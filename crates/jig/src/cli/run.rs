@@ -694,9 +694,8 @@ const fn loop_human_output(command: &LoopCommand) -> HumanOutput {
 const fn state_human_output(command: &StateCommand) -> HumanOutput {
     match command {
         StateCommand::Summary => HumanOutput::StateSummary,
-        StateCommand::Diagnose(_) => HumanOutput::StateDiagnose,
+        StateCommand::Diagnose => HumanOutput::StateDiagnose,
         StateCommand::Restore(_) => HumanOutput::StateRestore,
-        StateCommand::Export { .. } => HumanOutput::StateExport,
         StateCommand::Archive(_) => HumanOutput::StateArchive,
     }
 }

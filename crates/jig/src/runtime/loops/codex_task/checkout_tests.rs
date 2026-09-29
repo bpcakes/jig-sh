@@ -125,7 +125,7 @@ esac
     }
 
     #[test]
-    fn leftover_legacy_receipt_appends_do_not_dirty_the_shared_checkout() {
+    fn legacy_receipt_journal_changes_dirty_the_shared_checkout() {
         let _env_lock = lock_env();
         let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
         let (_temp, ctx) = fixture();
@@ -145,9 +145,13 @@ esac
         }
         .finish(TaskOutcome::Succeeded, &ctx);
 
-        assert!(!result.report.repository_requires_attention());
-        assert_eq!(result.report.value()["dirty"], false);
-        assert!(result.error.is_none(), "{:?}", result.error);
+        assert!(result.report.repository_requires_attention());
+        let value = result.report.value();
+        assert_eq!(value["dirty"], true);
+        assert_eq!(
+            value["diagnostics"]["observed_paths"],
+            json!([LEGACY_RECEIPT_JOURNAL])
+        );
     }
 
     #[test]

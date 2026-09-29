@@ -44,10 +44,6 @@ use preparation::{failed_preparation_tick, run_preparation};
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_CHARS: usize = 16_000;
-/// Runtimes before loop evidence appended loop receipts to this tracked
-/// journal, so a shared checkout may still carry uncommitted appends. Jig no
-/// longer reads or writes it; leftover changes must not block repo-mode tasks.
-const LEGACY_RECEIPT_JOURNAL_EXCLUDE: &str = ":(exclude).agent/state/receipts.jsonl";
 
 pub(super) struct CodexTaskExecution<'a> {
     pub(super) item_key: &'a str,
@@ -481,33 +477,13 @@ fn git_is_dirty(
     worktree: &Path,
     observer: &mut dyn ExecutionControl,
 ) -> Result<bool> {
-    git_status_has_changes(ctx, worktree, false, observer)
-}
-
-fn repo_task_has_changes(
-    ctx: &RepoContext,
-    worktree: &Path,
-    observer: &mut dyn ExecutionControl,
-) -> Result<bool> {
-    git_status_has_changes(ctx, worktree, true, observer)
-}
-
-fn git_status_has_changes(
-    ctx: &RepoContext,
-    worktree: &Path,
-    exclude_legacy_receipt_journal: bool,
-    observer: &mut dyn ExecutionControl,
-) -> Result<bool> {
-    let mut args = vec![
+    let args = [
         OsString::from("status"),
         OsString::from("--porcelain=v1"),
         OsString::from("--untracked-files=normal"),
         OsString::from("--"),
         OsString::from("."),
     ];
-    if exclude_legacy_receipt_journal {
-        args.push(OsString::from(LEGACY_RECEIPT_JOURNAL_EXCLUDE));
-    }
     let (mut command, label) = git_command(worktree, args);
     let timeout = ctx.command_timeout();
     let output_limit = internal_execution_output_limit();

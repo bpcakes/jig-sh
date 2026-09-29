@@ -44,12 +44,8 @@ pub(super) fn format_state_diagnose_summary(value: &serde_json::Value) -> String
             .as_u64()
             .unwrap_or(0);
         lines.push(format!("    State recovery backups: {backup_bytes}"));
-        lines.push(format!("    Receipt archives: {archive_bytes}"));
+        lines.push(format!("    State archives: {archive_bytes}"));
     }
-    if !value_bool(value, "deep").unwrap_or(false) {
-        lines.push("  Receipt payloads: not analyzed (rerun with --deep)".into());
-    }
-    push_run_linkage_lines(&mut lines, &value["run_linkage"]);
     if let Some(recommendations) = value["recommendations"].as_array()
         && !recommendations.is_empty()
     {
@@ -90,109 +86,10 @@ fn integrity_verdict(value: &serde_json::Value) -> String {
     if scan_errors > 0 {
         problems.push(format!("{scan_errors} stream scan errors"));
     }
-    let linkage = match value_str(&value["run_linkage"], "verdict") {
-        Some("clean") => "run linkage clean".to_string(),
-        Some("findings") => format!(
-            "{} run linkage findings",
-            value_u64(&value["run_linkage"], "finding_count").unwrap_or(0)
-        ),
-        Some("incomplete") => "run linkage incomplete (no clean verdict)".to_string(),
-        _ => "run linkage not checked (rerun with --deep)".to_string(),
-    };
-    problems.push(linkage);
+    if problems.is_empty() {
+        return "no malformed, torn, or unreadable streams".into();
+    }
     problems.join("; ")
-}
-
-fn push_run_linkage_lines(lines: &mut Vec<String>, linkage: &serde_json::Value) {
-    const MAX_FINDING_LINES: usize = 5;
-    match value_str(linkage, "verdict") {
-        Some("clean") => {
-            let runs = &linkage["runs"];
-            lines.push(format!(
-                "  Run linkage: clean ({} referenced runs: {} active, {} completed, {} archived)",
-                value_u64(linkage, "referenced_runs").unwrap_or(0),
-                value_u64(runs, "active").unwrap_or(0),
-                value_u64(runs, "completed").unwrap_or(0),
-                value_u64(runs, "archived_verified").unwrap_or(0),
-            ));
-        }
-        Some("findings") => {
-            let runs = &linkage["runs"];
-            let count = value_u64(linkage, "finding_count").unwrap_or(0);
-            let suffix = if value_bool(linkage, "complete").unwrap_or(false) {
-                ""
-            } else {
-                "; scan incomplete, more may exist"
-            };
-            lines.push(format!(
-                "  Run linkage: {count} finding(s) ({} missing, {} unverifiable, {} inconsistent, {} recoverable from backup){suffix}",
-                value_u64(runs, "missing").unwrap_or(0),
-                value_u64(runs, "unverifiable").unwrap_or(0),
-                value_u64(runs, "inconsistent").unwrap_or(0),
-                value_u64(runs, "recoverable_from_backup").unwrap_or(0),
-            ));
-            let findings = linkage["findings"].as_array().cloned().unwrap_or_default();
-            for finding in findings.iter().take(MAX_FINDING_LINES) {
-                lines.push(format!(
-                    "    {}: {}; receipts: {}; batch receipts: {}",
-                    value_str(finding, "run_id").unwrap_or("<unknown run>"),
-                    value_str(finding, "status").unwrap_or("unknown"),
-                    id_preview(&finding["receipt_ids"], value_u64(finding, "receipt_count")),
-                    id_preview(
-                        &finding["batch_receipt_ids"],
-                        value_u64(finding, "batch_receipt_count")
-                    ),
-                ));
-            }
-            let shown = findings.len().min(MAX_FINDING_LINES) as u64;
-            if count > shown {
-                lines.push(format!(
-                    "    ... {} more finding(s); rerun with --json for structured findings and truncation metadata",
-                    count - shown
-                ));
-            }
-        }
-        Some("incomplete") => {
-            let reasons = linkage["incomplete_reasons"]
-                .as_array()
-                .map(|reasons| {
-                    reasons
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                })
-                .unwrap_or_default();
-            lines.push(format!(
-                "  Run linkage: incomplete; no clean verdict ({reasons})"
-            ));
-        }
-        _ => lines.push("  Run linkage: not checked (rerun with --deep)".into()),
-    }
-}
-
-fn id_preview(ids: &serde_json::Value, total: Option<u64>) -> String {
-    const MAX_IDS: usize = 3;
-    let ids = ids
-        .as_array()
-        .map(|ids| {
-            ids.iter()
-                .filter_map(serde_json::Value::as_str)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if ids.is_empty() {
-        return "none".into();
-    }
-    let total = total.unwrap_or(ids.len() as u64);
-    let shown_ids = ids.iter().take(MAX_IDS).copied().collect::<Vec<_>>();
-    let omitted = total.saturating_sub(shown_ids.len() as u64);
-    let shown = shown_ids.join(", ");
-    if omitted == 0 {
-        shown
-    } else {
-        format!("{shown} (+{omitted} more)")
-    }
 }
 
 pub(super) fn format_state_restore_summary(value: &serde_json::Value) -> String {
@@ -233,66 +130,23 @@ pub(super) fn format_state_restore_summary(value: &serde_json::Value) -> String 
     lines.join("\n")
 }
 
-pub(super) fn format_state_export_summary(value: &serde_json::Value) -> String {
-    let exported = value_u64(value, "receipts_exported").unwrap_or(0);
-    let path = value_str(value, "output_path").unwrap_or("<unknown>");
-    let mut lines = vec![
-        format!(
-            "State export receipts: {}",
-            if exported > 0 {
-                "exported"
-            } else {
-                "empty export"
-            }
-        ),
-        format!("  Output: {path}"),
-        format!("  Receipts exported: {exported}"),
-    ];
-    if let Some(before) = value_str(value, "before") {
-        lines.push(format!("  Before: {before}"));
-    }
-    if let Some(bytes) = value_u64(value, "uncompressed_bytes") {
-        lines.push(format!("  Uncompressed bytes: {bytes}"));
-    }
-    if let Some(bytes) = value_u64(value, "compressed_bytes") {
-        lines.push(format!("  Compressed bytes: {bytes}"));
-    }
-    if let Some(checksum) = value_str(value, "sha256") {
-        lines.push(format!("  Gzip SHA-256: {checksum}"));
-    }
-    if let Some(checksum) = value_str(value, "content_sha256") {
-        lines.push(format!("  JSONL SHA-256: {checksum}"));
-    }
-    lines.push("  Active state: unchanged; export is non-mutating.".into());
-    lines.push(
-        "  Cache durability: exports are not managed by Jig's local cache; durability depends on the selected destination."
-            .into(),
-    );
-    lines.push("  Git history: export does not remove reachable Git blobs.".into());
-    lines.push("  full report: rerun with --json".into());
-    lines.join("\n")
-}
-
 pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String {
     let dry_run = value_bool(value, "dry_run").unwrap_or(false);
-    let archived = value_u64(value, "receipts_archived").unwrap_or(0);
-    let retained = value_u64(value, "receipts_retained").unwrap_or(0);
-    let runs_included = value_bool(value, "runs_included").unwrap_or(false);
     let runs_archived = value_u64(value, "runs_archived").unwrap_or(0);
     let runs_retained = value_u64(value, "runs_retained").unwrap_or(0);
     let before = value_str(value, "before").unwrap_or("<unknown>");
-    let changes_available = archived > 0 || (runs_included && runs_archived > 0);
+    let changes_available = runs_archived > 0;
     let status = match (dry_run, changes_available) {
         (true, true) => "dry run (changes available)",
-        (true, false) => "dry run (no eligible state)",
+        (true, false) => "dry run (no eligible runs)",
         (false, true) => "archived",
         (false, false) => "no-op",
     };
     let mut lines = vec![
         format!("State archive: {status}"),
         format!("  Before: {before}"),
-        format!("  Receipts archived: {archived}"),
-        format!("  Receipts retained: {retained}"),
+        format!("  Runs archived: {runs_archived}"),
+        format!("  Runs retained: {runs_retained}"),
         format!(
             "  Active state changed: {}",
             if !dry_run && changes_available {
@@ -302,49 +156,27 @@ pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String 
             }
         ),
     ];
-    if runs_included {
-        lines.push(format!("  Runs archived: {runs_archived}"));
-        lines.push(format!("  Runs retained: {runs_retained}"));
+    match value_str(value, "runs_archive_path") {
+        Some(path) => lines.push(format!("  Run archive: {path}")),
+        None if dry_run => lines.push("  Run archive: not written during dry run".into()),
+        None => lines.push("  Run archive: not written; no runs were eligible".into()),
     }
-    match value_str(value, "archive_path") {
-        Some(path) => lines.push(format!("  Local archive: {path}")),
-        None if dry_run => lines.push("  Local archive: not written during dry run".into()),
-        None => lines.push("  Local archive: not written; no receipts were eligible".into()),
-    }
-    match value_str(value, "recovery_backup_path") {
-        Some(path) => lines.push(format!("  Exact pre-archive recovery backup: {path}")),
+    match value_str(value, "runs_recovery_backup_path") {
+        Some(path) => lines.push(format!("  Exact runs recovery backup: {path}")),
         None if dry_run => {
-            lines.push("  Exact pre-archive recovery backup: not written during dry run".into());
+            lines.push("  Exact runs recovery backup: not written during dry run".into());
         }
-        None => lines.push(
-            "  Exact pre-archive recovery backup: not written; active state was unchanged".into(),
-        ),
-    }
-    if runs_included {
-        match value_str(value, "runs_archive_path") {
-            Some(path) => lines.push(format!("  Run archive: {path}")),
-            None if dry_run => lines.push("  Run archive: not written during dry run".into()),
-            None => lines.push("  Run archive: not written; no runs were eligible".into()),
-        }
-        match value_str(value, "runs_recovery_backup_path") {
-            Some(path) => lines.push(format!("  Exact runs recovery backup: {path}")),
-            None if dry_run => {
-                lines.push("  Exact runs recovery backup: not written during dry run".into());
-            }
-            None => lines
-                .push("  Exact runs recovery backup: not written; run state was unchanged".into()),
+        None => {
+            lines.push("  Exact runs recovery backup: not written; run state was unchanged".into())
         }
     }
-    if let Some(bytes) = value_u64(value, "uncompressed_bytes") {
+    if let Some(bytes) = value_u64(value, "runs_uncompressed_bytes") {
         lines.push(format!("  Uncompressed bytes: {bytes}"));
     }
-    if let Some(bytes) = value_u64(value, "compressed_bytes") {
+    if let Some(bytes) = value_u64(value, "runs_compressed_bytes") {
         lines.push(format!("  Compressed bytes: {bytes}"));
     }
-    if let Some(checksum) = value_str(value, "sha256") {
-        lines.push(format!("  Gzip SHA-256: {checksum}"));
-    }
-    if let Some(checksum) = value_str(value, "content_sha256") {
+    if let Some(checksum) = value_str(value, "runs_content_sha256") {
         lines.push(format!("  JSONL SHA-256: {checksum}"));
     }
     lines.push(

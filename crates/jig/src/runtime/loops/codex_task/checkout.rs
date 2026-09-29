@@ -5,9 +5,7 @@ use serde_json::{Value, json};
 use crate::context::RepoContext;
 use crate::execution::NoopExecutionObserver;
 
-use super::{
-    RepositoryRevisionState, git_is_dirty, git_stdout, remove_worktree, repo_task_has_changes,
-};
+use super::{RepositoryRevisionState, git_is_dirty, git_stdout, remove_worktree};
 
 mod diagnostics;
 use diagnostics::CheckoutDiagnostics;
@@ -129,7 +127,7 @@ impl PreparedCheckout {
         let mut cleanup_observer = NoopExecutionObserver;
         match self {
             Self::Repo { path, initial_head } => {
-                let dirty = repo_task_has_changes(ctx, &path, &mut cleanup_observer);
+                let dirty = git_is_dirty(ctx, &path, &mut cleanup_observer);
                 let final_head =
                     git_stdout(ctx, &path, ["rev-parse", "HEAD"], &mut cleanup_observer);
                 let diagnostics = CheckoutDiagnostics::inspect(ctx, &path, &dirty, &final_head);

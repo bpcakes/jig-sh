@@ -1,13 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
 use crate::policy::SqlxTodoInput;
+
+mod scanner;
+
+use scanner::scan_sqlx_calls;
 
 const DEFAULT_SQLX_TODO_PATH: &str = "docs/sqlx-unchecked-queries-todo.md";
 
@@ -50,8 +55,18 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     let status_by_key = read_sqlx_statuses(&ctx.root().join(prior_path));
     let mut calls = Vec::new();
     for file in sqlx_rust_files(ctx)? {
-        let text = fs::read_to_string(ctx.root().join(&file)).unwrap_or_default();
-        calls.extend(scan_sqlx_calls(&file, &text));
+        let text = match fs::read_to_string(ctx.root().join(&file)) {
+            Ok(text) => text,
+            // `git ls-files` still lists a tracked file whose deletion has not
+            // been staged, and an untracked listing races ordinary edits. An
+            // absent path has no call sites; every other read error is real.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("cannot read SQLx inventory source {file}"));
+            }
+        };
+        calls.extend(scan_sqlx_calls(&file, &text)?);
     }
     calls.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
     let checked_count = calls.iter().filter(|call| call.checked).count();
@@ -81,7 +96,8 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     }
     let mut body = String::new();
     body.push_str("# SQLx Unchecked Queries TODO\n\n");
-    body.push_str("This checklist tracks every `sqlx::query*` call site under the configured Rust crate roots that is not yet using compile-time checked SQLx macros.\n\n");
+    body.push_str("This checklist tracks detected `sqlx::query*` call sites under the configured Rust crate roots that are not yet using compile-time checked SQLx macros.\n\n");
+    body.push_str("Coverage is a source AST inventory, not complete Rust syntax coverage or compiler analysis. Sources are parsed as complete Rust files or expression fragments, as accepted by `include!`. It detects direct SQLx function calls and checked macro invocations. It does not resolve aliases or shadowing, expand macros, or evaluate arbitrary cfg expressions; macro input is read only for a fixed set of standard expression macros such as `vec!` and `assert!`. Test classification uses conventional test paths and exact `#[cfg(test)]` attributes on files and inline modules; external module and `include!` relationships are not resolved. Paths Git lists that are absent from the worktree are skipped; other unreadable or unparseable Rust sources fail the inventory.\n\n");
     body.push_str("- Generated on: native jig\n");
     let _ = writeln!(body, "- Unchecked call sites: {}", unchecked.len());
     let _ = writeln!(
@@ -136,384 +152,6 @@ fn git_untracked_files(root: &Path, roots: &[String]) -> Result<Vec<String>> {
     Ok(super::split_nul(&super::git_output(root, &args)?))
 }
 
-fn scan_sqlx_calls(path: &str, text: &str) -> Vec<SqlxCall> {
-    // Match only when the function name is followed by a macro bang, call
-    // paren, or turbofish; this avoids counting shorter prefixes inside longer
-    // variants.
-    let names = [
-        "sqlx::query_file_scalar",
-        "sqlx::query_file_as",
-        "sqlx::query_file",
-        "sqlx::query_scalar",
-        "sqlx::query_as",
-        "sqlx::query",
-    ];
-    let path_is_test = is_test_path(path);
-    let mut pending_cfg_test = false;
-    let mut pending_test_module_decl = false;
-    let mut test_module_brace_depth: Option<isize> = None;
-    let mut raw_string_hashes = None;
-    let mut block_comment_depth = 0usize;
-    let mut calls = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        let mut line_is_test = path_is_test || test_module_brace_depth.is_some();
-        let mut entered_test_module = false;
-        let trimmed = line.trim_start();
-        let code = line_code_with_state(line, &mut raw_string_hashes, &mut block_comment_depth);
-        let cfg_test_line = is_cfg_test_attr_code(&code);
-
-        if test_module_brace_depth.is_some() {
-            pending_cfg_test = false;
-            pending_test_module_decl = false;
-        } else if pending_test_module_decl {
-            if code.trim_start().starts_with('{') {
-                line_is_test = true;
-                test_module_brace_depth = Some(line_brace_delta_from_code(&code));
-                entered_test_module = true;
-                pending_test_module_decl = false;
-            } else if !(trimmed.is_empty() || trimmed.starts_with("//")) {
-                pending_test_module_decl = false;
-            }
-        } else if cfg_test_line {
-            pending_cfg_test = true;
-            if let Some(decl) = test_module_decl_code(&code) {
-                pending_cfg_test = false;
-                match decl {
-                    TestModuleDecl::InlineBrace => {
-                        line_is_test = true;
-                        test_module_brace_depth = Some(line_brace_delta_from_code(&code));
-                        entered_test_module = true;
-                    }
-                    TestModuleDecl::BraceNextLine => {
-                        pending_test_module_decl = true;
-                    }
-                    TestModuleDecl::ExternalFile => {}
-                }
-            }
-        } else if pending_cfg_test {
-            if let Some(decl) = test_module_decl_code(&code) {
-                match decl {
-                    TestModuleDecl::InlineBrace => {
-                        line_is_test = true;
-                        test_module_brace_depth = Some(line_brace_delta_from_code(&code));
-                        entered_test_module = true;
-                    }
-                    TestModuleDecl::BraceNextLine => {
-                        pending_test_module_decl = true;
-                    }
-                    TestModuleDecl::ExternalFile => {}
-                }
-                pending_cfg_test = false;
-            } else if !(trimmed.is_empty()
-                || trimmed.starts_with("#[")
-                || trimmed.starts_with("//"))
-            {
-                pending_cfg_test = false;
-            }
-        }
-
-        if pending_test_module_decl {
-            pending_cfg_test = false;
-        }
-
-        scan_sqlx_calls_in_line(path, index + 1, &code, line_is_test, &names, &mut calls);
-
-        let mut clear_test_module = false;
-        if let Some(depth) = &mut test_module_brace_depth {
-            if !entered_test_module {
-                *depth += line_brace_delta_from_code(&code);
-            }
-            if *depth <= 0 {
-                clear_test_module = true;
-            }
-        }
-        if clear_test_module {
-            test_module_brace_depth = None;
-        }
-    }
-    calls
-}
-
-fn scan_sqlx_calls_in_line(
-    path: &str,
-    line: usize,
-    code: &str,
-    is_test: bool,
-    names: &[&str],
-    calls: &mut Vec<SqlxCall>,
-) {
-    for name in names {
-        let mut start = 0usize;
-        while let Some(pos) = code[start..].find(name) {
-            let absolute = start + pos;
-            let after = &code[absolute + name.len()..];
-            if is_keyword_boundary(code[..absolute].chars().next_back())
-                && let Some(checked) = sqlx_call_checked(after)
-            {
-                calls.push(SqlxCall {
-                    path: path.into(),
-                    line,
-                    function: (*name).into(),
-                    checked,
-                    is_test,
-                });
-            }
-            start = absolute + name.len();
-        }
-    }
-}
-
-enum TestModuleDecl {
-    InlineBrace,
-    BraceNextLine,
-    ExternalFile,
-}
-
-fn sqlx_call_checked(after_name: &str) -> Option<bool> {
-    let after_name = after_name.trim_start();
-    if after_name.starts_with('!') {
-        Some(true)
-    } else if after_name.starts_with('(') || starts_turbofish(after_name) {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-fn starts_turbofish(after_name: &str) -> bool {
-    after_name
-        .strip_prefix("::")
-        .is_some_and(|rest| rest.trim_start().starts_with('<'))
-}
-
-fn test_module_decl_code(code: &str) -> Option<TestModuleDecl> {
-    let mod_index = find_keyword(code, "mod")?;
-    let after_mod = code[mod_index + 3..].trim_start();
-    let mut chars = after_mod.char_indices();
-    let (_, first) = chars.next()?;
-    if !(first == '_' || first.is_ascii_alphabetic()) {
-        return None;
-    }
-    let mut name_end = first.len_utf8();
-    for (index, ch) in chars {
-        if ch == '_' || ch.is_ascii_alphanumeric() {
-            name_end = index + ch.len_utf8();
-        } else {
-            break;
-        }
-    }
-    let after_name = after_mod[name_end..].trim_start();
-    if after_name.starts_with('{') {
-        Some(TestModuleDecl::InlineBrace)
-    } else if after_name.is_empty() {
-        Some(TestModuleDecl::BraceNextLine)
-    } else if after_name.starts_with(';') {
-        Some(TestModuleDecl::ExternalFile)
-    } else {
-        None
-    }
-}
-
-fn is_cfg_test_attr_code(code: &str) -> bool {
-    let Some(rest) = code.trim_start().strip_prefix("#[") else {
-        return false;
-    };
-    let Some(rest) = rest.trim_start().strip_prefix("cfg") else {
-        return false;
-    };
-    let Some(rest) = rest.trim_start().strip_prefix('(') else {
-        return false;
-    };
-    let Some(rest) = rest.trim_start().strip_prefix("test") else {
-        return false;
-    };
-    let Some(rest) = rest.trim_start().strip_prefix(')') else {
-        return false;
-    };
-    rest.trim_start().starts_with(']')
-}
-
-fn find_keyword(text: &str, keyword: &str) -> Option<usize> {
-    let mut start = 0usize;
-    while let Some(pos) = text[start..].find(keyword) {
-        let index = start + pos;
-        let before = text[..index].chars().next_back();
-        let after = text[index + keyword.len()..].chars().next();
-        if is_keyword_boundary(before) && is_keyword_boundary(after) {
-            return Some(index);
-        }
-        start = index + keyword.len();
-    }
-    None
-}
-
-fn is_keyword_boundary(ch: Option<char>) -> bool {
-    ch.is_none_or(|ch| !(ch == '_' || ch.is_ascii_alphanumeric()))
-}
-
-fn line_code_with_state(
-    line: &str,
-    raw_string_hashes: &mut Option<usize>,
-    block_comment_depth: &mut usize,
-) -> String {
-    let mut code = String::new();
-    let chars = line.chars().collect::<Vec<_>>();
-    let mut index = 0usize;
-
-    if let Some(hashes) = raw_string_hashes.take() {
-        let Some(end) = raw_string_end(&chars, 0, hashes) else {
-            *raw_string_hashes = Some(hashes);
-            return code;
-        };
-        code.push(' ');
-        index = end;
-    }
-
-    while index < chars.len() {
-        if *block_comment_depth > 0 {
-            if chars[index] == '/' && chars.get(index + 1).copied() == Some('*') {
-                *block_comment_depth += 1;
-                index += 2;
-            } else if chars[index] == '*' && chars.get(index + 1).copied() == Some('/') {
-                *block_comment_depth -= 1;
-                index += 2;
-                code.push(' ');
-            } else {
-                index += 1;
-            }
-            continue;
-        }
-        if chars[index] == '/' && chars.get(index + 1).copied() == Some('/') {
-            break;
-        }
-        if chars[index] == '/' && chars.get(index + 1).copied() == Some('*') {
-            *block_comment_depth = 1;
-            index += 2;
-            code.push(' ');
-            continue;
-        }
-        if let Some((prefix_len, raw_hashes)) = raw_string_prefix(&chars, index) {
-            let start = index + prefix_len + raw_hashes + 1;
-            if let Some(end) = raw_string_end(&chars, start, raw_hashes) {
-                index = end;
-            } else {
-                *raw_string_hashes = Some(raw_hashes);
-                break;
-            }
-            code.push(' ');
-            continue;
-        }
-        if let Some(quote_index) = quoted_string_start(&chars, index) {
-            index = skip_quoted(&chars, quote_index, '"');
-            code.push(' ');
-            continue;
-        }
-        if let Some(char_end) = char_literal_end_at(&chars, index) {
-            index = char_end;
-            code.push(' ');
-            continue;
-        }
-        code.push(chars[index]);
-        index += 1;
-    }
-    code
-}
-
-fn line_brace_delta_from_code(code: &str) -> isize {
-    code.chars().fold(0, |depth, ch| match ch {
-        '{' => depth + 1,
-        '}' => depth - 1,
-        _ => depth,
-    })
-}
-
-fn raw_string_prefix(chars: &[char], index: usize) -> Option<(usize, usize)> {
-    let prefix_len = if chars.get(index).copied() == Some('r') {
-        1
-    } else if chars.get(index).copied() == Some('b') && chars.get(index + 1).copied() == Some('r') {
-        2
-    } else {
-        return None;
-    };
-    let mut cursor = index + prefix_len;
-    let mut hashes = 0usize;
-    while chars.get(cursor).copied() == Some('#') {
-        hashes += 1;
-        cursor += 1;
-    }
-    (chars.get(cursor).copied() == Some('"')).then_some((prefix_len, hashes))
-}
-
-fn raw_string_end(chars: &[char], start: usize, hashes: usize) -> Option<usize> {
-    let mut cursor = start;
-    while cursor < chars.len() {
-        if chars[cursor] == '"' && raw_string_closes(chars, cursor, hashes) {
-            return Some(cursor + hashes + 1);
-        }
-        cursor += 1;
-    }
-    None
-}
-
-fn raw_string_closes(chars: &[char], quote_index: usize, hashes: usize) -> bool {
-    (0..hashes).all(|offset| chars.get(quote_index + 1 + offset).copied() == Some('#'))
-}
-
-fn quoted_string_start(chars: &[char], index: usize) -> Option<usize> {
-    if chars.get(index).copied() == Some('"') {
-        Some(index)
-    } else if chars.get(index).copied() == Some('b') && chars.get(index + 1).copied() == Some('"') {
-        Some(index + 1)
-    } else {
-        None
-    }
-}
-
-fn skip_quoted(chars: &[char], index: usize, quote: char) -> usize {
-    let mut cursor = index + 1;
-    let mut escaped = false;
-    while cursor < chars.len() {
-        if escaped {
-            escaped = false;
-        } else if chars[cursor] == '\\' {
-            escaped = true;
-        } else if chars[cursor] == quote {
-            return cursor + 1;
-        }
-        cursor += 1;
-    }
-    chars.len()
-}
-
-fn char_literal_end_at(chars: &[char], index: usize) -> Option<usize> {
-    if chars.get(index).copied() == Some('b') && chars.get(index + 1).copied() == Some('\'') {
-        return char_literal_end(chars, index + 1);
-    }
-    char_literal_end(chars, index)
-}
-
-fn char_literal_end(chars: &[char], index: usize) -> Option<usize> {
-    if chars.get(index).copied() != Some('\'') {
-        return None;
-    }
-    let mut cursor = index + 1;
-    if chars.get(cursor).copied() == Some('\\') {
-        cursor += 1;
-        if chars.get(cursor).copied() == Some('u') && chars.get(cursor + 1).copied() == Some('{') {
-            cursor += 2;
-            while cursor < chars.len() && chars[cursor] != '}' {
-                cursor += 1;
-            }
-            cursor += 1;
-        } else {
-            cursor += 1;
-        }
-    } else {
-        cursor += 1;
-    }
-    (chars.get(cursor).copied() == Some('\'')).then_some(cursor + 1)
-}
-
 fn read_sqlx_statuses(path: &Path) -> BTreeMap<String, char> {
     let mut map = BTreeMap::new();
     let Ok(text) = fs::read_to_string(path) else {
@@ -539,14 +177,6 @@ fn read_sqlx_statuses(path: &Path) -> BTreeMap<String, char> {
         }
     }
     map
-}
-
-fn is_test_path(path: &str) -> bool {
-    let basename = path.rsplit('/').next().unwrap_or(path);
-    path.contains("/tests/")
-        || matches!(basename, "tests.rs" | "test_support.rs")
-        || basename.starts_with("tests_")
-        || basename.ends_with("_tests.rs")
 }
 
 #[cfg(test)]

@@ -3,49 +3,8 @@
 //! Keep filesystem, locking, and JSONL traversal behavior out of this module.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::git_receipts::DiffStat;
 use jig_contract::{RunConclusion, RunPlan, TargetId, TargetRunResult};
-
-/// A receipt written by loop workflows. Check receipts from earlier runtimes
-/// also carried target, run and freshness fields; readers ignore them.
-#[derive(Debug, Serialize, serde::Deserialize)]
-pub(crate) struct ReceiptRecord {
-    pub(crate) id: String,
-    pub(crate) session_id: Option<String>,
-    pub(crate) plan_id: Option<String>,
-    pub(crate) tool_name: String,
-    pub(crate) args: Value,
-    #[serde(default)]
-    pub(crate) invoked_command_key: Option<String>,
-    pub(crate) started_at_ms: u64,
-    pub(crate) ended_at_ms: u64,
-    pub(crate) exit_status: i32,
-    pub(crate) stdout_preview: String,
-    pub(crate) stderr_preview: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) evidence: Option<Value>,
-    /// Only on check receipts from earlier runtimes; linkage diagnosis reads it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) run_id: Option<String>,
-    pub(crate) changed_paths: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) changed_path_count: Option<usize>,
-    #[serde(default)]
-    pub(crate) changed_paths_truncated: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) changed_paths_digest: Option<String>,
-    pub(crate) diff_stat: DiffStat,
-    #[serde(default)]
-    pub(crate) git_status_error: Option<String>,
-    #[serde(default)]
-    pub(crate) git_diff_stat_error: Option<String>,
-    #[serde(default)]
-    pub(crate) worktree_fingerprint: Option<String>,
-    #[serde(default)]
-    pub(crate) worktree_fingerprint_error: Option<String>,
-}
 
 /// One append-only transition in a durable target run.
 ///

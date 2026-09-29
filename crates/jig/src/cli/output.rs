@@ -14,8 +14,8 @@ use self::loops::{
     format_loop_status_summary, format_loop_tick_summary,
 };
 use self::state::{
-    format_state_archive_summary, format_state_diagnose_summary, format_state_export_summary,
-    format_state_restore_summary, format_state_summary,
+    format_state_archive_summary, format_state_diagnose_summary, format_state_restore_summary,
+    format_state_summary,
 };
 use self::vault::{format_vault_generic_summary, format_vault_run_summary};
 
@@ -62,7 +62,6 @@ pub(super) enum HumanOutput {
     StateSummary,
     StateDiagnose,
     StateRestore,
-    StateExport,
     StateArchive,
     Dev,
     DevStatus,
@@ -113,7 +112,6 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::StateSummary => format_state_summary(value),
         HumanOutput::StateDiagnose => format_state_diagnose_summary(value),
         HumanOutput::StateRestore => format_state_restore_summary(value),
-        HumanOutput::StateExport => format_state_export_summary(value),
         HumanOutput::StateArchive => format_state_archive_summary(value),
         HumanOutput::Dev => format_dev_summary(value),
         HumanOutput::DevStatus => format_dev_status_summary(value),

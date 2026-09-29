@@ -3,9 +3,9 @@
 //! This module deliberately does not use the normal state-layout or JSONL
 //! mutation helpers. Diagnosis must be safe to run before `.agent/state`
 //! exists, and a legacy record can be hundreds of megabytes. Each stream is
-//! therefore inspected one physical record at a time. The session, plan and
-//! decision streams are no longer written or read by Jig; they are still sized
-//! and checked because adopted repositories keep them.
+//! therefore inspected one physical record at a time. The session, plan,
+//! decision, and receipt streams are no longer written or read by Jig; they
+//! are still sized and checked because adopted repositories keep them.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,20 +13,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::Result;
 use serde::de::IgnoredAny;
 use serde_json::{Value, json};
 
-use crate::command::StateDiagnoseRequest;
 use crate::context::RepoContext;
 
 use super::jsonl::scan_jsonl_raw;
-
-mod deep;
-mod linkage;
-
-use deep::{ReceiptPayloadDiagnostics, analyze_receipt_record};
-use linkage::{RunLinkageCollector, RunLinkageReport, analyze_receipt_linkage};
 
 const STATE_STREAMS: [(&str, &str); 5] = [
     ("sessions", "sessions.jsonl"),
@@ -35,39 +27,18 @@ const STATE_STREAMS: [(&str, &str); 5] = [
     ("decisions", "decisions.jsonl"),
     ("runs", "runs.jsonl"),
 ];
+/// Streams Jig no longer writes or reads.
+const LEGACY_STREAMS: [&str; 4] = ["sessions", "plans", "decisions", "receipts"];
 const OVERSIZED_RECORD_BYTES: u64 = 1024 * 1024;
-const RECEIPT_RETENTION_RECOMMENDATION_BYTES: u64 = 8 * 1024 * 1024;
+const RUN_RETENTION_RECOMMENDATION_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DIAGNOSTIC_SAMPLES: usize = 20;
 
-pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -> Value {
+pub(crate) fn state_diagnose(ctx: &RepoContext) -> Value {
     let mut streams = BTreeMap::new();
-    let mut receipt_payload = ReceiptPayloadDiagnostics::default();
-    let mut linkage_collector = RunLinkageCollector::default();
-
     for (stream_name, file_name) in STATE_STREAMS {
         let path = ctx.state_file(file_name);
-        let report = inspect_stream(
-            ctx.root(),
-            &path,
-            request.deep.then_some(stream_name),
-            &mut receipt_payload,
-            &mut linkage_collector,
-        );
-        streams.insert(stream_name.to_string(), report);
+        streams.insert(stream_name.to_string(), inspect_stream(ctx.root(), &path));
     }
-    // Linkage joins references across streams, so it resolves only after every
-    // stream scan finished. Shallow mode reports the check as not performed
-    // instead of implying that receipt-to-run linkage was verified.
-    let run_linkage = if request.deep {
-        linkage::resolve(
-            ctx.root(),
-            linkage_collector,
-            streams.get("receipts"),
-            streams.get("runs"),
-        )
-    } else {
-        RunLinkageReport::not_checked()
-    };
 
     let legacy_archive = inspect_legacy_archive(
         ctx.root(),
@@ -77,27 +48,17 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
     let maintenance_cache = inspect_maintenance_cache(ctx.root(), MAX_DIAGNOSTIC_SAMPLES);
     let git = inspect_git_facts(ctx.root());
     let totals = state_totals(&streams, &legacy_archive, &maintenance_cache);
-    let recommendations = recommendations(
-        request.deep,
-        &streams,
-        &receipt_payload,
-        &legacy_archive,
-        &maintenance_cache,
-        &run_linkage,
-    );
-    let integrity = integrity_summary(&streams, &run_linkage);
+    let recommendations = recommendations(&streams, &legacy_archive, &maintenance_cache);
+    let integrity = integrity_summary(&streams);
 
     json!({
         "ok": true,
         "command": "state diagnose",
-        "deep": request.deep,
         "integrity": integrity,
         "state_dir": display_repo_path(ctx.root(), &ctx.state_dir()),
         "state_dir_exists": ctx.state_dir().is_dir(),
         "totals": totals,
         "streams": streams,
-        "receipts": request.deep.then_some(receipt_payload),
-        "run_linkage": run_linkage.to_value(),
         "legacy_archive": legacy_archive,
         "maintenance_cache": maintenance_cache,
         "git": git,
@@ -105,19 +66,11 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
     })
 }
 
-fn inspect_stream(
-    root: &Path,
-    path: &Path,
-    deep_stream: Option<&str>,
-    receipt_payload: &mut ReceiptPayloadDiagnostics,
-    linkage: &mut RunLinkageCollector,
-) -> StreamDiagnostics {
+fn inspect_stream(root: &Path, path: &Path) -> StreamDiagnostics {
     let mut report = StreamDiagnostics {
         path: display_repo_path(root, path),
         ..StreamDiagnostics::default()
     };
-    let mut deep_analysis_error_lines = Vec::new();
-    let mut deep_analysis_error_count = 0u64;
 
     let mut visit = |raw: super::jsonl::RawJsonlRecord<'_>| {
         let line_number = raw.line_number;
@@ -150,29 +103,6 @@ fn inspect_stream(
             );
             return Ok(());
         }
-
-        let deep_result: Result<()> = match deep_stream {
-            Some("receipts") => {
-                analyze_receipt_record(record, receipt_payload)?;
-                receipt_payload.analyzed_records += 1;
-                analyze_receipt_linkage(record, linkage)
-            }
-            Some("runs") => {
-                linkage.observe_run_event(record);
-                Ok(())
-            }
-            _ => Ok(()),
-        };
-        if let Err(error) = deep_result {
-            deep_analysis_error_count += 1;
-            push_sample(
-                &mut deep_analysis_error_lines,
-                MalformedRecordSample {
-                    line: line_number,
-                    error: format!("{error:#}"),
-                },
-            );
-        }
         Ok(())
     };
     let result = scan_jsonl_raw(path, &|| false, &mut visit);
@@ -200,10 +130,6 @@ fn inspect_stream(
         report.malformed_records as usize > report.malformed_record_samples.len();
     report.oversized_samples_truncated =
         report.oversized_records as usize > report.oversized_record_samples.len();
-    report.deep_analysis_errors = deep_analysis_error_lines;
-    report.deep_analysis_error_count = deep_analysis_error_count;
-    report.deep_analysis_errors_truncated =
-        deep_analysis_error_count as usize > report.deep_analysis_errors.len();
     report
 }
 
@@ -227,9 +153,6 @@ struct StreamDiagnostics {
     oversized_records: u64,
     oversized_record_samples: Vec<RecordSizeSample>,
     oversized_samples_truncated: bool,
-    deep_analysis_error_count: u64,
-    deep_analysis_errors: Vec<MalformedRecordSample>,
-    deep_analysis_errors_truncated: bool,
     scan_error: Option<String>,
 }
 
@@ -542,14 +465,11 @@ fn state_totals(
 }
 
 fn recommendations(
-    deep: bool,
     streams: &BTreeMap<String, StreamDiagnostics>,
-    receipts: &ReceiptPayloadDiagnostics,
     legacy_archive: &LegacyArchiveDiagnostics,
     maintenance_cache: &MaintenanceCacheDiagnostics,
-    run_linkage: &RunLinkageReport,
 ) -> Vec<Value> {
-    let mut recommendations = linkage::recommendations(run_linkage);
+    let mut recommendations = Vec::new();
     if streams
         .values()
         .any(|stream| stream.malformed_records > 0 || stream.torn_tail)
@@ -560,41 +480,32 @@ fn recommendations(
             "reason": "Back up and repair malformed or unterminated state before mutation.",
         }));
     }
-    let receipt_stream = streams.get("receipts");
-    let receipt_payload_bytes = receipts.total_top_level_value_bytes;
-    let receipt_stream_bytes = receipt_stream.map_or(0, |stream| stream.bytes);
-    if deep
-        && receipt_payload_bytes.max(receipt_stream_bytes) >= RECEIPT_RETENTION_RECOMMENDATION_BYTES
-    {
-        recommendations.push(json!({
-            "kind": "archive_receipts",
-            "command": "jig state archive --before <YYYY-MM-DD> --dry-run",
-            "alternative_command": "jig state export receipts --before <YYYY-MM-DD> --output receipts.jsonl.gz",
-            "reason": format!(
-                "Receipt state uses {} bytes ({} bytes of analyzed top-level payloads); preview a local compressed archive or create a non-mutating export.",
-                receipt_stream_bytes,
-                receipt_payload_bytes,
-            ),
-        }));
-    }
     let run_stream_bytes = streams.get("runs").map_or(0, |stream| stream.bytes);
-    if deep && run_stream_bytes >= RECEIPT_RETENTION_RECOMMENDATION_BYTES {
+    if run_stream_bytes >= RUN_RETENTION_RECOMMENDATION_BYTES {
         recommendations.push(json!({
             "kind": "archive_runs",
-            "command": "jig state archive --before <YYYY-MM-DD> --include-runs --dry-run",
+            "command": "jig state archive --before <YYYY-MM-DD> --dry-run",
             "reason": format!(
                 "Run state uses {run_stream_bytes} bytes; preview archiving completed run histories after all known runs become terminal."
             ),
         }));
     }
-    if deep && receipt_stream.is_some_and(|stream| stream.deep_analysis_error_count > 0) {
-        let error_count = receipt_stream.map_or(0, |stream| stream.deep_analysis_error_count);
+    let legacy_streams = LEGACY_STREAMS
+        .iter()
+        .filter_map(|name| streams.get(*name).filter(|stream| stream.bytes > 0))
+        .collect::<Vec<_>>();
+    if !legacy_streams.is_empty() {
         recommendations.push(json!({
-            "kind": "export_receipts_before_repair",
-            "command": "jig state export receipts --before <YYYY-MM-DD> --output receipts-before-repair.jsonl.gz",
-            "alternative_command": "jig state archive --before <YYYY-MM-DD> --dry-run",
+            "kind": "legacy_state_streams",
+            "command": null,
             "reason": format!(
-                "Deep receipt analysis failed for {error_count} records; preserve a non-mutating compressed export and resolve the reported records before archiving."
+                "{} bytes remain in state streams Jig no longer writes or reads ({}); keep them as history or remove them.",
+                legacy_streams.iter().map(|stream| stream.bytes).sum::<u64>(),
+                legacy_streams
+                    .iter()
+                    .map(|stream| stream.path.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
             ),
         }));
     }
@@ -621,17 +532,11 @@ fn recommendations(
     recommendations
 }
 
-/// `ok` reports that diagnosis ran. Integrity findings live here, in
-/// `run_linkage`, and in `recommendations`, so a successful command never
-/// implies healthy state.
-fn integrity_summary(
-    streams: &BTreeMap<String, StreamDiagnostics>,
-    run_linkage: &RunLinkageReport,
-) -> Value {
+/// `ok` reports that diagnosis ran. Integrity findings live here and in
+/// `recommendations`, so a successful command never implies healthy state.
+fn integrity_summary(streams: &BTreeMap<String, StreamDiagnostics>) -> Value {
     json!({
         "note": "`ok` reports command completion, not state integrity.",
-        "run_linkage": run_linkage.verdict,
-        "run_linkage_findings": run_linkage.finding_count,
         "malformed_records": streams
             .values()
             .map(|stream| stream.malformed_records)

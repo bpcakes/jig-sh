@@ -54,7 +54,7 @@ schedule semantics.
 | Checkout | Use it when | Result handling |
 | --- | --- | --- |
 | `worktree` | Results should remain isolated from the selected checkout. This is the default. | Jig removes a clean, unchanged worktree. Any file change or local commit causes Jig to retain the detached worktree for inspection; Jig does not merge it into the main checkout. |
-| `repo` | The task must update the selected checkout, such as recording Beads issues. | The checkout must be clean before the worker starts, apart from uncommitted appends that earlier runtimes left in `.agent/state/receipts.jsonl`. The prompt must leave it clean, normally by committing the explicitly authorized files. A dirty or unverifiable result requires attention and blocks later occurrences. |
+| `repo` | The task must update the selected checkout, such as recording Beads issues. | The checkout must be clean before the worker starts. The prompt must leave it clean, normally by committing the explicitly authorized files. A dirty or unverifiable result requires attention and blocks later occurrences. |
 
 For a mutating repo-mode task, state its write and commit authority narrowly in
 the prompt. For example:

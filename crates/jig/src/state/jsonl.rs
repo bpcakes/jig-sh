@@ -66,11 +66,11 @@ impl JsonlRecordTooLarge {
 impl std::fmt::Display for JsonlRecordTooLarge {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let recovery = match self.path.file_name().and_then(|name| name.to_str()) {
-            Some("receipts.jsonl") => {
-                "run `scripts/jig state diagnose --deep`, then preview `scripts/jig state archive --before <cutoff> --dry-run`"
+            Some("runs.jsonl") => {
+                "run `scripts/jig state diagnose`, then preview `scripts/jig state archive --before <cutoff> --dry-run`"
             }
             _ => {
-                "run `scripts/jig state diagnose --deep`; this stream has no automatic compaction command"
+                "run `scripts/jig state diagnose`; this stream has no automatic compaction command"
             }
         };
         write!(

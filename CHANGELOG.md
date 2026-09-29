@@ -23,6 +23,19 @@
   and non-string package entries now fail explicitly. Empty documents and
   absent/null package lists yield no patterns; glob and filesystem restrictions
   remain unchanged.
+- The native SQLx unchecked-call check and TODO inventory now use a Rust AST
+  parser, detecting direct calls separated by comments or newlines and accepting
+  complete `include!` expression fragments. Root-level `tests/` paths are now
+  classified as test code, so production counts can decrease on upgrade.
+  Unreadable or unparseable sources now fail both commands and preserve the
+  existing TODO; parse errors include both file and expression parser locations.
+  Missing worktree paths still listed by Git are skipped. This remains a bounded
+  source inventory, not complete Rust syntax coverage or compiler analysis:
+  macro input is inspected only for recognized expression macros, and aliases,
+  arbitrary cfg expressions, and external module/include relationships are not
+  resolved. Lexical matches in opaque macro bodies and function-value references
+  that the old scanner counted may disappear; newly detected calls can make
+  previously passing checks fail. Review regenerated inventories when upgrading.
 - Automatic Rust focus now compares against the merge base with the default
   branch, like native checks, instead of a work-plan baseline, and falls back to
   the whole workspace when that base cannot be resolved.
@@ -94,9 +107,7 @@
   `jig loop show`. Recording that evidence replaces receipt publication as the
   tick's commit point: if the write fails, a manual occurrence or an otherwise
   successful scheduled one requires attention.
-  Nothing writes `.agent/state/receipts.jsonl` any more, though `state export
-  receipts`, `state archive`, `state restore`, and `state diagnose` still read
-  an existing journal. `loop tick` returns `occurrence_id` instead of
+  Nothing writes `.agent/state/receipts.jsonl` any more. `loop tick` returns `occurrence_id` instead of
   `receipt_id`, and `loop dispatch`, `loop clear-attempt`, and
   `loop acknowledge-occurrence` no longer return `receipt_id`; clear-attempt and
   acknowledgement are plain state changes that record no evidence. Worker runs
@@ -107,8 +118,27 @@
   still load. Repo-mode Codex tasks no longer verify receipt-journal appends,
   so the 64 MiB journal limit and the `receipt_append_valid`,
   `receipt_ambiguity`, and `journal_unverifiable` diagnostics are gone; a worker
-  must leave the shared checkout clean, and uncommitted appends earlier
-  runtimes left in `receipts.jsonl` do not block it. The contract version is
+  must leave the shared checkout clean. The contract version is unchanged.
+- **Breaking:** stop reading the receipt journal. `jig state export receipts`
+  and `jig state diagnose --deep` are removed and rejected as usage errors, along
+  with receipt payload analysis and the receipt-to-run linkage report.
+  `jig state diagnose` JSON drops `deep`, `receipts`, `run_linkage`, the
+  `integrity.run_linkage` and `integrity.run_linkage_findings` fields, the
+  per-stream `deep_analysis_*` fields, and the `archive_receipts` and
+  `export_receipts_before_repair` recommendations. It now recommends
+  `archive_runs` whenever `runs.jsonl` reaches 8 MiB, and a new
+  `legacy_state_streams` recommendation reports the bytes left in
+  `receipts.jsonl`, `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl`.
+  `jig state archive --before` now archives completed run histories by default
+  and leaves `receipts.jsonl` alone; `--include-runs` is hidden and has no
+  effect. Its JSON drops `source_path`, `archive_path`, `recovery_backup_path`,
+  `receipt_count_before`, `receipts_archived`, `receipts_retained`,
+  `uncompressed_bytes`, `compressed_bytes`, `sha256`, `content_sha256`, and
+  `runs_included`, keeping the `runs_*` fields. `jig state restore` accepts only
+  runs and sessions backups; receipt backups stay in `.agent/.cache/` as gzip
+  JSONL. Repo-mode Codex tasks now treat uncommitted changes to a legacy
+  `receipts.jsonl` as dirty like any other path. Existing `receipts.jsonl` files
+  stay in place; keep them as history or delete them. The contract version is
   unchanged.
 - Stop validating the retired `[work].iteration_profile` and `[[work.refinements]]`
   settings. Both are still accepted so existing configuration loads, never affect

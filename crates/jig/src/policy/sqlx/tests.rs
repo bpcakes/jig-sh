@@ -9,6 +9,11 @@ use crate::context::RepoContext;
 use crate::policy::SqlxTodoInput;
 use crate::test_env::TestRepoBuilder;
 
+mod boundaries;
+mod discovery;
+mod fragments;
+mod syntax;
+
 #[test]
 fn scan_sqlx_calls_marks_inline_cfg_test_module_calls_as_test() {
     let text = r#"
@@ -24,7 +29,7 @@ mod tests {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 2);
     assert!(!calls[0].is_test);
@@ -46,7 +51,7 @@ mod tests {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -62,7 +67,7 @@ fn scan_sqlx_calls_marks_named_cfg_test_modules_as_test() {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -80,7 +85,7 @@ mod production {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(!calls[0].is_test);
@@ -100,7 +105,7 @@ mod outer {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -118,7 +123,7 @@ mod tests
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -137,7 +142,7 @@ mod production {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(!calls[0].is_test);
@@ -154,7 +159,7 @@ pub mod integration {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -172,7 +177,7 @@ mod tests {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -194,7 +199,7 @@ mod tests {
 }
 "##;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -219,7 +224,7 @@ mod production {
 }
 "##;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -234,7 +239,7 @@ pub async fn load(pool: &sqlx::Pool<sqlx::Postgres>) {
 }
 "####;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].line, 4);
@@ -257,7 +262,7 @@ mod tests {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -276,7 +281,7 @@ mod tests {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -299,7 +304,7 @@ mod tests {
 }
 "##;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -320,7 +325,7 @@ mod tests {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert!(calls[0].is_test);
@@ -336,7 +341,7 @@ pub async fn load(pool: &sqlx::Pool<sqlx::Postgres>) {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].line, 5);
@@ -353,7 +358,7 @@ pub async fn load(pool: &sqlx::Pool<sqlx::Postgres>) {
 }
 "##;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].line, 6);
@@ -369,7 +374,7 @@ pub async fn load(pool: &sqlx::Pool<sqlx::Postgres>) {
 }
 "#;
 
-    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text);
+    let calls = scan_sqlx_calls("crates/app/src/lib.rs", text).unwrap();
 
     assert_eq!(calls.len(), 3);
     assert_eq!(calls[0].function, "sqlx::query_as");

@@ -1,8 +1,6 @@
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 
-use flate2::read::GzDecoder;
 use fs4::fs_std::FileExt;
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -12,11 +10,8 @@ use super::jsonl::{
     state_lock_path, try_scan_jsonl_raw_from, with_jsonl_write_lock, write_jsonl_locked,
 };
 use super::*;
-use crate::command::StateRestoreRequest;
 use crate::context::RepoContext;
-use crate::git_receipts::DiffStat;
 use crate::test_env::TestRepoBuilder;
-use crate::tool_defs::tool;
 
 fn write_fixture_repo(root: &Path) {
     TestRepoBuilder::new(root)
@@ -511,11 +506,5 @@ fn cancellable_jsonl_read_checks_between_records() {
     assert!(checks.get() > 12);
 }
 
-mod receipt_cases;
-use receipt_cases::receipt_record;
 mod summary_cases;
 mod support_cases;
-
-mod archive_validation;
-
-include!("tests_parts/part_01.rs");

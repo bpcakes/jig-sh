@@ -59,7 +59,7 @@ exec sleep 60
     search_paths.extend(std::env::split_paths(&inherited_path));
     let path = std::env::join_paths(search_paths).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .args(["state", "diagnose", "--deep"])
+        .args(["state", "diagnose"])
         .current_dir(temp.path())
         .env_remove("JIG_REPO_ROOT")
         .env_remove("JIG_INVOKE_CWD")

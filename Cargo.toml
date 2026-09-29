@@ -81,6 +81,7 @@ jig-vault = { path = "crates/jig-vault", version = "=0.6.1-dev" }
 jig-vault-tui = { path = "crates/jig-vault-tui", version = "=0.6.1-dev" }
 jsonschema = { version = "0.48.5", default-features = false }
 libc = "0.2.177"
+proc-macro2 = "1.0.106"
 rcgen = { version = "0.14", features = ["x509-parser"] }
 # Ratatui 0.29's `Rect::area` uses u32, but `Buffer::pos_of` still narrows cell
 # indices to u16 while diffing; TUI render areas must remain at most 65,535 cells.

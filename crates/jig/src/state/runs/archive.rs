@@ -5,6 +5,9 @@ use anyhow::anyhow;
 use super::lifecycle::{RunLifecycleValidator, RunStreamValidator};
 use super::*;
 
+mod cutoff;
+use cutoff::parse_archive_before_ms;
+
 #[cfg(test)]
 use std::cell::Cell;
 
@@ -190,7 +193,7 @@ fn validate_published_run_archive(
 
 pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Result<Value> {
     ensure_state_layout(ctx)?;
-    let before_ms = crate::state::receipts::parse_archive_before_ms(before)?;
+    let before_ms = parse_archive_before_ms(before)?;
     let runs_path = ctx.state_file(RUNS_FILE);
     // Apply mode is already a mutating operation, so recover runs whose stable
     // worker lease proves that their process exited before writing a terminal
@@ -328,6 +331,11 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
         }
 
         Ok(json!({
+            "ok": true,
+            "command": "state archive",
+            "dry_run": dry_run,
+            "before": before,
+            "before_ms": before_ms,
             "runs_source_path": ".agent/state/runs.jsonl",
             "runs_archive_path": archive_path.map(|path| path.display().to_string()),
             "runs_recovery_backup_path": recovery_backup_path
