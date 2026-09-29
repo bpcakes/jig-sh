@@ -1,1 +1,0 @@
-Fix PR review finding: Cargo fmt aliases can read Git state. Preserve conservative generated defaults, require explicit adoption, add alias/staging regression, run formatter, Clippy, contract, file budget and backend tests.

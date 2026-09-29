@@ -1,1 +1,0 @@
-Execute and maintain .agent/plans/vault-tui.md.

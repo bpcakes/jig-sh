@@ -1,1 +1,0 @@
-Preserve legacy contract completeness, centralize semantic tool admission independently of implementation kind, add command-backed regression coverage, and run full repository gates.

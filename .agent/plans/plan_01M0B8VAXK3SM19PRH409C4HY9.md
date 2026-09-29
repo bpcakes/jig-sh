@@ -1,1 +1,0 @@
-Port the focused Codex usage-at-reset projection from the review-hardening branch onto master. Preserve current master behavior outside Codex usage presentation. Validate focused crates, CLI tests, and required repository gates.

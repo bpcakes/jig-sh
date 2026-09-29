@@ -1,1 +1,0 @@
-Retire only complete-evidence same-repository overlapping dead claims during normal launch. Reassess under the shared lock, preserve exact-owned route semantics and recovery notices, and validate strict negative, concurrency, and failure cases.

@@ -1,1 +1,0 @@
-Allow explicit dev stop and replacement to retire dead orphaned session records and their exact-owned stale routes without signaling persisted PIDs. Add focused lifecycle regressions and run crate verification.

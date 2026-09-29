@@ -1,1 +1,0 @@
-Centralize generated React lint policy; enable typed TypeScript, React Hooks, Vitest and Testing Library rules; enforce API and layer boundaries; fail on warnings and stale suppressions; validate a fresh Rust/React scaffold.

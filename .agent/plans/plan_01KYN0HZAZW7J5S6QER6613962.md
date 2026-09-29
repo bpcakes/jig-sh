@@ -1,1 +1,0 @@
-Split the largest bootstrap test modules and generated embedded-template snapshots into focused, idiomatic modules and generated resources without behavior changes; verify targeted and workspace gates.

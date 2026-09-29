@@ -1,1 +1,0 @@
-Model vault-home lifecycle explicitly, validate initialization before side effects, remove the obsolete viewport clamp, commit each green slice separately, and run configured gates.

@@ -1,1 +1,0 @@
-Characterize init output, type vault and report boundaries, split preparation from transactional execution, preserve CLI and JSON behavior, and run configured CI gates.

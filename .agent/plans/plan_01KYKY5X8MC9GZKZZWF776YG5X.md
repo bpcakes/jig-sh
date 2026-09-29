@@ -1,1 +1,0 @@
-Remove redundant clones, move 64 KiB buffers to the heap, and enforce both Clippy lints across the workspace.

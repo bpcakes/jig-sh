@@ -1,1 +1,0 @@
-Persist cleanup obligations across supervisor loss, preserve recovery diagnostics, and validate each independently committed slice.

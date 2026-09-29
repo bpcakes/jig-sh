@@ -1,1 +1,0 @@
-Execute and maintain .agent/plans/general-purpose-project-vault.md.

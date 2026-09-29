@@ -1,1 +1,0 @@
-Raise every Rust/React scaffold to Rust 1.94, ship SQLx 0.9 in database variants, enforce Rust and SQLx CLI compatibility in Doctor, update policy and snapshots, and verify every scaffold permutation plus repository gates.

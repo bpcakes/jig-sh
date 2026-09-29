@@ -1,1 +1,0 @@
-Phase 1: plan the feature-area crate split. Phase 2: implement jig-contract, jig-features, jig-rust, jig-sqlx, and jig-typescript. Phase 3: run formatting, tests, and architecture review. Phase 4: fix any findings or close the loop.

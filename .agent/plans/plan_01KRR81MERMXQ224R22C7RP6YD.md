@@ -1,1 +1,0 @@
-Phase 1: plan comprehensive fixes for developer friendliness findings. Phase 2: implement docs and CLI improvements for golden path onboarding, blank help text, human-oriented doctor/status summaries, and make dev wording. Phase 3: run comprehensive review on all working changes. Phase 4: fix review findings or close when none remain.
