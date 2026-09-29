@@ -13,7 +13,8 @@
 
 - Rust adoption detects direct `sqlx::migrate!` invocations through the Rust AST,
   including comment-separated paths, without treating strings or comments as
-  code. Non-candidate files skip parsing; a token-complexity budget and fixed
+  code. This is bounded syntax coverage: large valid sources can be skipped
+  with a warning. Non-candidate files skip parsing; a token-complexity budget and fixed
   parser stack prevent deeply nested or long recursive syntax from aborting
   adoption. Unparseable or over-budget sources produce warnings; macro expansion
   and name resolution remain outside this adoption signal.

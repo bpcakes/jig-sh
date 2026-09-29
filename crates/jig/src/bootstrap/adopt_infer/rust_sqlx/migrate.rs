@@ -5,8 +5,8 @@ use syn::visit::Visit as _;
 
 // A conservative upper bound for recursive AST work, including flat unary,
 // binary, type, and method chains that delimiter depth alone cannot bound.
-const MAX_TOKEN_PATH_COST: usize = 512;
-const PARSER_STACK_BYTES: usize = 16 * 1024 * 1024;
+const MAX_TOKEN_PATH_COST: usize = 2_048;
+const PARSER_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 // This is a syntax signal for adoption, not name resolution or macro expansion.
 // Ignore opaque macro inputs/definitions and aliases; inspect complete files or

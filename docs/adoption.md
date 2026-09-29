@@ -24,9 +24,9 @@ produce warnings and the scan continues. Files without the literal identifier
 substring `migrate` are skipped before parsing, so unrelated Rust templates do
 not consume the warning budget. Candidates are tokenized with `proc_macro2` and
 admitted to AST parsing only when the sum of token counts along every enclosing
-group path is at most 512. This conservative limit covers both nesting and long
+group path is at most 2,048. This conservative limit covers both nesting and long
 flat expression/type chains, and can skip large valid sources with a warning.
-Parsing, visiting, and destruction run on a fixed 16 MiB worker stack.
+Parsing, visiting, and destruction run on a fixed 64 MiB worker stack.
 This is not complete Rust syntax
 coverage: aliases, shadowing, macro expansion, and `include!` relationships are
 not resolved, and cfg conditions are not evaluated. Review inferred answers and

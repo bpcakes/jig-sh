@@ -52,10 +52,11 @@ fn sqlx_resource_child() {
     }
     // Near-budget recursion remains supported, including AST visiting/drop.
     for expression in [
-        format!("{}0{}", "(".repeat(480), ")".repeat(480)),
-        format!("{}0", "!".repeat(480)),
-        format!("0{}", "+0".repeat(240)),
-        format!("None::<{}u8{}>", "Vec<".repeat(150), ">".repeat(150)),
+        format!("{}0{}", "(".repeat(2_000), ")".repeat(2_000)),
+        format!("{}0", "!".repeat(2_000)),
+        format!("0{}", "+0".repeat(1_000)),
+        format!("value{}", ".method()".repeat(500)),
+        format!("None::<{}u8{}>", "Vec<".repeat(650), ">".repeat(650)),
     ] {
         let source =
             format!("fn production() {{ let _ = sqlx::migrate!(); let _ = {expression}; }}");
@@ -99,4 +100,31 @@ fn irrelevant_rust_templates_do_not_crowd_out_sqlx_path_warnings() {
     assert!(inference.enabled.value);
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(warnings[0].contains("using default SQLx paths"));
+}
+
+#[test]
+fn production_shaped_rust_sources_preserve_migration_signals() {
+    let scaffold = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../templates/scaffolds/rust-react/workspace/crates/db/src/lib.rs.jinja"
+    ))
+    .replace("<<[ db_pool ]>>", "PgPool")
+    .replace("<<[ db_database ]>>", "Postgres")
+    .replace("<<[ migration_path ]>>", "./migrations");
+    // Exercise a larger maintained module as well as the generated database
+    // source; broad item/block structure must not exhaust the parser budget.
+    let module = format!(
+        "{}\nfn example_migrations() {{ sqlx::migrate!(); }}",
+        include_str!("../rust_sqlx.rs")
+    );
+    for source in [scaffold, module] {
+        let (enabled, warnings) = infer_source(&source);
+        assert!(enabled, "{warnings:?}");
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| !warning.contains("source.rs")),
+            "{warnings:?}"
+        );
+    }
 }
