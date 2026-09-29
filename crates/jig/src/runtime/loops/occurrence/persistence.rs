@@ -186,43 +186,6 @@ impl SchedulePersistence {
         })
     }
 
-    pub(super) fn with_locked_compensating<T, U>(
-        &self,
-        cancelled: &dyn Fn() -> bool,
-        action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
-        after_commit: impl FnOnce(&T, Instant) -> Result<U>,
-    ) -> Result<(T, U)> {
-        let deadline = loop_state_lock_deadline();
-        self.with_locked_compensating_until(deadline, cancelled, action, after_commit)
-    }
-
-    fn with_locked_compensating_until<T, U>(
-        &self,
-        deadline: Instant,
-        cancelled: &dyn Fn() -> bool,
-        action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
-        after_commit: impl FnOnce(&T, Instant) -> Result<U>,
-    ) -> Result<(T, U)> {
-        self.with_schedule_locks_until(deadline, cancelled, |directories| {
-            let durable_required = self.durable_state_expected(directories)?;
-            let durable = self.read_durable(directories, durable_required, &|| false)?;
-            let mut store = durable.unwrap_or_default();
-            if !durable_required || self.protected_authority_needs_state(directories)? {
-                validate_durable_schedule(&store, &self.path)?;
-                self.write_durable_schedule(directories, &store)?;
-            }
-            self.ensure_initialization_markers(directories)?;
-            self.write_legacy_marker(directories)?;
-            let rollback = store.clone();
-            let result = action(&mut store)?;
-            validate_durable_schedule(&store, &self.path)?;
-            self.write_durable_schedule(directories, &store)?;
-            compensate_after_commit(result, after_commit, || {
-                self.write_durable_schedule(directories, &rollback)
-            })
-        })
-    }
-
     #[cfg(test)]
     pub(super) fn read_locked<T>(
         &self,
@@ -469,25 +432,6 @@ impl SchedulePersistence {
         Ok(self
             .protected_authority()?
             .map_or(self.path.as_path(), |authority| authority.path.as_path()))
-    }
-}
-
-fn compensate_after_commit<T, U>(
-    result: T,
-    after_commit: impl FnOnce(&T, Instant) -> Result<U>,
-    rollback: impl FnOnce() -> Result<()>,
-) -> Result<(T, U)> {
-    match after_commit(&result, loop_state_lock_deadline()) {
-        Ok(effect) => Ok((result, effect)),
-        Err(error) if crate::state::receipt_append_may_have_landed(&error) => Err(error.context(
-            "Committed loop schedule state was retained because its receipt append may have landed",
-        )),
-        Err(error) => match rollback() {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(error.context(format!(
-                "Failed to roll back committed loop schedule state: {rollback_error:#}"
-            ))),
-        },
     }
 }
 

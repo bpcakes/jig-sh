@@ -361,7 +361,7 @@ fn manual_occurrences_and_loop_error_selection_survive_unrelated_insertions() {
             finished_at_ms: None,
             acknowledged_at_ms: None,
             status: "running".to_string(),
-            worker_receipt_id: None,
+            worker_invoked: false,
             worktree: None,
             error: None,
         }],

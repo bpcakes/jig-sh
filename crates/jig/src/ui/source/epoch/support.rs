@@ -120,7 +120,7 @@ pub(super) fn scheduled_occurrence(value: &StatusScheduledOccurrence) -> Schedul
         finished_at_ms: value.finished_at_ms,
         acknowledged_at_ms: value.acknowledged_at_ms,
         status: value.status.clone(),
-        worker_receipt_id: value.worker_receipt_id.clone(),
+        worker_invoked: value.worker_invoked,
         worktree: value.worktree.clone(),
         error: value.error.clone(),
     }

@@ -21,12 +21,12 @@ use crate::command::LoopStatusRequest;
 use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 
+#[path = "tests/occurrence_evidence.rs"]
+mod occurrence_evidence;
 #[path = "tests/post_work_evidence.rs"]
 mod post_work_evidence;
 #[path = "tests/preparation.rs"]
 mod preparation;
-#[path = "tests/receipt_evidence.rs"]
-mod receipt_evidence;
 #[path = "tests/review_regressions.rs"]
 mod review_regressions;
 #[path = "tests/review_round14.rs"]
@@ -204,7 +204,8 @@ fn unexecuted_finalization_keeps_renewal_failure_as_dispatch_state_evidence() {
         finished_at_ms: None,
         acknowledged_at_ms: None,
         status: OccurrenceStatus::Running,
-        worker_receipt_id: None,
+        worker_invoked: false,
+        legacy_worker_receipt_id: None,
         worktree: None,
         error: None,
     };
@@ -244,7 +245,8 @@ fn unexecuted_finalization_suppresses_only_expected_ownership_loss() {
         finished_at_ms: None,
         acknowledged_at_ms: None,
         status: OccurrenceStatus::Running,
-        worker_receipt_id: None,
+        worker_invoked: false,
+        legacy_worker_receipt_id: None,
         worktree: None,
         error: None,
     };
@@ -733,58 +735,6 @@ schedule = "* * * * *"
     let retried = dispatch_due_at(&ctx, dispatch_at).unwrap();
     assert_eq!(retried["status"], "acted", "{retried:#}");
     assert_eq!(retried["executed_count"], 1);
-}
-
-#[test]
-fn held_workflow_lease_is_abandoned_even_when_tick_receipt_fails() {
-    let temp = tempdir().unwrap();
-    TestRepoBuilder::new(temp.path()).write();
-    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        format!(
-            r#"{config}
-[[loop.workflows]]
-id = "scheduled-noop"
-kind = "noop_status"
-schedule = "* * * * *"
-"#
-        ),
-    )
-    .unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let mut leases = LeaseStore::new(&ctx);
-    let LeaseAcquire::Acquired(_lease) = leases.acquire("workflow:scheduled-noop", 60).unwrap()
-    else {
-        panic!("expected workflow lease");
-    };
-    fs::create_dir_all(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
-    let workflow = list_workflows(&ctx)
-        .unwrap()
-        .into_iter()
-        .find(|workflow| workflow.id == "scheduled-noop")
-        .unwrap();
-    let mut occurrences = OccurrenceStore::new(&ctx);
-
-    let step = dispatch_workflow(
-        &ctx,
-        &mut occurrences,
-        &workflow,
-        timestamp("2026-08-21T08:42:30Z"),
-        &mut NoopExecutionObserver,
-    );
-
-    assert_eq!(step.executed_count, 0);
-    assert_eq!(step.deferred_count, 1);
-    assert_eq!(step.skipped_count, 1);
-    assert_eq!(step.action.as_ref().unwrap()["status"], "deferred");
-    assert!(
-        step.state_errors.iter().any(|error| error["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("Failed to record loop tick receipt"))),
-        "receipt failure should remain dispatch state evidence"
-    );
-    assert!(occurrences.snapshot().unwrap().is_empty());
 }
 
 fn timestamp(value: &str) -> u64 {

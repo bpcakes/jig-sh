@@ -54,14 +54,6 @@ impl DispatchSummary {
         self.state_error_count = u64::try_from(self.state_errors.len()).unwrap_or(u64::MAX);
     }
 
-    pub(super) fn state_error_text(&self) -> String {
-        self.state_errors
-            .iter()
-            .filter_map(|error| error["error"].as_str())
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-
     pub(super) fn status(&self) -> &'static str {
         if self.failed_count > 0 || self.state_error_count > 0 {
             "failed"
@@ -150,7 +142,7 @@ impl RunTickDisposition {
 
 pub(super) struct TerminalDetails {
     pub(super) outcome: OccurrenceOutcome,
-    pub(super) worker_receipt_id: Option<String>,
+    pub(super) worker_invoked: bool,
     pub(super) worktree: Option<String>,
     pub(super) error: Option<String>,
 }
@@ -167,7 +159,7 @@ impl TerminalDetails {
         };
         Self {
             outcome,
-            worker_receipt_id: completion.worker_receipt_id.clone(),
+            worker_invoked: completion.worker_invoked,
             worktree: completion.worktree.clone(),
             error: completion
                 .error
@@ -237,7 +229,7 @@ mod tests {
                 outcome: WorkflowOutcome::Failed,
                 execution: WorkflowExecution::Executed,
                 repository_revision: RepositoryRevisionState::NotApplicable,
-                worker_receipt_id: Some("receipt-worker".into()),
+                worker_invoked: true,
                 worktree: Some("/tmp/retained-worktree".into()),
                 error: Some("worker failed".into()),
             },
@@ -250,7 +242,7 @@ mod tests {
         let details = TerminalDetails::from_tick(&tick);
 
         assert_eq!(details.outcome, OccurrenceOutcome::Failed);
-        assert_eq!(details.worker_receipt_id.as_deref(), Some("receipt-worker"));
+        assert!(details.worker_invoked);
         assert_eq!(details.worktree.as_deref(), Some("/tmp/retained-worktree"));
         assert_eq!(details.error.as_deref(), Some("worker failed"));
     }
@@ -287,7 +279,7 @@ mod tests {
                 outcome: WorkflowOutcome::Succeeded,
                 execution: WorkflowExecution::Executed,
                 repository_revision: RepositoryRevisionState::NotApplicable,
-                worker_receipt_id: Some("receipt-worker".into()),
+                worker_invoked: true,
                 worktree: Some("/tmp/retained-worktree".into()),
                 error: None,
             },
@@ -300,7 +292,7 @@ mod tests {
         let details = TerminalDetails::from_tick(&tick);
 
         assert_eq!(details.outcome, OccurrenceOutcome::NeedsAttention);
-        assert_eq!(details.worker_receipt_id.as_deref(), Some("receipt-worker"));
+        assert!(details.worker_invoked);
         assert_eq!(details.worktree.as_deref(), Some("/tmp/retained-worktree"));
         assert_eq!(
             details.error.as_deref(),

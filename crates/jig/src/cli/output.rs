@@ -10,8 +10,8 @@ pub(super) use self::doctor::format_doctor_summary;
 pub(super) use self::info::format_info_summary;
 use self::loops::{
     format_loop_acknowledge_occurrence_summary, format_loop_clear_attempt_summary,
-    format_loop_dispatch_summary, format_loop_run_summary, format_loop_status_summary,
-    format_loop_tick_summary,
+    format_loop_dispatch_summary, format_loop_run_summary, format_loop_show_summary,
+    format_loop_status_summary, format_loop_tick_summary,
 };
 use self::state::{
     format_state_archive_summary, format_state_diagnose_summary, format_state_export_summary,
@@ -55,6 +55,7 @@ pub(super) enum HumanOutput {
     LoopTick,
     LoopDispatch,
     LoopStatus,
+    LoopShow,
     LoopRun,
     LoopClearAttempt,
     LoopAcknowledgeOccurrence,
@@ -105,6 +106,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::LoopTick => format_loop_tick_summary(value),
         HumanOutput::LoopDispatch => format_loop_dispatch_summary(value),
         HumanOutput::LoopStatus => format_loop_status_summary(value),
+        HumanOutput::LoopShow => format_loop_show_summary(value),
         HumanOutput::LoopRun => format_loop_run_summary(value),
         HumanOutput::LoopClearAttempt => format_loop_clear_attempt_summary(value),
         HumanOutput::LoopAcknowledgeOccurrence => format_loop_acknowledge_occurrence_summary(value),

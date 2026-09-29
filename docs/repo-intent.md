@@ -11,7 +11,7 @@ The core idea is to turn a repository into an operating environment for coding a
 - repo-wide and crate-level agent guidance
 - a typed `scripts/jig` CLI for repo-local commands
 - an MCP server exposing a bounded repository inspection and execution model to clients
-- append-only run history and loop receipts under `.agent/`
+- append-only run history under `.agent/` and per-occurrence loop evidence under Git metadata
 - native agent tooling checks for client-side Jig skills
 - policy scripts and CI workflows that keep the generated contract honest
 
@@ -38,9 +38,9 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 - bootstrap flows: `jig init`, `jig adopt`, and `jig update`
 - command-backed tool execution
 - MCP protocol handling over stdio
-- append-only runtime state for runs and loop receipts
+- append-only run history and loop occurrence evidence
 - agent tooling doctor/bootstrap commands for Codex-side Jig skills
-- repository source identity for run input digests, and loop receipt metadata including git changed paths and diff stats
+- repository source identity for run input digests
 
 The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 8`, with explicit components, actions, profiles, adapter provenance, literal argv and explicit shell runners, compatibility `jig.*` aliases, typed native configuration, declared bounded string arguments, target-local matching for non-empty action inputs, and `inputs_policy`/`source_state` input declarations. Input policies default to whole-repository. Audited command actions may declare `source_state = "worktree"` when their results depend only on working-file content; the default `git` policy declares Git placement and HEAD/branch authority. Native checks retain their Git and comparison dependencies. Jig validates and reports these declarations but no longer records target freshness or check receipts; checks record their results in run history. Contracts v6/v7 retain their released command behavior; v6 keeps component-aggregate matching, and versions 2 through 5 remain readable through the legacy repository projection.
 
@@ -115,11 +115,16 @@ The canonical `scripts/jig ui` entrypoint starts on Timeline, while `scripts/jig
 `crates/jig/src/state/` stores append-only JSONL records:
 
 - `runs.jsonl`: accepted immutable plans and folded execution lifecycle events, including each target's conclusion and the output tail of a target that did not succeed
-- `receipts.jsonl`: loop workflow evidence with bounded output and changed-path previews; check receipts written by earlier runtimes remain readable
+- `receipts.jsonl`: no longer written; check and loop receipts from earlier runtimes remain readable by export, archive, restore, and diagnosis
 
 Repositories adopted before structured work was removed may also keep
 `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl`. Jig no longer writes or
 reads them; `state diagnose` still reports their size and integrity.
+
+Loop occurrences record one evidence document each under
+`<git-dir>/jig/loop/evidence/`, beside the protected schedule ledger and outside
+the checkout; `jig loop show` reports it. That evidence follows the occurrence
+history's retention rather than being append-only.
 
 Normal writes append to these streams. Explicit maintenance uses streaming,
 validated whole-file rewrites: state archiving writes old receipt records plus,
@@ -175,6 +180,7 @@ For runtime changes, read `crates/jig/AGENTS.md` and use its entrypoint map:
 - command, legacy make, and MCP dispatch: `crates/jig/src/runtime.rs`
 - MCP protocol: `crates/jig/src/mcp.rs`
 - runs and receipts: `crates/jig/src/state.rs` and `crates/jig/src/state/`
+- loop occurrence evidence and `loop show`: `crates/jig/src/runtime/loops/evidence.rs` and `crates/jig/src/runtime/loops/show.rs`
 - bootstrap and template rendering: `crates/jig/src/bootstrap.rs` and `crates/jig/src/bootstrap/`
 - generated outputs: `templates/project/`
 

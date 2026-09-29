@@ -4,7 +4,7 @@ use std::fs;
 #[cfg(test)]
 use std::fs::File;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -516,21 +516,6 @@ impl AttemptStore {
                 });
                 Ok(matches_observed_version && store.attempts.remove(&key).is_some())
             })
-    }
-
-    pub(super) fn clear_attempt_and_then<T>(
-        &mut self,
-        workflow_id: &str,
-        item_key: &str,
-        cancelled: &dyn Fn() -> bool,
-        after_commit: impl FnOnce(bool, Instant) -> Result<T>,
-    ) -> Result<(bool, T)> {
-        let key = format!("{workflow_id}:{item_key}");
-        self.persistence.with_locked_compensating(
-            cancelled,
-            |store: &mut AttemptFile| Ok(store.attempts.remove(&key).is_some()),
-            |cleared, deadline| after_commit(*cleared, deadline),
-        )
     }
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut AttemptFile) -> Result<T>) -> Result<T> {

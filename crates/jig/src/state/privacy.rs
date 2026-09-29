@@ -1,8 +1,6 @@
 use std::fs;
 use std::path::Path;
 
-use serde_json::Value;
-
 pub(super) const REPOSITORY_ROOT_REDACTION: &str = "<repository-root>";
 
 pub(super) fn repository_root_spellings(root: &Path) -> Vec<String> {
@@ -26,28 +24,6 @@ pub(super) fn redact_repository_root(value: &str, spellings: &[String]) -> Strin
     spellings.iter().fold(value.to_string(), |redacted, root| {
         redact_path_bounded_occurrences(&redacted, root)
     })
-}
-
-pub(super) fn redact_repository_root_in_value(mut value: Value, spellings: &[String]) -> Value {
-    fn redact(value: &mut Value, spellings: &[String]) {
-        match value {
-            Value::String(text) => *text = redact_repository_root(text, spellings),
-            Value::Array(values) => {
-                for value in values {
-                    redact(value, spellings);
-                }
-            }
-            Value::Object(values) => {
-                for value in values.values_mut() {
-                    redact(value, spellings);
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) => {}
-        }
-    }
-
-    redact(&mut value, spellings);
-    value
 }
 
 fn redact_path_bounded_occurrences(value: &str, root: &str) -> String {

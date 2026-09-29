@@ -4,8 +4,6 @@ use serde_json::{Value, json};
 use crate::command::{LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest};
 use crate::context::RepoContext;
 use crate::execution::ExecutionControl;
-use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation_until};
-use crate::tool_defs::{LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL, LOOP_CLEAR_ATTEMPT_TOOL};
 
 use super::super::occurrence::{OccurrenceAcknowledgement, OccurrenceStore};
 use super::super::state::AttemptStore;
@@ -18,7 +16,6 @@ pub(in crate::runtime::loops) fn clear_attempt(
     request: LoopClearAttemptRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let started = now_ms();
     let workflow_id = request.workflow.trim();
     let item_key = request.item.trim();
     if workflow_id.is_empty() {
@@ -51,58 +48,21 @@ pub(in crate::runtime::loops) fn clear_attempt(
     } else {
         None
     };
-    let mut attempt_store = AttemptStore::new(ctx);
-    let (cleared, (evidence, receipt_id)) = attempt_store.clear_attempt_and_then(
-        workflow_id,
-        item_key,
-        &|| observer.cancelled(),
-        |cleared, deadline| {
-            let workflow = if workflow_configured || (!cleared && builtin_alias) {
-                resolved_workflow
-                    .expect("configured workflows and built-in aliases are resolved above")
-            } else {
-                removed_workflow_value(workflow_id)
-            };
-            let evidence = json!({
-                "kind": "loop_clear_attempt",
-                "schema_version": 1,
-                "workflow": workflow,
-                "workflow_id": workflow_id,
-                "item_key": item_key,
-                "cleared": cleared,
-            });
-            let receipt_id = record_receipt_with_cancellation_until(
-                ctx,
-                ReceiptInput {
-                    tool_name: LOOP_CLEAR_ATTEMPT_TOOL,
-                    args: json!({
-                        "workflow": workflow_id,
-                        "item": evidence["item_key"],
-                    }),
-                    invoked_command_key: None,
-                    started_at_ms: started,
-                    ended_at_ms: now_ms(),
-                    exit_status: 0,
-                    stdout: "",
-                    stderr: "",
-                    evidence: Some(evidence.clone()),
-                    collect_git_metadata: false,
-                    collect_worktree_fingerprint: false,
-                },
-                &|| observer.cancelled(),
-                deadline,
-            )?;
-            Ok((evidence, receipt_id))
-        },
-    )?;
+    let cleared =
+        AttemptStore::new(ctx)
+            .clear_attempt_with_cancellation(workflow_id, item_key, &|| observer.cancelled())?;
+    let workflow = if workflow_configured || (!cleared && builtin_alias) {
+        resolved_workflow.expect("configured workflows and built-in aliases are resolved above")
+    } else {
+        removed_workflow_value(workflow_id)
+    };
 
     Ok(json!({
         "ok": true,
         "command": "loop clear-attempt",
-        "receipt_id": receipt_id,
-        "workflow": evidence["workflow"],
-        "workflow_id": evidence["workflow_id"],
-        "item_key": evidence["item_key"],
+        "workflow": workflow,
+        "workflow_id": workflow_id,
+        "item_key": item_key,
         "cleared": cleared,
     }))
 }
@@ -120,48 +80,13 @@ pub(in crate::runtime::loops) fn acknowledge_occurrence(
     request: LoopAcknowledgeOccurrenceRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let started = now_ms();
     let occurrence_id = request.occurrence.trim();
     if occurrence_id.is_empty() {
         bail!("--occurrence must not be empty");
     }
     super::super::pre_execution::require_ignored_loop_runtime_root(ctx, observer)?;
-    let mut occurrence_store = OccurrenceStore::new(ctx);
-    let (acknowledgement, receipt_id) = occurrence_store.acknowledge_and_then(
-        occurrence_id,
-        &|| observer.cancelled(),
-        |occurrence, changed, deadline| {
-            if observer.cancelled() {
-                bail!("Execution was cancelled before recording occurrence acknowledgement");
-            }
-            record_receipt_with_cancellation_until(
-                ctx,
-                ReceiptInput {
-                    tool_name: LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL,
-                    args: json!({
-                        "occurrence": occurrence_id,
-                    }),
-                    invoked_command_key: None,
-                    started_at_ms: started,
-                    ended_at_ms: now_ms(),
-                    exit_status: 0,
-                    stdout: "",
-                    stderr: "",
-                    evidence: Some(json!({
-                        "kind": "loop_acknowledge_occurrence",
-                        "schema_version": 1,
-                        "occurrence": occurrence,
-                        "changed": changed,
-                    })),
-                    // Hold schedule locks through receipt publication; keep Git inspection outside.
-                    collect_git_metadata: false,
-                    collect_worktree_fingerprint: false,
-                },
-                &|| observer.cancelled(),
-                deadline,
-            )
-        },
-    )?;
+    let acknowledgement = OccurrenceStore::new(ctx)
+        .acknowledge_with_cancellation(occurrence_id, &|| observer.cancelled())?;
     let (occurrence, changed) = match acknowledgement {
         OccurrenceAcknowledgement::Acknowledged(occurrence) => (occurrence, true),
         OccurrenceAcknowledgement::AlreadyAcknowledged(occurrence) => (occurrence, false),
@@ -170,7 +95,6 @@ pub(in crate::runtime::loops) fn acknowledge_occurrence(
     Ok(json!({
         "ok": true,
         "command": "loop acknowledge-occurrence",
-        "receipt_id": receipt_id,
         "occurrence_id": occurrence_id,
         "occurrence": occurrence,
         "changed": changed,

@@ -122,7 +122,7 @@ mod review_round4_tests {
             &mut attempts,
             PrRepairOutcome::WorkerCancelled {
                 before_start: false,
-                worker_receipt_id: "receipt-worker".into(),
+                worker: json!({"kind": "worker_run", "status": "passed"}),
                 worktree: PreparedPrWorktree::Created(worktree.clone()),
             },
         )
@@ -131,13 +131,10 @@ mod review_round4_tests {
 
         assert_eq!(action["status"], "needs_attention");
         assert_eq!(action["attention_kind"], "cancelled_after_start");
-        assert_eq!(action["worker_receipt_id"], "receipt-worker");
+        assert_eq!(action["worker"]["kind"], "worker_run");
         assert_eq!(action["worktree"], worktree.display().to_string());
         assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
-        assert_eq!(
-            completion.worker_receipt_id.as_deref(),
-            Some("receipt-worker")
-        );
+        assert!(completion.worker_invoked);
         assert_eq!(
             completion.worktree.as_deref(),
             Some(worktree.to_string_lossy().as_ref())
@@ -218,7 +215,7 @@ exec git "$@"
             PrRepairOutcome::PreExecutionFailed {
                 error: anyhow!("worker did not start"),
                 worktree: Some(PreparedPrWorktree::Created(worktree.clone())),
-                worker_receipt_id: None,
+                worker: None,
             },
             guard,
         )
@@ -320,7 +317,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             PrRepairOutcome::PreExecutionFailed {
                 error: anyhow!("worker did not start"),
                 worktree: Some(PreparedPrWorktree::Created(worktree.clone())),
-                worker_receipt_id: None,
+                worker: None,
             },
             guard,
         )
@@ -359,7 +356,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &mut attempts,
             PrRepairOutcome::WorkerCancelled {
                 before_start: true,
-                worker_receipt_id: "receipt-worker".into(),
+                worker: json!({"kind": "worker_run", "status": "passed"}),
                 worktree: PreparedPrWorktree::Created(worktree.clone()),
             },
         )
@@ -370,7 +367,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             completion.execution,
             WorkflowExecution::Unexecuted(UnexecutedReason::CancelledBeforeStart)
         );
-        assert_eq!(completion.worker_receipt_id.as_deref(), Some("receipt-worker"));
+        assert!(completion.worker_invoked);
         assert_eq!(action["worktree_retained"], false);
         assert!(!worktree.exists());
         assert!(attempts.snapshot().unwrap().is_empty());
@@ -405,7 +402,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &mut attempts,
             PrRepairOutcome::WorkerCancelled {
                 before_start: true,
-                worker_receipt_id: "receipt-worker".into(),
+                worker: json!({"kind": "worker_run", "status": "passed"}),
                 worktree: PreparedPrWorktree::Created(worktree.clone()),
             },
             Some(&release_error),
@@ -421,7 +418,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
         );
         assert_eq!(action["unexecuted_reason"], "cancelled_before_start");
         assert_eq!(action["worktree_retained"], true);
-        assert_eq!(action["worker_receipt_id"], "receipt-worker");
+        assert_eq!(action["worker"]["kind"], "worker_run");
         assert!(worktree.exists());
         assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
         assert_eq!(
@@ -463,7 +460,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             PrRepairOutcome::PreExecutionFailed {
                 error: anyhow!("worker process could not start"),
                 worktree: Some(PreparedPrWorktree::Created(worktree.clone())),
-                worker_receipt_id: Some("receipt-worker".into()),
+                worker: Some(json!({"kind": "worker_run", "status": "failed"})),
             },
         )
         .unwrap();
@@ -473,7 +470,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             completion.execution,
             WorkflowExecution::Unexecuted(UnexecutedReason::PreExecutionError)
         );
-        assert_eq!(completion.worker_receipt_id.as_deref(), Some("receipt-worker"));
+        assert!(completion.worker_invoked);
         assert_eq!(action["worktree_retained"], false);
         assert!(!worktree.exists());
         assert!(attempts.snapshot().unwrap().is_empty());
@@ -507,7 +504,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &mut attempts,
             PrRepairOutcome::WorkerFailed {
                 error: anyhow!("worker output was malformed"),
-                worker_receipt_id: Some("receipt-worker".into()),
+                worker: Some(json!({"kind": "worker_run", "status": "failed"})),
                 worktree: worktree.clone(),
             },
         )
@@ -518,7 +515,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             action["attention_kind"],
             "failed_repair_worktree_retained"
         );
-        assert_eq!(action["worker_receipt_id"], "receipt-worker");
+        assert_eq!(action["worker"]["kind"], "worker_run");
         assert_eq!(action["worktree_retained"], true);
         assert!(worktree.join("partial.txt").exists());
     }
@@ -562,7 +559,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &mut attempts,
             PrRepairOutcome::WorkerFailed {
                 error: anyhow!("git push failed before starting"),
-                worker_receipt_id: Some("receipt-worker".into()),
+                worker: Some(json!({"kind": "worker_run", "status": "failed"})),
                 worktree: worktree.clone(),
             },
         )
@@ -603,7 +600,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &mut attempts,
             PrRepairOutcome::WorkerFailed {
                 error: anyhow!("worker output was malformed"),
-                worker_receipt_id: Some("receipt-worker".into()),
+                worker: Some(json!({"kind": "worker_run", "status": "failed"})),
                 worktree: worktree.clone(),
             },
         )
@@ -644,7 +641,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &mut attempts,
             PrRepairOutcome::WorkerFailed {
                 error: anyhow!("worker output was malformed"),
-                worker_receipt_id: Some("receipt-worker".into()),
+                worker: Some(json!({"kind": "worker_run", "status": "failed"})),
                 worktree: worktree.clone(),
             },
             Some(&release_error),
@@ -661,7 +658,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
         assert_eq!(action["completed_error"], "worker output was malformed");
         assert_eq!(action["lease_error"], release_error.to_string());
         assert_eq!(action["worktree_retained"], true);
-        assert_eq!(action["worker_receipt_id"], "receipt-worker");
+        assert_eq!(action["worker"]["kind"], "worker_run");
         assert!(worktree.exists());
         assert_eq!(attempts.snapshot().unwrap().len(), 1);
     }
@@ -697,7 +694,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
                     "kind": "pr_manager_worker",
                     "status": "attempted",
                     "worktree": worktree,
-                    "worker_receipt_id": "receipt-worker",
+                    "worker": {"kind": "worker_run"},
                     "push": {"final_head": "pushed-head"},
                 }),
                 worktree: worktree.clone(),
@@ -711,7 +708,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             "attempt_state_persistence_failed"
         );
         assert_eq!(action["completed_status"], "attempted");
-        assert_eq!(action["worker_receipt_id"], "receipt-worker");
+        assert_eq!(action["worker"]["kind"], "worker_run");
         assert_eq!(action["push"]["final_head"], "pushed-head");
         assert_eq!(action["worktree_retained"], true);
         assert!(worktree.exists());
@@ -730,7 +727,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &mut attempts,
             PrRepairOutcome::WorkerFailed {
                 error: anyhow!("worker output was invalid"),
-                worker_receipt_id: None,
+                worker: None,
                 worktree: failed_worktree.clone(),
             },
         )

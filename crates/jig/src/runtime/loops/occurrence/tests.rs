@@ -43,7 +43,7 @@ fn occurrence_claim_is_single_use_and_owner_checked() {
                 "another-owner",
                 OccurrenceFinish {
                     outcome: OccurrenceOutcome::Succeeded,
-                    worker_receipt_id: None,
+                    worker_invoked: false,
                     worktree: None,
                     error: None,
                 },
@@ -95,17 +95,14 @@ fn renewal_error_does_not_skip_terminal_worker_evidence() {
     let finalization = guard
         .finish(OccurrenceFinish {
             outcome: OccurrenceOutcome::Succeeded,
-            worker_receipt_id: Some("receipt-worker"),
+            worker_invoked: true,
             worktree: Some("/tmp/ExampleProject-retained-worktree"),
             error: None,
         })
         .unwrap();
 
     assert_eq!(finalization.occurrence.status, OccurrenceStatus::Succeeded);
-    assert_eq!(
-        finalization.occurrence.worker_receipt_id.as_deref(),
-        Some("receipt-worker")
-    );
+    assert!(finalization.occurrence.worker_invoked);
     assert_eq!(
         finalization.occurrence.worktree.as_deref(),
         Some("/tmp/ExampleProject-retained-worktree")
@@ -229,7 +226,7 @@ fn unexecuted_abandonment_refuses_ambiguous_worker_evidence() {
             &claim.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::Succeeded,
-                worker_receipt_id: Some("receipt-worker"),
+                worker_invoked: true,
                 worktree: None,
                 error: None,
             },
@@ -497,7 +494,7 @@ fn occurrence_guard_renews_the_persisted_claim_before_expiry() {
     let finished = guard
         .finish(OccurrenceFinish {
             outcome: OccurrenceOutcome::Succeeded,
-            worker_receipt_id: None,
+            worker_invoked: false,
             worktree: None,
             error: None,
         })
@@ -739,7 +736,7 @@ fn assert_expiry_clock_runs_under_lock(transition: DelayedTransition) {
             &owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::Succeeded,
-                worker_receipt_id: Some("receipt-worker"),
+                worker_invoked: true,
                 worktree: None,
                 error: None,
             },

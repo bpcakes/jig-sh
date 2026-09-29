@@ -54,7 +54,9 @@ pub(super) struct WorkflowCompletion {
     pub(super) outcome: WorkflowOutcome,
     pub(super) execution: WorkflowExecution,
     pub(super) repository_revision: RepositoryRevisionState,
-    pub(super) worker_receipt_id: Option<String>,
+    /// A worker invocation was attempted and described in the tick's actions,
+    /// even if it was cancelled before its process started.
+    pub(super) worker_invoked: bool,
     pub(super) worktree: Option<String>,
     pub(super) error: Option<String>,
 }
@@ -76,9 +78,7 @@ impl WorkflowCompletion {
             outcome,
             execution: WorkflowExecution::Executed,
             repository_revision: RepositoryRevisionState::NotApplicable,
-            worker_receipt_id: evidence
-                .and_then(|action| action["worker_receipt_id"].as_str())
-                .map(str::to_string),
+            worker_invoked: evidence.is_some_and(|action| action["worker"].is_object()),
             worktree: evidence.and_then(retained_worktree).map(str::to_string),
             error: completion_error(actions, outcome),
         }
@@ -158,7 +158,7 @@ fn push_action_error(errors: &mut Vec<String>, action: &Value) {
 }
 
 fn action_has_completion_evidence(action: &Value) -> bool {
-    action["worker_receipt_id"].is_string() || retained_worktree(action).is_some()
+    action["worker"].is_object() || retained_worktree(action).is_some()
 }
 
 fn retained_worktree(action: &Value) -> Option<&str> {
@@ -424,15 +424,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn workflow_completion_prefers_failed_action_with_receipt() {
+    fn workflow_completion_prefers_failed_action_with_worker_evidence() {
         let completion = WorkflowCompletion::from_actions(&[
             json!({
                 "status": "skipped",
-                "worker_receipt_id": null,
+                "worker": null,
             }),
             json!({
                 "status": "failed",
-                "worker_receipt_id": "receipt_failed",
+                "worker": {"kind": "worker_run"},
                 "error": "worker failed",
             }),
         ]);
@@ -443,7 +443,7 @@ mod tests {
                 outcome: WorkflowOutcome::Failed,
                 execution: WorkflowExecution::Executed,
                 repository_revision: RepositoryRevisionState::NotApplicable,
-                worker_receipt_id: Some("receipt_failed".into()),
+                worker_invoked: true,
                 worktree: None,
                 error: Some("worker failed".into()),
             }
@@ -454,15 +454,12 @@ mod tests {
     fn workflow_completion_classifies_post_commit_cancellation_as_attention() {
         let completion = WorkflowCompletion::from_actions(&[json!({
             "status": "cancelled_after_commit",
-            "worker_receipt_id": "receipt_worker",
+            "worker": {"kind": "worker_run"},
             "error": "follow-up review thread updates are incomplete",
         })]);
 
         assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
-        assert_eq!(
-            completion.worker_receipt_id.as_deref(),
-            Some("receipt_worker")
-        );
+        assert!(completion.worker_invoked);
         assert_eq!(
             completion.error.as_deref(),
             Some("follow-up review thread updates are incomplete")
@@ -508,15 +505,12 @@ mod tests {
         let completion = WorkflowCompletion::from_actions(&[json!({
             "status": "failed",
             "completed_status": "cancelled_after_commit",
-            "worker_receipt_id": "receipt_worker",
+            "worker": {"kind": "worker_run"},
             "error": "lease cleanup failed after post-push cancellation",
         })]);
 
         assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
-        assert_eq!(
-            completion.worker_receipt_id.as_deref(),
-            Some("receipt_worker")
-        );
+        assert!(completion.worker_invoked);
         assert_eq!(
             completion.error.as_deref(),
             Some("lease cleanup failed after post-push cancellation")
@@ -531,16 +525,13 @@ mod tests {
             }),
             json!({
                 "status": "cancelled_after_commit",
-                "worker_receipt_id": "receipt_worker",
+                "worker": {"kind": "worker_run"},
                 "error": "follow-up review thread updates are incomplete",
             }),
         ]);
 
         assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
-        assert_eq!(
-            completion.worker_receipt_id.as_deref(),
-            Some("receipt_worker")
-        );
+        assert!(completion.worker_invoked);
         assert_eq!(
             completion.error.as_deref(),
             Some("follow-up review thread updates are incomplete")
@@ -576,15 +567,12 @@ mod tests {
             }),
             json!({
                 "status": "succeeded",
-                "worker_receipt_id": "receipt_worker",
+                "worker": {"kind": "worker_run"},
             }),
         ]);
 
         assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
-        assert_eq!(
-            completion.worker_receipt_id.as_deref(),
-            Some("receipt_worker")
-        );
+        assert!(completion.worker_invoked);
         assert_eq!(
             completion.error.as_deref(),
             Some("attempt budget is exhausted")
@@ -600,7 +588,7 @@ mod tests {
             }),
             json!({
                 "status": "succeeded",
-                "worker_receipt_id": "receipt_second_pr",
+                "worker": {"kind": "worker_run"},
                 "checkout": {
                     "mode": "worktree",
                     "retained": true,
@@ -610,10 +598,7 @@ mod tests {
         ]);
 
         assert_eq!(completion.outcome, WorkflowOutcome::Failed);
-        assert_eq!(
-            completion.worker_receipt_id.as_deref(),
-            Some("receipt_second_pr")
-        );
+        assert!(completion.worker_invoked);
         assert_eq!(completion.worktree.as_deref(), Some("/tmp/second-pr"));
         assert_eq!(completion.error.as_deref(), Some("first PR failed"));
     }
@@ -627,7 +612,7 @@ mod tests {
             }),
             json!({
                 "status": "succeeded",
-                "worker_receipt_id": "receipt_second_pr",
+                "worker": {"kind": "worker_run"},
             }),
             json!({
                 "status": "succeeded",
@@ -640,10 +625,7 @@ mod tests {
         ]);
 
         assert_eq!(completion.outcome, WorkflowOutcome::Failed);
-        assert_eq!(
-            completion.worker_receipt_id.as_deref(),
-            Some("receipt_second_pr")
-        );
+        assert!(completion.worker_invoked);
         assert_eq!(completion.worktree, None);
         assert_eq!(completion.error.as_deref(), Some("first PR failed"));
     }

@@ -424,20 +424,38 @@ pub(super) fn write_codex_stub(path: &Path, body: &str) {
     }
 }
 
-/// Newest-first receipt records for one tool, read directly from the journal.
-pub(crate) fn tool_receipts(
-    ctx: &RepoContext,
-    tool_name: &str,
-    failed_only: bool,
-) -> Vec<serde_json::Value> {
-    let path = ctx.state_file("receipts.jsonl");
-    let mut receipts = std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .filter(|receipt| receipt["tool_name"] == tool_name)
-        .filter(|receipt| !failed_only || receipt["exit_status"] != 0)
-        .collect::<Vec<_>>();
-    receipts.reverse();
-    receipts
+/// What `jig loop show` reports for the newest occurrence of a workflow, found
+/// through `jig loop status` for ticks whose output was an error.
+pub(crate) fn latest_loop_show(ctx: &RepoContext, workflow_id: &str) -> serde_json::Value {
+    let status = crate::runtime::dispatch(
+        ctx,
+        crate::command::RuntimeCommand::Loop(crate::command::LoopCommand::Status(
+            crate::command::LoopStatusRequest {
+                workflow: Some(workflow_id.into()),
+            },
+        )),
+    )
+    .unwrap();
+    let occurrence_id = status["scheduled_occurrences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .max_by_key(|occurrence| occurrence["started_at_ms"].as_u64())
+        .and_then(|occurrence| occurrence["occurrence_id"].as_str())
+        .expect("the workflow recorded an occurrence")
+        .to_owned();
+    loop_show(ctx, &occurrence_id)
+}
+
+/// What `jig loop show` reports for one loop occurrence.
+pub(crate) fn loop_show(ctx: &RepoContext, occurrence_id: &str) -> serde_json::Value {
+    crate::runtime::dispatch(
+        ctx,
+        crate::command::RuntimeCommand::Loop(crate::command::LoopCommand::Show(
+            crate::command::LoopShowRequest {
+                occurrence: occurrence_id.into(),
+            },
+        )),
+    )
+    .unwrap()
 }

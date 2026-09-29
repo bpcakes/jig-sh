@@ -18,9 +18,6 @@ use crate::runtime::tests::common::write_fixture_repo;
 use crate::state::now_ms;
 #[cfg(unix)]
 use crate::test_env::{EnvVarGuard, lock_env};
-use crate::tool_defs::LOOP_TICK_TOOL;
-#[cfg(unix)]
-use crate::tool_defs::WORKER_RUN_TOOL;
 
 use super::*;
 

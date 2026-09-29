@@ -23,7 +23,7 @@ use crate::execution::{
     run_authoritative_execution_command,
 };
 use crate::runtime::worker_runner::{
-    CodexExecFailure, CodexExecOutcome, CodexExecRequest, WorkerReceiptRequest, run_codex_exec,
+    CodexExecFailure, CodexExecOutcome, CodexExecRequest, WorkerRunLabel, run_codex_exec,
 };
 use crate::state::now_ms;
 
@@ -472,7 +472,7 @@ fn run_pr_repair<L: serde::Serialize>(
                 PrRepairStepError::Failed(error) => PrRepairOutcome::PreExecutionFailed {
                     error,
                     worktree: failure.worktree,
-                    worker_receipt_id: None,
+                    worker: None,
                 },
             };
         }
@@ -486,7 +486,7 @@ fn run_pr_repair<L: serde::Serialize>(
         Err(PrRepairStepError::Failed(error)) => PrRepairOutcome::PreExecutionFailed {
             error,
             worktree: Some(worktree),
-            worker_receipt_id: None,
+            worker: None,
         },
     }
 }
@@ -531,12 +531,10 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
             output_schema: Some(&output_schema),
             transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: &prompt,
-            receipt: WorkerReceiptRequest {
+            run: WorkerRunLabel {
                 purpose: "pr_manager",
                 workflow_id: Some(&repair.workflow.id),
                 item_key: Some(&repair.item.item_key),
-                collect_git_metadata: false,
-                collect_worktree_fingerprint: false,
             },
             phase: None,
         },
@@ -544,19 +542,17 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
     ) {
         Err(error) => {
             let failure = error.downcast_ref::<CodexExecFailure>();
-            let worker_receipt_id = failure
-                .and_then(CodexExecFailure::worker_receipt_id)
-                .map(str::to_string);
+            let worker = failure.map(|failure| failure.evidence().clone());
             if failure.is_some_and(CodexExecFailure::worker_was_unexecuted) {
                 return Ok(PrRepairOutcome::PreExecutionFailed {
                     error,
                     worktree: Some(prepared_worktree.clone()),
-                    worker_receipt_id,
+                    worker,
                 });
             }
             return Ok(PrRepairOutcome::WorkerFailed {
                 error,
-                worker_receipt_id,
+                worker,
                 worktree: worktree.to_path_buf(),
             });
         }
@@ -564,11 +560,11 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
             CodexExecOutcome::Completed(worker) => worker,
             CodexExecOutcome::Cancelled {
                 before_start,
-                worker_receipt_id,
+                evidence: worker,
             } => {
                 return Ok(PrRepairOutcome::WorkerCancelled {
                     before_start,
-                    worker_receipt_id,
+                    worker,
                     worktree: prepared_worktree.clone(),
                 });
             }
@@ -580,7 +576,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
                 "PR manager worker exited with status {}",
                 worker.status().code().unwrap_or(1)
             ),
-            worker_receipt_id: Some(worker.worker_receipt_id().to_string()),
+            worker: Some(worker.evidence().clone()),
             worktree: worktree.to_path_buf(),
         });
     }
@@ -590,7 +586,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
         Err(error) => {
             return Ok(PrRepairOutcome::WorkerFailed {
                 error,
-                worker_receipt_id: Some(worker.worker_receipt_id().to_string()),
+                worker: Some(worker.evidence().clone()),
                 worktree: worktree.to_path_buf(),
             });
         }
@@ -601,7 +597,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
         prepared_worktree,
         &worker_output,
         merge.as_ref(),
-        worker.worker_receipt_id(),
+        worker.evidence(),
         observer,
     ) {
         return Ok(outcome);
@@ -636,7 +632,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
                     "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
                     "merge": merge,
                     "worker_output": worker_output,
-                    "worker_receipt_id": worker.worker_receipt_id(),
+                    "worker": worker.evidence(),
                     "push": {
                         "status": "unconfirmed",
                         "pushed": Value::Null,
@@ -659,7 +655,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
             };
             return Ok(PrRepairOutcome::WorkerFailed {
                 error,
-                worker_receipt_id: Some(worker.worker_receipt_id().to_string()),
+                worker: Some(worker.evidence().clone()),
                 worktree: worktree.to_path_buf(),
             });
         }
@@ -701,7 +697,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
             "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
             "merge": merge,
             "worker_output": worker_output,
-            "worker_receipt_id": worker.worker_receipt_id(),
+            "worker": worker.evidence(),
             "push": push,
             "review_thread_posts": review_thread_posts.posts,
             "error": error,

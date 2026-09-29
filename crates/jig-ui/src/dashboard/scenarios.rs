@@ -220,7 +220,7 @@ fn status_scheduled_occurrence(occurrence: &ScheduledOccurrence) -> StatusSchedu
         finished_at_ms: occurrence.finished_at_ms,
         acknowledged_at_ms: occurrence.acknowledged_at_ms,
         status: occurrence.status.clone(),
-        worker_receipt_id: occurrence.worker_receipt_id.clone(),
+        worker_invoked: occurrence.worker_invoked,
         worktree: occurrence.worktree.clone(),
         error: occurrence.error.clone(),
     }

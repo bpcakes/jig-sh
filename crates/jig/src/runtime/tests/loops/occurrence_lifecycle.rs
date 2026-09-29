@@ -9,15 +9,8 @@ fn loop_acknowledge_occurrence_resolves_attention_without_reopening_the_schedule
     assert_eq!(output["ok"], true);
     assert_eq!(output["changed"], true);
     assert_eq!(output["occurrence"]["status"], "acknowledged");
-    assert!(output["receipt_id"].as_str().is_some());
-    let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .find(|receipt| receipt["id"] == output["receipt_id"])
-        .unwrap();
-    assert_eq!(receipt["changed_paths"], json!([]));
-    assert!(receipt["worktree_fingerprint"].is_null());
+    assert!(output.get("receipt_id").is_none());
+    assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 
     let repeated = acknowledge_occurrence(&ctx).unwrap();
     assert_eq!(repeated["changed"], false);
@@ -77,33 +70,6 @@ fn loop_acknowledge_occurrence_rejects_non_attention_state() {
     let error = acknowledge_occurrence(&ctx).unwrap_err().to_string();
 
     assert!(error.contains("only needs_attention occurrences can be acknowledged"));
-}
-
-#[test]
-fn loop_acknowledge_occurrence_rolls_back_when_receipt_append_fails() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    write_occurrence(&temp, "needs_attention");
-    fs::create_dir_all(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = acknowledge_occurrence(&ctx).unwrap_err();
-
-    assert!(
-        format!("{error:#}").contains("Failed to open receipt journal without following links"),
-        "{error:#}"
-    );
-    let schedule = serde_json::from_slice::<serde_json::Value>(
-        &fs::read(temp.path().join(".agent/runtime/loop/schedule.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        schedule["occurrences"]["nightly@100"]["status"],
-        "needs_attention"
-    );
-    assert!(
-        schedule["occurrences"]["nightly@100"]["acknowledged_at_ms"].is_null()
-    );
 }
 
 fn acknowledge_occurrence(ctx: &RepoContext) -> anyhow::Result<serde_json::Value> {

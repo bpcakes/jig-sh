@@ -351,8 +351,10 @@ contribute adapter metadata and component-scoped actions instead.
 Run history records each target result with its run id, structured target,
 configuration digest, input digest, exit code, and normalized findings. A target
 that did not succeed also records a bounded tail of its stdout and stderr.
-Checks no longer write receipts; receipts written by earlier runtimes, which
-carried the same target fields, remain readable and append-only.
+Jig no longer writes receipts; check receipts written by earlier runtimes, which
+carried the same target fields, remain readable and append-only. Loop
+occurrences record their own evidence under Git metadata, reported by
+`jig loop show`.
 
 Gate evaluation, agent-review gates, and structured work plans were removed
 with `jig work`. Receipts linked to plans recorded before that removal remain

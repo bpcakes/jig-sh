@@ -42,19 +42,6 @@ mod tests {
     }
 
     #[test]
-    fn receipt_recording_failure_preserves_ambiguous_append_provenance() {
-        let failure = CodexExecFailure::receipt_recording(
-            "worker receipt failed".into(),
-            crate::state::receipt_append_may_have_landed_for_test(),
-            false,
-            false,
-        );
-        let error = anyhow::Error::new(failure);
-
-        assert!(crate::state::receipt_append_may_have_landed(&error));
-    }
-
-    #[test]
     fn codex_refine_approval_policy_is_a_top_level_codex_arg() {
         let mut request = CodexExecRequest {
             root: Path::new("/tmp/repo"),
@@ -67,12 +54,10 @@ mod tests {
             output_schema: None,
             transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: "fix this",
-            receipt: WorkerReceiptRequest {
+            run: WorkerRunLabel {
                 purpose: "work_refine",
                 workflow_id: None,
                 item_key: None,
-                collect_git_metadata: true,
-                collect_worktree_fingerprint: true,
             },
             phase: Some(WorkerPhase {
                 label: "test worker",
@@ -386,12 +371,10 @@ printf 'authoritative result\n' > "$out"
                 output_schema: None,
                 transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
                 prompt: "example prompt",
-                receipt: WorkerReceiptRequest {
+                run: WorkerRunLabel {
                     purpose: "test",
                     workflow_id: None,
                     item_key: None,
-                    collect_git_metadata: false,
-                    collect_worktree_fingerprint: false,
                 },
                 phase: None,
             },
@@ -404,60 +387,12 @@ printf 'authoritative result\n' > "$out"
 
         assert_eq!(output.authoritative_stdout(), b"authoritative result\n");
         assert_eq!(output.provider_stdout(), "diagnostic transcript\n");
-        let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .find(|receipt| receipt["id"] == output.worker_receipt_id())
-            .unwrap();
-        assert_eq!(receipt["stdout_preview"], "authoritative result\n");
-        assert_eq!(
-            receipt["evidence"]["provider_stdout_preview"],
-            "diagnostic transcript\n"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cancelled_before_start_keeps_its_phase_when_receipt_recording_fails() {
-        let temp = tempfile::tempdir().unwrap();
-        TestRepoBuilder::new(temp.path())
-            .required_commands(Vec::<String>::new())
-            .write();
-        fs::create_dir_all(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-        let error = run_codex_exec(
-            &ctx,
-            CodexExecRequest {
-                root: temp.path(),
-                codex_home: None,
-                model: None,
-                approval_policy: Some("never"),
-                sandbox: Some("workspace-write"),
-                ephemeral: true,
-                extra_args: Vec::new(),
-                output_schema: None,
-                transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
-                prompt: "example prompt",
-                receipt: WorkerReceiptRequest {
-                    purpose: "test",
-                    workflow_id: Some("ExampleProject"),
-                    item_key: Some("ExampleProject@100"),
-                    collect_git_metadata: false,
-                    collect_worktree_fingerprint: false,
-                },
-                phase: None,
-            },
-            &mut CancelledControl,
-        )
-        .err()
-        .expect("receipt recording failure must surface");
-        let failure = error.downcast_ref::<CodexExecFailure>().unwrap();
-
-        assert!(failure.worker_was_unexecuted());
-        assert!(failure.worker_was_cancelled_before_start());
-        assert!(failure.worker_receipt_id().is_none());
+        let evidence = output.evidence();
+        assert_eq!(evidence["kind"], "worker_run");
+        assert_eq!(evidence["status"], "passed");
+        assert_eq!(evidence["exit_status"], 0);
+        assert_eq!(evidence["provider_stdout_preview"], "diagnostic transcript\n");
+        assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
     }
 
     #[cfg(unix)]

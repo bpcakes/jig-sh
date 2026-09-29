@@ -11,12 +11,6 @@ pub(crate) use repository::{
     RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool, RunInspection,
 };
 
-pub(crate) const LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL: &str = "jig.loop_acknowledge_occurrence";
-pub(crate) const LOOP_CLEAR_ATTEMPT_TOOL: &str = "jig.loop_clear_attempt";
-pub(crate) const LOOP_DISPATCH_TOOL: &str = "jig.loop_dispatch";
-pub(crate) const LOOP_TICK_TOOL: &str = "jig.loop_tick";
-pub(crate) const WORKER_RUN_TOOL: &str = "jig.worker_run";
-
 pub(crate) mod args {
     pub(crate) const NAME: &str = "name";
     pub(crate) const PLAN_ID: &str = "plan_id";
@@ -71,6 +65,7 @@ pub(crate) mod cli_command {
     pub(crate) const LOOP_CLEAR_ATTEMPT: &str = "clear-attempt";
     pub(crate) const LOOP_DISPATCH: &str = "dispatch";
     pub(crate) const LOOP_RUN: &str = "run";
+    pub(crate) const LOOP_SHOW: &str = "show";
     pub(crate) const LOOP_STATUS: &str = "status";
     pub(crate) const LOOP_TICK: &str = "tick";
     pub(crate) const MCP: &str = "mcp";

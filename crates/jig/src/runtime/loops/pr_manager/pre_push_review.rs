@@ -83,7 +83,7 @@ fn pre_push_review_authority_outcome<L: serde::Serialize>(
     worktree: &PreparedPrWorktree,
     worker_output: &Value,
     merge: Option<&Value>,
-    worker_receipt_id: &str,
+    worker: &Value,
     observer: &mut dyn ExecutionControl,
 ) -> Option<PrRepairOutcome> {
     let (attention_kind, error, revalidation) =
@@ -120,14 +120,14 @@ fn pre_push_review_authority_outcome<L: serde::Serialize>(
             Err(_) if observer.cancelled() => {
                 return Some(PrRepairOutcome::WorkerCancelled {
                     before_start: false,
-                    worker_receipt_id: worker_receipt_id.to_string(),
+                    worker: worker.clone(),
                     worktree: worktree.clone(),
                 });
             }
             Err(PrRepairStepError::Cancelled(_)) => {
                 return Some(PrRepairOutcome::WorkerCancelled {
                     before_start: false,
-                    worker_receipt_id: worker_receipt_id.to_string(),
+                    worker: worker.clone(),
                     worktree: worktree.clone(),
                 });
             }
@@ -155,7 +155,7 @@ fn pre_push_review_authority_outcome<L: serde::Serialize>(
             "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
             "merge": merge,
             "worker_output": worker_output,
-            "worker_receipt_id": worker_receipt_id,
+            "worker": worker,
             "review_thread_revalidation": revalidation,
             "push": {
                 "status": "not_attempted",
