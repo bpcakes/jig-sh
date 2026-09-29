@@ -5,7 +5,7 @@
 
 > **Keep coding agents on contract.**
 
-Jig is a repo-local operating harness for coding agents. It gives supported Rust, Go, and TypeScript repositories a versioned command catalog and append-only receipts. You can adopt an existing repository or scaffold one of Jig's supported project shapes.
+Jig is a repo-local operating harness for coding agents. It gives supported Rust, Go, and TypeScript repositories a versioned command catalog and append-only run history. You can adopt an existing repository or scaffold one of Jig's supported project shapes.
 
 Agents should not have to infer how to operate a repository from scattered scripts and prose. Jig makes the repository's commands, ownership boundaries, checks, and definition of done explicit to humans, CI, CLI clients, and MCP clients.
 
@@ -25,7 +25,7 @@ Agents should not have to infer how to operate a repository from scattered scrip
 
 - **Agent guidance** through `AGENTS.md` and `agent-map.md`.
 - **A typed command catalog** in `.agent/jig-contract.json`, executed through the repo-local `scripts/jig` launcher.
-- **Append-only receipts** under `.agent/state/` for checks and runs.
+- **Append-only run history** under `.agent/state/` for checks and runs.
 - **Affected checks and file budgets** so agents can select work from checked-in component policy and enforce repository-owned source limits.
 - **A bounded MCP runtime** for repository inspection, immutable planning, execution, and cancellation.
 - **Local runtime tools** for orchestration loops, a terminal dashboard, development hostnames, and encrypted local secrets.
@@ -99,7 +99,7 @@ For the guided path, run `jig init ./ExampleProject` in a terminal. Inside an ex
 
 Run checks that validate the behavior you change, using `scripts/jig check COMPONENT:ACTION`
 or a focused native test command. `scripts/jig file-budget audit` provides standalone diagnostics
-without creating runs or receipts. Receipt inspection is optional.
+without creating runs. Inspecting run history is optional.
 
 ## What changes in the repository
 
@@ -113,21 +113,26 @@ A full harness contains this core structure:
 ├── agent-map.md                # index of nested agent guides
 ├── .agent/
 │   ├── jig-contract.json       # versioned command catalog
-│   └── state/                  # append-only receipts and runtime records
+│   └── state/                  # append-only run history and runtime records
 ├── scripts/
 │   ├── jig                     # repo-local launcher
 │   └── install-jig.sh          # compatible runtime installer
 └── .github/workflows/          # generated policy and test workflows
 ```
 
-Checks append receipt records. A simplified record looks like this:
+Checks append run-history records to `.agent/state/runs.jsonl`. A simplified
+record for a failed target looks like this:
 
 ```json
 {
-  "tool_name": "jig.test",
-  "exit_status": 0,
-  "changed_paths": ["README.md"],
-  "diff_stat": { "files": 1, "insertions": 8, "deletions": 2 }
+  "event": "target_completed",
+  "run_id": "run_01EXAMPLE",
+  "result": {
+    "target": { "component": "api", "action": "test" },
+    "conclusion": "failure",
+    "exit_code": 101,
+    "output_tail": { "stdout": "", "stderr": "test example::parses ... FAILED\n" }
+  }
 }
 ```
 
@@ -146,10 +151,10 @@ Inspect recorded state with `scripts/jig state summary`.
 
 Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, scheduled task prompts, local status, or secrets outside the generated command catalog.
 
-| Surface | Stable contract? | Records receipts? | Machine-local? |
+| Surface | Stable contract? | Records history? | Machine-local? |
 | --- | --- | --- | --- |
-| `check` / `run` | yes | yes | no |
-| `loop` | runtime-owned | yes | no |
+| `check` / `run` | yes | run history | no |
+| `loop` | runtime-owned | receipts | no |
 | `state` | runtime-owned | no | partly |
 | `status` / `ui` | runtime-owned | no | partly |
 | `dev` / `proxy` | runtime-owned | no | yes |
@@ -176,9 +181,9 @@ With no selectors or `--profile`, `jig run` executes the repository’s default 
 profile. Use `jig run --explain` to inspect that selection first.
 
 `run` requires contract v6 or later. Approve each planned `worktree` or `external`
-effect explicitly; approvals must match the plan. `--explain` creates no run or
-receipts. Selection, `--no-receipt`, `--fail-fast`, and native `--comparison-*`
-options use the shared repository execution behavior.
+effect explicitly; approvals must match the plan. `--explain` creates no run.
+Selection, `--fail-fast`, and native `--comparison-*` options use the shared
+repository execution behavior.
 
 In contract v7, `--affected BASE` combines Git changes with checked-in component, dependency, and action-input policy. The plan explains why each target was selected before execution. See [Public Contract](docs/public-contract.md) and [Developer UX](docs/developer-ux.md) for the full surface.
 
@@ -246,7 +251,7 @@ jig update --recopy    # re-render from the stored .jig.toml answers
 
 ### Affected checks and file budgets
 
-Use `scripts/jig info freshness` to preview [scoped freshness adoption](docs/target-freshness-integration.md#adopt-scoped-freshness). Receipts record target freshness metadata; every check run still executes its targets.
+Use `scripts/jig info freshness` to preview [action input declarations](docs/target-freshness-integration.md#preview-and-apply-declarations). Jig records no target freshness; every check run executes its targets.
 
 Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget audit` for diagnostics without opening a run, or let the configured check profile and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
 
@@ -268,11 +273,11 @@ The three tabs are Status, Timeline, and Health. Collection failures remain visi
 
 ### State maintenance
 
-`jig ui` presents `.agent/state/` without mutating it: recent failures, per-tool check health, loop workflows, repository status, and a filterable receipt timeline. Enter opens bounded receipt, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive.
+`jig ui` presents `.agent/state/` without mutating it: recent failed targets, per-target check health, loop workflows, repository status, and a filterable timeline of finished targets from run history. Enter opens bounded target-result, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive.
 
 The 0.3.0 browser server and URL endpoints are gone. A hidden `--port` parser exits with a migration diagnostic and may stop parsing in a later release. Use the terminal dashboard or one-shot JSON.
 
-Use `scripts/jig state diagnose` to inspect receipt and session growth. Compaction, archival, export, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
+Use `scripts/jig state diagnose` to inspect run, receipt, and legacy stream growth. Compaction, archival, export, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
 
 ### Vault
 
@@ -285,7 +290,7 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-Vault metadata, child output, and plaintext do not enter command receipts or MCP results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
+Vault metadata, child output, and plaintext do not enter run history, receipts, or MCP results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
 
 ### Local development proxy
 
@@ -321,8 +326,8 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 - [Developer UX](docs/developer-ux.md): command surface and daily workflow
 - [Configuration](docs/configuration.md): `.jig.toml`, presets, package managers, and runtime options
 - [Adoption](docs/adoption.md): previewing and adding Jig to an existing repository
-- [Public Contract](docs/public-contract.md): contract epochs, CLI, MCP, receipts, runs, and state
-- [Target freshness](docs/target-freshness-integration.md): scoped receipts and adoption preview
+- [Public Contract](docs/public-contract.md): contract epochs, CLI, MCP, runs, and state
+- [Action input declarations](docs/target-freshness-integration.md): input and source-state declarations and their preview
 - [Scheduled Codex Tasks](docs/codex-task-operations.md): unattended `codex_task` workflows
 - [Platform Support](docs/platform-support.md): supported hosts and feature limits
 - [`examples/`](examples/): visible `.jig.toml` answer files

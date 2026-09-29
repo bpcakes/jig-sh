@@ -488,7 +488,6 @@ fn tick_with_execution(
             evidence: Some(evidence.clone()),
             collect_git_metadata: true,
             collect_worktree_fingerprint: true,
-            worktree_fingerprint_override: None,
         },
         &receipt_cancelled,
     ) {

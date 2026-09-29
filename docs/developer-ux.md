@@ -149,7 +149,7 @@ Managed npm checks, browser E2E, and generated dev pin the exact app and require
 ## Day-To-Day Loop
 
 Choose commands for the current task and validate the affected behavior with focused
-checks. Receipt inspection is optional. A full test suite is
+checks. Run history inspection is optional. A full test suite is
 useful when the affected behavior or remaining risk warrants it.
 
 The daily developer loop is built around a few stable verbs:
@@ -158,18 +158,18 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig bootstrap` remains the project-dependency-only primitive used by setup.
 - `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. The launcher keeps `doctor` and `check contract` reachable through a capability-only final runtime probe against its rendered contract epoch, so a missing or malformed repository manifest can be reported instead of blocking its own diagnostic. Ordinary commands still require strict repository validation. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux and macOS retain the exact child process-group identity until descendants are proven gone, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
-- `scripts/jig check ...` runs configured repo checks and records receipts by default.
+- `scripts/jig check ...` runs configured repo checks and records each run in run history.
 - `scripts/jig file-budget audit` provides standalone source-size diagnostics without creating runs or receipts.
-- `scripts/jig state summary` summarizes recorded receipts. Former `scripts/jig work ...` invocations fail with a usage error that points to `check` and `state summary`.
+- `scripts/jig state summary` summarizes run history: runs, target results, failures, and the most recent target results. Former `scripts/jig work ...` invocations fail with a usage error that points to `check` and `state summary`.
 - `scripts/jig status` collects local repository, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
 - `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 - `scripts/jig claude homes` lists Claude Code configuration directories; `scripts/jig claude launch` opens the shared searchable picker or an explicit home. Add `--usage` for subscription limits.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
-- `scripts/jig info freshness` previews conservative target-freshness adoption without writing files.
+- `scripts/jig info freshness` previews action input declarations (`inputs_policy` and `source_state`) without writing files.
 
-Checks record structured results and append-only evidence under `.agent/state/`. A reviewer can inspect the exact target and run, the contract and input digests, and the recorded target freshness metadata. Every check run executes its targets; recorded receipts are never reused in place of execution.
+Checks record structured results in append-only run history under `.agent/state/runs.jsonl`. A reviewer can inspect the exact target and run, the contract and input digests, the conclusion and exit code, findings, and the tail of a failed target's output. Every check run executes its targets; earlier results are never reused in place of execution.
 
 ### Repository targets and check plans
 
@@ -209,12 +209,12 @@ scripts/jig run --profile verify --affected origin/main --json
 With no selectors or `--profile`, `jig run` executes the repository’s default check
 profile. Use `jig run --explain` to inspect that selection first.
 
-The foreground command shares MCP planning, execution, receipts and cancellation.
+The foreground command shares MCP planning, execution, run history and cancellation.
 Approve every planned `worktree` and `external` effect explicitly with repeated
 `--approve-effect` flags. `--explain` prints the plan without execution or run
-state. `--no-receipt`, `--fail-fast`, and `--comparison-*` have the same
-repository execution meaning as on `check`; the retired `--plan-id` is accepted
-and ignored. This requires contract v6 or
+state. `--fail-fast` and `--comparison-*` have the same repository execution
+meaning as on `check`; the retired `--plan-id` is accepted and ignored, and the
+removed `--no-receipt` is rejected. This requires contract v6 or
 later; general declared action arguments remain follow-up work.
 
 Bare `scripts/jig check` resolves the default verification profile. For a
@@ -240,7 +240,7 @@ dependency and build trees do not become source inputs; unignore a containing
 path when a repository intentionally stores an input there. Because observed
 ignored dotenv files have no committed baseline, generated repositories exclude
 their mere presence through reviewed `repository.affected_ignore` policy while
-retaining their contents in evidence fingerprints. An explicit action input
+retaining their contents in source fingerprints. An explicit action input
 overrides the affected-ignore policy when a check must be selected for that
 dotenv. The plan explains each direct path and configured
 component-dependent propagation; runtime-owned `.agent/state/` and
@@ -253,15 +253,17 @@ selection.
 `--explain` is read-only: it prints the immutable plan, bounded target-reason
 previews (with total-count metadata when truncated), dependency layers, effects,
 configuration digest, source identity, and input
-digests, and executes no command or receipt write. Selectors are normalized and
+digests, and executes no command or state write. Selectors are normalized and
 targets are sorted before the plan id is derived, so equivalent requests
 against the same repository state have the same plan id. The existing named
-check forms and their receipt controls remain compatible.
+check forms remain compatible.
 
 Executing one of these plans creates an append-only durable run even when the
-CLI waits for it to finish. Each target reaches its own conclusion and normally
-writes one receipt carrying the run id, structured target, configuration and
-input digests, and normalized findings. A reviewed plan is rejected before a
+CLI waits for it to finish. Each target reaches its own conclusion, recorded in
+run history with its configuration and input digests, exit code, and normalized
+findings. A target that did not succeed also keeps the last 4,000 bytes of its
+stdout and stderr as `output_tail`. Checks write no receipts. A reviewed plan is
+rejected before a
 run is created if the contract or worktree changed. Query the accepted plan and
 folded target results later with:
 
@@ -270,15 +272,15 @@ scripts/jig status run RUN_ID
 ```
 
 Checks own their configured process trees, apply target timeouts, and preserve
-every target result on cancellation or explicit fail-fast skips. Receipt flags
+every target result on cancellation or explicit fail-fast skips. Execution flags
 may appear before or after target selectors, for example
-`scripts/jig check api:test --no-receipt`.
+`scripts/jig check api:test --fail-fast`.
 
 ## State Health And Retention
 
 Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state; add `--deep` to analyze receipt payload growth and to verify that every receipt run reference still resolves to run history in the journal, a run archive, or an exact backup. Missing or unverifiable history is reported with the affected run and receipt IDs and read-only preservation guidance; it is never repaired by inventing events. Legacy `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl` streams are still sized and checked, but Jig no longer reads them. `state compact sessions` was removed; `state restore --backup <path>` still restores a sessions backup it created.
 
-Receipt retention is also local. `state archive --before <date>` compresses eligible old records into ignored `.agent/.cache/state-archives/`, writes an exact manifested pre-archive backup under `.agent/.cache/state-backups/`, and shrinks the active stream. `state restore --backup <path>` can restore that exact receipt preimage. `state export receipts --before <date> --output <file.jsonl.gz>` makes a non-mutating copy at a caller-selected destination. Cache artifacts are ignored local recovery aids rather than durable backups, and neither operation rewrites Git history, so durable retention and committed historical blobs require separate, coordinated handling.
+Receipt retention is also local. Only loop workflows write receipts now; checks record run history instead. `state archive --before <date>` compresses eligible old records into ignored `.agent/.cache/state-archives/`, writes an exact manifested pre-archive backup under `.agent/.cache/state-backups/`, and shrinks the active stream. `state restore --backup <path>` can restore that exact receipt preimage. `state export receipts --before <date> --output <file.jsonl.gz>` makes a non-mutating copy at a caller-selected destination. Cache artifacts are ignored local recovery aids rather than durable backups, and neither operation rewrites Git history, so durable retention and committed historical blobs require separate, coordinated handling.
 
 ## Terminal Dashboard
 
@@ -291,7 +293,7 @@ scripts/jig --json ui                  # one recorder snapshot
 scripts/jig status --json              # one local status snapshot
 ```
 
-The three tabs are Status, Timeline, and Health. Status summarizes local repository, harness, loop, and collection observations. Timeline lists receipts newest-first. Health shows recent failures, receipt output, per-tool aggregates, and loop attempts that need attention. The Work tab, plan detail, and session, plan, and decision rows were removed with structured work.
+The three tabs are Status, Timeline, and Health. Status summarizes local repository, harness, loop, and collection observations. Timeline lists finished targets from run history newest-first, with each run, conclusion, exit code, duration, and the output tail of a target that did not succeed. Health shows recent failed, timed-out, and blocked targets with their output tail, per-target aggregates, and loop attempts that need attention. The Work tab, plan detail, and session, plan, and decision rows were removed with structured work.
 
 At the top level, use Tab or Shift-Tab, left/right, or `1` through `3` to switch tabs; `j`/`k`, up/down, PageUp/PageDown, Home, and End move through lists; and `q` or Ctrl-C quits. Enter opens the selected item on Timeline or Health. `f`/`F` plus `-`/`+` control the Timeline filter and row limit. `r` and `R` refresh local data. Escape closes detail first and quits only from the top level. Detail views retain the movement keys, and `h`/`l` or left/right scroll horizontally.
 
@@ -299,7 +301,7 @@ Local collection defaults to a 10-second completion-relative schedule. Refreshes
 
 The full layout is comfortable at 108 by 24 cells or larger and supported from 72 by 20. Terminals from 40 by 12 use a compact layout; smaller terminals show a safe micro summary. Both stdin and stdout must be terminals. When redirected, the interactive command exits nonzero with guidance to use `jig ui --json` for recorder data or `jig status --json` for local status data, and terminal state is restored on cancellation or failure.
 
-The recorder JSON document uses schema version 2. It is a one-shot, read-only document rather than an address for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 3.
+The recorder JSON document uses schema version 3, which reads run history instead of receipts. It is a one-shot, read-only document rather than an address for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 3.
 
 The 0.3.0 cutover removes the browser server, browser URLs, and HTTP snapshot endpoints. The old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in a later release. Callers needing the browser transport can continue using 0.3.0. The cutover does not change generated launcher scope or itself require a new contract epoch because `ui` and `status` remain runtime-owned repository commands.
 
@@ -350,7 +352,7 @@ Those constraints keep the normal path smooth while making machine-wide or netwo
 
 ## Vault
 
-The vault handles a common developer problem: a project needs a complete local environment bundle, but the repository and command receipts should contain references rather than protected values.
+The vault handles a common developer problem: a project needs a complete local environment bundle, but the repository and its run history should contain references rather than protected values.
 
 References are project-relative. `jig://Production/RESTIC_PASSWORD` selects the `Production` item in whichever vault the current repository, `--global`, or `--home` chooses. There is no repository-name segment and no cross-project reference syntax. A project moves its encrypted state with backup and restore, not by adding a project qualifier to references.
 
@@ -397,7 +399,7 @@ The friendliness here is in the workflow shape: developers get an auditable secr
 
 ## Agent And MCP Friendliness
 
-Jig treats agents as first-class repo operators. The generated root `AGENTS.md`, `agent-map.md`, optional crate-level guide conventions, MCP server, and receipts all serve the same goal: reduce guessing.
+Jig treats agents as first-class repo operators. The generated root `AGENTS.md`, `agent-map.md`, optional crate-level guide conventions, MCP server, and run history all serve the same goal: reduce guessing.
 
 An agent can discover:
 
@@ -436,7 +438,7 @@ Jig's developer friendliness comes from a few consistent product choices:
 - It gives every repo a small, stable command vocabulary.
 - It records repo conventions in committed configuration instead of tribal memory.
 - It preserves existing repo ownership during adoption.
-- It makes local checks and their receipts inspectable.
+- It makes local checks and their results inspectable.
 - It makes MCP and CLI use converge on the same runtime contract.
 - It keeps machine-local proxy and vault state out of repo history.
 - It makes broad trust changes explicit at the command line.
@@ -449,6 +451,6 @@ The intentional friction is part of the UX. Trusting a local CA, exposing a prox
 - [Adoption Guide](./adoption.md)
 - [Configuration Reference](./configuration.md)
 - [Public Contract](./public-contract.md)
-- [Target freshness](./target-freshness-integration.md)
+- [Action input declarations](./target-freshness-integration.md)
 - [Scheduled Codex Tasks](./codex-task-operations.md)
 - [Repo Intent For Agents](./repo-intent.md)

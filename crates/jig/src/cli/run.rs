@@ -371,8 +371,8 @@ fn run_command(cli: Cli) -> Result<()> {
             emit(json_output, HumanOutput::Proxy, &output)?;
             finish_after_json_output(require_foreground_status(&output), json_output)
         }
-        CommandKind::Bootstrap(opts) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Bootstrap(opts.into()),
+        CommandKind::Bootstrap(_) => dispatch_runtime_command(
+            crate::command::RuntimeCommand::Bootstrap,
             false,
             json_output,
             HumanOutput::ToolExecution,
@@ -398,10 +398,8 @@ fn run_command(cli: Cli) -> Result<()> {
         }
         CommandKind::Migration(MigrationCommand::Add(opts)) => run_migration_add(opts, json_output),
         CommandKind::Sqlx(command) => run_sqlx_command(command, json_output),
-        CommandKind::SchemaDump(opts) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(
-                opts.into(),
-            )),
+        CommandKind::SchemaDump(_) => dispatch_runtime_command(
+            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump),
             false,
             json_output,
             HumanOutput::ToolExecution,
@@ -469,10 +467,8 @@ fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {
         SqlxCommand::Migration(SqlxMigrationCommand::Add(opts)) => {
             run_migration_add(opts, json_output)
         }
-        SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts)) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(
-                opts.into(),
-            )),
+        SqlxCommand::Schema(SqlxSchemaCommand::Dump(_)) => dispatch_runtime_command(
+            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump),
             false,
             json_output,
             HumanOutput::ToolExecution,

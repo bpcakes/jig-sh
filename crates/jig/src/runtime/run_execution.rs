@@ -23,8 +23,7 @@ use crate::repository_path::{resolve_repository_working_directory, validate_runn
 #[cfg(test)]
 use crate::state::start_run;
 use crate::state::{
-    ReceiptInput, TargetReceiptMetadata, complete_run, mark_run_running, mark_target_started,
-    now_ms, record_target_receipt, record_target_result, run_by_id,
+    complete_run, mark_run_running, mark_target_started, now_ms, record_target_result, run_by_id,
 };
 
 use super::tool_execution::run_native_tool_with_control;
@@ -51,7 +50,6 @@ pub(super) struct SourceObservationMetrics {
 
 pub(super) struct ExecuteCheckRunRequest {
     pub(super) alias_override: Option<ExecutionAliasOverride>,
-    pub(super) record_receipts: bool,
     pub(super) fail_fast: bool,
 }
 
@@ -278,17 +276,11 @@ fn execute_started_check_run_inner(
     let mut stop_after_failure = false;
     let mut source_epoch =
         ExecutionSourceEpoch::from_plan(run.plan.source.worktree_fingerprint.clone());
-    let freshness = (request.record_receipts
-        && catalog.contract_version()
-            >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION)
-        .then(|| freshness::ExecutionFreshness::prepare(ctx, catalog, &run, control));
     let finisher = TargetFinisher {
         alias_override: request.alias_override.as_ref(),
-        freshness: freshness.as_ref(),
         ctx,
         catalog,
         run: &run,
-        record_receipts: request.record_receipts,
     };
     let target_count = run.plan.targets.len();
     let mut target_index = 0;
@@ -378,7 +370,6 @@ fn execute_started_check_run_inner(
                 control,
                 &mut source_epoch,
                 &positioned,
-                freshness.as_ref(),
             )?;
             for ((target_id, planned), outcome) in layer
                 .iter()
@@ -480,7 +471,7 @@ fn execute_started_check_run_inner(
                 finisher.finish(
                     planned,
                     CompletedTargetCapture::now(None, capture),
-                    source_epoch.receipt_fingerprint(),
+                    source_epoch.observed_fingerprint(),
                 )?
             } else {
                 mark_target_started(ctx, &run_id, target_id.clone())?;
@@ -492,8 +483,7 @@ fn execute_started_check_run_inner(
                     PhasePosition::new(target_index, target_count)
                         .expect("planned target position must be valid"),
                 );
-                let capture =
-                    run_target_capture(ctx, catalog, &run_id, planned, control, freshness.as_ref());
+                let capture = run_target_capture(ctx, catalog, &run_id, planned, control);
                 let completed = CompletedTargetCapture::now(Some(started_at_ms), capture);
                 let (completed, fingerprint) =
                     source_epoch.finish_completed_target(ctx, planned, completed);
@@ -513,7 +503,7 @@ fn execute_started_check_run_inner(
                 &mut compatibility_results,
                 &mut stop_after_failure,
             )?;
-            // Keep the resource through both receipt and durable result publication.
+            // Keep the resource through durable result publication.
             drop(resource_lease);
         }
     }
@@ -548,9 +538,7 @@ use parallel::*;
 
 pub(super) use target_result::block_started_check_run;
 
-use freshness::run_target_capture;
-
-fn run_target_capture_inner(
+fn run_target_capture(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     run_id: &str,
@@ -663,7 +651,6 @@ fn run_target_with_control(
     enforce_current_repository_authority(ctx, catalog.config_digest(), planned, capture)
 }
 
-mod freshness;
 mod resources;
 mod source_epoch;
 use source_epoch::*;

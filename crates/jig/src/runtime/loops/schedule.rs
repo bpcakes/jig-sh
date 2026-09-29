@@ -122,7 +122,6 @@ fn dispatch_due_at_with_observer(
             evidence: Some(evidence.clone()),
             collect_git_metadata: true,
             collect_worktree_fingerprint: true,
-            worktree_fingerprint_override: None,
         },
         &|| observer.cancelled(),
     )?;

@@ -26,7 +26,6 @@ pub(super) fn dispatch(
     {
         bail!("explicit run comparison authority requires repository contract version 7 or later");
     }
-    let record_receipts = request.tool.record_receipt();
     let plan = crate::repository::plan_action_run_with_cancellation(
         &current,
         &catalog,
@@ -49,7 +48,6 @@ pub(super) fn dispatch(
         plan.clone(),
         ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts,
             fail_fast: request.fail_fast,
         },
         observer,

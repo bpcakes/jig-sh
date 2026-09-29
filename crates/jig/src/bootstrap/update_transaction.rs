@@ -666,17 +666,15 @@ fn validate_manifest(manifest: &UpdateManifest) -> Result<()> {
         bail!("Unsupported or oversized repository update transaction manifest");
     }
     if let Some(proof) = &manifest.lifecycle_proof
-        && (proof.receipt_id.is_empty()
-            || proof.receipt_id.len() > 128
-            || ![
-                &proof.config_digest,
-                &proof.input_digest,
-                &proof.source_fingerprint,
-                &proof.policy_raw_digest,
-                &proof.evaluation_digest,
-            ]
-            .into_iter()
-            .all(|identity| valid_sha256_identity(identity)))
+        && (![
+            &proof.config_digest,
+            &proof.input_digest,
+            &proof.source_fingerprint,
+            &proof.policy_raw_digest,
+            &proof.evaluation_digest,
+        ]
+        .into_iter()
+        .all(|identity| valid_sha256_identity(identity)))
     {
         bail!("Invalid lifecycle proof in repository update transaction manifest");
     }

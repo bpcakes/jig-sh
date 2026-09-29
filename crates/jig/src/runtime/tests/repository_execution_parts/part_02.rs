@@ -28,7 +28,6 @@ fn parallel_read_only_layer_fails_closed_and_reports_failure_on_a_source_mutatio
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,
@@ -98,7 +97,6 @@ fn cancelled_parallel_target_keeps_not_started_evidence_after_a_sibling_mutation
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,
@@ -118,7 +116,7 @@ fn cancelled_parallel_target_keeps_not_started_evidence_after_a_sibling_mutation
 }
 
 #[test]
-fn parallel_target_that_fails_authority_before_start_keeps_specific_receipt_evidence() {
+fn parallel_target_that_fails_authority_before_start_keeps_specific_evidence() {
     let temp = tempdir().unwrap();
     let mut commands = (0..8)
         .map(|index| {
@@ -144,7 +142,6 @@ fn parallel_target_that_fails_authority_before_start_keeps_specific_receipt_evid
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: true,
             fail_fast: false,
         },
         &mut observer,
@@ -153,19 +150,19 @@ fn parallel_target_that_fails_authority_before_start_keeps_specific_receipt_evid
 
     let ninth = &execution.run.result.targets[8];
     assert_eq!(ninth.started_at_ms, None, "{ninth:?}");
-    let receipt_id = ninth.receipt_id.as_deref().unwrap();
-    let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .find(|receipt| receipt["id"] == receipt_id)
-        .unwrap();
+    assert_eq!(
+        ninth.conclusion,
+        Some(jig_contract::RunConclusion::Blocked),
+        "{ninth:?}"
+    );
     assert!(
-        receipt["worktree_fingerprint_error"]
-            .as_str()
+        ninth
+            .output_tail
+            .as_ref()
             .unwrap()
+            .stderr
             .contains("authority could not be verified"),
-        "a pre-start authority failure must remain specific in durable evidence: {receipt:#}"
+        "a pre-start authority failure must remain specific in durable evidence: {ninth:?}"
     );
 }
 
@@ -253,7 +250,6 @@ depends_on = [{ component = "api", action = "generate" }]
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,
@@ -315,7 +311,6 @@ checks = ["jig.first", "jig.second"]
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: true,
             fail_fast: false,
         },
         &|| true,
@@ -330,7 +325,10 @@ checks = ["jig.first", "jig.second"]
     assert!(execution.run.result.targets.iter().all(|target| {
         target.status == jig_contract::RunStatus::Completed
             && target.conclusion == Some(jig_contract::RunConclusion::Cancelled)
-            && target.receipt_id.is_some()
+            && target.output_tail.as_ref().is_some_and(|tail| {
+                tail.stderr
+                    .contains("cancellation was requested before the target started")
+            })
     }));
 }
 
@@ -374,7 +372,6 @@ checks = ["jig.a_fail", "jig.z_later"]
                 comparison: None,
                 explain: false,
                 fail_fast,
-                tool: crate::command::ToolRequest::new(true),
             },
         ))
     };
@@ -389,20 +386,17 @@ checks = ["jig.a_fail", "jig.z_later"]
     assert_eq!(stopped["ok"], false);
     assert_eq!(stopped["results"].as_array().unwrap().len(), 1);
     assert!(!temp.path().join("later-ran.txt").exists());
-    let stopped_run_id = stopped["run"]["run_id"].as_str().unwrap();
-    let skipped_target = &stopped["run"]["targets"][1]["target"];
-    let skipped_receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .find(|receipt| receipt["run_id"] == stopped_run_id && receipt["target"] == *skipped_target)
-        .unwrap();
-    assert!(skipped_receipt["worktree_fingerprint"].is_null());
+    let failed = &stopped["run"]["targets"][0];
+    assert_eq!(failed["exit_code"], 7, "{failed:#}");
+    assert_eq!(failed["output_tail"]["stderr"], "failed\n", "{failed:#}");
+    let skipped = &stopped["run"]["targets"][1];
+    assert_eq!(skipped["conclusion"], "skipped", "{skipped:#}");
     assert!(
-        skipped_receipt["worktree_fingerprint_error"]
+        skipped["output_tail"]["stderr"]
             .as_str()
             .unwrap()
-            .contains("did not start")
+            .contains("fail-fast was requested"),
+        "{skipped:#}"
     );
 }
 
@@ -451,9 +445,7 @@ rust_test_command = "printf 'live stdout'; printf 'live stderr' >&2"
 
     let output = dispatch_with_observer(
         &ctx,
-        RuntimeCommand::Check(crate::command::CheckCommand::Test(
-            crate::command::ToolRequest::new(false),
-        )),
+        RuntimeCommand::Check(crate::command::CheckCommand::Test),
         &mut observer,
     )
     .unwrap();
@@ -505,9 +497,7 @@ fn plain_v6_named_test_routes_through_repository_planning_for_every_component() 
 
     let output = dispatch_with_observer(
         &ctx,
-        RuntimeCommand::Check(crate::command::CheckCommand::Test(
-            crate::command::ToolRequest::new(false),
-        )),
+        RuntimeCommand::Check(crate::command::CheckCommand::Test),
         &mut observer,
     )
     .unwrap();
@@ -572,9 +562,7 @@ command_output_limit_bytes = {OUTPUT_BYTES}
 
     let output = crate::runtime::dispatch(
         &ctx,
-        RuntimeCommand::Check(crate::command::CheckCommand::Test(
-            crate::command::ToolRequest::new(false),
-        )),
+        RuntimeCommand::Check(crate::command::CheckCommand::Test),
     )
     .unwrap();
 
@@ -614,7 +602,6 @@ command_timeout_seconds = 1
             crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
                 tool: crate::cli::ToolOpts {
                     plan_id: None,
-                    no_receipt: true,
                 },
                 selectors: Vec::new(),
             }),
@@ -627,7 +614,7 @@ command_timeout_seconds = 1
     assert!(started.elapsed() < Duration::from_secs(5));
 }
 #[test]
-fn native_tool_no_receipt_skips_receipt_append() {
+fn native_contract_check_writes_no_receipt() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
     fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
@@ -665,7 +652,6 @@ rust_test_locked_command = "printf 'test locked\n'"
             crate::cli::CheckCommand::Contract(crate::cli::CheckTargetOpts {
                 tool: crate::cli::ToolOpts {
                     plan_id: None,
-                    no_receipt: true,
                 },
                 selectors: Vec::new(),
             }),
@@ -674,7 +660,7 @@ rust_test_locked_command = "printf 'test locked\n'"
     .unwrap();
 
     assert_eq!(output["ok"], true);
-    assert_eq!(output["receipt_id"], serde_json::Value::Null);
+    assert!(output.get("receipt_id").is_none());
     assert!(
         output["result"]["stdout"]
             .as_str()
@@ -685,7 +671,7 @@ rust_test_locked_command = "printf 'test locked\n'"
 }
 
 #[test]
-fn failed_tool_error_remains_primary_when_receipt_append_fails() {
+fn failed_tool_reports_its_output_without_writable_state() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
@@ -711,7 +697,6 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
             crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
                 tool: crate::cli::ToolOpts {
                     plan_id: None,
-                    no_receipt: false,
                 },
                 selectors: Vec::new(),
             }),
@@ -724,11 +709,11 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
     assert!(error.contains("command key: rust_test_command"), "{error}");
     assert!(error.contains("tool failed stdout"), "{error}");
     assert!(error.contains("tool failed stderr"), "{error}");
-    assert!(error.contains("receipt recording also failed"), "{error}");
+    assert!(!error.contains("receipt"), "{error}");
 }
 
 #[test]
-fn collect_result_keeps_failed_tool_context_when_receipt_append_fails() {
+fn direct_tool_execution_keeps_failed_tool_context_without_writable_state() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
@@ -752,7 +737,6 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
         &ctx,
         crate::tool_defs::tool::TEST,
         json!({}),
-        true,
         &mut crate::execution::NoopExecutionObserver,
     )
     .unwrap_err()
@@ -762,5 +746,5 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
     assert!(error.contains("command key: rust_test_command"), "{error}");
     assert!(error.contains("tool failed stdout"), "{error}");
     assert!(error.contains("tool failed stderr"), "{error}");
-    assert!(error.contains("receipt recording also failed"), "{error}");
+    assert!(!error.contains("receipt"), "{error}");
 }

@@ -1,16 +1,16 @@
 Repository, harness, and default-branch identity
 Current branch or detached revision
 Recent failures
-Failure stderr
-Tool statistics
+Failure output tail
+Target statistics
 Loop workflows
 Loop leases
 Exhausted attempts
 Loop clear-attempt command
-Receipt timeline
+Target result timeline
 Timeline failure filter
 Timeline limit
-Receipt diff and duration
+Target result conclusion and duration
 Dashboard JSON route
 Terminal auto-refresh
 Status overview structure

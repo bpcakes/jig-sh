@@ -146,15 +146,19 @@ pub fn records(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-pub fn receipt_for<'a>(records: &'a [Value], action: &str) -> &'a Value {
-    let selected = records
+/// Whether any target result has been published to run history.
+pub fn completed_any(fixture: &Fixture) -> bool {
+    records(&fixture.root.join(".agent/state/runs.jsonl"))
         .iter()
-        .filter(|record| record["target"]["action"] == action)
+        .any(|event| event["event"] == "target_completed")
+}
+
+/// The single published result for `action` in run-history events.
+pub fn result_for<'a>(events: &'a [Value], action: &str) -> &'a Value {
+    let selected = events
+        .iter()
+        .filter(|event| event["event"] == "target_completed" && event["target"]["action"] == action)
         .collect::<Vec<_>>();
-    assert_eq!(
-        selected.len(),
-        1,
-        "one original target receipt for {action}: {records:#?}"
-    );
-    selected[0]
+    assert_eq!(selected.len(), 1, "one result for {action}: {events:#?}");
+    &selected[0]["result"]
 }

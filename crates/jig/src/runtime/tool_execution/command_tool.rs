@@ -30,9 +30,6 @@ enum ConfiguredCommandOutcome {
 
 struct ConfiguredCommandFailure {
     args: Value,
-    options: ManifestToolExecutionOptions,
-    started: u64,
-    ended: u64,
     error: anyhow::Error,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
@@ -42,13 +39,10 @@ pub(super) fn execute_command_tool(
     ctx: &RepoContext,
     invocation: CommandToolInvocation<'_>,
     args: Value,
-    options: ManifestToolExecutionOptions,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
-    let started = now_ms();
     let run_result = run_configured_command(ctx, &invocation, &args, position, observer);
-    let ended = now_ms();
     let output = match run_result {
         Ok(ConfiguredCommandOutcome::Completed(output)) => output,
         Ok(ConfiguredCommandOutcome::CancelledBeforeStart) => {
@@ -66,7 +60,6 @@ pub(super) fn execute_command_tool(
                     stdout: String::new(),
                     stderr: message,
                 },
-                receipt_id: None,
             })?;
             return Ok(ManifestToolExecutionOutcome::Cancelled(response));
         }
@@ -75,37 +68,6 @@ pub(super) fn execute_command_tool(
                 "Configured command for {} was cancelled",
                 invocation.tool_name
             );
-            let evidence = serde_json::json!({
-                "kind": "supervised_command",
-                "schema_version": 1,
-                "status": "cancelled",
-                "error": message,
-            });
-            let receipt_result = maybe_record_receipt(
-                ctx,
-                options.record_receipt,
-                ReceiptInput {
-                    tool_name: invocation.tool_name,
-                    args: args.clone(),
-                    invoked_command_key: invocation.command_key.map(str::to_owned),
-                    started_at_ms: started,
-                    ended_at_ms: ended,
-                    exit_status: 1,
-                    stdout: "",
-                    stderr: &message,
-                    evidence: Some(evidence),
-                    collect_git_metadata: options.collect_git_metadata,
-                    collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-                    worktree_fingerprint_override: None,
-                },
-                &|| observer.cancelled(),
-            );
-            let receipt_id = match receipt_result {
-                Ok(receipt_id) => receipt_id,
-                Err(receipt_error) => {
-                    bail!("{message}\nreceipt recording also failed:\n{receipt_error:#}")
-                }
-            };
             let response = tool_response_value(ToolExecutionResponse {
                 ok: true,
                 tool: invocation.tool_name,
@@ -116,7 +78,6 @@ pub(super) fn execute_command_tool(
                     stdout: String::new(),
                     stderr: message,
                 },
-                receipt_id,
             })?;
             return Ok(ManifestToolExecutionOutcome::Cancelled(response));
         }
@@ -131,14 +92,9 @@ pub(super) fn execute_command_tool(
                 ctx.command_output_limit().bytes()
             );
             return finish_configured_command_error(
-                ctx,
                 &invocation,
-                observer,
                 ConfiguredCommandFailure {
                     args,
-                    options,
-                    started,
-                    ended,
                     error,
                     stdout,
                     stderr,
@@ -147,14 +103,9 @@ pub(super) fn execute_command_tool(
         }
         Err(error) => {
             return finish_configured_command_error(
-                ctx,
                 &invocation,
-                observer,
                 ConfiguredCommandFailure {
                     args,
-                    options,
-                    started,
-                    ended,
                     error,
                     stdout: Vec::new(),
                     stderr: Vec::new(),
@@ -166,26 +117,6 @@ pub(super) fn execute_command_tool(
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
-    let receipt_result = maybe_record_receipt(
-        ctx,
-        options.record_receipt,
-        ReceiptInput {
-            tool_name: invocation.tool_name,
-            args: args.clone(),
-            invoked_command_key: invocation.command_key.map(str::to_owned),
-            started_at_ms: started,
-            ended_at_ms: ended,
-            exit_status,
-            stdout: &stdout,
-            stderr: &stderr,
-            evidence: None,
-            collect_git_metadata: options.collect_git_metadata,
-            collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-            worktree_fingerprint_override: None,
-        },
-        &|| observer.cancelled(),
-    );
-
     let tool_failure = tool_failure_message(
         invocation.tool_name,
         invocation.command_key,
@@ -193,7 +124,7 @@ pub(super) fn execute_command_tool(
         &stdout,
         &stderr,
     );
-    let receipt_id = receipt_id_or_preserve_tool_error(tool_failure, receipt_result)?;
+    fail_on_tool_failure(tool_failure)?;
 
     tool_response_value(ToolExecutionResponse {
         ok: true,
@@ -205,22 +136,16 @@ pub(super) fn execute_command_tool(
             stdout,
             stderr,
         },
-        receipt_id,
     })
     .map(ManifestToolExecutionOutcome::Completed)
 }
 
 fn finish_configured_command_error(
-    ctx: &RepoContext,
     invocation: &CommandToolInvocation<'_>,
-    observer: &dyn ExecutionControl,
     failure: ConfiguredCommandFailure,
 ) -> Result<ManifestToolExecutionOutcome> {
     let ConfiguredCommandFailure {
         args,
-        options,
-        started,
-        ended,
         error,
         stdout,
         stderr,
@@ -232,31 +157,6 @@ fn finish_configured_command_error(
         stderr.push('\n');
     }
     stderr.push_str(&message);
-    let evidence = serde_json::json!({
-        "kind": "supervised_command",
-        "schema_version": 1,
-        "status": "error",
-        "error": message,
-    });
-    let receipt_result = maybe_record_receipt(
-        ctx,
-        options.record_receipt,
-        ReceiptInput {
-            tool_name: invocation.tool_name,
-            args: args.clone(),
-            invoked_command_key: invocation.command_key.map(str::to_owned),
-            started_at_ms: started,
-            ended_at_ms: ended,
-            exit_status: 1,
-            stdout: &stdout,
-            stderr: &stderr,
-            evidence: Some(evidence),
-            collect_git_metadata: options.collect_git_metadata,
-            collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-            worktree_fingerprint_override: None,
-        },
-        &|| observer.cancelled(),
-    );
     let tool_failure = tool_failure_message(
         invocation.tool_name,
         invocation.command_key,
@@ -264,7 +164,7 @@ fn finish_configured_command_error(
         &stdout,
         &stderr,
     );
-    let receipt_id = receipt_id_or_preserve_tool_error(tool_failure, receipt_result)?;
+    fail_on_tool_failure(tool_failure)?;
     tool_response_value(ToolExecutionResponse {
         ok: true,
         tool: invocation.tool_name,
@@ -275,22 +175,8 @@ fn finish_configured_command_error(
             stdout,
             stderr,
         },
-        receipt_id,
     })
     .map(ManifestToolExecutionOutcome::Completed)
-}
-
-pub(super) fn maybe_record_receipt(
-    ctx: &RepoContext,
-    should_record_receipt: bool,
-    input: ReceiptInput<'_>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Option<String>> {
-    if should_record_receipt {
-        record_receipt_with_cancellation(ctx, input, cancelled).map(Some)
-    } else {
-        Ok(None)
-    }
 }
 
 fn run_configured_command(
@@ -392,7 +278,6 @@ pub(super) struct ToolExecutionResponse<'a> {
     pub(super) command_key: Option<&'a str>,
     pub(super) args: Value,
     pub(super) result: ToolProcessResult,
-    pub(super) receipt_id: Option<String>,
 }
 
 #[derive(Serialize)]

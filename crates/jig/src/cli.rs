@@ -472,8 +472,6 @@ pub(crate) struct ToolOpts {
     /// Retired with work plans; accepted and ignored.
     #[arg(long, hide = true)]
     pub(crate) plan_id: Option<String>,
-    #[arg(long, help = "Run without appending a receipt to .agent/state")]
-    pub(crate) no_receipt: bool,
 }
 
 #[derive(Args, Debug, Default)]

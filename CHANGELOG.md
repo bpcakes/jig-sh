@@ -4,13 +4,15 @@
 
 ### Changed
 
-- Record dependency execution proof without a work plan. Target freshness now
-  matches dependency proofs within the dependent's run and leaves the proof's
-  `plan_id` empty, so dependents outside a plan no longer report
-  `dependency_proof_invalid`. Automatic Rust focus now compares against the
-  merge base with the default branch, like native checks, instead of a work-plan
-  baseline, and falls back to the whole workspace when that base cannot be
-  resolved.
+- Automatic Rust focus now compares against the merge base with the default
+  branch, like native checks, instead of a work-plan baseline, and falls back to
+  the whole workspace when that base cannot be resolved.
+- A target that does not succeed now records `output_tail` in its run result:
+  the final 4,000 bytes of its stdout and stderr, cut at a character boundary,
+  with counts of any omitted earlier bytes.
+- `jig update` retires the legacy file-budget checker by evaluating
+  `repo:file-budget` itself, then evaluating again just before deleting the
+  checker, instead of requiring an earlier passing receipt.
 
 ### Removed
 
@@ -44,6 +46,25 @@
   place and are still sized by `jig state diagnose`, which no longer analyzes
   session recursion. The loop `noop-status` workflow no longer reports open plans
   or work-gate counts.
+- **Breaking:** stop recording check receipts and target freshness. `jig check`,
+  `jig run`, and MCP `jig.execute_run` record their results only in run history
+  (`runs.jsonl`). Directly executed manifest tools, `migration add`, and policy
+  checks no longer record anything. Only loop workflows still write receipts. Target identities, dependency execution
+  proofs, and their validation are gone. Epoch-8 `inputs_policy` and
+  `source_state` declarations are still validated and reported, and action
+  `inputs` still drive `--affected`. `--no-receipt` and the MCP `record_receipts`
+  field are rejected, and check, run, and MCP output no longer includes
+  `receipt_id`, `reused_from`, `target_freshness`, `target_identity`, or
+  `target_identity_error`; plan again instead of submitting a plan from an
+  earlier runtime. Existing `runs.jsonl` records that carry those fields still
+  load. `jig state summary` now reports `runs`, `target_results`,
+  `failed_target_results`, and `recent_target_results` from run history. `jig ui`
+  reads its Timeline and Health tabs from run history, and its recorder document
+  moves to `schema_version: 3`: `target_stats` replaces `tool_stats`, timeline
+  rows are target results, failures carry `output_tail` instead of
+  `stderr_preview`, the `failure_output_chars` limit replaces
+  `failure_stderr_chars`, and the `state.runs` error scope replaces
+  `state.receipts`. The contract version is unchanged.
 - Stop validating the retired `[work].iteration_profile` and `[[work.refinements]]`
   settings. Both are still accepted so existing configuration loads, never affect
   execution authority, and are dropped by `jig update`.

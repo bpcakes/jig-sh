@@ -167,8 +167,6 @@ pub(crate) struct ExecuteRunArgs {
     /// Retired. Accepted and ignored until the next contract epoch.
     #[serde(default, rename = "work_plan_id")]
     pub(crate) _retired_work_plan_id: Option<String>,
-    #[serde(default = "default_true")]
-    pub(crate) record_receipts: bool,
     #[serde(default)]
     pub(crate) fail_fast: bool,
     #[serde(default)]
@@ -254,10 +252,6 @@ pub(super) fn schema_value<T: JsonSchema>() -> Value {
     serde_json::to_value(schema).expect("repository MCP schemas must serialize")
 }
 
-const fn default_true() -> bool {
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_defaults_to_receipts_without_defaulting_fail_fast() {
+    fn execute_rejects_retired_receipt_control_without_defaulting_fail_fast() {
         let plan = RunPlan::new(
             "plan",
             "config",
@@ -285,9 +279,13 @@ mod tests {
             Vec::new(),
         );
         let parsed = serde_json::from_value::<ExecuteRunArgs>(json!({ "plan": plan })).unwrap();
-
-        assert!(parsed.record_receipts);
         assert!(!parsed.fail_fast);
+        assert!(
+            serde_json::from_value::<ExecuteRunArgs>(
+                json!({ "plan": plan, "record_receipts": false })
+            )
+            .is_err()
+        );
     }
 
     #[test]

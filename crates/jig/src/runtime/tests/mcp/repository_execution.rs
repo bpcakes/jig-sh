@@ -33,7 +33,6 @@ fn targets_without_a_worktree_effect_cannot_mutate_the_repository() {
             run,
             crate::runtime::run_execution::ExecuteCheckRunRequest {
                 alias_override: None,
-                record_receipts: true,
                 fail_fast: false,
             },
             &|| Ok(false),
@@ -385,10 +384,7 @@ fn mcp_call_dispatches_command_tool_without_makefile() {
     assert_eq!(output["command_key"], "rust_test_command");
     assert_eq!(output["result"]["stdout"], "command tool ran\n");
     assert!(!temp.path().join("Makefile").exists());
-
-    let receipts = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
-    let receipt = receipts.lines().last().unwrap();
-    assert!(receipt.contains(r#""invoked_command_key":"rust_test_command""#));
+    assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 }
 
 #[test]

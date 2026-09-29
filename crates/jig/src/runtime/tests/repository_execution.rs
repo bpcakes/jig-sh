@@ -111,7 +111,6 @@ fn empty_freshly_planned_check_rejects_source_drift_before_creating_a_run() {
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,
@@ -152,7 +151,6 @@ fn freshly_planned_check_rejects_authority_that_changed_before_planning() {
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,
@@ -200,7 +198,6 @@ fn freshly_planned_check_reports_repository_lease_waiting() {
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,
@@ -256,7 +253,6 @@ fn freshly_planned_check_can_cancel_while_waiting_for_repository_lease() {
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,
@@ -320,7 +316,6 @@ fn accepted_empty_check_cannot_complete_under_changed_manifest_authority() {
         run,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &|| Ok(false),
@@ -368,7 +363,6 @@ fn target_that_changes_manifest_authority_cannot_report_success() {
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,
@@ -419,7 +413,6 @@ fn repository_command_target_fails_on_the_configured_output_limit() {
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: true,
             fail_fast: false,
         },
         &|| false,
@@ -475,7 +468,6 @@ fn repository_command_target_uses_the_configured_default_timeout() {
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &|| false,
@@ -508,7 +500,6 @@ fn repository_affected_check_rejects_legacy_contracts_before_git_resolution() {
                 comparison: None,
                 explain: true,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(true),
             },
         )),
     )
@@ -550,7 +541,6 @@ fn independent_read_only_layer_targets_execute_concurrently() {
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,
@@ -601,7 +591,6 @@ fn wide_parallel_layer_keeps_the_bounded_worker_pool_busy() {
                 comparison: None,
                 explain: false,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(true),
             },
         )),
     )
@@ -641,7 +630,6 @@ fn queued_parallel_target_revalidates_source_before_starting() {
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: false,
             fail_fast: false,
         },
         &mut observer,

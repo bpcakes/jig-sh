@@ -17,10 +17,6 @@ impl ReadLockLabels {
         cache: "state cache file",
         data: "state data file",
     };
-    pub(super) const RECEIPT: Self = Self {
-        cache: "receipt cache lock",
-        data: "receipt state file",
-    };
 }
 
 /// Invoke the reader only after selecting a current locked file, a missing

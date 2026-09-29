@@ -229,8 +229,6 @@ jig_capability_only_requested() {
             ;;
           --plan-id=*)
             ;;
-          --no-receipt)
-            ;;
           contract)
             capability_command=check-contract
             ;;
@@ -259,8 +257,6 @@ jig_capability_only_requested() {
             capability_command=check-contract-plan-id
             ;;
           --plan-id=*)
-            ;;
-          --no-receipt)
             ;;
           *)
             return 1

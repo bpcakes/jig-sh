@@ -8,7 +8,7 @@ pub(super) fn prepare_policy(
     prepare_policy_from_bytes(read_policy_bytes(ctx, view), current_date)
 }
 
-pub(super) fn prepare_policy_from_bytes(
+fn prepare_policy_from_bytes(
     bytes: std::result::Result<Option<Vec<u8>>, String>,
     current_date: PolicyDateV1,
 ) -> PolicyPreparationV1 {

@@ -46,7 +46,6 @@ mod tests {
             evidence: Some(json!({"kind": "worker_run"})),
             collect_git_metadata: false,
             collect_worktree_fingerprint: false,
-            worktree_fingerprint_override: None,
         }
     }
 
@@ -500,7 +499,7 @@ esac
         let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
         let before = fs::read(&path).unwrap_or_default();
         let result = crate::runtime::dispatch(&ctx, crate::command::RuntimeCommand::Check(
-            crate::command::CheckCommand::Test(crate::command::ToolRequest::new(false)),
+            crate::command::CheckCommand::Test,
         )).unwrap();
         assert_eq!(result["ok"], true, "{result:#}");
         assert!(result["receipt_id"].is_null());

@@ -16,12 +16,6 @@ use super::{
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
 };
 
-impl From<ToolOpts> for command::ToolRequest {
-    fn from(opts: ToolOpts) -> Self {
-        Self::new(!opts.no_receipt)
-    }
-}
-
 impl From<AgentMapCommand> for command::AgentMapCommand {
     fn from(command: AgentMapCommand) -> Self {
         match command {
@@ -76,7 +70,6 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
                 comparison,
                 explain,
                 fail_fast,
-                tool: tool.into(),
             })),
             Some(CheckCommand::Selectors(selectors)) => {
                 Ok(Self::Repository(command::RepositoryCheckRequest {
@@ -86,7 +79,6 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
                     comparison,
                     explain,
                     fail_fast,
-                    tool: tool.into(),
                 }))
             }
             Some(command)
@@ -108,85 +100,44 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
                     comparison,
                     explain,
                     fail_fast,
-                    tool: merge_tool_opts(tool, child.tool)?.into(),
                 }))
             }
             // Preserve the named command DTO until runtime has loaded the
             // repository contract. `dispatch_named_check` executes the legacy
             // manifest tool only for v2-v5; v6 resolves this name as a
             // repository selector so every component action is included.
-            Some(command) => direct_check_command(command, tool),
+            Some(command) => Ok(direct_check_command(command)),
         }
     }
 }
 
 include!("command_conversion/external_check.rs");
 
-fn direct_check_command(
-    command: CheckCommand,
-    parent_tool: ToolOpts,
-) -> Result<command::CheckCommand> {
-    let command = match command {
-        CheckCommand::Fmt(opts) => {
-            command::CheckCommand::Fmt(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::Lint(opts) => {
-            command::CheckCommand::Lint(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::Clippy(opts) => {
-            command::CheckCommand::Clippy(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::Test(opts) => {
-            command::CheckCommand::Test(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::TestLocked(opts) => {
-            command::CheckCommand::TestLocked(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::TypeScriptLint(opts) => {
-            command::CheckCommand::TypeScriptLint(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::TypeScriptTypecheck(opts) => command::CheckCommand::TypeScriptTypecheck(
-            merge_tool_opts(parent_tool, opts.tool)?.into(),
-        ),
-        CheckCommand::TypeScriptBuild(opts) => {
-            command::CheckCommand::TypeScriptBuild(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::TypeScriptCoverage(opts) => command::CheckCommand::TypeScriptCoverage(
-            merge_tool_opts(parent_tool, opts.tool)?.into(),
-        ),
-        CheckCommand::Sqlx(opts) => {
-            command::CheckCommand::Sqlx(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::Sqlc(opts) => {
-            command::CheckCommand::Sqlc(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::Schema(opts) => {
-            command::CheckCommand::Schema(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::Contract(opts) => {
-            command::CheckCommand::Contract(merge_tool_opts(parent_tool, opts.tool)?.into())
-        }
-        CheckCommand::AgentMap(opts) => {
-            reject_repository_options(&parent_tool)?;
-            command::CheckCommand::AgentMap(opts.into())
-        }
-        CheckCommand::AgentGuides => {
-            reject_repository_options(&parent_tool)?;
-            command::CheckCommand::AgentGuides
-        }
+fn direct_check_command(command: CheckCommand) -> command::CheckCommand {
+    match command {
+        CheckCommand::Fmt(_) => command::CheckCommand::Fmt,
+        CheckCommand::Lint(_) => command::CheckCommand::Lint,
+        CheckCommand::Clippy(_) => command::CheckCommand::Clippy,
+        CheckCommand::Test(_) => command::CheckCommand::Test,
+        CheckCommand::TestLocked(_) => command::CheckCommand::TestLocked,
+        CheckCommand::TypeScriptLint(_) => command::CheckCommand::TypeScriptLint,
+        CheckCommand::TypeScriptTypecheck(_) => command::CheckCommand::TypeScriptTypecheck,
+        CheckCommand::TypeScriptBuild(_) => command::CheckCommand::TypeScriptBuild,
+        CheckCommand::TypeScriptCoverage(_) => command::CheckCommand::TypeScriptCoverage,
+        CheckCommand::Sqlx(_) => command::CheckCommand::Sqlx,
+        CheckCommand::Sqlc(_) => command::CheckCommand::Sqlc,
+        CheckCommand::Schema(_) => command::CheckCommand::Schema,
+        CheckCommand::Contract(_) => command::CheckCommand::Contract,
+        CheckCommand::AgentMap(opts) => command::CheckCommand::AgentMap(opts.into()),
+        CheckCommand::AgentGuides => command::CheckCommand::AgentGuides,
         CheckCommand::MigrationImmutability(opts) => {
-            reject_repository_options(&parent_tool)?;
             command::CheckCommand::MigrationImmutability(opts.into())
         }
-        CheckCommand::SqlxUncheckedNonTest => {
-            reject_repository_options(&parent_tool)?;
-            command::CheckCommand::SqlxUncheckedNonTest
-        }
+        CheckCommand::SqlxUncheckedNonTest => command::CheckCommand::SqlxUncheckedNonTest,
         CheckCommand::Selectors(_) => {
             unreachable!("external selectors are handled before direct commands")
         }
-    };
-    Ok(command)
+    }
 }
 
 fn repository_selector(command: CheckCommand) -> Result<(&'static str, CheckTargetOpts)> {
@@ -214,25 +165,6 @@ fn repository_selector(command: CheckCommand) -> Result<(&'static str, CheckTarg
         }
         CheckCommand::Selectors(_) => unreachable!("external selectors are handled separately"),
     }
-}
-
-fn merge_tool_opts(parent: ToolOpts, child: ToolOpts) -> Result<ToolOpts> {
-    if parent.plan_id.is_some() && child.plan_id.is_some() {
-        bail!("--plan-id may be supplied before or after the check name, not both");
-    }
-    Ok(ToolOpts {
-        plan_id: parent.plan_id.or(child.plan_id),
-        no_receipt: parent.no_receipt || child.no_receipt,
-    })
-}
-
-fn reject_repository_options(tool: &ToolOpts) -> Result<()> {
-    if tool.plan_id.is_some() || tool.no_receipt {
-        bail!(
-            "--plan-id and --no-receipt apply to repository target checks, not Jig-owned policy subcommands"
-        );
-    }
-    Ok(())
 }
 
 impl From<CheckMigrationImmutabilityOpts> for command::MigrationImmutabilityRequest {

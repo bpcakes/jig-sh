@@ -274,7 +274,6 @@ fn generated_launcher_keeps_bare_check_and_target_selectors_repository_scoped() 
         &["check", "--plan-id", "plan_example", "contract"][..],
         &["check", "--plan-id=plan_example", "contract"][..],
         &["check", "contract", "--plan-id=plan_example"][..],
-        &["check", "contract", "--no-receipt"][..],
     ] {
         assert!(generated_launcher_classifies_as_capability_only(args));
     }
@@ -285,6 +284,7 @@ fn generated_launcher_keeps_bare_check_and_target_selectors_repository_scoped() 
         &["check", "--profile", "ci", "--explain"][..],
         &["check", "contract", "--profile", "ci"][..],
         &["check", "--no-receipt"][..],
+        &["check", "contract", "--no-receipt"][..],
         &["check", "unknown-selector"][..],
     ] {
         assert!(

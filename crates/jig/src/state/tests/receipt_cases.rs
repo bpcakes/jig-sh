@@ -7,7 +7,6 @@ pub(super) fn receipt_record(
     diff_stat: DiffStat,
 ) -> ReceiptRecord {
     ReceiptRecord {
-        target_freshness: None,
         id: id.into(),
         session_id: Some("session_1".into()),
         plan_id: Some("plan_1".into()),
@@ -21,15 +20,6 @@ pub(super) fn receipt_record(
         stderr_preview: String::new(),
         evidence: None,
         run_id: None,
-        target: None,
-        config_digest: None,
-        input_digest: None,
-        findings: Vec::new(),
-        finding_count: None,
-        findings_truncated: false,
-        findings_digest: None,
-        evaluated_at_ms: None,
-        valid_until_ms: None,
         changed_paths: Vec::new(),
         changed_path_count: None,
         changed_paths_truncated: false,
@@ -39,172 +29,6 @@ pub(super) fn receipt_record(
         git_diff_stat_error: None,
         worktree_fingerprint: None,
         worktree_fingerprint_error: None,
-    }
-}
-
-#[test]
-fn state_summary_is_read_only_and_counts_state_records() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    ensure_state_layout(&ctx).unwrap();
-    let receipt = receipt_record("receipt_ok", tool::TEST, 0, DiffStat::default());
-    append_jsonl(&ctx.state_file("receipts.jsonl"), &receipt).unwrap();
-    let before = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl")).unwrap();
-
-    let output = state_summary(&ctx).unwrap();
-
-    let after = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl")).unwrap();
-    assert_eq!(before.len(), after.len());
-    assert!(output.get("receipt_id").is_none());
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["counts"]["receipts"], 1);
-    assert_eq!(output["counts"]["failed_receipts"], 0);
-    assert!(output["counts"].get("sessions").is_none());
-    assert!(output.get("current_session_id").is_none());
-    assert_eq!(output["recent_receipts"][0]["tool_name"], tool::TEST);
-    assert!(output["recent_receipts"][0].get("plan_id").is_none());
-    assert!(output["recent_receipts"][0].get("session_id").is_none());
-}
-
-#[test]
-fn legacy_state_summary_accepts_records_above_the_dashboard_limit() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    ensure_state_layout(&ctx).unwrap();
-    let mut receipt = receipt_record("receipt_large", tool::TEST, 0, DiffStat::default());
-    receipt.stdout_preview = "x".repeat(super::jsonl::DASHBOARD_JSONL_RECORD_BYTES + 1);
-    append_jsonl(&ctx.state_file("receipts.jsonl"), &receipt).unwrap();
-
-    let summary = state_summary(&ctx).unwrap();
-    let bounded_error =
-        super::summary::state_summary_with_cancellation(&ctx, &|| false).unwrap_err();
-
-    assert_eq!(summary["counts"]["receipts"], 1);
-    assert!(
-        bounded_error
-            .downcast_ref::<super::jsonl::JsonlRecordTooLarge>()
-            .is_some()
-    );
-}
-
-#[test]
-fn cancellable_state_summary_stops_during_stream_collection() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    };
-    use std::time::Duration;
-
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    fs::create_dir_all(ctx.state_dir()).unwrap();
-    let receipts_path = ctx.state_file("receipts.jsonl");
-    fs::write(&receipts_path, b"").unwrap();
-    let lock = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&receipts_path)
-        .unwrap();
-    FileExt::lock_exclusive(&lock).unwrap();
-
-    let reader_ctx = ctx;
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let reader_cancelled = Arc::clone(&cancelled);
-    let (started_tx, started_rx) = mpsc::channel();
-    let (summary_tx, summary_rx) = mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        started_tx.send(()).unwrap();
-        let result = super::summary::state_summary_with_cancellation(&reader_ctx, &|| {
-            reader_cancelled.load(Ordering::SeqCst)
-        });
-        summary_tx.send(result).unwrap();
-    });
-
-    started_rx.recv().unwrap();
-    assert!(summary_rx.recv_timeout(Duration::from_millis(100)).is_err());
-    cancelled.store(true, Ordering::SeqCst);
-    let result = match summary_rx.recv_timeout(Duration::from_secs(2)) {
-        Ok(result) => result,
-        Err(error) => {
-            FileExt::unlock(&lock).unwrap();
-            reader.join().unwrap();
-            panic!("state summary stayed blocked on a state stream: {error}");
-        }
-    };
-
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "status collection was cancelled"
-    );
-    FileExt::unlock(&lock).unwrap();
-    reader.join().unwrap();
-}
-
-#[test]
-fn state_summary_on_uninitialized_repo_creates_nothing() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    assert!(!ctx.state_dir().exists());
-    assert!(!temp.path().join(".agent/.cache").exists());
-
-    let output = state_summary(&ctx).unwrap();
-
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["counts"]["receipts"], 0);
-    assert!(!ctx.state_dir().exists());
-    assert!(!temp.path().join(".agent/.cache").exists());
-    assert!(!temp.path().join(".agent/plans").exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn state_summary_reads_existing_read_only_state() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    record_receipt(
-        &ctx,
-        ReceiptInput {
-            tool_name: tool::TEST,
-            args: json!({}),
-            invoked_command_key: None,
-            started_at_ms: 1,
-            ended_at_ms: 2,
-            exit_status: 0,
-            stdout: "",
-            stderr: "",
-            evidence: None,
-            collect_git_metadata: false,
-            collect_worktree_fingerprint: false,
-            worktree_fingerprint_override: None,
-        },
-    )
-    .unwrap();
-    let state_dir = ctx.state_dir();
-    let cache_dir = temp.path().join(".agent/.cache");
-    let lock_dir = cache_dir.join("state-locks");
-    for path in [
-        ctx.state_file("receipts.jsonl"),
-        lock_dir.join("receipts.jsonl.lock"),
-    ] {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o444)).unwrap();
-    }
-    for path in [&state_dir, &lock_dir, &cache_dir] {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o555)).unwrap();
-    }
-
-    let output = state_summary(&ctx).unwrap();
-
-    assert_eq!(output["counts"]["receipts"], 1);
-    for path in [&cache_dir, &lock_dir, &state_dir] {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
 

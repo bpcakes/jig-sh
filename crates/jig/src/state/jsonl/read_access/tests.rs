@@ -110,26 +110,16 @@ fn read_errors_precede_unlock_errors_and_unlock_errors_prevent_retries() {
             ReadLockLabels::STATE,
             "Failed to unlock stale state cache file",
         ),
-        (
-            Some(Ok(())),
-            ReadLockLabels::RECEIPT,
-            "Failed to unlock receipt cache lock",
-        ),
-        (
-            None,
-            ReadLockLabels::RECEIPT,
-            "Failed to unlock stale receipt cache lock",
-        ),
     ] {
         let error = finish_read(result, failed_unlock(), failed_unlock(), labels).unwrap_err();
         assert_eq!(error.to_string(), expected);
     }
     for (result, expected) in [
-        (Some(Ok(())), "Failed to unlock receipt state file"),
-        (None, "Failed to unlock stale receipt state file"),
+        (Some(Ok(())), "Failed to unlock state data file"),
+        (None, "Failed to unlock stale state data file"),
     ] {
         let error =
-            finish_read(result, Ok(()), failed_unlock(), ReadLockLabels::RECEIPT).unwrap_err();
+            finish_read(result, Ok(()), failed_unlock(), ReadLockLabels::STATE).unwrap_err();
         assert_eq!(error.to_string(), expected);
     }
     assert_eq!(

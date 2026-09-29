@@ -98,7 +98,6 @@ fn recorded_receipt_persists_bounded_change_set_metadata() {
             evidence: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: false,
-            worktree_fingerprint_override: None,
         },
     )
     .unwrap();
@@ -147,7 +146,6 @@ fn cancelled_git_enrichment_does_not_prevent_durable_receipt_append() {
             evidence: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: true,
-            worktree_fingerprint_override: None,
         },
         &|| true,
     )

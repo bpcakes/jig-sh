@@ -193,7 +193,7 @@ fn execute_admitted(
     {
         let stopped = stopped_before_start(planned, stop);
         capture.conclusion = stopped.conclusion;
-        capture.receipt_exit_status = 1;
+        capture.envelope_exit_status = 1;
         capture.stderr.push_str(&stopped.stderr);
     }
     explain_partial(&mut capture, resolved);
@@ -216,7 +216,7 @@ fn finish_unstarted(
     finisher.finish(
         planned,
         CompletedTargetCapture::now(None, capture),
-        source_epoch.receipt_fingerprint(),
+        source_epoch.observed_fingerprint(),
     )
 }
 
@@ -241,21 +241,4 @@ fn fingerprint(
     .map_err(|_| {
         "source authority could not be established within the resource target budget".into()
     })
-}
-
-struct BudgetedObservation<'a, 'b>(&'a mut TargetExecutionControl<'b>);
-
-impl ExecutionObserver for BudgetedObservation<'_, '_> {
-    fn event(&mut self, event: ExecutionEvent<'_>) {
-        self.0.event(event);
-    }
-    fn flush(&mut self) -> Result<()> {
-        self.0.flush()
-    }
-}
-
-impl RepositoryRunControl for BudgetedObservation<'_, '_> {
-    fn cancelled(&self) -> Result<bool> {
-        Ok(self.0.remaining().is_err())
-    }
 }

@@ -2,9 +2,8 @@ use time::OffsetDateTime;
 
 use crate::dashboard::{
     AppliedLimit, BoundedRows, BoundedText, ExhaustedAttempt, Failure, HarnessObservation,
-    LoopAttempt, LoopLease, LoopObservation, LoopStateError, LoopWorkflow, ReceiptTimelineRow,
-    RecorderEpochId, RecorderLimits, RecorderSnapshot, ScheduledOccurrence, SnapshotError,
-    TimelineRow, ToolStat,
+    LoopAttempt, LoopLease, LoopObservation, LoopStateError, LoopWorkflow, RecorderEpochId,
+    RecorderLimits, RecorderSnapshot, ScheduledOccurrence, SnapshotError, TargetStat, TimelineRow,
 };
 
 use super::sanitize_text;
@@ -19,7 +18,7 @@ pub(crate) struct LocalDashboard {
     pub(crate) repo: LocalRepositoryView,
     pub(crate) harness: LocalHarnessView,
     pub(crate) failures: Vec<FailureView>,
-    pub(crate) tools: Vec<ToolView>,
+    pub(crate) targets: Vec<TargetView>,
     pub(crate) health: Vec<HealthItemView>,
     pub(crate) timeline: Vec<TimelineItemView>,
     pub(crate) timeline_limit: usize,
@@ -34,25 +33,25 @@ impl From<RecorderSnapshot> for LocalDashboard {
             .sort_by_key(|failure| std::cmp::Reverse(failure.ended_at_ms));
         snapshot
             .timeline
-            .sort_by_key(|row| std::cmp::Reverse(timeline_timestamp(row)));
+            .sort_by_key(|row| std::cmp::Reverse(row.timestamp_ms));
         let failures = snapshot
             .failures
             .into_iter()
             .map(FailureView::from)
             .collect::<Vec<_>>();
-        let tools = snapshot
-            .tool_stats
+        let targets = snapshot
+            .target_stats
             .into_iter()
-            .map(ToolView::from)
+            .map(TargetView::from)
             .collect::<Vec<_>>();
-        let health = health_items(&failures, &tools, snapshot.loops.as_ref());
+        let health = health_items(&failures, &targets, snapshot.loops.as_ref());
         Self {
             generated_at_ms: snapshot.generated_at_ms,
             epoch_id: snapshot.epoch_id,
             repo: snapshot.repo.into(),
             harness: snapshot.harness.into(),
             failures,
-            tools,
+            targets,
             health,
             timeline: snapshot
                 .timeline
@@ -63,12 +62,6 @@ impl From<RecorderSnapshot> for LocalDashboard {
             limits: snapshot.limits.into(),
             errors: snapshot.errors.into_iter().map(Into::into).collect(),
         }
-    }
-}
-
-fn timeline_timestamp(row: &TimelineRow) -> Option<u64> {
-    match row {
-        TimelineRow::Receipt(row) => row.timestamp_ms,
     }
 }
 
@@ -117,31 +110,31 @@ impl From<HarnessObservation> for LocalHarnessView {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FailureView {
-    pub(crate) id: String,
-    pub(crate) display_id: String,
-    pub(crate) tool: String,
+    pub(crate) identity: String,
+    pub(crate) run_id: String,
+    pub(crate) target: String,
     pub(crate) ended_at: String,
-    pub(crate) exit_status: i64,
-    pub(crate) stderr: TextView,
+    pub(crate) outcome: String,
+    pub(crate) output: TextView,
 }
 
 impl From<Failure> for FailureView {
     fn from(failure: Failure) -> Self {
         Self {
-            display_id: sanitize_text(&failure.id),
-            id: failure.id,
-            tool: sanitize_text(&failure.tool_name),
+            identity: format!("failure:{}:{}", failure.run_id, failure.target),
+            run_id: sanitize_text(&failure.run_id),
+            target: sanitize_text(&failure.target),
             ended_at: format_timestamp(failure.ended_at_ms),
-            exit_status: failure.exit_status,
-            stderr: failure.stderr_preview.into(),
+            outcome: outcome_label(Some(&failure.conclusion), failure.exit_code),
+            output: failure.output_tail.into(),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ToolView {
-    pub(crate) raw_tool: String,
-    pub(crate) tool: String,
+pub(crate) struct TargetView {
+    pub(crate) raw_target: String,
+    pub(crate) target: String,
     pub(crate) runs: u64,
     pub(crate) failures: u64,
     pub(crate) last_status: String,
@@ -149,21 +142,26 @@ pub(crate) struct ToolView {
     pub(crate) average: String,
 }
 
-impl From<ToolStat> for ToolView {
-    fn from(tool: ToolStat) -> Self {
+impl From<TargetStat> for TargetView {
+    fn from(stat: TargetStat) -> Self {
         Self {
-            tool: sanitize_text(&tool.tool),
-            raw_tool: tool.tool,
-            runs: tool.runs,
-            failures: tool.failures,
-            last_status: if tool.last_exit_status == 0 {
-                "pass".to_string()
-            } else {
-                format!("exit {}", tool.last_exit_status)
-            },
-            last_ended_at: format_timestamp(Some(tool.last_ended_at_ms)),
-            average: format_duration(Some(tool.avg_duration_ms)),
+            target: sanitize_text(&stat.target),
+            raw_target: stat.target,
+            runs: stat.runs,
+            failures: stat.failures,
+            last_status: outcome_label(stat.last_conclusion.as_deref(), None),
+            last_ended_at: format_timestamp(Some(stat.last_ended_at_ms)),
+            average: format_duration(Some(stat.avg_duration_ms)),
         }
+    }
+}
+
+/// Explicit text for a target outcome, so no status relies on color alone.
+fn outcome_label(conclusion: Option<&str>, exit_code: Option<i64>) -> String {
+    let conclusion = conclusion.map_or_else(|| "unfinished".to_string(), sanitize_text);
+    match exit_code {
+        Some(code) if conclusion != "success" => format!("{conclusion} (exit {code})"),
+        _ => conclusion,
     }
 }
 
@@ -204,54 +202,41 @@ pub(crate) struct TimelineItemView {
 
 impl From<TimelineRow> for TimelineItemView {
     fn from(row: TimelineRow) -> Self {
-        match row {
-            TimelineRow::Receipt(row) => receipt_timeline(row),
+        let failed = !row.succeeded();
+        let outcome = outcome_label(row.conclusion.as_deref(), row.exit_code);
+        let mut lines = vec![
+            field("Run", &row.run_id),
+            field("Target", &row.target),
+            field("Status", &row.status),
+            format!("Conclusion: {outcome}"),
+            format!(
+                "Exit: {}",
+                row.exit_code
+                    .map_or_else(|| "—".to_string(), |code| code.to_string())
+            ),
+            format!("Started: {}", format_timestamp(row.started_at_ms)),
+            format!("Ended: {}", format_timestamp(row.ended_at_ms)),
+            format!("Duration: {}", format_duration(row.duration_ms)),
+        ];
+        if let Some(count) = row.finding_count {
+            lines.push(format!("Findings: {count}"));
         }
-    }
-}
-
-fn receipt_timeline(row: ReceiptTimelineRow) -> TimelineItemView {
-    let failed = row.exit_status != 0;
-    let mut lines = vec![
-        field("Receipt", &row.id),
-        field("Tool", &row.tool_name),
-        format!("Exit: {}", row.exit_status),
-        format!("Started: {}", format_timestamp(row.started_at_ms)),
-        format!("Ended: {}", format_timestamp(row.ended_at_ms)),
-        format!("Duration: {}", format_duration(row.duration_ms)),
-    ];
-    push_optional(
-        &mut lines,
-        "Command key",
-        row.invoked_command_key.as_deref(),
-    );
-    push_optional(&mut lines, "Diff", row.diff_summary.as_deref());
-    if let Some(count) = row.changed_path_count {
-        lines.push(format!("Changed paths: {count}"));
-    }
-    if let Some(stderr) = row.stderr_preview {
-        append_text(&mut lines, "Stderr", &stderr.into());
-    }
-    TimelineItemView {
-        display_identity: sanitize_text(&row.stable_identity),
-        identity: row.stable_identity,
-        timestamp: format_timestamp(row.timestamp_ms),
-        primary: format!(
-            "{} {}",
-            sanitize_text(&row.tool_name),
-            if failed {
-                format!("exit {}", row.exit_status)
-            } else {
-                "pass".to_string()
-            }
-        ),
-        secondary: row
-            .diff_summary
-            .as_deref()
-            .map(sanitize_text)
-            .unwrap_or_default(),
-        failed,
-        detail: DetailDocument::new("Receipt event", lines),
+        if let Some(output) = row.output_tail {
+            append_text(&mut lines, "Output tail", &output.into());
+        }
+        TimelineItemView {
+            display_identity: sanitize_text(&row.stable_identity),
+            identity: row.stable_identity,
+            timestamp: format_timestamp(row.timestamp_ms),
+            primary: format!("{} {outcome}", sanitize_text(&row.target)),
+            secondary: format!(
+                "{} · {}",
+                format_duration(row.duration_ms),
+                sanitize_text(&row.run_id)
+            ),
+            failed,
+            detail: DetailDocument::new("Target result", lines),
+        }
     }
 }
 
@@ -333,7 +318,7 @@ impl LimitView {
 #[derive(Clone, Debug)]
 pub(crate) struct LocalLimitsView {
     pub(crate) failures: LimitView,
-    pub(crate) tools: LimitView,
+    pub(crate) targets: LimitView,
     pub(crate) timeline: LimitView,
 }
 
@@ -341,7 +326,7 @@ impl From<RecorderLimits> for LocalLimitsView {
     fn from(limits: RecorderLimits) -> Self {
         Self {
             failures: limits.failures.into(),
-            tools: limits.tool_stats.into(),
+            targets: limits.target_stats.into(),
             timeline: limits.timeline.into(),
         }
     }

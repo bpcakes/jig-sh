@@ -87,7 +87,7 @@ def measure(root, scratch, jig, mode, condition, env):
     event_path = control / "events.jsonl"
     env = dict(env, PROBE_CONTROL=str(control), PROBE_EVENTS=str(event_path), PROBE_CONDITION=condition)
     groups = [["left"]] if condition == "isolated" else ([["left", "right"]] if condition == "same_run" else [["left"], ["right"]])
-    argv = [[str(jig), "check", *[f"example:{label}" for label in group], "--no-receipt", "--json"] for group in groups]
+    argv = [[str(jig), "check", *[f"example:{label}" for label in group], "--json"] for group in groups]
     started = time.monotonic()
     processes, streams = [], []
     released = None

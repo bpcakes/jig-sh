@@ -4,12 +4,14 @@ pub(super) fn format_state_summary(value: &serde_json::Value) -> String {
     let counts = &value["counts"];
     let repo = &value["repo"];
     let repo_name = value_str(repo, "name").unwrap_or("<unknown>");
-    let receipts = value_u64(counts, "receipts").unwrap_or(0);
-    let failed_receipts = value_u64(counts, "failed_receipts").unwrap_or(0);
+    let runs = value_u64(counts, "runs").unwrap_or(0);
+    let target_results = value_u64(counts, "target_results").unwrap_or(0);
+    let failed = value_u64(counts, "failed_target_results").unwrap_or(0);
 
     [
         "State summary:".into(),
-        format!("  Receipts: {receipts} ({failed_receipts} failed)"),
+        format!("  Runs: {runs}"),
+        format!("  Target results: {target_results} ({failed} failed)"),
         format!("Repo: {repo_name}"),
     ]
     .join("\n")

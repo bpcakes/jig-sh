@@ -227,16 +227,21 @@ fn state_summary_focuses_on_persisted_record_counts() {
     let summary = format_state_summary(&json!({
         "repo": { "name": "demo", "default_branch": "main" },
         "counts": {
-            "receipts": 20,
-            "failed_receipts": 3
+            "runs": 4,
+            "target_results": 20,
+            "failed_target_results": 3
         },
-        "recent_receipts": [{ "id": "receipt_1", "tool_name": "jig.test" }]
+        "recent_target_results": [{
+            "run_id": "run_1",
+            "target": { "component": "api", "action": "test" }
+        }]
     }));
 
     assert!(summary.contains("State summary:"));
-    assert!(summary.contains("Receipts: 20 (3 failed)"));
+    assert!(summary.contains("Runs: 4"));
+    assert!(summary.contains("Target results: 20 (3 failed)"));
     assert!(summary.contains("Repo: demo"));
-    assert!(!summary.contains("jig.test"));
+    assert!(!summary.contains("run_1"));
 }
 
 include!("output_tests_parts.rs");

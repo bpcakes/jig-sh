@@ -3,9 +3,7 @@ use serde_json::{Value, json};
 
 use super::output::{HumanOutput, emit};
 use super::structured_error::require_json_ok;
-use crate::command::{
-    AgentBootstrapRequest, AgentCommand, CheckCommand, RuntimeCommand, ToolRequest,
-};
+use crate::command::{AgentBootstrapRequest, AgentCommand, CheckCommand, RuntimeCommand};
 use crate::{context::RepoContext, doctor, runtime};
 
 pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
@@ -71,7 +69,7 @@ fn run_setup_with_progress(
     next_phase("doctor before");
     let doctor_before = run_doctor()?;
     next_phase("dependency bootstrap");
-    let bootstrap = dispatch(RuntimeCommand::Bootstrap(ToolRequest::default()))?;
+    let bootstrap = dispatch(RuntimeCommand::Bootstrap)?;
 
     next_phase("agent readiness");
     let agent_before = dispatch(RuntimeCommand::Agent(AgentCommand::Doctor))?;
@@ -99,9 +97,7 @@ fn run_setup_with_progress(
     next_phase("agent verification");
     let agent_after = dispatch(RuntimeCommand::Agent(AgentCommand::Doctor))?;
     next_phase("contract verification");
-    let contract = dispatch(RuntimeCommand::Check(CheckCommand::Contract(
-        ToolRequest::default(),
-    )))?;
+    let contract = dispatch(RuntimeCommand::Check(CheckCommand::Contract))?;
     next_phase("doctor after");
     let doctor_after = run_doctor()?;
     let ok = bootstrap["ok"].as_bool().unwrap_or(false)
@@ -167,7 +163,7 @@ mod tests {
             |command| {
                 let mut calls = dispatch_calls.borrow_mut();
                 Ok(match command {
-                    RuntimeCommand::Bootstrap(_) => {
+                    RuntimeCommand::Bootstrap => {
                         calls.push("bootstrap");
                         json!({ "ok": true })
                     }
@@ -190,7 +186,7 @@ mod tests {
                         *dispatch_agent_ready.borrow_mut() = true;
                         json!({ "ok": true })
                     }
-                    RuntimeCommand::Check(CheckCommand::Contract(_)) => {
+                    RuntimeCommand::Check(CheckCommand::Contract) => {
                         calls.push("check contract");
                         json!({ "ok": true })
                     }
@@ -236,7 +232,7 @@ mod tests {
             || Ok(json!({ "ok": true })),
             |command| {
                 Ok(match command {
-                    RuntimeCommand::Bootstrap(_) => json!({ "ok": true }),
+                    RuntimeCommand::Bootstrap => json!({ "ok": true }),
                     RuntimeCommand::Agent(AgentCommand::Doctor) => {
                         let call = agent_doctor_calls.get();
                         agent_doctor_calls.set(call + 1);
@@ -263,7 +259,7 @@ mod tests {
                         registered.push(request.marketplace.unwrap());
                         json!({ "ok": true })
                     }
-                    RuntimeCommand::Check(CheckCommand::Contract(_)) => json!({ "ok": true }),
+                    RuntimeCommand::Check(CheckCommand::Contract) => json!({ "ok": true }),
                     _ => panic!("unexpected setup command"),
                 })
             },

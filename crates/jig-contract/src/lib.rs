@@ -8,7 +8,7 @@ pub mod resources;
 pub mod run;
 pub mod rust_focus;
 
-pub use resources::{ExecutionResourceV1, ReusedTargetEvidenceV1};
+pub use resources::ExecutionResourceV1;
 pub use rust_focus::{
     PreparedRustInputV1, RustFeaturesV1, RustFocusV1, RustNextestConfigV1, RustScopeDispositionV1,
     RustTargetV1,
@@ -30,7 +30,8 @@ pub use run::{
     FindingSeverity, NativeActionResult, PlannedTarget, PolicyPreparationFailureV1,
     PolicyPreparationV1, PolicySourceV1, PreparedDiagnosticV1, PreparedNativeInputV1,
     ResolvedComparisonV1, RunConclusion, RunPlan, RunResult, RunStatus, SelectionReason,
-    SourceIdentity, StrictInventoryFallbackV1, StrictInventoryReasonV1, TargetRunResult,
+    SourceIdentity, StrictInventoryFallbackV1, StrictInventoryReasonV1, TargetOutputTailV1,
+    TargetRunResult,
 };
 
 pub mod kind {

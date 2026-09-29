@@ -12,7 +12,7 @@
 - `src/cli/run/dev_launch.rs`: private dev-worker CLI handoff; its worker owns the existing dev lifecycle and output.
 - `src/runtime.rs`: command-backed tool execution plus MCP tool call dispatch.
 - `src/mcp.rs`: JSON-RPC/MCP stdio server.
-- `src/state.rs`: receipts and runs recorded under `.agent/state`.
+- `src/state.rs`: run history and loop receipts recorded under `.agent/state`.
 - `src/ui.rs`: `jig ui` and `jig status --tui` CLI adapter for the separately owned `jig-ui` terminal crate.
 - `src/ui/source.rs`: typed recorder and status source with retained local epochs.
 - `src/status.rs`: read-only local repository and loop aggregate snapshots.
@@ -29,18 +29,18 @@
 - Change shared operation signal supervision: `src/signal_supervision.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
 - Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
-- Change make-tool behavior or receipt recording around command execution: `src/runtime.rs`.
+- Change manifest-tool behavior around command execution: `src/runtime.rs`.
 - Change MCP descriptors, schemas, or protocol handling: `src/mcp.rs`.
-- Change receipt or run persistence: `src/state.rs`.
-- Change the data exposed by the unified dashboard: `src/ui/source/`.
+- Change run history or receipt persistence, or `jig state summary`: `src/state.rs` and `src/state/`.
+- Change the data exposed by the unified dashboard, including its run-history timeline and health aggregates: `src/ui/source/`.
 - Change dashboard navigation, scheduling, or rendering: `crates/jig-ui/`.
 - Change local status aggregation: `src/status.rs` and `src/status/`.
 - Change terminal status navigation, refresh runtime, or rendering: `crates/jig-ui/src/terminal/`.
 - Change Vault TUI navigation, forms, or rendering: `crates/jig-vault-tui/`; keep scope, environment capture, external tools, and core calls in `src/runtime/vault/tui.rs`.
 - Change bounded owned-process execution or process-tree cleanup: `src/process.rs` and
   `src/process/tests.rs`.
-- Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`.
-- Change git metadata captured in receipts: `src/git_receipts.rs`.
+- Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`; the legacy file-budget checker retirement evaluates `repo:file-budget` inline in `src/bootstrap/file_budget_lifecycle.rs`.
+- Change repository source identity or the git metadata captured in loop receipts: `src/git_receipts.rs`.
 
 ## Invariants
 

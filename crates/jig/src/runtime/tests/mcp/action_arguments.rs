@@ -1,5 +1,5 @@
 use super::*;
-use crate::command::{RepositoryRunRequest, RuntimeCommand, ToolRequest};
+use crate::command::{RepositoryRunRequest, RuntimeCommand};
 
 fn fixture() -> tempfile::TempDir {
     let temp = tempdir().unwrap();
@@ -76,7 +76,6 @@ fn request(target: &str, values: Vec<String>) -> RepositoryRunRequest {
         explain: true,
         fail_fast: false,
         approved_effects: vec![],
-        tool: ToolRequest::default(),
     }
 }
 
@@ -229,10 +228,7 @@ fn action_arguments_native_migration_and_compatibility_alias_agree() {
             assert!(call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:migration-add"], "arguments": {"api:migration-add": {"name": name}}})).is_err());
             let alias_error = crate::runtime::dispatch(
                 &ctx,
-                RuntimeCommand::MigrationAdd(crate::command::MigrationAddRequest {
-                    name,
-                    tool: ToolRequest::default(),
-                }),
+                RuntimeCommand::MigrationAdd(crate::command::MigrationAddRequest { name }),
             )
             .unwrap_err();
             assert!(
@@ -261,7 +257,6 @@ fn action_arguments_native_migration_and_compatibility_alias_agree() {
             &ctx,
             RuntimeCommand::MigrationAdd(crate::command::MigrationAddRequest {
                 name: name.clone(),
-                tool: ToolRequest::default(),
             }),
         )
         .unwrap();

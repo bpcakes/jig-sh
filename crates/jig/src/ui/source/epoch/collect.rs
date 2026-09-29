@@ -1,127 +1,145 @@
 use super::*;
 
-pub(super) fn collect_receipts(
+/// Folds finished target results from run history into the dashboard's
+/// timeline, failure list and per-target statistics in one bounded pass.
+pub(super) fn collect_runs(
     context: &RepoContext,
     cancelled: &dyn Fn() -> bool,
-) -> Result<StreamSection<ReceiptFacts>, SourceError> {
-    let path = context.state_file("receipts.jsonl");
-    let mut facts = MutableReceiptFacts::default();
+) -> Result<StreamSection<RunFacts>, SourceError> {
+    let path = context.state_file("runs.jsonl");
+    let mut facts = MutableRunFacts::default();
     let mut failures = NewestRows::new(LimitId::Failures.ceiling());
     let mut timeline = NewestRows::new(LimitId::Timeline.ceiling());
     let result = scan_dashboard_jsonl_raw(&path, cancelled, |raw| {
-        let receipt =
-            serde_json::from_slice::<DashboardReceiptRecord>(raw.bytes).with_context(|| {
-                format!(
-                    "Failed to decode receipt record at byte {}",
-                    raw.start_offset
-                )
-            })?;
+        let RunHistoryEvent::TargetCompleted(event) = run_history_event(raw.bytes)
+            .with_context(|| format!("Failed to decode run record at byte {}", raw.start_offset))?
+        else {
+            return Ok(());
+        };
+        let failed = event.failed();
+        let CompletedTargetEvent { run_id, result } = *event;
+        let target = result.target.to_string();
+        let conclusion = result.conclusion.map(snake_case);
+        let duration_ms = result
+            .started_at_ms
+            .zip(result.ended_at_ms)
+            .map(|(started, ended)| ended.saturating_sub(started));
+        let output_tail = (result.conclusion != Some(RunConclusion::Success))
+            .then(|| output_tail(result.output_tail.as_ref()))
+            .transpose()?;
         facts.count = facts.count.saturating_add(1);
-        facts.failed = facts
-            .failed
-            .saturating_add(u64::from(receipt.exit_status != 0));
-        let diff_summary = Some(receipt_diff_summary(&receipt));
-        if receipt.exit_status != 0 {
+        facts.failed = facts.failed.saturating_add(u64::from(failed));
+        if failed {
             failures.push(Failure {
-                id: receipt.id.clone(),
-                tool_name: receipt.tool_name.clone(),
-                ended_at_ms: Some(receipt.ended_at_ms),
-                exit_status: i64::from(receipt.exit_status),
-                stderr_preview: bounded_text(&receipt.stderr_preview, LimitId::FailureStderrChars)?,
+                run_id: run_id.clone(),
+                target: target.clone(),
+                conclusion: conclusion.clone().unwrap_or_default(),
+                exit_code: result.exit_code.map(i64::from),
+                ended_at_ms: result.ended_at_ms,
+                output_tail: output_tail
+                    .clone()
+                    .map_or_else(|| bounded_tail("", LimitId::FailureOutputChars), Ok)?,
             });
         }
-        if receipt.invoked_command_key.is_some() {
-            let duration = receipt.ended_at_ms.saturating_sub(receipt.started_at_ms);
-            if !facts.tools.contains_key(&receipt.tool_name)
-                && facts.tools.len() == MAX_AGGREGATION_KEYS
-            {
-                anyhow::bail!(
-                    "dashboard receipt tool aggregation exceeds the {MAX_AGGREGATION_KEYS}-key working-set limit"
-                );
-            }
-            let tool = facts
-                .tools
-                .entry(receipt.tool_name.clone())
-                .or_insert(MutableToolStat {
-                    runs: 0,
-                    failures: 0,
-                    total_duration_ms: 0,
-                    last_exit_status: i64::from(receipt.exit_status),
-                    last_ended_at_ms: receipt.ended_at_ms,
-                });
-            tool.runs = tool.runs.saturating_add(1);
-            tool.failures = tool
-                .failures
-                .saturating_add(u64::from(receipt.exit_status != 0));
-            tool.total_duration_ms = tool.total_duration_ms.saturating_add(duration);
-            if receipt.ended_at_ms >= tool.last_ended_at_ms {
-                tool.last_ended_at_ms = receipt.ended_at_ms;
-                tool.last_exit_status = i64::from(receipt.exit_status);
-            }
+        if !facts.targets.contains_key(&target) && facts.targets.len() == MAX_AGGREGATION_KEYS {
+            anyhow::bail!(
+                "dashboard target aggregation exceeds the {MAX_AGGREGATION_KEYS}-key working-set limit"
+            );
         }
-        timeline.push(TimelineRow::Receipt(ReceiptTimelineRow {
-            stable_identity: stable_identity("receipt", raw),
-            timestamp_ms: Some(receipt.ended_at_ms),
-            id: receipt.id,
-            tool_name: receipt.tool_name,
-            invoked_command_key: receipt.invoked_command_key,
-            exit_status: i64::from(receipt.exit_status),
-            started_at_ms: Some(receipt.started_at_ms),
-            ended_at_ms: Some(receipt.ended_at_ms),
-            duration_ms: Some(receipt.ended_at_ms.saturating_sub(receipt.started_at_ms)),
-            diff_summary,
-            changed_path_count: Some(
-                u64::try_from(
-                    receipt
-                        .changed_path_count
-                        .unwrap_or(receipt.changed_paths.len()),
-                )
-                .unwrap_or(u64::MAX),
-            ),
-            stderr_preview: (receipt.exit_status != 0)
-                .then(|| bounded_text(&receipt.stderr_preview, LimitId::FailureStderrChars))
-                .transpose()?,
-        }));
+        let ended_at_ms = result.ended_at_ms.unwrap_or_default();
+        let stat = facts
+            .targets
+            .entry(target.clone())
+            .or_insert(MutableTargetStat {
+                runs: 0,
+                failures: 0,
+                total_duration_ms: 0,
+                last_conclusion: conclusion.clone(),
+                last_ended_at_ms: ended_at_ms,
+            });
+        stat.runs = stat.runs.saturating_add(1);
+        stat.failures = stat.failures.saturating_add(u64::from(failed));
+        stat.total_duration_ms = stat
+            .total_duration_ms
+            .saturating_add(duration_ms.unwrap_or_default());
+        if ended_at_ms >= stat.last_ended_at_ms {
+            stat.last_ended_at_ms = ended_at_ms;
+            stat.last_conclusion.clone_from(&conclusion);
+        }
+        timeline.push(TimelineRow {
+            stable_identity: stable_identity("target_result", raw),
+            timestamp_ms: result.ended_at_ms.or(result.started_at_ms),
+            run_id,
+            target,
+            status: snake_case(result.status),
+            conclusion,
+            exit_code: result.exit_code.map(i64::from),
+            started_at_ms: result.started_at_ms,
+            ended_at_ms: result.ended_at_ms,
+            duration_ms,
+            finding_count: result.finding_count,
+            output_tail,
+        });
         Ok(())
     });
-    let error = stream_error(CollectionDomain::Receipts, result, cancelled)?;
+    let error = stream_error(CollectionDomain::Runs, result, cancelled)?;
     facts.failures = failures.into_rows();
     facts.timeline = timeline.into_rows();
     facts.failures.sort_by(|left, right| {
         right
             .ended_at_ms
             .cmp(&left.ended_at_ms)
-            .then_with(|| left.id.cmp(&right.id))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+            .then_with(|| left.target.cmp(&right.target))
     });
-    let tool_count = facts.tools.len();
-    let mut tool_stats = facts
-        .tools
+    let target_count = facts.targets.len();
+    let mut target_stats = facts
+        .targets
         .into_iter()
-        .map(|(tool, stat)| ToolStat {
-            tool,
+        .map(|(target, stat)| TargetStat {
+            target,
             runs: stat.runs,
             failures: stat.failures,
-            last_exit_status: stat.last_exit_status,
+            last_conclusion: stat.last_conclusion,
             last_ended_at_ms: stat.last_ended_at_ms,
             avg_duration_ms: stat.total_duration_ms / stat.runs.max(1),
         })
         .collect::<Vec<_>>();
-    tool_stats.sort_by(|left, right| {
+    target_stats.sort_by(|left, right| {
         right
             .last_ended_at_ms
             .cmp(&left.last_ended_at_ms)
-            .then_with(|| left.tool.cmp(&right.tool))
+            .then_with(|| left.target.cmp(&right.target))
     });
-    tool_stats.truncate(LimitId::ToolStats.ceiling());
+    target_stats.truncate(LimitId::TargetStats.ceiling());
     Ok(StreamSection {
-        data: ReceiptFacts {
+        data: RunFacts {
             count: facts.count,
             failed: facts.failed,
             failures: facts.failures,
-            tool_stats,
-            tool_count,
+            target_stats,
+            target_count,
             timeline: facts.timeline,
         },
         error,
     })
+}
+
+/// The stderr tail when a target wrote one, otherwise its stdout tail.
+fn output_tail(tail: Option<&TargetOutputTailV1>) -> Result<BoundedText, SourceError> {
+    let text = tail.map_or("", |tail| {
+        if tail.stderr.is_empty() {
+            &tail.stdout
+        } else {
+            &tail.stderr
+        }
+    });
+    bounded_tail(text, LimitId::FailureOutputChars)
+}
+
+fn snake_case(value: impl serde::Serialize) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }

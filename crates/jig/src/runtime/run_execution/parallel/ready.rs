@@ -149,7 +149,6 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                                         target,
                                         &mut target_control,
                                         None,
-                                        finisher.freshness,
                                     )
                                 });
                                 let _ = outcomes.send(ReadyOutcome::Ordinary { index, execution });

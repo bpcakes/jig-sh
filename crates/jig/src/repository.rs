@@ -31,9 +31,7 @@ pub(crate) use planner::{plan_action_run, plan_run};
 pub(crate) mod cargo_discovery;
 mod cargo_impact;
 mod native_input;
-pub(crate) use native_input::{
-    prepare_file_budget_input_v1, read_policy_bytes, revalidate_freshness_native_input,
-};
+pub(crate) use native_input::{prepare_file_budget_input_v1, read_policy_bytes};
 
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
 pub(crate) const FILE_BUDGET_CONTRACT_VERSION: u32 = 7;

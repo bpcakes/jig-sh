@@ -354,7 +354,7 @@ assert_capability_discovery_does_not_reinstall_after_strict_failure() {
       JIG_FIXTURE_PROBE_LOG="$probe_log" \
       JIG_FIXTURE_CARGO_LOG="$cargo_log" \
       PATH="$fake_dir:$PATH" \
-      scripts/jig --json check contract --no-receipt >/dev/null
+      scripts/jig --json check contract >/dev/null
   )
   (
     cd "$repo_dir"
@@ -362,7 +362,7 @@ assert_capability_discovery_does_not_reinstall_after_strict_failure() {
       JIG_FIXTURE_PROBE_LOG="$probe_log" \
       JIG_FIXTURE_CARGO_LOG="$cargo_log" \
       PATH="$fake_dir:$PATH" \
-      scripts/jig check --json contract --no-receipt >/dev/null
+      scripts/jig check --json contract >/dev/null
   )
   (
     cd "$repo_dir"
@@ -370,7 +370,7 @@ assert_capability_discovery_does_not_reinstall_after_strict_failure() {
       JIG_FIXTURE_PROBE_LOG="$probe_log" \
       JIG_FIXTURE_CARGO_LOG="$cargo_log" \
       PATH="$fake_dir:$PATH" \
-      scripts/jig check contract --json --no-receipt >/dev/null
+      scripts/jig check contract --json >/dev/null
   )
   (
     cd "$repo_dir"
@@ -406,9 +406,9 @@ assert_capability_discovery_does_not_reinstall_after_strict_failure() {
   )
   grep -Fxq 'doctor' "$probe_log"
   grep -Fxq -- '-- doctor' "$probe_log"
-  grep -Fxq -- '--json check contract --no-receipt' "$probe_log"
-  grep -Fxq -- 'check --json contract --no-receipt' "$probe_log"
-  grep -Fxq -- 'check contract --json --no-receipt' "$probe_log"
+  grep -Fxq -- '--json check contract' "$probe_log"
+  grep -Fxq -- 'check --json contract' "$probe_log"
+  grep -Fxq -- 'check contract --json' "$probe_log"
   grep -Fxq -- 'update --launcher-only' "$probe_log"
   grep -Fxq -- 'adopt . --write' "$probe_log"
   grep -Fxq -- '--version' "$probe_log"

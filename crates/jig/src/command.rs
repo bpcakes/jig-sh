@@ -54,7 +54,7 @@ pub(crate) use vault::{
 
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
-    Bootstrap(ToolRequest),
+    Bootstrap,
     Check(CheckCommand),
     Run(RepositoryRunRequest),
     MigrationAdd(MigrationAddRequest),
@@ -86,25 +86,25 @@ impl RuntimeCommand {
 
         match self {
             Self::Run(_)
-            | Self::Bootstrap(_)
+            | Self::Bootstrap
             | Self::MigrationAdd(_)
             | Self::Sqlx(_)
             | Self::Agent(_) => Cooperative,
             Self::Check(command) => match command {
                 CheckCommand::Repository(_)
-                | CheckCommand::Fmt(_)
-                | CheckCommand::Lint(_)
-                | CheckCommand::Clippy(_)
-                | CheckCommand::Test(_)
-                | CheckCommand::TestLocked(_)
-                | CheckCommand::TypeScriptLint(_)
-                | CheckCommand::TypeScriptTypecheck(_)
-                | CheckCommand::TypeScriptBuild(_)
-                | CheckCommand::TypeScriptCoverage(_)
-                | CheckCommand::Sqlx(_)
-                | CheckCommand::Sqlc(_)
-                | CheckCommand::Schema(_)
-                | CheckCommand::Contract(_) => Cooperative,
+                | CheckCommand::Fmt
+                | CheckCommand::Lint
+                | CheckCommand::Clippy
+                | CheckCommand::Test
+                | CheckCommand::TestLocked
+                | CheckCommand::TypeScriptLint
+                | CheckCommand::TypeScriptTypecheck
+                | CheckCommand::TypeScriptBuild
+                | CheckCommand::TypeScriptCoverage
+                | CheckCommand::Sqlx
+                | CheckCommand::Sqlc
+                | CheckCommand::Schema
+                | CheckCommand::Contract => Cooperative,
                 CheckCommand::AgentMap(_)
                 | CheckCommand::AgentGuides
                 | CheckCommand::MigrationImmutability(_)
@@ -130,29 +130,6 @@ impl RuntimeCommand {
             | Self::Dev(_)
             | Self::Proxy(_) => Native,
         }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ToolRequest {
-    record_receipt: bool,
-}
-
-impl Default for ToolRequest {
-    fn default() -> Self {
-        Self {
-            record_receipt: true,
-        }
-    }
-}
-
-impl ToolRequest {
-    pub(crate) const fn new(record_receipt: bool) -> Self {
-        Self { record_receipt }
-    }
-
-    pub(crate) const fn record_receipt(&self) -> bool {
-        self.record_receipt
     }
 }
 
@@ -189,7 +166,7 @@ mod tests {
     #[test]
     fn command_backed_and_cancellable_scans_use_cooperative_signals() {
         let cooperative_commands = [
-            RuntimeCommand::Check(CheckCommand::Test(ToolRequest::default())),
+            RuntimeCommand::Check(CheckCommand::Test),
             RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
             RuntimeCommand::Loop(LoopCommand::ClearAttempt(LoopClearAttemptRequest {
                 workflow: "ExampleProject".into(),

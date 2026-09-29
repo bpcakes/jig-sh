@@ -127,7 +127,7 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer<'plan>(
                 publish,
             )?;
         }
-        // Every child is cleaned up and every wave receipt/result is published
+        // Every child is cleaned up and every wave result is published
         // before any claim can be released or another wave admitted.
         slots.end_wave();
         drop(wave);
@@ -256,7 +256,7 @@ fn admit_wave(
         // capacity releases its lease before the next admission attempt.
     }
     slots.finish_admission(admission_snapshot, waiting_for_slot);
-    // No lease waits, metadata, or receipt writes occur in the admission scan.
+    // No lease waits, metadata, or state writes occur in the admission scan.
     // Flush may report an observer failure; dropping the vector then releases
     // every admitted claim without ever spawning a child.
     control.flush()?;
@@ -360,7 +360,7 @@ fn publish_outcome(
     {
         let stopped = stopped_before_start(pending.planned, stop);
         completed.capture.conclusion = stopped.conclusion;
-        completed.capture.receipt_exit_status = 1;
+        completed.capture.envelope_exit_status = 1;
         completed.capture.stderr.push_str(&stopped.stderr);
     }
     if let Some(resolved) = &pending.resolved {

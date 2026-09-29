@@ -16,7 +16,6 @@ pub(super) fn add(
         ctx,
         tool::MIGRATION_ADD,
         json!({ args::NAME: request.name }),
-        request.tool.record_receipt(),
         observer,
     )
     .map(|value| {
@@ -26,7 +25,6 @@ pub(super) fn add(
             "tool": tool::MIGRATION_ADD,
             args::NAME: name,
             "result": value["result"],
-            "receipt_id": value["receipt_id"],
         })
     })
 }

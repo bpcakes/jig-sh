@@ -26,13 +26,12 @@ fn parses_canonical_and_legacy_sqlx_commands() {
         other => panic!("expected sqlx migration add command, got {other:?}"),
     }
 
-    let schema = Cli::try_parse_from(["jig", "sqlx", "schema", "dump", "--no-receipt"]).unwrap();
-    match schema.command {
-        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts))) => {
-            assert!(opts.no_receipt);
-        }
-        other => panic!("expected sqlx schema dump command, got {other:?}"),
-    }
+    let schema = Cli::try_parse_from(["jig", "sqlx", "schema", "dump"]).unwrap();
+    assert!(matches!(
+        schema.command,
+        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(_)))
+    ));
+    assert!(Cli::try_parse_from(["jig", "sqlx", "schema", "dump", "--no-receipt"]).is_err());
 
     assert!(matches!(
         Cli::try_parse_from(["jig", "migration-add", "create_users"])
@@ -128,15 +127,15 @@ fn parses_agent_native_check_selections() {
     ));
 
     let exact =
-        Cli::try_parse_from(["jig", "check", "api:test", "web:lint", "--no-receipt"]).unwrap();
+        Cli::try_parse_from(["jig", "check", "api:test", "web:lint", "--fail-fast"]).unwrap();
     match exact.command {
         CommandKind::Check(CheckOpts {
-            tool,
+            fail_fast,
             command: Some(CheckCommand::Selectors(selectors)),
             ..
         }) => {
-            assert!(!tool.no_receipt);
-            assert_eq!(selectors, ["api:test", "web:lint", "--no-receipt"]);
+            assert!(!fail_fast);
+            assert_eq!(selectors, ["api:test", "web:lint", "--fail-fast"]);
         }
         other => panic!("expected target selectors, got {other:?}"),
     }
@@ -669,30 +668,12 @@ fn parses_state_summary_command() {
 }
 
 #[test]
-fn parses_tool_no_receipt_flag() {
-    let cli = Cli::try_parse_from(["jig", "check", "contract", "--no-receipt"]).unwrap();
+fn rejects_the_retired_receipt_flag_and_accepts_a_plan_id() {
+    assert!(Cli::try_parse_from(["jig", "check", "contract", "--no-receipt"]).is_err());
+    assert!(Cli::try_parse_from(["jig", "migration-add", "create_users", "--no-receipt"]).is_err());
 
-    match cli.command {
-        CommandKind::Check(CheckOpts {
-            command: Some(CheckCommand::Contract(opts)),
-            ..
-        }) => {
-            assert!(opts.tool.no_receipt);
-            assert_eq!(opts.tool.plan_id, None);
-        }
-        other => panic!("expected check contract command, got {other:?}"),
-    }
-
-    // The retired `--plan-id` is accepted and ignored, so it no longer conflicts.
-    let cli = Cli::try_parse_from([
-        "jig",
-        "check",
-        "contract",
-        "--plan-id",
-        "plan_1",
-        "--no-receipt",
-    ])
-    .unwrap();
+    // The retired `--plan-id` is accepted and ignored until contract epoch 12.
+    let cli = Cli::try_parse_from(["jig", "check", "contract", "--plan-id", "plan_1"]).unwrap();
     let CommandKind::Check(CheckOpts {
         command: Some(CheckCommand::Contract(opts)),
         ..
@@ -700,7 +681,7 @@ fn parses_tool_no_receipt_flag() {
     else {
         panic!("expected check contract command");
     };
-    assert!(opts.tool.no_receipt);
+    assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_1"));
 }
 
 #[test]

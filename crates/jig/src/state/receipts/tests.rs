@@ -136,7 +136,6 @@ fn recorded_receipt_persists_bounded_change_set_metadata() {
             evidence: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: false,
-            worktree_fingerprint_override: None,
         },
     )
     .unwrap();
@@ -184,7 +183,6 @@ fn cancelled_git_enrichment_does_not_prevent_durable_receipt_append() {
             evidence: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: true,
-            worktree_fingerprint_override: None,
         },
         &|| true,
     )
@@ -215,13 +213,16 @@ fn raw_receipt(id: &str, ended_at_ms: u64, extra: &str) -> String {
 }
 
 #[test]
-fn receipts_without_native_result_or_time_fields_keep_legacy_defaults() {
-    let receipt: ReceiptRecord = serde_json::from_str(&raw_receipt("legacy", 42, "")).unwrap();
-    assert_eq!(receipt.finding_count, None);
-    assert!(!receipt.findings_truncated);
-    assert_eq!(receipt.findings_digest, None);
-    assert_eq!(receipt.evaluated_at_ms, None);
-    assert_eq!(receipt.valid_until_ms, None);
+fn legacy_check_receipt_fields_are_ignored_on_read() {
+    let receipt: ReceiptRecord = serde_json::from_str(&raw_receipt(
+        "legacy",
+        42,
+        r#","run_id":"run_legacy","target":"api:test","config_digest":"sha256:a","input_digest":"sha256:b","findings":[],"finding_count":0,"findings_truncated":false,"evaluated_at_ms":1,"valid_until_ms":2,"target_freshness":{"status":"complete"}"#,
+    ))
+    .unwrap();
+    assert_eq!(receipt.id, "legacy");
+    assert_eq!(receipt.run_id.as_deref(), Some("run_legacy"));
+    assert_eq!(receipt.ended_at_ms, 42);
 }
 
 fn run_git(root: &Path, args: &[&str]) {

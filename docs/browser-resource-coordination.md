@@ -4,7 +4,7 @@ Current source supports `resources = [{ kind = "playwright_servers_v1" }]` on an
 authored read-only process check. Older strict runtimes reject this tag; upgrade
 the runtime before opting in. Existing actions, generated CI and package scripts
 are not automatically changed. Removing the declaration restores prior admission
-behavior without modifying historical receipts.
+behavior without modifying historical run records.
 
 The declaration attests that the runner follows Jig's generated Playwright
 environment contract. Invoke the existing public checker, for example:

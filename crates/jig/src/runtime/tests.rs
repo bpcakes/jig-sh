@@ -26,7 +26,6 @@ fn named_v6_checks_preserve_feature_specific_unavailable_diagnostics() {
         &ctx,
         "sqlc",
         crate::tool_defs::tool::SQLC_CHECK,
-        crate::command::ToolRequest::default(),
         &mut observer,
     )
     .unwrap_err()
@@ -41,7 +40,6 @@ fn named_v6_checks_preserve_feature_specific_unavailable_diagnostics() {
             comparison: None,
             explain: true,
             fail_fast: false,
-            tool: crate::command::ToolRequest::default(),
         },
         &mut observer,
     )
@@ -78,7 +76,6 @@ rust_migration_layout = "versioned_artifacts"
         &ctx,
         RuntimeCommand::MigrationAdd(crate::command::MigrationAddRequest {
             name: "create_users".into(),
-            tool: crate::command::ToolRequest::default(),
         }),
     )
     .unwrap_err();
@@ -117,7 +114,6 @@ migration_add_command = "mkdir -p schema && touch schema/should-not-exist.sql"
         &ctx,
         RuntimeCommand::MigrationAdd(crate::command::MigrationAddRequest {
             name: "create_users".into(),
-            tool: crate::command::ToolRequest::default(),
         }),
     )
     .unwrap_err();
@@ -288,7 +284,7 @@ fn dispatch(ctx: &RepoContext, command: CommandKind) -> Result<Value> {
 
 fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
     match command {
-        CommandKind::Bootstrap(opts) => RuntimeCommand::Bootstrap(opts.into()),
+        CommandKind::Bootstrap(_) => RuntimeCommand::Bootstrap,
         CommandKind::Run(opts) => RuntimeCommand::Run(opts.try_into().unwrap()),
         CommandKind::Check(command) => RuntimeCommand::Check(command.try_into().unwrap()),
         CommandKind::Migration(MigrationCommand::Add(opts)) => {
@@ -297,11 +293,9 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Sqlx(SqlxCommand::Migration(SqlxMigrationCommand::Add(opts))) => {
             RuntimeCommand::MigrationAdd(opts.into())
         }
-        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts))) => {
-            RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(opts.into()))
-        }
-        CommandKind::SchemaDump(opts) => {
-            RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(opts.into()))
+        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(_)))
+        | CommandKind::SchemaDump(_) => {
+            RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump)
         }
         CommandKind::MigrationAdd(opts) => RuntimeCommand::MigrationAdd(opts.into()),
         CommandKind::AgentMap(command) => RuntimeCommand::AgentMap(command.into()),
@@ -344,7 +338,7 @@ fn dispatch_routes_state_summary() {
 
     assert_eq!(output["ok"], true);
     assert_eq!(output["command"], "state summary");
-    assert_eq!(output["counts"]["receipts"], 0);
+    assert_eq!(output["counts"]["runs"], 0);
 }
 
 #[test]
@@ -409,7 +403,7 @@ fn dispatch_routes_proxy_list_through_dev_proxy_feature() {
 }
 
 #[test]
-fn tool_no_receipt_skips_receipt_append() {
+fn command_tool_check_writes_no_receipt() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
@@ -432,10 +426,7 @@ rust_test_command = "printf 'command tool ran\n'"
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
             crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
-                tool: crate::cli::ToolOpts {
-                    plan_id: None,
-                    no_receipt: true,
-                },
+                tool: crate::cli::ToolOpts { plan_id: None },
                 selectors: Vec::new(),
             }),
         )),
@@ -443,7 +434,7 @@ rust_test_command = "printf 'command tool ran\n'"
     .unwrap();
 
     assert_eq!(output["ok"], true);
-    assert_eq!(output["receipt_id"], serde_json::Value::Null);
+    assert!(output.get("receipt_id").is_none());
     assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 }
 
@@ -488,7 +479,6 @@ checks = ["jig.fmt_check", "jig.test"]
                 comparison: None,
                 explain: true,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(false),
             },
         )),
     )
@@ -508,7 +498,6 @@ checks = ["jig.fmt_check", "jig.test"]
                 comparison: None,
                 explain: false,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(false),
             },
         )),
     )
@@ -520,7 +509,7 @@ checks = ["jig.fmt_check", "jig.test"]
 }
 
 #[test]
-fn repository_check_persists_queryable_runs_and_target_receipts() {
+fn repository_check_persists_queryable_runs_without_receipts() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .contract_version(5)
@@ -561,7 +550,6 @@ checks = ["jig.fmt_check", "jig.test"]
                 comparison: None,
                 explain: false,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(true),
             },
         )),
     )
@@ -576,33 +564,19 @@ checks = ["jig.fmt_check", "jig.test"]
         Some(jig_contract::RunConclusion::Success)
     );
     assert_eq!(durable.result.targets.len(), 2);
-    assert!(
-        durable
-            .result
-            .targets
-            .iter()
-            .all(|target| target.receipt_id.is_some())
-    );
-
-    let receipts = fs::read_to_string(ctx.state_file("receipts.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .filter(|receipt| receipt["run_id"] == run_id)
-        .collect::<Vec<_>>();
-    assert_eq!(receipts.len(), 2);
-    assert!(receipts.iter().all(|receipt| receipt["plan_id"].is_null()));
-    assert!(receipts.iter().all(|receipt| receipt["target"].is_object()));
-    assert!(
-        receipts
-            .iter()
-            .all(|receipt| receipt["config_digest"].as_str().is_some())
-    );
-    assert!(
-        receipts
-            .iter()
-            .all(|receipt| receipt["input_digest"].as_str().is_some())
-    );
+    for target in &durable.result.targets {
+        assert!(target.config_digest.starts_with("sha256:"));
+        assert!(target.input_digest.starts_with("sha256:"));
+        assert!(
+            target.output_tail.is_none(),
+            "successful targets keep no output"
+        );
+    }
+    for target in output["run"]["targets"].as_array().unwrap() {
+        assert!(target.get("receipt_id").is_none(), "{target:#}");
+        assert!(target.get("target_freshness").is_none(), "{target:#}");
+    }
+    assert!(!ctx.state_file("receipts.jsonl").exists());
 }
 
 #[test]
@@ -641,7 +615,6 @@ checks = ["jig.test"]
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: true,
             fail_fast: false,
         },
         &|| false,

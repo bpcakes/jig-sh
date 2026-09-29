@@ -180,9 +180,7 @@ impl Timestamped for TimelineRow {
 }
 
 pub(super) fn timeline_timestamp(row: &TimelineRow) -> u64 {
-    match row {
-        TimelineRow::Receipt(row) => row.timestamp_ms.unwrap_or(0),
-    }
+    row.timestamp_ms.unwrap_or(0)
 }
 
 impl Timestamped for Failure {
@@ -191,14 +189,17 @@ impl Timestamped for Failure {
     }
 
     fn tie_breaker(&self) -> &str {
-        &self.id
+        &self.run_id
     }
 }
 
-pub(super) fn bounded_text(value: &str, limit: LimitId) -> Result<BoundedText, SourceError> {
-    let ceiling = limit.ceiling();
+/// Keeps the final characters of `value`, where failure output is most useful.
+pub(super) fn bounded_tail(value: &str, limit: LimitId) -> Result<BoundedText, SourceError> {
     let total = value.chars().count();
-    let text = value.chars().take(ceiling).collect::<String>();
+    let text = value
+        .chars()
+        .skip(total.saturating_sub(limit.ceiling()))
+        .collect::<String>();
     BoundedText::for_limit(text, Some(total), limit).map_err(limit_error)
 }
 

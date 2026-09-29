@@ -91,7 +91,6 @@ pub(super) fn execute_parallel_read_only_layer(
     control: &mut dyn RepositoryRunControl,
     source_epoch: &mut ExecutionSourceEpoch,
     targets: &[(&PlannedTarget, PhasePosition)],
-    freshness: Option<&super::freshness::ExecutionFreshness>,
 ) -> Result<ParallelLayerExecution> {
     let cancellation = Arc::new(ParallelCancellationState::default());
     let initial_cancellation = control.cancelled();
@@ -126,7 +125,7 @@ pub(super) fn execute_parallel_read_only_layer(
             return Ok(ParallelLayerExecution { outcomes });
         }
         if let Err(message) = source_epoch.prepare_read_only_layer(ctx, targets.len()) {
-            let fingerprint = source_epoch.receipt_fingerprint();
+            let fingerprint = source_epoch.observed_fingerprint();
             let outcomes = targets
                 .iter()
                 .map(|(planned, _)| ParallelTargetOutcome {
@@ -186,7 +185,6 @@ pub(super) fn execute_parallel_read_only_layer(
                             (planned, position),
                             &mut target_control,
                             (index >= worker_count).then_some(queued_source_epoch),
-                            freshness,
                         );
                         if outcome_tx.send((index, outcome)).is_err() {
                             break;
@@ -267,7 +265,6 @@ fn execute_parallel_target(
     (planned, position): (&PlannedTarget, PhasePosition),
     control: &mut dyn RepositoryRunControl,
     queued_source_epoch: Option<&Mutex<&mut ExecutionSourceEpoch>>,
-    freshness: Option<&super::freshness::ExecutionFreshness>,
 ) -> Result<ParallelTargetExecution> {
     let execution = match control.cancelled() {
         Ok(true) => ParallelTargetExecution::not_started(
@@ -315,14 +312,8 @@ fn execute_parallel_target(
                 let started_at_ms = now_ms();
                 let label = format!("Repository target '{}'", planned.target);
                 let phase = ExecutionPhase::start(control, &label, position);
-                let capture = run_target_capture(
-                    ctx,
-                    catalog,
-                    &run.result.run_id,
-                    planned,
-                    control,
-                    freshness,
-                );
+                let capture =
+                    run_target_capture(ctx, catalog, &run.result.run_id, planned, control);
                 let phase = phase.complete_owned();
                 ParallelTargetExecution::completed(started_at_ms, capture, phase)
             }

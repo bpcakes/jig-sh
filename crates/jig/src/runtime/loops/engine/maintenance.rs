@@ -88,7 +88,6 @@ pub(in crate::runtime::loops) fn clear_attempt(
                     evidence: Some(evidence.clone()),
                     collect_git_metadata: false,
                     collect_worktree_fingerprint: false,
-                    worktree_fingerprint_override: None,
                 },
                 &|| observer.cancelled(),
                 deadline,
@@ -157,7 +156,6 @@ pub(in crate::runtime::loops) fn acknowledge_occurrence(
                     // Hold schedule locks through receipt publication; keep Git inspection outside.
                     collect_git_metadata: false,
                     collect_worktree_fingerprint: false,
-                    worktree_fingerprint_override: None,
                 },
                 &|| observer.cancelled(),
                 deadline,

@@ -68,7 +68,6 @@ impl TryFrom<RepositoryRunOpts> for crate::command::RepositoryRunRequest {
                     ApprovedEffect::External => ActionEffect::External,
                 })
                 .collect(),
-            tool: opts.tool.into(),
         })
     }
 }
@@ -144,7 +143,6 @@ mod tests {
         assert_eq!(request.approved_effects, [ActionEffect::Worktree]);
         assert!(request.fail_fast);
         assert!(request.comparison.is_some());
-        assert!(request.tool.record_receipt());
         for args in [
             vec!["jig", "run", "--approve-effect", "read-only"],
             vec![

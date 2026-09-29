@@ -24,8 +24,7 @@ field or variant before executing it. Do not add the field to a repository still
 using an unsupported pinned runtime. No release pin changes automatically.
 
 Upgrade the selected runtime before opting in. To stop acquiring claims, remove
-the declarations and regenerate configuration; retain historical receipts and
-runs. Disabling the policy does not make run records written with `reused_from`
+the declarations and regenerate configuration; retain historical run records. Disabling the policy does not make run records written with `reused_from`
 by the removed `work check` path readable by older strict readers, so keep a
 capable runtime when rolling configuration back.
 
@@ -79,14 +78,14 @@ request's claim. Source or resource-authority changes while waiting require
 replanning.
 
 After an actual wait, the target executes; a wait never substitutes an earlier
-passing receipt. The removed `work check` command could reuse one at this point
-and recorded the original receipt, run and plan IDs in `reused_from`; those
-historical run records remain readable. Resource sharing never grants
-cross-worktree receipt sharing.
+passing result. The removed `work check` command could reuse a receipt at this
+point and recorded the original receipt, run and plan IDs in `reused_from`;
+current readers drop that field, so those historical run records remain
+readable. Resource sharing never grants cross-worktree result sharing.
 
 Legacy tool aliases for opted-in actions enter the same prepared-target executor,
-including declared read-only prerequisites. The requested alias and literal
-arguments remain attached to the original target receipt. An alias does not
+including declared read-only prerequisites. The alias response keeps the
+requested alias name and literal arguments. An alias does not
 authorize effectful prerequisites: those require an explicitly approved canonical
 `jig run` request. Aliases without resource declarations remain unchanged.
 
@@ -103,7 +102,7 @@ resource ownership rules. Fail-fast execution remains sequential.
 A coordinated target retains its original timeout while pending and while its
 batch finishes validation. Waiting for a batch peer does not grant a new budget.
 A source mutation during a batch invalidates its otherwise successful results;
-an earlier-finishing sibling cannot publish a passing receipt ahead of that
+an earlier-finishing sibling cannot publish a passing result ahead of that
 shared check.
 
 In read-only plans that combine parallel work with dependency chains, ordinary
@@ -128,8 +127,8 @@ namespace. Advisory ownership, not file existence or a recorded PID, determines
 whether a resource is held. Lock names are opaque hashes; computed absolute
 resource paths and raw Cargo metadata are not written to public evidence.
 
-Jig holds a claim through child cleanup, source postcondition, receipt publication
-and durable target-result publication. Its target child deliberately inherits
+Jig holds a claim through child cleanup, source postcondition, and durable
+target-result publication. Its target child deliberately inherits
 the claim, while unrelated subprocesses do not. If Jig is killed, a surviving
 child retains ownership until its descriptors close; an exited owner with no
 surviving holder leaves no permanent live claim. Commands that deliberately

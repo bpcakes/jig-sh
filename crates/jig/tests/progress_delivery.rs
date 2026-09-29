@@ -39,7 +39,7 @@ rust_test_command = "dd if=/dev/zero bs=262144 count=1 2>/dev/null; exit 7"
     .unwrap();
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .args(["check", "test", "--no-receipt"])
+        .args(["check", "test"])
         .current_dir(temp.path())
         .env("NO_COLOR", "1")
         .env_remove("JIG_REPO_ROOT")

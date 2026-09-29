@@ -17,8 +17,6 @@ use tempfile::NamedTempFile;
 
 use crate::cancellation::ensure_status_collection_active;
 
-use super::records::ReceiptRecord;
-
 const JSONL_READ_CHUNK: usize = 16 * 1024;
 pub(crate) const DASHBOARD_JSONL_RECORD_BYTES: usize = 1024 * 1024;
 
@@ -658,14 +656,6 @@ pub(super) fn scan_jsonl_raw_locked(
 
 mod read_access;
 use read_access::{JsonlReadAccess, ReadLockLabels, with_jsonl_read};
-
-mod reverse;
-pub(super) use reverse::read_receipts_reverse;
-#[cfg(test)]
-pub(super) use reverse::{
-    read_receipt_window, read_receipt_window_with_bytes, read_receipts_reverse_with_cancellation,
-    read_receipts_reverse_with_test_lock,
-};
 
 mod snapshot;
 use snapshot::*;

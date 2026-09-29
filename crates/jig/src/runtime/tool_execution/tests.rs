@@ -304,7 +304,6 @@ legacy_aliases = ["jig.compat_check"]"#,
         &ctx,
         "jig.compat_check",
         serde_json::json!({}),
-        true,
         &mut crate::execution::NoopExecutionObserver,
     )
     .unwrap();
@@ -347,7 +346,6 @@ legacy_aliases = ["jig.migration_add"]"#,
         &ctx,
         tool::MIGRATION_ADD,
         serde_json::json!({"name": "Create Examples"}),
-        true,
         &mut crate::execution::NoopExecutionObserver,
     )
     .unwrap();
@@ -395,7 +393,6 @@ legacy_aliases = ["jig.compat_contract"]"#,
         &ctx,
         "jig.compat_contract",
         serde_json::json!({}),
-        true,
         &mut crate::execution::NoopExecutionObserver,
     )
     .unwrap_err()
@@ -447,7 +444,6 @@ legacy_aliases = ["jig.compat_check"]"#,
         &ctx,
         "jig.bootstrap",
         serde_json::json!({}),
-        true,
         &mut crate::execution::NoopExecutionObserver,
     )
     .unwrap_err()

@@ -1,6 +1,6 @@
 use super::*;
 use crate::bootstrap::repository_model::RepositoryRenderModel;
-use jig_contract::{ActionRunner, ComparisonRequestV1, StrictInventoryReasonV1};
+use jig_contract::ActionRunner;
 use sha2::{Digest, Sha256};
 
 mod clippy_migration;
@@ -488,7 +488,7 @@ fn update_recopy_preserves_authored_file_budget_action_alias_and_profile_removal
 }
 
 #[test]
-fn post_deletion_binary_retires_registry_recognized_legacy_asset_after_fresh_receipt() {
+fn post_deletion_binary_retires_registry_recognized_legacy_asset_when_file_budget_passes() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
@@ -603,26 +603,8 @@ fn post_deletion_binary_retires_registry_recognized_legacy_asset_after_fresh_rec
 
     git(&repo, ["add", "."]).unwrap();
     git(&repo, ["commit", "-m", "phase one"]).unwrap();
-    let ctx = RepoContext::load_from(&repo).unwrap();
-    let checked = crate::runtime::dispatch(
-        &ctx,
-        crate::command::RuntimeCommand::Check(crate::command::CheckCommand::Repository(
-            crate::command::RepositoryCheckRequest {
-                selectors: vec!["repo:file-budget".into()],
-                profile: None,
-                affected_base: None,
-                comparison: Some(ComparisonRequestV1::StrictInventory {
-                    reason: StrictInventoryReasonV1::ExplicitCheck,
-                }),
-                explain: false,
-                fail_fast: false,
-                tool: crate::command::ToolRequest::default(),
-            },
-        )),
-    )
-    .unwrap();
-    assert_eq!(checked["ok"], true, "{checked:#}");
 
+    // Phase two evaluates repo:file-budget itself; no prior check is needed.
     let phase_two = run_update(UpdateOpts {
         path: repo.clone(),
         template: None,

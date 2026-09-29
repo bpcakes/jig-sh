@@ -78,15 +78,12 @@ pub(crate) fn dispatch_with_observer(
     // before its durable commit point. Re-checking here after a successful
     // return would turn an already-committed mutation into an apparent failure.
     match command {
-        RuntimeCommand::Bootstrap(opts) => {
-            tool_execution::execute_manifest_tool_request_with_observer(
-                ctx,
-                tool::BOOTSTRAP,
-                json!({}),
-                opts,
-                observer,
-            )
-        }
+        RuntimeCommand::Bootstrap => tool_execution::execute_manifest_tool_with_observer(
+            ctx,
+            tool::BOOTSTRAP,
+            json!({}),
+            observer,
+        ),
         RuntimeCommand::Check(command) => dispatch_check_with_observer(ctx, command, observer),
         RuntimeCommand::Run(request) => repository_run::dispatch(ctx, request, observer),
         RuntimeCommand::MigrationAdd(request) => migration::add(ctx, request, observer),
@@ -258,56 +255,36 @@ fn dispatch_check_with_observer(
 ) -> Result<Value> {
     match command {
         CheckCommand::Repository(request) => dispatch_repository_check(ctx, request, observer),
-        CheckCommand::Fmt(opts) => {
-            dispatch_named_check(ctx, "fmt", tool::FMT_CHECK, opts, observer)
+        CheckCommand::Fmt => dispatch_named_check(ctx, "fmt", tool::FMT_CHECK, observer),
+        CheckCommand::Lint => dispatch_named_check(ctx, "lint", tool::LINT, observer),
+        CheckCommand::Clippy => dispatch_named_check(ctx, "clippy", tool::CLIPPY, observer),
+        CheckCommand::Test => dispatch_named_check(ctx, "test", tool::TEST, observer),
+        CheckCommand::TestLocked => {
+            dispatch_named_check(ctx, "test-locked", tool::TEST_LOCKED, observer)
         }
-        CheckCommand::Lint(opts) => dispatch_named_check(ctx, "lint", tool::LINT, opts, observer),
-        CheckCommand::Clippy(opts) => {
-            dispatch_named_check(ctx, "clippy", tool::CLIPPY, opts, observer)
+        CheckCommand::TypeScriptLint => {
+            dispatch_named_check(ctx, "typescript-lint", tool::TYPESCRIPT_LINT, observer)
         }
-        CheckCommand::Test(opts) => dispatch_named_check(ctx, "test", tool::TEST, opts, observer),
-        CheckCommand::TestLocked(opts) => {
-            dispatch_named_check(ctx, "test-locked", tool::TEST_LOCKED, opts, observer)
-        }
-        CheckCommand::TypeScriptLint(opts) => dispatch_named_check(
-            ctx,
-            "typescript-lint",
-            tool::TYPESCRIPT_LINT,
-            opts,
-            observer,
-        ),
-        CheckCommand::TypeScriptTypecheck(opts) => dispatch_named_check(
+        CheckCommand::TypeScriptTypecheck => dispatch_named_check(
             ctx,
             "typescript-typecheck",
             tool::TYPESCRIPT_TYPECHECK,
-            opts,
             observer,
         ),
-        CheckCommand::TypeScriptBuild(opts) => dispatch_named_check(
-            ctx,
-            "typescript-build",
-            tool::TYPESCRIPT_BUILD,
-            opts,
-            observer,
-        ),
-        CheckCommand::TypeScriptCoverage(opts) => dispatch_named_check(
+        CheckCommand::TypeScriptBuild => {
+            dispatch_named_check(ctx, "typescript-build", tool::TYPESCRIPT_BUILD, observer)
+        }
+        CheckCommand::TypeScriptCoverage => dispatch_named_check(
             ctx,
             "typescript-coverage",
             tool::TYPESCRIPT_COVERAGE,
-            opts,
             observer,
         ),
-        CheckCommand::Sqlx(opts) => {
-            dispatch_named_check(ctx, "sqlx", tool::SQLX_CHECK, opts, observer)
-        }
-        CheckCommand::Sqlc(opts) => {
-            dispatch_named_check(ctx, "sqlc", tool::SQLC_CHECK, opts, observer)
-        }
-        CheckCommand::Schema(opts) => {
-            dispatch_named_check(ctx, "schema", tool::SCHEMA_CHECK, opts, observer)
-        }
-        CheckCommand::Contract(opts) => {
-            dispatch_named_check(ctx, "contract", tool::CONTRACT_CHECK, opts, observer)
+        CheckCommand::Sqlx => dispatch_named_check(ctx, "sqlx", tool::SQLX_CHECK, observer),
+        CheckCommand::Sqlc => dispatch_named_check(ctx, "sqlc", tool::SQLC_CHECK, observer),
+        CheckCommand::Schema => dispatch_named_check(ctx, "schema", tool::SCHEMA_CHECK, observer),
+        CheckCommand::Contract => {
+            dispatch_named_check(ctx, "contract", tool::CONTRACT_CHECK, observer)
         }
         CheckCommand::AgentMap(opts) => crate::policy::run_check(
             ctx,
@@ -332,7 +309,6 @@ fn dispatch_named_check(
     ctx: &RepoContext,
     selector: &str,
     legacy_tool: &str,
-    tool: crate::command::ToolRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     if ctx.contract_version() >= 6 {
@@ -347,18 +323,11 @@ fn dispatch_named_check(
                 comparison: None,
                 explain: false,
                 fail_fast: false,
-                tool,
             },
             observer,
         )
     } else {
-        tool_execution::execute_manifest_tool_request_with_observer(
-            ctx,
-            legacy_tool,
-            json!({}),
-            tool,
-            observer,
-        )
+        tool_execution::execute_manifest_tool_with_observer(ctx, legacy_tool, json!({}), observer)
     }
 }
 
@@ -405,14 +374,7 @@ fn dispatch_repository_check_with_catalog(
         }));
     }
 
-    execute_repository_check_plan(
-        ctx,
-        catalog,
-        plan,
-        request.tool,
-        request.fail_fast,
-        observer,
-    )
+    execute_repository_check_plan(ctx, catalog, plan, request.fail_fast, observer)
 }
 
 fn preserve_named_check_availability_diagnostic(
@@ -455,7 +417,6 @@ fn execute_repository_check_plan(
     ctx: &RepoContext,
     catalog: &crate::repository::RepositoryCatalog,
     plan: jig_contract::RunPlan,
-    tool: crate::command::ToolRequest,
     fail_fast: bool,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
@@ -465,7 +426,6 @@ fn execute_repository_check_plan(
         plan.clone(),
         run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: tool.record_receipt(),
             fail_fast,
         },
         observer,

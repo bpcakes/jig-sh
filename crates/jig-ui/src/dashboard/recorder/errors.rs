@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::super::CollectionDomain;
 
-pub const SNAPSHOT_ERROR_SCOPES: &[&str] = &["repository", "state.receipts", "loops"];
+pub const SNAPSHOT_ERROR_SCOPES: &[&str] = &["repository", "state.runs", "loops"];
 pub const SNAPSHOT_ERROR_CODES: &[&str] = &[
     "git_observation_failed",
     "git_upstream_comparison_failed",

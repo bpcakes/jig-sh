@@ -2,11 +2,11 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use jig_contract::{
-    ActionId, ActionRunner, ComparisonRequestV1, ComponentId, NativeActionConfigurationV1,
-    TargetId, tool,
+    ActionId, ActionRunner, ComponentId, NativeActionConfigurationV1, RunConclusion, TargetId, tool,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,7 +22,7 @@ pub(super) const LEGACY_CHECKER_PATH: &str = "scripts/check-rust-file-loc.sh";
 const LEGACY_REGISTRY_PATH: &str = ".agent/jig-legacy-assets.json";
 const RERUN_COMMAND: &str = "scripts/jig check repo:file-budget";
 const REGISTRY_VERSION: u32 = 1;
-mod freshness;
+const NATIVE_EVALUATION_DEADLINE: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Copy)]
 struct KnownLegacyAsset {
@@ -145,12 +145,11 @@ struct LegacyAssetRegistry {
     assets: Vec<LegacyAssetRecord>,
 }
 
+/// Proof that the generated native file budget passed on the current source.
+/// Transaction manifests written by earlier runtimes also carried receipt
+/// fields, which are ignored on read.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub(super) struct LifecycleProof {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) effective_time: Option<jig_contract::freshness::EffectiveTimeValidityV1>,
-    pub(super) receipt_id: String,
     pub(super) config_digest: String,
     pub(super) input_digest: String,
     pub(super) source_fingerprint: String,
@@ -158,6 +157,19 @@ pub(super) struct LifecycleProof {
     pub(super) comparison: Value,
     pub(super) evaluation_digest: String,
     pub(super) valid_until_ms: Option<u64>,
+}
+
+impl LifecycleProof {
+    /// Whether two passing evaluations covered the same authority, policy and
+    /// source. Each evaluation digests its own evaluation time, so neither the
+    /// evaluation digest nor the validity window is compared.
+    fn covers_same_source(&self, other: &Self) -> bool {
+        self.config_digest == other.config_digest
+            && self.input_digest == other.input_digest
+            && self.source_fingerprint == other.source_fingerprint
+            && self.policy_raw_digest == other.policy_raw_digest
+            && self.comparison == other.comparison
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -233,7 +245,7 @@ pub(super) fn prepare_legacy_migration(
                 asset: LEGACY_CHECKER_PATH.into(),
                 status: "retire",
                 generation: Some(record.generation),
-                reason: "latest successful native receipt matches current and staged post-update authority".into(),
+                reason: "repo:file-budget passes on the current source and the staged update keeps its authority".into(),
                 rerun_command: None,
                 proof: Some(proof),
             })
@@ -259,8 +271,8 @@ pub(super) fn prepare_legacy_migration(
 }
 
 pub(super) fn revalidate_lifecycle_proof(root: &Path, proof: &LifecycleProof) -> Result<()> {
-    let current = validate_receipt_proof(root)?;
-    if &current != proof {
+    let current = native_proof(root)?;
+    if !current.covers_same_source(proof) {
         bail!(
             "file-budget retirement proof changed after transaction preparation; the uncommitted update will be rolled back and the legacy checker retained"
         );
@@ -272,15 +284,15 @@ fn retirement_proof(
     destination: &Path,
     staged: &StagedRender,
 ) -> std::result::Result<LifecycleProof, String> {
-    if staged_changes_receipt_authority(destination, staged)
+    if staged_changes_native_authority(destination, staged)
         .map_err(|error| format!("could not compare staged authority: {error:#}"))?
     {
         return Err(
-            "the staged update changes native authority or evaluated repository source; commit this update, run the native action, then update again"
+            "the staged update changes native authority or evaluated repository source; commit this update, then update again"
                 .into(),
         );
     }
-    let proof = validate_receipt_proof(destination).map_err(|error| format!("{error:#}"))?;
+    let proof = native_proof(destination).map_err(|error| format!("{error:#}"))?;
     let staged_context = RepoContext::load_from_root(staged.destination.clone())
         .map_err(|error| format!("staged native authority is invalid: {error:#}"))?;
     let staged_catalog = RepositoryCatalog::from_context(&staged_context)
@@ -289,162 +301,90 @@ fn retirement_proof(
         || !catalog_has_generated_action(&staged_catalog)
     {
         return Err(
-            "the staged update changes or replaces generated repo:file-budget authority; a fresh native receipt is required"
+            "the staged update changes or replaces generated repo:file-budget authority; commit this update, then update again"
                 .into(),
         );
     }
     Ok(proof)
 }
 
-fn validate_receipt_proof(root: &Path) -> Result<LifecycleProof> {
+fn native_proof(root: &Path) -> Result<LifecycleProof> {
     let ctx = RepoContext::load_from_root(root.to_path_buf())?;
-    validate_receipt_proof_with_context(&ctx)
+    native_proof_with_context(&ctx)
 }
 
-fn validate_receipt_proof_with_context(ctx: &RepoContext) -> Result<LifecycleProof> {
+/// Evaluates the generated native file budget against the current source and
+/// binds the passing result to the authority it was evaluated under.
+fn native_proof_with_context(ctx: &RepoContext) -> Result<LifecycleProof> {
     let root = ctx.root();
     let catalog = RepositoryCatalog::from_context(ctx)?;
     if !catalog_has_generated_action(&catalog) {
         bail!("generated repo:file-budget authority is absent or authored");
     }
-    let mut budget = crate::repository::freshness::CollectionBudget::new(
-        crate::repository::freshness::CollectionLimits::with_timeout(
-            std::time::Duration::from_millis(crate::repository::freshness::RECORDING_TIMEOUT_MS),
-        ),
-        &|| false,
-    );
-    let mut originals = (ctx.contract_version()
-        >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION)
-        .then(|| {
-            crate::state::OriginalReceiptIndex::open(&ctx.state_file("receipts.jsonl"), &mut budget)
-        })
-        .transpose()?;
-    let receipt = if let Some(originals) = &mut originals {
-        originals.latest_lifecycle_receipt(&file_budget_target()?, &mut budget)?
-    } else {
-        crate::state::latest_file_budget_lifecycle_receipt(ctx)?
-    }
-    .context("no repo:file-budget receipt exists")?;
-    if receipt.exit_status != 0 {
-        bail!("the latest repo:file-budget receipt did not succeed");
-    }
-    if receipt.worktree_fingerprint_error.is_some() {
-        bail!("the latest repo:file-budget receipt could not attest repository source");
-    }
-    let source = crate::git_receipts::repository_source_snapshot(root)?;
-    if receipt.worktree_fingerprint.as_deref() != Some(&source.worktree_fingerprint) {
-        bail!("the latest repo:file-budget receipt is stale for current repository source");
-    }
     let target = file_budget_target()?;
-    let expected_input = target_input_digest(&catalog, &target, &source.worktree_fingerprint)?;
-    if receipt.input_digest.as_deref() != Some(&expected_input)
-        || receipt.config_digest.as_deref() != Some(catalog.config_digest())
+    let action = catalog
+        .action(&target)
+        .context("file-budget action disappeared")?;
+    let configuration = action_file_budget_configuration(action)?;
+    let source = crate::git_receipts::repository_source_snapshot(root)?;
+    let result = crate::runtime::run_direct_file_budget(
+        ctx,
+        None,
+        configuration,
+        crate::runtime::FileBudgetEvaluationMode::Check,
+        Instant::now() + NATIVE_EVALUATION_DEADLINE,
+        &|| false,
+    )?;
+    if result.conclusion != RunConclusion::Success {
+        bail!("repo:file-budget does not pass on the current repository source");
+    }
+    if crate::git_receipts::repository_source_snapshot(root)?.worktree_fingerprint
+        != source.worktree_fingerprint
     {
-        bail!("the latest repo:file-budget receipt is bound to different action authority");
+        bail!("repository source changed while repo:file-budget was evaluated");
     }
 
-    let evidence = receipt
+    let evidence = result
         .evidence
         .as_ref()
         .and_then(|value| value.get("file_budget"))
-        .context("the latest repo:file-budget receipt has no native evidence")?;
+        .context("the repo:file-budget evaluation returned no native evidence")?;
     if evidence.get("schema").and_then(Value::as_str) != Some("jig.file_budget/evidence-v1")
         || evidence.get("complete").and_then(Value::as_bool) != Some(true)
     {
-        bail!("the latest repo:file-budget receipt evidence is incomplete");
+        bail!("the repo:file-budget evaluation evidence is incomplete");
     }
     let evaluation_digest = evidence
         .get("evaluation_digest")
         .and_then(Value::as_str)
         .filter(|digest| valid_sha256_identity(digest))
-        .context("the latest repo:file-budget evaluation digest is missing or invalid")?;
+        .context("the repo:file-budget evaluation digest is missing or invalid")?;
     let policy_raw_digest = evidence
         .get("policy_raw_digest")
         .and_then(Value::as_str)
         .filter(|digest| valid_sha256_identity(digest))
-        .context("the latest repo:file-budget policy digest is missing or invalid")?;
-    let evaluated_at_ms = evidence
-        .get("evaluated_at_ms")
-        .and_then(Value::as_u64)
-        .context("the latest repo:file-budget evaluation time is missing")?;
-    if receipt.evaluated_at_ms != Some(evaluated_at_ms) {
-        bail!("the latest repo:file-budget receipt and evidence evaluation times differ");
-    }
+        .context("the repo:file-budget policy digest is missing or invalid")?;
     let valid_until_ms = evidence.get("valid_until_ms").and_then(Value::as_u64);
-    if receipt.valid_until_ms != valid_until_ms {
-        bail!("the latest repo:file-budget receipt and evidence validity differ");
-    }
     let active_waivers = evidence
         .get("active_waiver_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
     if active_waivers > 0 && valid_until_ms.is_none() {
-        bail!("the latest repo:file-budget receipt used waivers without bounded validity");
-    }
-    if valid_until_ms.is_some_and(|deadline| crate::state::now_ms() >= deadline) {
-        bail!("the latest repo:file-budget receipt has expired");
-    }
-
-    let request: ComparisonRequestV1 = serde_json::from_value(
-        evidence
-            .get("request")
-            .cloned()
-            .context("receipt request is missing")?,
-    )?;
-    let action = catalog
-        .action(&target)
-        .context("file-budget action disappeared")?;
-    let configuration = action_file_budget_configuration(action)?;
-    let prepared =
-        crate::repository::prepare_file_budget_input_v1(ctx, Some(request), configuration)?;
-    for (field, current) in [
-        (
-            "policy_preparation",
-            serde_json::to_value(&prepared.policy)?,
-        ),
-        (
-            "comparison_preparation",
-            serde_json::to_value(&prepared.comparison)?,
-        ),
-        ("request", serde_json::to_value(&prepared.request)?),
-        ("view", serde_json::to_value(prepared.view)?),
-        (
-            "configuration",
-            serde_json::to_value(&prepared.configuration)?,
-        ),
-    ] {
-        if evidence.get(field) != Some(&current) {
-            bail!("the latest repo:file-budget receipt has stale {field}");
-        }
+        bail!("the repo:file-budget evaluation used waivers without bounded validity");
     }
     let current_policy = fs::read(root.join(FILE_BUDGET_POLICY_PATH))?;
     if format!("sha256:{}", digest(&current_policy)) != policy_raw_digest {
-        bail!("the authored file-budget policy changed after the latest receipt");
+        bail!("the authored file-budget policy changed while it was evaluated");
     }
-    let effective_time = originals
-        .map(|originals| {
-            freshness::validate(
-                ctx,
-                &catalog,
-                &receipt.original,
-                prepared,
-                &source.worktree_fingerprint,
-                originals,
-                &mut budget,
-            )
-        })
-        .transpose()?;
     Ok(LifecycleProof {
-        effective_time,
-        receipt_id: receipt.receipt_id,
         config_digest: catalog.config_digest().into(),
-        input_digest: expected_input,
+        input_digest: target_input_digest(&catalog, &target, &source.worktree_fingerprint)?,
         source_fingerprint: source.worktree_fingerprint,
         policy_raw_digest: policy_raw_digest.into(),
         comparison: evidence
             .get("comparison")
             .cloned()
-            .context("the latest repo:file-budget comparison evidence is missing")?,
+            .context("the repo:file-budget comparison evidence is missing")?,
         evaluation_digest: evaluation_digest.into(),
         valid_until_ms,
     })
@@ -489,7 +429,7 @@ fn file_budget_target() -> Result<TargetId> {
     ))
 }
 
-fn staged_changes_receipt_authority(destination: &Path, staged: &StagedRender) -> Result<bool> {
+fn staged_changes_native_authority(destination: &Path, staged: &StagedRender) -> Result<bool> {
     for relative in staged.authored_seed_paths() {
         if relative == Path::new(FILE_BUDGET_POLICY_PATH) && !destination.join(relative).exists() {
             return Ok(true);

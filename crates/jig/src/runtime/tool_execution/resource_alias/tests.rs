@@ -12,7 +12,7 @@ const REQUESTED_ALIAS: &str = "jig.resource_second";
 const ARGUMENT: &str = " literal ; $(not-a-command) = value ";
 
 #[test]
-fn resource_alias_waits_and_preserves_dependencies_arguments_and_original_alias_receipt() {
+fn resource_alias_waits_and_preserves_dependencies_and_arguments() {
     let fixture = Fixture::new(0, 0);
     let ctx = fixture.context();
     let claims = fixture.claims(&ctx);
@@ -43,26 +43,16 @@ fn resource_alias_waits_and_preserves_dependencies_arguments_and_original_alias_
     assert_eq!(output["result"]["stdout"], ARGUMENT);
     assert_eq!(output["result"]["exit_status"], 0);
     assert!(fixture.marker().exists());
-    let receipts = fixture.receipts();
-    let target_receipts = receipts
-        .iter()
-        .filter(|receipt| receipt["target"] == json!({"component":"repo","action":"check"}))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        target_receipts.len(),
-        1,
-        "adapter must not mint an extra receipt"
-    );
-    assert_eq!(target_receipts[0]["tool_name"], REQUESTED_ALIAS);
-    assert_eq!(target_receipts[0]["args"], json!({"value": ARGUMENT}));
-    assert_eq!(target_receipts[0]["id"], output["receipt_id"]);
-    assert_eq!(
-        receipts
+    assert!(output.get("receipt_id").is_none());
+    let results = fixture.target_results();
+    for action in ["check", "prepare"] {
+        let completed = results
             .iter()
-            .filter(|receipt| receipt["target"]["action"] == "prepare")
-            .count(),
-        1
-    );
+            .filter(|result| result["target"]["action"] == action)
+            .collect::<Vec<_>>();
+        assert_eq!(completed.len(), 1, "{action} must complete exactly once");
+        assert_eq!(completed[0]["conclusion"], "success");
+    }
 }
 
 #[test]
@@ -86,19 +76,25 @@ fn cancelling_a_waiting_alias_never_starts_the_child_or_releases_the_owner() {
 }
 
 #[test]
-fn failed_alias_fails_fast_with_its_receipt() {
+fn failed_alias_fails_fast() {
     let fixture = Fixture::new(7, 0);
     let ctx = fixture.context();
     let error = execute_manifest_tool_with_observer(
         &ctx,
         REQUESTED_ALIAS,
         json!({"value": ARGUMENT}),
-        true,
         &mut NoopExecutionObserver,
     )
     .unwrap_err();
     assert!(error.to_string().contains("failed with status 7"));
-    assert!(error.to_string().contains("receipt: "));
+    assert!(!error.to_string().contains("receipt"));
+    assert!(
+        !fixture
+            .repo
+            .path()
+            .join(".agent/state/receipts.jsonl")
+            .exists()
+    );
 }
 
 #[test]
@@ -146,11 +142,10 @@ fn invoke(
     ctx: &RepoContext,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
-    execute_manifest_tool_with_options(
+    execute_manifest_tool_with_boundary(
         ctx,
         REQUESTED_ALIAS,
         json!({"value": ARGUMENT}),
-        ManifestToolExecutionOptions::new(true, true, true),
         ManifestToolExecutionBoundary::single(),
         observer,
     )
@@ -310,11 +305,13 @@ impl Fixture {
         resolved.claims
     }
 
-    fn receipts(&self) -> Vec<Value> {
-        fs::read_to_string(self.repo.path().join(".agent/state/receipts.jsonl"))
+    fn target_results(&self) -> Vec<Value> {
+        fs::read_to_string(self.repo.path().join(".agent/state/runs.jsonl"))
             .unwrap()
             .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|event| event["event"] == "target_completed")
+            .map(|event| event["result"].clone())
             .collect()
     }
 }

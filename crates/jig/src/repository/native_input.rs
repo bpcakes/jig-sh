@@ -24,9 +24,6 @@ const MAX_PREPARED_DIAGNOSTIC_CHARS_V1: usize = 1_024;
 const MAX_SYMBOLIC_COMPARISON_REF_BYTES_V1: usize = 1_024;
 const MAX_EXACT_OBJECT_ID_BYTES_V1: usize = 64;
 
-mod freshness;
-pub(crate) use freshness::revalidate_freshness_native_input;
-
 pub(crate) fn prepare_file_budget_input_v1(
     ctx: &RepoContext,
     request: Option<ComparisonRequestV1>,
@@ -127,8 +124,8 @@ const fn current_view(request: &ComparisonRequestV1) -> CurrentViewV1 {
 }
 
 mod policy;
+use policy::prepare_policy;
 pub(crate) use policy::read_policy_bytes;
-use policy::{prepare_policy, prepare_policy_from_bytes};
 
 fn prepare_comparison(
     ctx: &RepoContext,
@@ -412,8 +409,7 @@ max_lines = 100
     }
 
     #[test]
-    fn freshness_index_policy_matches_preparation_at_the_size_boundary() {
-        use crate::repository::freshness::{CollectionBudget, CollectionLimits};
+    fn index_policy_preparation_rejects_policies_above_the_size_boundary() {
         let (_temp, ctx) = prepared_repository(VALID_POLICY);
         for extra in [0, 1] {
             let mut policy = VALID_POLICY.as_bytes().to_vec();
@@ -440,14 +436,6 @@ max_lines = 100
                 assert_eq!(*reason, PolicyPreparationFailureV1::Unreadable);
                 assert!(diagnostics_preview[0].message.contains("preparation limit"));
             }
-            let mut budget = CollectionBudget::new(
-                CollectionLimits::with_timeout(std::time::Duration::from_secs(30)),
-                &|| false,
-            );
-            revalidate_freshness_native_input(&ctx, &prepared, &mut budget).unwrap();
-            assert!(
-                budget.finish_stats().content_bytes_read >= (MAX_POLICY_BYTES_V1 + extra) as u64
-            );
         }
     }
 
@@ -605,61 +593,5 @@ max_lines = 100
                 }
             }
         ));
-    }
-    #[test]
-    fn freshness_revalidates_push_before_fallback_without_repeating_fetch() {
-        use crate::repository::freshness::{CollectionBudget, CollectionLimits};
-        let (_temp, ctx) = prepared_repository(VALID_POLICY);
-        let (source, source_ctx) = prepared_repository(VALID_POLICY);
-        std::fs::write(
-            source_ctx.root().join("source.rs"),
-            "fn other_revision() {}\n",
-        )
-        .unwrap();
-        git(source_ctx.root(), &["add", "source.rs"]);
-        git(
-            source_ctx.root(),
-            &["commit", "-q", "-m", "Example available comparison"],
-        );
-        let requested_oid = git(source_ctx.root(), &["rev-parse", "HEAD"]);
-        let prepared = prepare_file_budget_input_v1(
-            &ctx,
-            Some(ComparisonRequestV1::ExactTree {
-                requested_oid,
-                provenance: jig_contract::ExactTreeProvenanceV1::PushBefore,
-            }),
-            NativeFileBudgetConfigV1 {
-                missing_comparison: MissingComparisonV1::StrictInventory,
-                ..NativeFileBudgetConfigV1::default()
-            },
-        )
-        .unwrap();
-        let mut budget = CollectionBudget::new(
-            CollectionLimits::with_timeout(std::time::Duration::from_secs(30)),
-            &|| false,
-        );
-        revalidate_freshness_native_input(&ctx, &prepared, &mut budget).unwrap();
-        let mut corrupted = prepared.clone();
-        let ComparisonPreparationV1::Ready {
-            comparison:
-                ResolvedComparisonV1::StrictInventory {
-                    fallback_from: Some(fallback),
-                    ..
-                },
-        } = &mut corrupted.comparison
-        else {
-            panic!("fixture must select the explicit fallback")
-        };
-        fallback.failure.message = "changed diagnostic".into();
-        assert!(revalidate_freshness_native_input(&ctx, &corrupted, &mut budget).is_err());
-        std::fs::write(ctx.root().join(POLICY_PATH_V1), "changed policy").unwrap();
-        assert!(revalidate_freshness_native_input(&ctx, &prepared, &mut budget).is_err());
-        std::fs::write(ctx.root().join(POLICY_PATH_V1), VALID_POLICY).unwrap();
-        revalidate_freshness_native_input(&ctx, &prepared, &mut budget).unwrap();
-        git(
-            ctx.root(),
-            &["fetch", "-q", source.path().to_str().unwrap(), "main"],
-        );
-        assert!(revalidate_freshness_native_input(&ctx, &prepared, &mut budget).is_err());
     }
 }

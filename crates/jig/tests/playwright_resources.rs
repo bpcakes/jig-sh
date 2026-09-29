@@ -162,8 +162,7 @@ fn one_layer_overlaps_distinct_pairs_and_publishes_before_conflicting_sibling() 
         events
             .iter()
             .any(|event| event["event"] == "target_completed"
-                && event["target"]["action"] == first
-                && event["result"]["receipt_id"].is_string())
+                && event["target"]["action"] == first)
     );
     fixture.release(next);
     run.finish_success();
@@ -261,7 +260,7 @@ fn browser_admission_timeout_starts_nothing_and_retains_owner() {
 }
 
 #[test]
-fn browser_waiter_executes_live_validator_after_receipt_publication() {
+fn browser_waiter_executes_live_validator_after_result_publication() {
     let fixture = BrowserFixture::new();
     let mut owner = fixture.inner.spawn("publisher", &[]);
     owner.wait_entered();
@@ -274,19 +273,17 @@ fn browser_waiter_executes_live_validator_after_receipt_publication() {
     waiter.release();
     waiter.finish_success();
     assert_eq!(fixture.inner.launches(), "publisher\nwaiter\n");
-    let receipts = records(&fixture.inner.root, "receipts.jsonl");
-    let receipts = receipts
-        .iter()
-        .filter(|receipt| receipt["tool_name"] == "jig.target_run")
-        .collect::<Vec<_>>();
-    assert_eq!(receipts.len(), 2);
-    assert_ne!(receipts[0]["id"], receipts[1]["id"]);
-    assert_ne!(receipts[0]["run_id"], receipts[1]["run_id"]);
     let events = records(&fixture.inner.root, "runs.jsonl");
+    let completed = events
+        .iter()
+        .filter(|event| event["event"] == "target_completed")
+        .collect::<Vec<_>>();
+    assert_eq!(completed.len(), 2);
+    assert_ne!(completed[0]["run_id"], completed[1]["run_id"]);
     assert!(
-        events
+        completed
             .iter()
-            .all(|event| event["result"]["reused_from"].is_null())
+            .all(|event| event["result"]["conclusion"] == "success")
     );
     fixture.assert_no_overlap_or_cargo();
 }
@@ -325,18 +322,12 @@ fn current_wrapper_readiness_is_checked_after_wait_and_repair_runs_validator() {
         fs::read_to_string(expensive).unwrap(),
         "publisher\nrepaired\n"
     );
-    let receipts = records(&fixture.inner.root, "receipts.jsonl");
-    let statuses = receipts
-        .iter()
-        .filter(|receipt| receipt["tool_name"] == "jig.target_run")
-        .map(|receipt| receipt["exit_status"].as_i64().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(statuses, [0, 42, 0]);
     let events = records(&fixture.inner.root, "runs.jsonl");
-    assert!(
-        events
-            .iter()
-            .all(|event| event["result"]["reused_from"].is_null())
-    );
+    let exit_codes = events
+        .iter()
+        .filter(|event| event["event"] == "target_completed")
+        .map(|event| event["result"]["exit_code"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(exit_codes, [0, 42, 0]);
     fixture.assert_no_overlap_or_cargo();
 }

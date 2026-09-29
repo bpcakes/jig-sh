@@ -153,23 +153,12 @@ fn native_result(
     }
 }
 use crate::repository::RepositoryCatalog;
-use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::{self, JsonObject, args, kind, tool};
 
 mod failure;
 
 pub(in crate::runtime) use failure::manifest_tool_result_failure;
 use failure::tool_failure_message;
-
-pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    request: crate::command::ToolRequest,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    execute_manifest_tool_with_observer(ctx, tool_name, args, request.record_receipt(), observer)
-}
 
 pub(super) fn call_manifest_tool_with_observer(
     ctx: &RepoContext,
@@ -179,24 +168,19 @@ pub(super) fn call_manifest_tool_with_observer(
 ) -> Result<Value> {
     // A legacy `plan_id` argument is accepted and ignored.
     let args = tool_defs::execution_tool_args(tool, args_obj)?;
-
-    // MCP execution tools are evidence-producing by design; the CLI-only
-    // --no-receipt escape hatch is intentionally not part of the tool schema.
-    execute_manifest_tool_with_observer(ctx, &tool.name, args, true, observer)
+    execute_manifest_tool_with_observer(ctx, &tool.name, args, observer)
 }
 
 pub(super) fn execute_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
-    record_receipt: bool,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    execute_manifest_tool_with_options(
+    execute_manifest_tool_with_boundary(
         ctx,
         tool_name,
         args,
-        ManifestToolExecutionOptions::new(record_receipt, true, true),
         ManifestToolExecutionBoundary::single(),
         observer,
     )?
@@ -213,14 +197,10 @@ impl ManifestToolExecutionOutcome {
         match self {
             Self::Completed(value) => Ok(value),
             Self::Cancelled(value) => {
-                let mut message = manifest_tool_result_failure(&value)?.map_or_else(
+                let message = manifest_tool_result_failure(&value)?.map_or_else(
                     || "Tool execution was cancelled".to_string(),
                     |(_, message)| message,
                 );
-                if let Some(receipt_id) = value.get("receipt_id").and_then(Value::as_str) {
-                    message.push_str("\nreceipt: ");
-                    message.push_str(receipt_id);
-                }
                 bail!("{message}")
             }
         }
@@ -232,27 +212,6 @@ pub(in crate::runtime) fn undeclared_tool_message(ctx: &RepoContext, tool_name: 
         message
     } else {
         format!("Tool is not declared in .agent/jig-contract.json: {tool_name}")
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ManifestToolExecutionOptions {
-    record_receipt: bool,
-    collect_git_metadata: bool,
-    collect_worktree_fingerprint: bool,
-}
-
-impl ManifestToolExecutionOptions {
-    const fn new(
-        record_receipt: bool,
-        collect_git_metadata: bool,
-        collect_worktree_fingerprint: bool,
-    ) -> Self {
-        Self {
-            record_receipt,
-            collect_git_metadata,
-            collect_worktree_fingerprint,
-        }
     }
 }
 
@@ -271,11 +230,10 @@ impl ManifestToolExecutionBoundary<'_> {
     }
 }
 
-fn execute_manifest_tool_with_options(
+fn execute_manifest_tool_with_boundary(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
-    options: ManifestToolExecutionOptions,
     boundary: ManifestToolExecutionBoundary<'_>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
@@ -296,7 +254,7 @@ fn execute_manifest_tool_with_options(
                 "Contract-v6 tool '{tool_name}' does not resolve to a repository action through legacy_aliases"
             );
         }
-        return execute_v6_action_alias(current, tool_name, args, options, boundary, observer);
+        return execute_v6_action_alias(current, tool_name, args, boundary, observer);
     }
     if let Some(error) = jig_features::tool_admission_error(&current, tool_name) {
         bail!(error);
@@ -311,7 +269,6 @@ fn execute_manifest_tool_with_options(
                 timeout_seconds: None,
             },
             args,
-            options,
             boundary.position,
             observer,
         ),
@@ -333,7 +290,6 @@ fn execute_manifest_tool_with_options(
                     timeout: current.command_timeout().duration(),
                 },
                 args,
-                options,
                 boundary.position,
                 observer,
             )
@@ -346,7 +302,6 @@ fn execute_v6_action_alias(
     mut current: RepoContext,
     tool_name: &str,
     args: Value,
-    options: ManifestToolExecutionOptions,
     boundary: ManifestToolExecutionBoundary<'_>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
@@ -388,7 +343,6 @@ fn execute_v6_action_alias(
             &tool,
             action,
             normalized,
-            options,
             boundary.position,
             observer,
             repository_execution,
@@ -470,21 +424,12 @@ fn execute_action_alias(
     tool: &ManifestTool,
     action: ActionSpec,
     args: Value,
-    options: ManifestToolExecutionOptions,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
     repository_execution: crate::state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
     if !action.resources.is_empty() {
-        return resource_alias::execute(
-            ctx,
-            tool,
-            action,
-            args,
-            options,
-            observer,
-            repository_execution,
-        );
+        return resource_alias::execute(ctx, tool, action, args, observer, repository_execution);
     }
     let outcome = match action.runner {
         ActionRunner::RustNextestV1 { .. } => bail!(
@@ -510,7 +455,6 @@ fn execute_action_alias(
                     .unwrap_or_else(|| ctx.command_timeout().duration()),
             },
             args,
-            options,
             position,
             observer,
         ),
@@ -523,7 +467,6 @@ fn execute_action_alias(
                 timeout_seconds: action.timeout_seconds,
             },
             args,
-            options,
             position,
             observer,
         ),
@@ -553,7 +496,6 @@ fn execute_action_alias(
                         .unwrap_or_else(|| ctx.command_timeout().duration()),
                 },
                 args,
-                options,
                 position,
                 observer,
             )

@@ -29,26 +29,16 @@ fn contended_resource_waiters_leave_slots_for_an_ordinary_dependency_chain() {
                 .exists()
         );
     }
-    let published = records(&fixture, "receipts.jsonl");
+    let published = records(&fixture, "runs.jsonl");
     for action in ["prerequisite", "dependent"] {
-        assert_eq!(receipt(&published, action)["exit_status"], 0);
-        assert_eq!(
-            receipt(&published, action)["target_freshness"]["state"],
-            "complete"
-        );
+        assert_eq!(result(&published, action)["conclusion"], "success");
     }
     for index in 0..8 {
         release(&fixture, &format!("cargo-{index}"));
     }
     run.finish_success();
     assert!(!fixture.signals.join("capacity-exceeded").exists());
-    assert_eq!(
-        records(&fixture, "receipts.jsonl")
-            .iter()
-            .filter(|receipt| receipt["target"].is_object())
-            .count(),
-        10
-    );
+    assert_eq!(completed_results(&fixture).len(), 10);
 }
 
 #[test]
@@ -218,9 +208,13 @@ fn ordinary_and_resource_workers_share_eight_execution_slots() {
     }
     run.finish_success();
     assert_eight_target_bound(&fixture);
-    let receipts = records(&fixture, "receipts.jsonl");
-    assert_eq!(receipts.len(), 11);
-    assert!(receipts.iter().all(|receipt| receipt["exit_status"] == 0));
+    let results = completed_results(&fixture);
+    assert_eq!(results.len(), 11);
+    assert!(
+        results
+            .iter()
+            .all(|result| result["conclusion"] == "success")
+    );
 }
 
 #[test]
@@ -248,9 +242,13 @@ fn disjoint_resource_waves_share_slots_with_an_ordinary_dependency_chain() {
     release(&fixture, "dependent");
     run.finish_success();
     assert_eight_target_bound(&fixture);
-    let receipts = records(&fixture, "receipts.jsonl");
-    assert_eq!(receipts.len(), 10);
-    assert!(receipts.iter().all(|receipt| receipt["exit_status"] == 0));
+    let results = completed_results(&fixture);
+    assert_eq!(results.len(), 10);
+    assert!(
+        results
+            .iter()
+            .all(|result| result["conclusion"] == "success")
+    );
 }
 
 #[test]

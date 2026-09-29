@@ -1,8 +1,8 @@
 use crate::{
     dashboard::{
-        BoundedRows, BoundedText, CollectionDomain, LimitId, LoopStateError, ReceiptTimelineRow,
-        RecorderEpochId, RecorderRefresh, RecorderSnapshot, Remediation, ScheduledOccurrence,
-        SnapshotError, SnapshotErrorCode, TimelineRow, scenarios,
+        BoundedRows, BoundedText, CollectionDomain, LimitId, LoopStateError, RecorderEpochId,
+        RecorderRefresh, RecorderSnapshot, Remediation, ScheduledOccurrence, SnapshotError,
+        SnapshotErrorCode, TimelineRow, scenarios,
     },
     terminal::model::{App, Tab},
 };
@@ -33,54 +33,58 @@ fn assert_contains_all(rendered: &str, expected: &[&str]) {
     }
 }
 
-fn receipt_row(identity: &str, timestamp_ms: u64, exit_status: i64) -> TimelineRow {
-    TimelineRow::Receipt(ReceiptTimelineRow {
-        stable_identity: identity.to_string(),
+/// A target result row whose identity is `<run>:<target>`.
+fn result_row(run_id: &str, timestamp_ms: u64, conclusion: &str) -> TimelineRow {
+    TimelineRow {
+        stable_identity: format!("{run_id}:api:test"),
         timestamp_ms: Some(timestamp_ms),
-        id: identity.trim_start_matches("receipt:").to_string(),
-        tool_name: "jig.test".to_string(),
-        invoked_command_key: Some("test".to_string()),
-        exit_status,
+        run_id: run_id.to_string(),
+        target: "api:test".to_string(),
+        status: "completed".to_string(),
+        conclusion: Some(conclusion.to_string()),
+        exit_code: Some(i64::from(conclusion != "success")),
         started_at_ms: Some(timestamp_ms.saturating_sub(50)),
         ended_at_ms: Some(timestamp_ms),
         duration_ms: Some(50),
-        diff_summary: Some("1 file changed".to_string()),
-        changed_path_count: Some(1),
-        stderr_preview: None,
-    })
+        finding_count: None,
+        output_tail: None,
+    }
 }
 
-fn stderr_failure(recorder: &mut RecorderSnapshot, stderr: &str) {
-    recorder.failures[0].stderr_preview = BoundedText::for_limit(
-        stderr,
-        Some(stderr.chars().count()),
-        LimitId::FailureStderrChars,
+fn output_failure(recorder: &mut RecorderSnapshot, output: &str) {
+    recorder.failures[0].output_tail = BoundedText::for_limit(
+        output,
+        Some(output.chars().count()),
+        LimitId::FailureOutputChars,
     )
     .unwrap();
 }
 
 #[test]
-fn failure_stderr_is_bounded_and_scrollable() {
+fn failure_output_is_bounded_and_scrollable() {
     let mut recorder = scenarios::recorder_snapshot();
     let mut older = recorder.failures[0].clone();
-    older.id = "receipt_older".to_string();
+    older.run_id = "run_older".to_string();
     older.ended_at_ms = Some(scenarios::OBSERVED_AT_MS - 5_000);
     recorder.failures.push(older);
-    let stderr = format!("first\n{}\nlast", "x".repeat(389));
-    recorder.failures[0].stderr_preview =
-        BoundedText::for_limit(stderr, Some(425), LimitId::FailureStderrChars).unwrap();
+    let output = format!("first\n{}\nlast", "x".repeat(389));
+    recorder.failures[0].output_tail =
+        BoundedText::for_limit(output, Some(425), LimitId::FailureOutputChars).unwrap();
     let mut app = App::new(Tab::Health);
     app.recorder.data = Some(recorder.into());
 
     let failures = &app.recorder.data.as_ref().unwrap().failures;
-    assert_eq!(failures[0].id, "receipt_failed");
-    assert_eq!(failures[1].id, "receipt_older");
+    assert_eq!(failures[0].run_id, "run_failed");
+    assert_eq!(failures[1].run_id, "run_older");
     let failure = app.selected_health().unwrap();
-    assert_eq!(failure.identity, "failure:receipt_failed");
+    assert_eq!(failure.identity, "failure:run_failed:api:test");
     assert_contains_all(
         &failure.detail.lines.join(" "),
         &[
-            "Stderr:",
+            "Run: run_failed",
+            "Target: api:test",
+            "Conclusion: failure (exit 1)",
+            "Output tail:",
             "first",
             "last",
             "limit 400 characters; 25 omitted",
@@ -88,7 +92,7 @@ fn failure_stderr_is_bounded_and_scrollable() {
     );
     assert!(app.open_selected_detail());
     let rendered = normalized(&render_text(&app, 80, 16));
-    assert_contains_all(&rendered, &["Failure detail", "Stderr:", "first"]);
+    assert_contains_all(&rendered, &["Failure detail", "Output tail:", "first"]);
     assert!(app.detail.scroll_limit() > 0);
     app.move_detail_to_edge(true);
     let end = normalized(&render_text(&app, 80, 16));
@@ -96,7 +100,7 @@ fn failure_stderr_is_bounded_and_scrollable() {
 }
 
 #[test]
-fn tool_health_renders_all_aggregates() {
+fn target_health_renders_all_aggregates() {
     let app = app_with_local(Tab::Health);
     let item = app
         .recorder
@@ -107,12 +111,12 @@ fn tool_health_renders_all_aggregates() {
         .iter()
         .find(|item| item.section == "Check health")
         .unwrap();
-    assert_eq!(item.identity, "tool:jig.test");
+    assert_eq!(item.identity, "target:api:test");
     assert_contains_all(
         &item.detail.lines.join(" "),
         &[
-            "Tool: jig.test",
-            "Last status: exit 1",
+            "Target: api:test",
+            "Last conclusion: failure",
             "Last run:",
             "Runs: 3",
             "Failures: 1",
@@ -210,8 +214,11 @@ fn exhausted_attempt_keeps_identity_and_inert_recovery_argv() {
 fn timeline_and_loop_attention_details_are_reachable() {
     let mut app = app_with_local(Tab::Timeline);
     assert!(app.open_selected_detail());
-    let receipt = normalized(&render_text(&app, 80, 24));
-    assert_contains_all(&receipt, &["Receipt event", "Receipt: receipt_failed"]);
+    let result = normalized(&render_text(&app, 80, 24));
+    assert_contains_all(
+        &result,
+        &["Target result", "Run: run_failed", "Target: api:test"],
+    );
     app.close_detail();
     assert!(!app.detail_is_open());
 
@@ -241,28 +248,34 @@ fn producer_limits_and_partial_errors_are_visible_without_erasing_data() {
     app.select_tab(Tab::Timeline);
     let timeline = normalized(&render_text(&app, 120, 36));
     assert!(timeline.contains("omitted count unknown"));
-    assert!(timeline.contains("receipt_failed"));
+    assert!(timeline.contains("run_failed"));
 }
 
 #[test]
 fn recorder_refresh_keeps_timeline_selection_and_open_detail() {
     let mut recorder = scenarios::recorder_snapshot();
     recorder.timeline = vec![
-        receipt_row("receipt:newer", scenarios::OBSERVED_AT_MS - 100, 0),
-        receipt_row("receipt:older", scenarios::OBSERVED_AT_MS - 200, 0),
+        result_row("run_newer", scenarios::OBSERVED_AT_MS - 100, "success"),
+        result_row("run_older", scenarios::OBSERVED_AT_MS - 200, "success"),
     ];
     let mut app = App::new(Tab::Timeline);
     accept_recorder(&mut app, recorder.clone());
     app.move_selection(1);
-    assert_eq!(app.selected_timeline().unwrap().identity, "receipt:older");
+    assert_eq!(
+        app.selected_timeline().unwrap().identity,
+        "run_older:api:test"
+    );
 
     recorder.timeline.insert(
         0,
-        receipt_row("receipt:newest", scenarios::OBSERVED_AT_MS, 0),
+        result_row("run_newest", scenarios::OBSERVED_AT_MS, "success"),
     );
     accept_recorder(&mut app, recorder.clone());
     assert_eq!(app.timeline_index, 2);
-    assert_eq!(app.selected_timeline().unwrap().identity, "receipt:older");
+    assert_eq!(
+        app.selected_timeline().unwrap().identity,
+        "run_older:api:test"
+    );
 
     assert!(app.open_selected_detail());
     recorder.epoch_id = RecorderEpochId::new(2).unwrap();
@@ -276,7 +289,7 @@ fn recorder_refresh_keeps_timeline_selection_and_open_detail() {
             .unwrap()
             .lines
             .iter()
-            .any(|line| line == "Receipt: older")
+            .any(|line| line == "Run: run_older")
     );
     assert!(app.selected_timeline().is_none());
 }
@@ -284,9 +297,8 @@ fn recorder_refresh_keeps_timeline_selection_and_open_detail() {
 #[test]
 fn multiline_text_and_labels_cross_the_terminal_boundary_safely() {
     let mut recorder = scenarios::recorder_snapshot();
-    stderr_failure(&mut recorder, "first\r\nsecond\tcolumn\nthird\u{1b}[31m");
-    let TimelineRow::Receipt(row) = &mut recorder.timeline[0];
-    row.tool_name = "jig\u{1b}[31m\u{202e}.test".to_string();
+    output_failure(&mut recorder, "first\r\nsecond\tcolumn\nthird\u{1b}[31m");
+    recorder.timeline[0].target = "api\u{1b}[31m\u{202e}:test".to_string();
     let mut app = App::new(Tab::Timeline);
     app.recorder.data = Some(recorder.into());
     let timeline = render_text(&app, 120, 36);
@@ -305,7 +317,7 @@ fn multiline_text_and_labels_cross_the_terminal_boundary_safely() {
 #[test]
 fn detail_scroll_edges_clamp_and_document_survives_epoch_refresh() {
     let mut recorder = scenarios::recorder_snapshot();
-    stderr_failure(&mut recorder, "one\ntwo\nthree\nfour");
+    output_failure(&mut recorder, "one\ntwo\nthree\nfour");
     let mut app = App::new(Tab::Health);
     accept_recorder(&mut app, recorder);
     assert!(app.open_selected_detail());
@@ -411,16 +423,16 @@ fn manual_occurrences_and_loop_error_selection_survive_unrelated_insertions() {
 fn recorder_errors_render_their_sanitized_subject() {
     let mut recorder = scenarios::recorder_snapshot();
     recorder.errors.push(SnapshotError::new(
-        CollectionDomain::Receipts,
+        CollectionDomain::Runs,
         SnapshotErrorCode::StreamReadFailed,
-        Some("receipt\u{1b}[31m-target".to_string()),
-        "receipt stream failed",
+        Some("run\u{1b}[31m-target".to_string()),
+        "run stream failed",
     ));
     let mut app = App::new(Tab::Timeline);
     app.recorder.data = Some(recorder.into());
     let rendered = render_text(&app, 120, 36);
-    assert!(rendered.contains("receipt�[31m-target"));
-    assert!(rendered.contains("receipt stream failed"));
+    assert!(rendered.contains("run�[31m-target"));
+    assert!(rendered.contains("run stream failed"));
     assert!(!rendered.contains('\u{1b}'));
 }
 
@@ -478,7 +490,7 @@ fn compact_local_views_are_single_selection_following_lists() {
 #[test]
 fn long_detail_lines_are_reachable_horizontally_and_item_details_become_stale() {
     let mut recorder = scenarios::recorder_snapshot();
-    stderr_failure(&mut recorder, &format!("{}TAIL_MARKER", "x".repeat(120)));
+    output_failure(&mut recorder, &format!("{}TAIL_MARKER", "x".repeat(120)));
     let mut app = App::new(Tab::Health);
     accept_recorder(&mut app, recorder);
     assert!(app.open_selected_detail());
@@ -496,8 +508,7 @@ fn long_detail_lines_are_reachable_horizontally_and_item_details_become_stale() 
 #[test]
 fn timeline_summaries_stay_single_line() {
     let mut recorder = scenarios::recorder_snapshot();
-    let TimelineRow::Receipt(row) = &mut recorder.timeline[0];
-    row.diff_summary = Some("first line\nsecond line".to_string());
+    recorder.timeline[0].run_id = "first line\nsecond line".to_string();
     let local: crate::terminal::model::LocalDashboard = recorder.into();
     assert!(
         local
