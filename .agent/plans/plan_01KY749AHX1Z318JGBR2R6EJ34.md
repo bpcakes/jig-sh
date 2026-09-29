@@ -1,1 +1,0 @@
-Extend Rust React init templates for both product SPA and admin roles, update scaffold assertions and documentation, then generate and validate both applications.

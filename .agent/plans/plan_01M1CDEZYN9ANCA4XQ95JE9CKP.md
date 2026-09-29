@@ -1,1 +1,0 @@
-Correct supported-stack and prerequisite claims, align contract language, repair navigation, add concise examples, and add standard open-source trust files. Validate prose, links, contract policy, and tests.

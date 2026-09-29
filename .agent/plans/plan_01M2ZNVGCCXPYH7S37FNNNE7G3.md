@@ -1,1 +1,0 @@
-Change default frontend scaffold directories to apps/<name>; preserve configured existing paths. Validate scaffold tests, generated contract and required gates.

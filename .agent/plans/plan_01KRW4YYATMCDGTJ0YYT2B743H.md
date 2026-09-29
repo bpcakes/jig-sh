@@ -1,1 +1,0 @@
-Phase 1 plan: split CLI parser and output modules by domain, split runtime work internals by concern, extract vault broker env policy out of the run module, and make the dev-proxy internal publish boundary explicit. Phase 2 implement behavior-preserving refactors. Phase 3 run comprehensive review on the working tree. Phase 4 iterate on actionable findings or close when clean.

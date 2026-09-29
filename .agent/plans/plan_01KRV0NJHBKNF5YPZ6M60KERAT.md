@@ -1,1 +1,0 @@
-Address QA findings from adopting Jig into an existing Rust workspace with an npm TypeScript frontend: command drift in generated CI, package-manager support, frontend preflight validation, dev config warnings, crate guide onboarding, first-run guidance, and lockfile/cache correctness.

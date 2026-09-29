@@ -1,1 +1,0 @@
-Add an adopt repo-topology report for Rust crates, including binary/library target shape, likely app/support/example roles, nearest AGENTS.md ownership, crate guide scaffold actions, and conservative skipping of obvious examples/fixtures/tests crate guides.

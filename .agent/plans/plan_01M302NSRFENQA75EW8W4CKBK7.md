@@ -1,1 +1,0 @@
-Advance the workspace to the next prerelease version, expose Git provenance in development CLI version output, preserve exact release identities, and validate release tooling and runtime compatibility.

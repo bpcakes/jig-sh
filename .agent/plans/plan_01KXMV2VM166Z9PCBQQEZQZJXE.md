@@ -1,1 +1,0 @@
-Give the generated web frontend the same pinned shadcn 4.13 and Tailwind 4 foundation as admin while preserving its product-SPA layout. Update provenance, tests, docs, snapshots, and clean rendered-repository evidence.

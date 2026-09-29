@@ -1,1 +1,0 @@
-Apply every mechanical cleanup category from the attached Tier 1 audit across all workspace targets. Preserve behavior, verify each named lint has zero findings, run formatting and workspace tests, then commit the result.

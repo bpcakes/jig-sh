@@ -1,1 +1,0 @@
-Implement jig-sh-5h5z from the pinned baseline; validate preparation ordering, failure recovery, sandbox authority, and repository gates.

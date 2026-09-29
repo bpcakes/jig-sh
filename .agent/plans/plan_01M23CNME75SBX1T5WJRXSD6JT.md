@@ -1,1 +1,0 @@
-Add Claude home discovery, explicit and interactive launch selection, exact CLAUDE_CONFIG_DIR forwarding, CLI documentation, and process-level regression tests. Validate formatting, clippy, contract, and configured test gates using the development binary.

@@ -1,1 +1,0 @@
-Separate usage-sample state from inspection state, preserve freshness at constrained widths, and give projected windows durable duration identity. Land behavior and refactoring slices separately, then run all required gates.

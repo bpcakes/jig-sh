@@ -1,1 +1,0 @@
-Add native check gates with plan evidence enforcement, keep Codex review gates and refinements as documented configuration concepts, and validate with focused Rust tests plus Jig checks.

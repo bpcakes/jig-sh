@@ -1,1 +1,0 @@
-Retract only the old inferred Cargo formatter worktree policy during generated matching and rendering; preserve owner-declared and custom runner policies. Verify update and recopy regressions, run required checks, then commit and push the pending review fixes.

@@ -1,1 +1,0 @@
-Add repository-independent global and exact session inspection, strict metadata-only recovery, and exact stop. Keep existing repository-scoped defaults; validate deleted-root, selector, evidence, and isolation cases before clean native review.
