@@ -23,6 +23,24 @@ fn check(root: &Path, expected: usize) {
     assert_eq!(output.status.success(), expected == 0);
 }
 
+fn assert_parse_failure(output: Output, expression_diagnostic: Option<&str>) {
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("cannot parse SQLx inventory source src/broken.rs:"),
+        "{combined}"
+    );
+    if let Some(expected) = expression_diagnostic {
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let message = value["error"]["message"].as_str().unwrap();
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
 #[test]
 fn native_cli_inventory_detects_new_and_replacement_calls_and_fails_on_parse_errors() {
     let temp = tempdir().unwrap();
@@ -137,22 +155,7 @@ rust_test_command = "cargo test"
     ] {
         fs::write(root.join("src/broken.rs"), broken).unwrap();
         for args in [&["check", "sqlx-unchecked-non-test", "--json"][..], &args] {
-            let output = jig(root, args);
-            assert!(!output.status.success());
-            let combined = format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                combined.contains("cannot parse SQLx inventory source src/broken.rs:"),
-                "{combined}"
-            );
-            if let Some(expected) = expression_diagnostic {
-                let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-                let message = value["error"]["message"].as_str().unwrap();
-                assert!(message.contains(expected), "{message}");
-            }
+            assert_parse_failure(jig(root, args), expression_diagnostic);
         }
         assert_eq!(fs::read_to_string(&todo_path).unwrap(), todo);
     }
