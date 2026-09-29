@@ -11,7 +11,7 @@ impl ScheduleOccurrence {
 
     fn is_unexecuted_stale_reconciliation(&self) -> bool {
         self.is_unacknowledged_stale_reconciliation()
-            && self.worker_receipt_id.is_none()
+            && !self.worker_was_invoked()
             && self.error.as_deref() == Some(STALE_RECONCILIATION_ERROR)
     }
 }

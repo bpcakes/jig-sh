@@ -61,115 +61,9 @@ printf 'task complete\n' > "$out"
     let diagnostic = &task["checkout"]["diagnostics"];
     assert_eq!(diagnostic["reasons"], json!(["application_changes"]));
     assert_eq!(diagnostic["observed_paths"], json!(["scheduled-change.txt"]));
-    assert_eq!(diagnostic["parent_receipt_id"], task["worker_receipt_id"]);
-    assert_eq!(diagnostic["observed_receipt_ids"], json!([task["worker_receipt_id"]]));
+    assert!(diagnostic.get("parent_receipt_id").is_none(), "{diagnostic:#}");
+    assert_eq!(task["worker"]["status"], "passed");
     assert_eq!(task["output"], "task complete\n");
-}
-
-#[cfg(unix)]
-#[test]
-fn scheduled_repo_task_detects_receipt_history_rewrites() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let bin = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    configure_scheduled_task(&temp, "repo-task", "checkout = \"repo\"", false);
-    let receipts = temp.path().join(".agent/state/receipts.jsonl");
-    fs::create_dir_all(receipts.parent().unwrap()).unwrap();
-    fs::write(&receipts, "{\"id\":\"receipt-seed\"}\n").unwrap();
-    git_ok(temp.path(), ["add", ".agent/state/receipts.jsonl"]);
-    git_ok(temp.path(), ["commit", "-m", "seed receipt history"]);
-    let codex_path = bin.path().join("codex-receipt-rewrite-stub.sh");
-    write_codex_stub(
-        &codex_path,
-        r#"#!/bin/sh
-set -eu
-out=""
-prev=""
-for arg in "$@"; do
-  if [ "$prev" = "-o" ]; then out="$arg"; fi
-  prev="$arg"
-done
-cat >/dev/null
-: > .agent/state/receipts.jsonl
-printf 'task complete\n' > "$out"
-"#,
-    );
-    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output =
-        crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
-
-    assert_eq!(output["status"], "needs_attention", "{output:#}");
-    let task = &output["actions"][0]["tick"]["actions"][0];
-    assert_eq!(task["checkout"]["diagnostics"]["reasons"], json!(["journal_unverifiable"]));
-    assert_eq!(task["checkout"]["dirty"], false, "{output:#}");
-    assert_eq!(
-        task["checkout"]["receipt_append_valid"], false,
-        "{output:#}"
-    );
-    assert!(
-        task["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("receipt history changed")),
-        "{output:#}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn scheduled_repo_task_rejects_a_direct_schema_valid_receipt_append() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let bin = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    configure_scheduled_task(&temp, "repo-task", "checkout = \"repo\"", false);
-    let seed_ctx = RepoContext::load_from(temp.path()).unwrap();
-    crate::runtime::dispatch(
-        &seed_ctx,
-        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
-            workflow: Some("noop-status".into()),
-            lease_ttl_seconds: None,
-            max_attempts: None,
-            backoff_seconds: None,
-        })),
-    )
-    .unwrap();
-    git_ok(temp.path(), ["add", ".agent/state/receipts.jsonl"]);
-    git_ok(temp.path(), ["commit", "-m", "seed valid receipt history"]);
-    let codex_path = bin.path().join("codex-valid-receipt-forgery-stub.sh");
-    write_codex_stub(
-        &codex_path,
-        r#"#!/bin/sh
-set -eu
-cat >/dev/null
-seed=$(head -n 1 .agent/state/receipts.jsonl)
-printf '%s\n' "$seed" >> .agent/state/receipts.jsonl
-printf 'task complete\n'
-"#,
-    );
-    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
-
-    assert_eq!(output["status"], "needs_attention", "{output:#}");
-    let task = &output["actions"][0]["tick"]["actions"][0];
-    assert_eq!(task["checkout"]["diagnostics"]["reasons"], json!(["receipt_ambiguity"]));
-    assert_eq!(task["checkout"]["diagnostics"]["observed_receipt_ids"].as_array().unwrap().len(), 2);
-    assert_eq!(task["checkout"]["dirty"], false, "{output:#}");
-    assert_eq!(
-        task["checkout"]["receipt_append_valid"],
-        false,
-        "{output:#}"
-    );
-    assert!(
-        task["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("only appended record")),
-        "{output:#}"
-    );
 }
 
 #[cfg(unix)]
@@ -196,7 +90,6 @@ fn timed_out_repo_task_keeps_corrupt_checkout_under_attention() {
 set -eu
 cat >/dev/null
 printf 'run\n' >> "$JIG_TEST_RUN_LOG"
-printf '{}\n' >> .agent/state/receipts.jsonl
 printf 'partial change\n' > partial-change.txt
 sleep 60
 "#,
@@ -212,10 +105,6 @@ sleep 60
     let task = &first["actions"][0]["tick"]["actions"][0];
     assert_eq!(task["status"], "needs_attention", "{first:#}");
     assert_eq!(task["checkout"]["dirty"], true, "{first:#}");
-    assert_eq!(
-        task["checkout"]["receipt_append_valid"], false,
-        "{first:#}"
-    );
 
     let second = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at + 60_000).unwrap();
     assert_eq!(second["status"], "needs_attention", "{second:#}");
@@ -305,7 +194,7 @@ esac
     assert_eq!(first["needs_attention_count"], 1, "{first:#}");
     assert_eq!(action["status"], "needs_attention", "{first:#}");
     assert_eq!(action["occurrence"]["status"], "needs_attention");
-    assert!(action["occurrence"]["worker_receipt_id"].is_string());
+    assert_eq!(action["occurrence"]["worker_invoked"], true);
     let worktree = action["occurrence"]["worktree"]
         .as_str()
         .expect("ambiguous push must retain its diagnostic worktree");
@@ -424,7 +313,7 @@ while :; do sleep 1; done
     );
     assert_eq!(worker_action["completed_status"], "needs_attention");
     assert_eq!(worker_action["worktree_retained"], true);
-    assert!(worker_action["worker_receipt_id"].is_string());
+    assert_eq!(worker_action["worker"]["kind"], "worker_run");
     let worktree = worker_action["worktree"]
         .as_str()
         .expect("cancelled worker must retain its worktree");

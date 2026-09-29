@@ -17,7 +17,7 @@ fn scheduled_claim_cannot_run_older_work_after_a_newer_dispatch_records_it() {
             &newer.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::Succeeded,
-                worker_receipt_id: None,
+                worker_invoked: false,
                 worktree: None,
                 error: None,
             },
@@ -56,7 +56,7 @@ fn unresolved_attention_blocks_new_scheduled_claims_until_acknowledged() {
             &first.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::NeedsAttention,
-                worker_receipt_id: Some("receipt-example"),
+                worker_invoked: true,
                 worktree: None,
                 error: Some("ambiguous worker result"),
             },
@@ -118,7 +118,7 @@ fn shared_repository_attention_blocks_all_workflows() {
             &first.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::NeedsAttention,
-                worker_receipt_id: Some("receipt-example"),
+                worker_invoked: true,
                 worktree: None,
                 error: Some("ambiguous shared checkout"),
             },
@@ -245,7 +245,7 @@ fn shared_repository_claim_waits_for_all_managed_worktree_authority() {
             &isolated.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::NeedsAttention,
-                worker_receipt_id: None,
+                worker_invoked: false,
                 worktree: Some(retained.to_string_lossy().as_ref()),
                 error: Some("retained isolated evidence"),
             },
@@ -359,7 +359,7 @@ fn retained_worktree_backpressure_preserves_non_utf8_repository_paths() {
             &claim.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::NeedsAttention,
-                worker_receipt_id: None,
+                worker_invoked: false,
                 worktree: Some(&encoded),
                 error: Some("retained evidence"),
             },
@@ -448,7 +448,7 @@ fn retained_worktree_constraint_does_not_depend_on_attention_constraint() {
             &first.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::NeedsAttention,
-                worker_receipt_id: None,
+                worker_invoked: false,
                 worktree: Some(retained.to_string_lossy().as_ref()),
                 error: None,
             },

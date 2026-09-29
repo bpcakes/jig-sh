@@ -15,10 +15,9 @@ impl OccurrenceGuard {
     pub(in crate::runtime::loops) fn finish_manual(
         self,
         finish: OccurrenceFinish<'_>,
-        retain: bool,
     ) -> Result<OccurrenceFinalization> {
         self.finalize(|store, occurrence_id, owner| {
-            store.finish_manual(occurrence_id, owner, finish, retain)
+            store.finish_manual(occurrence_id, owner, finish)
         })
     }
 }
@@ -62,12 +61,13 @@ impl OccurrenceStore {
         )
     }
 
+    /// Records a manual tick's terminal state. Finished manual occurrences stay
+    /// in history like scheduled ones, so their evidence remains inspectable.
     fn finish_manual(
         &mut self,
         occurrence_id: &str,
         owner: &str,
         finish: OccurrenceFinish<'_>,
-        retain: bool,
     ) -> Result<ScheduleOccurrence> {
         self.with_locked(|store| {
             let now = now_ms();
@@ -86,21 +86,14 @@ impl OccurrenceStore {
                 mark_expired_claim(record, now, Some(&finish));
                 return Ok(record.clone());
             }
-            if retain {
-                record.status = finish.outcome.status();
-                record.finished_at_ms = Some(now);
-                record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
-                record.worktree = finish.worktree.map(str::to_string);
-                record.error = finish.error.map(bounded_error);
-                let finished = record.clone();
-                prune_history(store);
-                Ok(finished)
-            } else {
-                store
-                    .occurrences
-                    .remove(occurrence_id)
-                    .ok_or_else(|| anyhow::anyhow!("Loop occurrence not found: {occurrence_id}"))
-            }
+            record.status = finish.outcome.status();
+            record.finished_at_ms = Some(now);
+            record.worker_invoked = finish.worker_invoked;
+            record.worktree = finish.worktree.map(str::to_string);
+            record.error = finish.error.map(bounded_error);
+            let finished = record.clone();
+            prune_history(store);
+            Ok(finished)
         })
     }
 
@@ -127,7 +120,7 @@ impl OccurrenceStore {
                 mark_expired_claim(record, now, Some(&finish));
                 return Ok(record.clone());
             }
-            record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
+            record.worker_invoked = finish.worker_invoked;
             record.worktree = finish.worktree.map(str::to_string);
             record.error = finish.error.map(bounded_error);
             Ok(record.clone())

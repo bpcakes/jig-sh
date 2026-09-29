@@ -341,7 +341,7 @@ checkout = "worktree"
             &previous.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::Failed,
-                worker_receipt_id: Some("receipt-example"),
+                worker_invoked: true,
                 worktree: retained.to_str(),
                 error: Some("worker failed"),
             },
@@ -610,9 +610,9 @@ checkout = "repo"
     assert_eq!(
         retried.action.as_ref().unwrap()["tick"]["actions"][0]["checkout"]["dirty"],
         false,
-        "the worker receipt is runtime evidence, not a task-authored checkout change"
+        "loop evidence lives outside the checkout, so the task left it clean"
     );
-    assert!(temp.path().join(".agent/state/receipts.jsonl").exists());
+    assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 }
 
 #[cfg(unix)]

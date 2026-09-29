@@ -173,7 +173,8 @@ impl OccurrenceStore {
                 finished_at_ms: None,
                 acknowledged_at_ms: None,
                 status: OccurrenceStatus::Running,
-                worker_receipt_id: None,
+                worker_invoked: false,
+                legacy_worker_receipt_id: None,
                 worktree: None,
                 error: None,
             };

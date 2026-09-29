@@ -264,7 +264,7 @@ wait
 }
 
 #[test]
-fn loop_attempt_repair_rolls_back_before_redelivering_sigint() {
+fn loop_clear_attempt_waiting_for_its_lock_exits_on_sigint_without_changes() {
     let temp = tempdir().unwrap();
     write_loop_signal_fixture(temp.path());
     let cache = temp.path().join(".agent/.cache/loop");
@@ -289,19 +289,14 @@ fn loop_attempt_repair_rolls_back_before_redelivering_sigint() {
 }"#,
     )
     .unwrap();
-
-    let state = temp.path().join(".agent/state");
-    fs::create_dir_all(&state).unwrap();
-    let receipts_path = state.join("receipts.jsonl");
-    fs::write(&receipts_path, b"").unwrap();
-    let receipt_lock = OpenOptions::new()
+    let attempt_lock = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(&receipts_path)
+        .open(cache.join("attempts.lock"))
         .unwrap();
-    receipt_lock.lock_exclusive().unwrap();
+    attempt_lock.lock_exclusive().unwrap();
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
         .args([
@@ -320,27 +315,17 @@ fn loop_attempt_repair_rolls_back_before_redelivering_sigint() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while attempt_count(&attempts_path) != 0 && Instant::now() < deadline {
-        if let Some(status) = child.try_wait().unwrap() {
-            FileExt::unlock(&receipt_lock).unwrap();
-            let output = child.wait_with_output().unwrap();
-            panic!(
-                "loop clear-attempt exited with {status} before its receipt boundary: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    if attempt_count(&attempts_path) != 0 {
-        let _ = child.kill();
-        let _ = child.wait();
-        FileExt::unlock(&receipt_lock).unwrap();
-        panic!("loop clear-attempt did not commit provisional attempt state");
+    std::thread::sleep(Duration::from_millis(300));
+    if let Some(status) = child.try_wait().unwrap() {
+        FileExt::unlock(&attempt_lock).unwrap();
+        let output = child.wait_with_output().unwrap();
+        panic!(
+            "loop clear-attempt exited with {status} while its lock was held: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
-    // SAFETY: `child.id()` is the live Jig process blocked during receipt publication.
+    // SAFETY: `child.id()` is the live Jig process waiting for the attempt lock.
     assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
     let status = child
         .wait_timeout(Duration::from_secs(3))
@@ -348,18 +333,14 @@ fn loop_attempt_repair_rolls_back_before_redelivering_sigint() {
         .unwrap_or_else(|| {
             let _ = child.kill();
             let _ = child.wait();
-            FileExt::unlock(&receipt_lock).unwrap();
-            panic!("loop clear-attempt did not cancel its receipt transaction")
+            FileExt::unlock(&attempt_lock).unwrap();
+            panic!("loop clear-attempt did not stop waiting for its lock")
         });
-    FileExt::unlock(&receipt_lock).unwrap();
+    FileExt::unlock(&attempt_lock).unwrap();
 
     assert!(!status.success(), "SIGINT unexpectedly reported success");
-    assert_eq!(
-        attempt_count(&attempts_path),
-        1,
-        "SIGINT must restore attempt authority before process exit"
-    );
-    assert_eq!(fs::read(&receipts_path).unwrap(), b"");
+    assert_eq!(attempt_count(&attempts_path), 1);
+    assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 }
 
 fn attempt_count(path: &std::path::Path) -> usize {

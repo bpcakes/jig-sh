@@ -684,6 +684,7 @@ const fn loop_human_output(command: &LoopCommand) -> HumanOutput {
         LoopCommand::Tick(_) => HumanOutput::LoopTick,
         LoopCommand::Dispatch(_) => HumanOutput::LoopDispatch,
         LoopCommand::Status(_) => HumanOutput::LoopStatus,
+        LoopCommand::Show(_) => HumanOutput::LoopShow,
         LoopCommand::Run(_) => HumanOutput::LoopRun,
         LoopCommand::ClearAttempt(_) => HumanOutput::LoopClearAttempt,
         LoopCommand::AcknowledgeOccurrence(_) => HumanOutput::LoopAcknowledgeOccurrence,

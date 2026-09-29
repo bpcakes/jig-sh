@@ -217,7 +217,7 @@ mod cancellation_tests {
     fn lease_cleanup_failure_preserves_post_commit_attention_diagnostic() {
         let action = json!({
             "status": "cancelled_after_commit",
-            "worker_receipt_id": "receipt-worker",
+            "worker": {"kind": "worker_run"},
             "error": "follow-up review thread updates are incomplete",
         });
         let error = anyhow!("injected lease renewal failure");
@@ -242,10 +242,7 @@ mod cancellation_tests {
             completion.outcome,
             super::super::workflow::WorkflowOutcome::NeedsAttention
         );
-        assert_eq!(
-            completion.worker_receipt_id.as_deref(),
-            Some("receipt-worker")
-        );
+        assert!(completion.worker_invoked);
     }
 
     #[test]

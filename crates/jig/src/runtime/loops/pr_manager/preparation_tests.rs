@@ -386,7 +386,7 @@ exit "$status"
             PrRepairOutcome::PreExecutionFailed {
                 error: anyhow!("injected preparation failure"),
                 worktree: Some(PreparedPrWorktree::Created(worktree.clone())),
-                worker_receipt_id: None,
+                worker: None,
             },
         )
         .unwrap();
@@ -426,7 +426,7 @@ exit "$status"
             PrRepairOutcome::PreExecutionFailed {
                 error: anyhow!("fetch failed before the retry could reuse the worktree"),
                 worktree: Some(PreparedPrWorktree::Retained(worktree.clone())),
-                worker_receipt_id: None,
+                worker: None,
             },
         )
         .unwrap();

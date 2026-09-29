@@ -1,16 +1,6 @@
 use super::*;
 
 #[test]
-fn truncate_handles_multibyte_boundaries() {
-    let value = format!("{}{}", "a".repeat(3999), "é");
-    let truncated = truncate(&value);
-
-    assert!(truncated.ends_with('…'));
-    assert!(truncated.starts_with(&"a".repeat(3999)));
-    assert_eq!(truncated.chars().last(), Some('…'));
-}
-
-#[test]
 fn repository_execution_lease_allows_readers_and_excludes_a_writer() {
     use std::sync::mpsc;
     use std::time::Duration;

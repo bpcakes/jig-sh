@@ -88,7 +88,7 @@ fn manual_pr_manager_rejects_corrupt_branch_authority_before_claiming() {
 
 #[cfg(unix)]
 #[test]
-fn scheduled_lease_failure_preserves_worker_receipt_and_retained_worktree() {
+fn scheduled_lease_failure_preserves_worker_invocation_and_retained_worktree() {
     use std::time::{Duration, Instant};
 
     use fs4::fs_std::FileExt;
@@ -145,7 +145,7 @@ printf 'task complete\n'
     let occurrence = &output["actions"][0]["occurrence"];
     assert_eq!(output["status"], "failed", "{output:#}");
     assert_eq!(occurrence["status"], "needs_attention", "{output:#}");
-    assert!(occurrence["worker_receipt_id"].is_string(), "{output:#}");
+    assert_eq!(occurrence["worker_invoked"], true, "{output:#}");
     let worktree = occurrence["worktree"]
         .as_str()
         .expect("cancelled isolated worker must retain its worktree");
@@ -168,7 +168,7 @@ printf 'task complete\n'
 
 #[cfg(unix)]
 #[test]
-fn scheduled_codex_start_failure_links_retry_receipt_without_consuming_occurrence() {
+fn scheduled_codex_start_failure_keeps_worker_evidence_without_consuming_occurrence() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -191,10 +191,11 @@ fn scheduled_codex_start_failure_links_retry_receipt_without_consuming_occurrenc
         false,
         "{output:#}"
     );
-    let worker_receipt = output["actions"][0]["tick"]["actions"][0]["worker_receipt_id"]
-        .as_str()
-        .expect("pre-start worker failure must link its diagnostic receipt");
-    assert!(worker_receipt.starts_with("receipt_"));
+    let worker = &output["actions"][0]["tick"]["actions"][0]["worker"];
+    assert_eq!(
+        worker["status"], "error",
+        "pre-start worker failure keeps its evidence: {output:#}"
+    );
     let checkout = &output["actions"][0]["tick"]["actions"][0]["checkout"];
     assert_eq!(checkout["retained"], false, "{output:#}");
     let removed = checkout["path"]
@@ -242,7 +243,7 @@ printf 'task complete\n'
     assert_eq!(output["state_errors"][0]["kind"], "attempts", "{output:#}");
     assert_eq!(action["status"], "succeeded", "{output:#}");
     assert_eq!(occurrence["status"], "succeeded", "{output:#}");
-    assert!(occurrence["worker_receipt_id"].is_string(), "{output:#}");
+    assert_eq!(occurrence["worker_invoked"], true, "{output:#}");
     let worktree = occurrence["worktree"]
         .as_str()
         .expect("successful dirty worker must retain its worktree");

@@ -158,7 +158,14 @@ impl ManualOccurrenceGuard {
         self.guard.renewal_failed()
     }
 
-    pub(super) fn completion_requires_retention(completion: &WorkflowCompletion) -> bool {
+    pub(super) fn occurrence_id(&self) -> &str {
+        self.guard.occurrence_id()
+    }
+
+    /// Completions that need attention or retain a worktree are finalized
+    /// before their evidence is written, so a failed write cannot lose them.
+    /// Others are staged, then finalized once their evidence is durable.
+    pub(super) fn finalizes_before_evidence(completion: &WorkflowCompletion) -> bool {
         completion.outcome == WorkflowOutcome::NeedsAttention || completion.worktree.is_some()
     }
 
@@ -175,10 +182,7 @@ impl ManualOccurrenceGuard {
     }
 
     pub(super) fn finish(self, completion: &WorkflowCompletion) -> Result<OccurrenceFinalization> {
-        self.guard.finish_manual(
-            occurrence_finish(completion),
-            Self::completion_requires_retention(completion),
-        )
+        self.guard.finish_manual(occurrence_finish(completion))
     }
 
     pub(super) fn complete_tick(
@@ -214,7 +218,7 @@ fn occurrence_finish(completion: &WorkflowCompletion) -> OccurrenceFinish<'_> {
             WorkflowOutcome::Failed => OccurrenceOutcome::Failed,
             WorkflowOutcome::NeedsAttention => OccurrenceOutcome::NeedsAttention,
         },
-        worker_receipt_id: completion.worker_receipt_id.as_deref(),
+        worker_invoked: completion.worker_invoked,
         worktree: completion.worktree.as_deref(),
         error: completion.error.as_deref(),
     }

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Add `jig loop show <occurrence>` (and `--json`) to report one loop
+  occurrence and the evidence its tick recorded: what the workflow observed and
+  did, each action and worker run with bounded output, and errors. It also
+  names the worker receipt of an occurrence recorded by an earlier runtime.
+
 ### Changed
 
 - Automatic Rust focus now compares against the merge base with the default
@@ -13,6 +20,9 @@
 - `jig update` retires the legacy file-budget checker by evaluating
   `repo:file-budget` itself, then evaluating again just before deleting the
   checker, instead of requiring an earlier passing receipt.
+- Manual `jig loop tick` occurrences now stay in loop history after they finish,
+  like scheduled ones, instead of being removed when they need no attention, so
+  `jig loop status` lists them and their evidence remains available.
 
 ### Removed
 
@@ -49,7 +59,7 @@
 - **Breaking:** stop recording check receipts and target freshness. `jig check`,
   `jig run`, and MCP `jig.execute_run` record their results only in run history
   (`runs.jsonl`). Directly executed manifest tools, `migration add`, and policy
-  checks no longer record anything. Only loop workflows still write receipts. Target identities, dependency execution
+  checks no longer record anything. Target identities, dependency execution
   proofs, and their validation are gone. Epoch-8 `inputs_policy` and
   `source_state` declarations are still validated and reported, and action
   `inputs` still drive `--affected`. `--no-receipt` and the MCP `record_receipts`
@@ -65,6 +75,29 @@
   `stderr_preview`, the `failure_output_chars` limit replaces
   `failure_stderr_chars`, and the `state.runs` error scope replaces
   `state.receipts`. The contract version is unchanged.
+- **Breaking:** stop writing loop receipts. Each loop occurrence's tick instead
+  records one evidence document under `<git-dir>/jig/loop/evidence/` (the
+  ignored `.agent/runtime/loop/evidence/` without Git metadata), outside the
+  checkout, kept while the occurrence stays in loop history and reported by
+  `jig loop show`. Recording that evidence replaces receipt publication as the
+  tick's commit point: if the write fails, a manual occurrence or an otherwise
+  successful scheduled one requires attention.
+  Nothing writes `.agent/state/receipts.jsonl` any more, though `state export
+  receipts`, `state archive`, `state restore`, and `state diagnose` still read
+  an existing journal. `loop tick` returns `occurrence_id` instead of
+  `receipt_id`, and `loop dispatch`, `loop clear-attempt`, and
+  `loop acknowledge-occurrence` no longer return `receipt_id`; clear-attempt and
+  acknowledgement are plain state changes that record no evidence. Worker runs
+  appear in their action as a `worker` object instead of `worker_receipt_id`,
+  and scheduled occurrences carry `worker_invoked` instead of
+  `worker_receipt_id`, so `jig status --json` and the `jig ui` recorder move to
+  `schema_version: 4`. Existing `schedule.json` records with `worker_receipt_id`
+  still load. Repo-mode Codex tasks no longer verify receipt-journal appends,
+  so the 64 MiB journal limit and the `receipt_append_valid`,
+  `receipt_ambiguity`, and `journal_unverifiable` diagnostics are gone; a worker
+  must leave the shared checkout clean, and uncommitted appends earlier
+  runtimes left in `receipts.jsonl` do not block it. The contract version is
+  unchanged.
 - Stop validating the retired `[work].iteration_profile` and `[[work.refinements]]`
   settings. Both are still accepted so existing configuration loads, never affect
   execution authority, and are dropped by `jig update`.

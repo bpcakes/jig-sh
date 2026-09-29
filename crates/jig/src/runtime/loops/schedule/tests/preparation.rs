@@ -246,10 +246,18 @@ fn failed_or_missing_preparation_retains_evidence_and_does_not_replay() {
         assert_eq!(task["worker_started"], false);
         let retained = task["checkout"]["path"].as_str().unwrap();
         assert!(Path::new(retained).exists());
-        assert!(
-            fs::read_to_string(repo.path().join(".agent/state/receipts.jsonl"))
-                .unwrap()
-                .contains("preparation")
+        let evidence = crate::runtime::loops::evidence::read(
+            &ctx,
+            first_action["occurrence"]["occurrence_id"]
+                .as_str()
+                .unwrap(),
+            &|| false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            evidence.tick["actions"][0]["preparation"]["status"],
+            expected
         );
         assert_eq!(
             occurrences.snapshot().unwrap()[0].status,

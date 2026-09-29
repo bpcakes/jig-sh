@@ -486,7 +486,7 @@ exit 2
     );
     assert_eq!(action["completed_status"], "failed", "{run:#}");
     assert_eq!(action["worktree_retained"], true, "{run:#}");
-    assert!(action["worker_receipt_id"].is_string(), "{run:#}");
+    assert_eq!(action["worker"]["kind"], "worker_run", "{run:#}");
     let retained_worktree = action["worktree"]
         .as_str()
         .expect("failed worker action must report its retained worktree");

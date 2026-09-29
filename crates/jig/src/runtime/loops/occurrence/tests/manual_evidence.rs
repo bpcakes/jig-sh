@@ -44,7 +44,7 @@ fn stale_reconciliation_preserves_staged_manual_diagnostics() {
             &claim.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::Failed,
-                worker_receipt_id: None,
+                worker_invoked: false,
                 worktree: None,
                 error: Some("tick receipt publication failed"),
             },
@@ -76,7 +76,7 @@ fn original_owner_can_stage_manual_evidence_after_stale_reconciliation() {
     let staged = guard
         .stage_manual(OccurrenceFinish {
             outcome: OccurrenceOutcome::Failed,
-            worker_receipt_id: Some("receipt-worker"),
+            worker_invoked: true,
             worktree: None,
             error: Some("worker failed"),
         })
@@ -84,7 +84,7 @@ fn original_owner_can_stage_manual_evidence_after_stale_reconciliation() {
 
     assert_eq!(staged.status, OccurrenceStatus::NeedsAttention);
     assert_eq!(staged.finished_at_ms, Some(u64::MAX));
-    assert_eq!(staged.worker_receipt_id.as_deref(), Some("receipt-worker"));
+    assert!(staged.worker_invoked);
     assert!(
         staged
             .error
@@ -92,10 +92,7 @@ fn original_owner_can_stage_manual_evidence_after_stale_reconciliation() {
             .is_some_and(|error| error.contains("claim expired")),
         "{staged:?}"
     );
-    assert_eq!(
-        store.snapshot().unwrap()[0].worker_receipt_id.as_deref(),
-        Some("receipt-worker")
-    );
+    assert!(store.snapshot().unwrap()[0].worker_invoked);
 }
 
 #[test]
@@ -104,15 +101,12 @@ fn original_owner_can_finish_manual_occurrence_after_stale_reconciliation() {
     store.reconcile_stale_at(u64::MAX).unwrap();
 
     let finalization = guard
-        .finish_manual(
-            OccurrenceFinish {
-                outcome: OccurrenceOutcome::Succeeded,
-                worker_receipt_id: Some("receipt-worker"),
-                worktree: None,
-                error: None,
-            },
-            false,
-        )
+        .finish_manual(OccurrenceFinish {
+            outcome: OccurrenceOutcome::Succeeded,
+            worker_invoked: true,
+            worktree: None,
+            error: None,
+        })
         .unwrap();
 
     assert_eq!(
@@ -120,10 +114,7 @@ fn original_owner_can_finish_manual_occurrence_after_stale_reconciliation() {
         OccurrenceStatus::NeedsAttention
     );
     assert_eq!(finalization.occurrence.finished_at_ms, Some(u64::MAX));
-    assert_eq!(
-        finalization.occurrence.worker_receipt_id.as_deref(),
-        Some("receipt-worker")
-    );
+    assert!(finalization.occurrence.worker_invoked);
     assert_eq!(store.snapshot().unwrap(), vec![finalization.occurrence]);
 }
 

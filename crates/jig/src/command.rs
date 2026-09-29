@@ -23,7 +23,7 @@ pub(crate) use check::{
 };
 pub(crate) use loops::{
     LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopCommand, LoopDispatchRequest,
-    LoopRunRequest, LoopStatusRequest, LoopTickRequest,
+    LoopRunRequest, LoopShowRequest, LoopStatusRequest, LoopTickRequest,
 };
 pub(crate) use migration::MigrationAddRequest;
 pub(crate) use proxy::{
@@ -114,6 +114,7 @@ impl RuntimeCommand {
                 LoopCommand::Tick(_)
                 | LoopCommand::Dispatch(_)
                 | LoopCommand::Status(_)
+                | LoopCommand::Show(_)
                 | LoopCommand::Run(_)
                 | LoopCommand::ClearAttempt(_)
                 | LoopCommand::AcknowledgeOccurrence(_) => Cooperative,

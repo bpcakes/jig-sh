@@ -72,7 +72,7 @@ printf 'task complete\n' > "$out"
     .unwrap();
     assert_eq!(second["status"], "needs_attention", "{second:#}");
     assert_eq!(second["ok"], false, "{second:#}");
-    assert!(second["receipt_id"].is_string(), "{second:#}");
+    assert!(second["occurrence_id"].is_null(), "{second:#}");
     assert_eq!(
         second["actions"][0]["reason"],
         "manual_occurrence_blocked"
@@ -92,12 +92,14 @@ printf 'task complete\n' > "$out"
 }
 
 #[test]
-fn manual_tick_receipt_failure_preserves_attention_and_blocks_reentry() {
+fn manual_tick_evidence_failure_preserves_attention_and_blocks_reentry() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
-    let receipt_path = temp.path().join(".agent/state/receipts.jsonl");
-    fs::create_dir_all(&receipt_path).unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    // A file where the evidence directory belongs makes the write fail.
+    let evidence_path = crate::runtime::loops::evidence_directory_for_test(&ctx);
+    fs::create_dir_all(evidence_path.parent().unwrap()).unwrap();
+    fs::write(&evidence_path, "not a directory").unwrap();
 
     let error = crate::runtime::dispatch(
         &ctx,
@@ -110,8 +112,8 @@ fn manual_tick_receipt_failure_preserves_attention_and_blocks_reentry() {
     )
     .unwrap_err();
 
-    assert!(format!("{error:#}").contains("Failed to record loop tick receipt"));
-    fs::remove_dir_all(&receipt_path).unwrap();
+    assert!(format!("{error:#}").contains("Failed to record loop occurrence evidence"));
+    fs::remove_file(&evidence_path).unwrap();
     let blocked = crate::runtime::dispatch(
         &ctx,
         RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
@@ -129,7 +131,7 @@ fn manual_tick_receipt_failure_preserves_attention_and_blocks_reentry() {
     assert_eq!(occurrence["status"], "needs_attention");
     assert!(occurrence["error"]
         .as_str()
-        .is_some_and(|error| error.contains("Failed to record loop tick receipt")));
+        .is_some_and(|error| error.contains("Failed to record loop occurrence evidence")));
 }
 
 #[cfg(unix)]
@@ -191,7 +193,7 @@ printf 'task complete\n' > "$out"
     .unwrap();
     assert_eq!(blocked["status"], "needs_attention", "{blocked:#}");
     assert_eq!(blocked["ok"], false, "{blocked:#}");
-    assert!(blocked["receipt_id"].is_string(), "{blocked:#}");
+    assert!(blocked["occurrence_id"].is_null(), "{blocked:#}");
     assert_eq!(
         blocked["actions"][0]["reason"],
         "manual_occurrence_blocked"

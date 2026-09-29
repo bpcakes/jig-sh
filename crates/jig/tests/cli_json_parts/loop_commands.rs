@@ -434,7 +434,7 @@ exec "$@""#,
 
 #[cfg(unix)]
 #[test]
-fn repo_worker_accepts_a_nested_jig_command_now_that_it_writes_no_receipt() {
+fn repo_worker_accepts_a_nested_jig_command_that_leaves_the_checkout_clean() {
     let repo = tempdir().unwrap();
     let bin = tempdir().unwrap();
     write_failing_loop_repo(repo.path());
@@ -478,22 +478,12 @@ printf 'nested Jig completed\n' > "$out"
         "nested Jig command did not finish: {}",
         fs::read_to_string(&nested_log).unwrap_or_default()
     );
-    assert_ne!(
-        dispatch["actions"][0]["tick"]["actions"][0]["checkout"]
-            ["receipt_append_valid"],
+    assert_eq!(
+        dispatch["actions"][0]["tick"]["actions"][0]["checkout"]["dirty"],
         false,
         "{dispatch:#}"
     );
-    let receipts =
-        fs::read_to_string(repo.path().join(".agent/state/receipts.jsonl")).unwrap_or_default();
-    assert!(
-        !receipts.lines().any(|line| {
-            serde_json::from_str::<Value>(line)
-                .ok()
-                .is_some_and(|receipt| receipt["tool_name"] == "jig.bootstrap")
-        }),
-        "nested Jig command wrote a receipt: {receipts}"
-    );
+    assert!(!repo.path().join(".agent/state/receipts.jsonl").exists());
 }
 
 #[cfg(unix)]

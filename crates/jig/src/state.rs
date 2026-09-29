@@ -18,16 +18,7 @@ pub(crate) use jsonl::{JsonlRecordTooLarge, RawJsonlRecord, scan_dashboard_jsonl
 pub(crate) use jsonl::{dashboard_scan_count, reset_dashboard_scan_counts};
 pub(crate) use receipts::WORK_CHECK_EVIDENCE_SCHEMA;
 pub(crate) use receipts::WORK_CHECK_TARGETS_SCHEMA;
-pub(crate) use receipts::receipt_append_may_have_landed;
-#[cfg(test)]
-pub(crate) use receipts::receipt_append_may_have_landed_for_test;
-#[cfg(test)]
-pub(crate) use receipts::record_receipt;
-pub(crate) use receipts::{
-    ReceiptInput, record_receipt_with_cancellation, record_receipt_with_cancellation_until,
-};
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
-pub(crate) use receipts::{receipt_record_id, with_receipt_journal_writer};
 #[cfg(test)]
 use records::ReceiptRecord;
 pub(crate) use runs::{CompletedTargetEvent, RunHistoryEvent, run_history_event};
@@ -47,8 +38,6 @@ use support::ensure_state_layout;
 pub(crate) use support::now_ms;
 #[cfg(test)]
 pub(crate) use support::set_test_now_ms;
-#[cfg(test)]
-use support::truncate;
 
 mod compression;
 mod diagnostics;

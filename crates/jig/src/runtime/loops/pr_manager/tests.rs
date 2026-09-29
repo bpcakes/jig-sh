@@ -138,7 +138,7 @@ mod tests {
                 "kind": "pr_manager_worker",
                 "status": "attempted",
                 "worktree": worktree,
-                "worker_receipt_id": "receipt-worker",
+                "worker": {"kind": "worker_run"},
                 "error": null,
             }),
             &worktree,

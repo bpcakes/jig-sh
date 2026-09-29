@@ -154,7 +154,7 @@ Contract v6 and later expose four bounded MCP repository operations: inspect, pl
 | Surface | Stable contract? | Records history? | Machine-local? |
 | --- | --- | --- | --- |
 | `check` / `run` | yes | run history | no |
-| `loop` | runtime-owned | receipts | no |
+| `loop` | runtime-owned | occurrence evidence | yes |
 | `state` | runtime-owned | no | partly |
 | `status` / `ui` | runtime-owned | no | partly |
 | `dev` / `proxy` | runtime-owned | no | yes |
@@ -257,10 +257,11 @@ Contract v7 also provides the native `repo:file-budget` action backed by the rep
 
 ### Orchestration and terminal dashboard
 
-`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig ui` opens the unified read-only terminal dashboard over local repository and recorder state. `jig status --tui` opens the same dashboard on Status instead of Timeline.
+`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, outcomes, and what each occurrence observed and did. `jig ui` opens the unified read-only terminal dashboard over local repository and recorder state. `jig status --tui` opens the same dashboard on Status instead of Timeline.
 
 ```sh
 scripts/jig loop status
+scripts/jig loop show <id>        # what one occurrence observed and did
 scripts/jig loop dispatch         # call every minute from an external scheduler
 scripts/jig status
 scripts/jig ui                    # terminal dashboard, starting on Timeline
@@ -290,7 +291,7 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-Vault metadata, child output, and plaintext do not enter run history, receipts, or MCP results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
+Vault metadata, child output, and plaintext do not enter run history, loop evidence, or MCP results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
 
 ### Local development proxy
 

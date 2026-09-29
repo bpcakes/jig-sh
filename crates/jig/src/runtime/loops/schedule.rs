@@ -8,8 +8,7 @@ use crate::execution::NoopExecutionObserver;
 use crate::execution::{
     AdditionalCancellationControl, ExecutionControl, ExecutionPhase, PhasePosition,
 };
-use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
-use crate::tool_defs::LOOP_DISPATCH_TOOL;
+use crate::state::now_ms;
 
 use super::engine::{ScheduledTick, tick_scheduled_with_observer, tick_with_observer};
 use super::occurrence::{
@@ -50,7 +49,6 @@ fn dispatch_due_at_with_observer(
     dispatch_at_ms: u64,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let started = now_ms();
     let workflows = list_workflows(ctx)?;
     super::pre_execution::require_ignored_loop_runtime_root(ctx, observer)?;
     let coordination_recovery =
@@ -82,19 +80,12 @@ fn dispatch_due_at_with_observer(
     summary.needs_attention_count = attention.scheduled_occurrence_count;
     summary.exhausted_attempt_count = attention.exhausted_attempt_count;
     summary.include_state_errors(attention.state_errors);
-    let state_error_text = summary.state_error_text();
     let status = summary.status();
-    let ok = loop_status_is_success(status);
-    let ended = now_ms();
-    let receipt_actions = actions
-        .iter()
-        .map(dispatch_receipt_action)
-        .collect::<Vec<_>>();
-    let evidence = json!({
-        "kind": "loop_dispatch",
-        "schema_version": 1,
-        "dispatch_at_ms": dispatch_at_ms,
+    Ok(json!({
+        "ok": loop_status_is_success(status),
+        "command": "loop dispatch",
         "status": status,
+        "dispatch_at_ms": dispatch_at_ms,
         "due_count": summary.due_count,
         "executed_count": summary.executed_count,
         "deferred_count": summary.deferred_count,
@@ -106,69 +97,8 @@ fn dispatch_due_at_with_observer(
         "state_errors": summary.state_errors,
         "repository_revision_changed": summary.repository_revision_changed,
         "reconciled_occurrences": reconciled,
-        "actions": receipt_actions,
-    });
-    let receipt_id = record_receipt_with_cancellation(
-        ctx,
-        ReceiptInput {
-            tool_name: LOOP_DISPATCH_TOOL,
-            args: json!({}),
-            invoked_command_key: None,
-            started_at_ms: started,
-            ended_at_ms: ended,
-            exit_status: i32::from(!ok),
-            stdout: "",
-            stderr: &state_error_text,
-            evidence: Some(evidence.clone()),
-            collect_git_metadata: true,
-            collect_worktree_fingerprint: true,
-        },
-        &|| observer.cancelled(),
-    )?;
-    Ok(json!({
-        "ok": ok,
-        "command": "loop dispatch",
-        "receipt_id": receipt_id,
-        "status": status,
-        "dispatch_at_ms": dispatch_at_ms,
-        "due_count": summary.due_count,
-        "executed_count": summary.executed_count,
-        "deferred_count": summary.deferred_count,
-        "skipped_count": summary.skipped_count,
-        "failed_count": summary.failed_count,
-        "needs_attention_count": summary.needs_attention_count,
-        "exhausted_attempt_count": summary.exhausted_attempt_count,
-        "state_error_count": summary.state_error_count,
-        "state_errors": evidence["state_errors"],
-        "repository_revision_changed": evidence["repository_revision_changed"],
-        "reconciled_occurrences": evidence["reconciled_occurrences"],
         "actions": actions,
     }))
-}
-
-fn dispatch_receipt_action(action: &Value) -> Value {
-    let mut action = action.clone();
-    let Some(tick) = action.get_mut("tick") else {
-        return action;
-    };
-    let Some(receipt_id) = tick
-        .get("receipt_id")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-    else {
-        return action;
-    };
-    let status = tick.get("status").cloned().unwrap_or(Value::Null);
-    let workflow_id = tick.pointer("/workflow/id").cloned().unwrap_or(Value::Null);
-    let item_key = tick.get("item_key").cloned().unwrap_or(Value::Null);
-    *tick = json!({
-        "kind": "loop_tick_receipt_reference",
-        "receipt_id": receipt_id,
-        "status": status,
-        "workflow_id": workflow_id,
-        "item_key": item_key,
-    });
-    action
 }
 
 fn dispatch_workflow(
@@ -419,7 +349,7 @@ fn dispatch_workflow(
     let details = TerminalDetails::from_tick(&tick);
     match guard.finish(OccurrenceFinish {
         outcome: details.outcome,
-        worker_receipt_id: details.worker_receipt_id.as_deref(),
+        worker_invoked: details.worker_invoked,
         worktree: details.worktree.as_deref(),
         error: details.error.as_deref(),
     }) {

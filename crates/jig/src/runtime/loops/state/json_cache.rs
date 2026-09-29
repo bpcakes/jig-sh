@@ -73,48 +73,6 @@ where
     })
 }
 
-pub(super) fn with_json_cache_lock_compensating_until<T, U, S>(
-    location: &JsonLocation,
-    deadline: Instant,
-    cancelled: &dyn Fn() -> bool,
-    action: impl FnOnce(&mut S) -> Result<T>,
-    after_commit: impl FnOnce(&T, Instant) -> Result<U>,
-) -> Result<(T, U)>
-where
-    S: Clone + Default + DeserializeOwned + Serialize,
-{
-    let cache = StateDirectory::open(&location.root, &location.dir)?;
-    let lock_name = cache_file_name(&location.dir, &location.lock_path)?;
-    let data_name = cache_file_name(&location.dir, &location.path)?;
-    cache.with_lock_until(&lock_name, &location.lock_path, deadline, cancelled, || {
-        cache.reclaim_orphaned_temps(&data_name, &location.path)?;
-        let mut store: S = cache.read_json_or_default(&data_name, &location.path, cancelled)?;
-        let rollback = store.clone();
-        let result = action(&mut store)?;
-        cache.write_json_with_mode(&data_name, &location.path, &store, location.write_mode)?;
-        match after_commit(&result, loop_state_lock_deadline()) {
-            Ok(effect) => Ok((result, effect)),
-            Err(error) if crate::state::receipt_append_may_have_landed(&error) => Err(error
-                .context(
-                    "Committed loop state was retained because its receipt append may have landed",
-                )),
-            Err(error) => {
-                match cache.write_json_with_mode(
-                    &data_name,
-                    &location.path,
-                    &rollback,
-                    location.write_mode,
-                ) {
-                    Ok(()) => Err(error),
-                    Err(rollback_error) => Err(error.context(format!(
-                        "Failed to roll back committed loop state: {rollback_error:#}"
-                    ))),
-                }
-            }
-        }
-    })
-}
-
 pub(super) fn read_json_cache_or_default_with_cancellation<T>(
     root: &Path,
     dir: &Path,
@@ -407,6 +365,51 @@ impl StateDirectory {
         match write_mode {
             JsonWriteMode::Cache => self.write_json(data_name, data_path, value),
             JsonWriteMode::Durable => self.write_json_durable(data_name, data_path, value),
+        }
+    }
+
+    /// Names of the regular files directly in this directory.
+    pub(in crate::runtime::loops) fn regular_file_names(
+        &self,
+        directory_path: &Path,
+    ) -> Result<Vec<OsString>> {
+        let mut names = Vec::new();
+        for entry in self.directory.entries().with_context(|| {
+            format!(
+                "Failed to inspect loop state directory {}",
+                directory_path.display()
+            )
+        })? {
+            let entry = entry.with_context(|| {
+                format!(
+                    "Failed to inspect loop state directory {}",
+                    directory_path.display()
+                )
+            })?;
+            let file_type = entry.file_type().with_context(|| {
+                format!(
+                    "Failed to inspect loop state entry {}",
+                    directory_path.join(entry.file_name()).display()
+                )
+            })?;
+            if file_type.is_file() {
+                names.push(entry.file_name());
+            }
+        }
+        Ok(names)
+    }
+
+    pub(in crate::runtime::loops) fn remove_file(
+        &self,
+        data_name: &OsStr,
+        data_path: &Path,
+    ) -> Result<()> {
+        match self.directory.remove_file(data_name) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                Err(error).with_context(|| format!("Failed to remove {}", data_path.display()))
+            }
         }
     }
 
@@ -706,46 +709,6 @@ mod tests {
                 .to_string_lossy()
                 .starts_with("attempts.json.tmp-")
         }));
-    }
-
-    #[test]
-    fn compensating_cache_retains_commit_when_receipt_may_have_landed() {
-        let temp = tempdir().unwrap();
-        let data_path = temp.path().join("attempts.json");
-        let location = JsonLocation::new(
-            temp.path().to_path_buf(),
-            temp.path().to_path_buf(),
-            "attempts",
-            JsonWriteMode::Cache,
-        );
-
-        let error = with_json_cache_lock_compensating_until(
-            &location,
-            loop_state_lock_deadline(),
-            &|| false,
-            |state: &mut BTreeMap<String, String>| {
-                state.insert("ExampleProject".into(), "cleared".into());
-                Ok(())
-            },
-            |_, _| -> Result<()> { Err(crate::state::receipt_append_may_have_landed_for_test()) },
-        )
-        .unwrap_err();
-
-        let state = read_json_cache_or_default_with_cancellation::<BTreeMap<String, String>>(
-            temp.path(),
-            temp.path(),
-            &data_path,
-            &|| false,
-        )
-        .unwrap();
-        assert_eq!(
-            state.get("ExampleProject").map(String::as_str),
-            Some("cleared")
-        );
-        assert!(
-            format!("{error:#}").contains("receipt append may have landed"),
-            "{error:#}"
-        );
     }
 
     include!("json_cache/durable_tests.rs");

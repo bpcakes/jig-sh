@@ -20,8 +20,7 @@ use crate::execution::{
     EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionCommandError, ExecutionControl, ExecutionPhase,
     PhasePosition, ProcessExecutionObserver,
 };
-use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
-use crate::tool_defs::WORKER_RUN_TOOL;
+use crate::state::now_ms;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
 const WORKER_PROVIDER_PREVIEW_BYTES: usize = 4_000;
@@ -29,13 +28,12 @@ const WORKER_PROVIDER_PREVIEW_BYTES: usize = 4_000;
 // metadata syscall for every faster poll while transcript output is flowing.
 const WORKER_RESULT_FILE_INSPECTION_INTERVAL: Duration = Duration::from_millis(10);
 
+/// Identifies a worker run in its evidence and process label.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct WorkerReceiptRequest<'a> {
+pub(crate) struct WorkerRunLabel<'a> {
     pub(crate) purpose: &'a str,
     pub(crate) workflow_id: Option<&'a str>,
     pub(crate) item_key: Option<&'a str>,
-    pub(crate) collect_git_metadata: bool,
-    pub(crate) collect_worktree_fingerprint: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -56,7 +54,7 @@ pub(crate) struct CodexExecRequest<'a> {
     pub(crate) transcript_overflow_policy: ProcessOutputOverflowPolicy,
     /// Delivered to `codex exec` on stdin.
     pub(crate) prompt: &'a str,
-    pub(crate) receipt: WorkerReceiptRequest<'a>,
+    pub(crate) run: WorkerRunLabel<'a>,
     pub(crate) phase: Option<WorkerPhase<'a>>,
 }
 
@@ -64,7 +62,7 @@ pub(crate) struct CodexExecOutput {
     output: Output,
     provider_stdout: String,
     provider_stdout_truncated: bool,
-    worker_receipt_id: String,
+    evidence: Value,
 }
 
 impl CodexExecOutput {
@@ -84,47 +82,26 @@ impl CodexExecOutput {
         self.provider_stdout_truncated
     }
 
-    pub(crate) fn worker_receipt_id(&self) -> &str {
-        &self.worker_receipt_id
+    /// What ran and how it ended, for the loop occurrence's evidence.
+    pub(crate) fn evidence(&self) -> &Value {
+        &self.evidence
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct CodexExecFailure {
-    worker_receipt_id: Option<String>,
+    evidence: Value,
     unexecuted: bool,
-    cancelled_before_start: bool,
     message: String,
-    source: Option<anyhow::Error>,
 }
 
 impl CodexExecFailure {
-    fn receipt_recording(
-        message: String,
-        receipt_error: anyhow::Error,
-        unexecuted: bool,
-        cancelled_before_start: bool,
-    ) -> Self {
-        let message = format!("{message}: {receipt_error:#}");
-        Self {
-            worker_receipt_id: None,
-            unexecuted,
-            cancelled_before_start,
-            message,
-            source: Some(receipt_error),
-        }
-    }
-
-    pub(crate) fn worker_receipt_id(&self) -> Option<&str> {
-        self.worker_receipt_id.as_deref()
+    pub(crate) fn evidence(&self) -> &Value {
+        &self.evidence
     }
 
     pub(crate) fn worker_was_unexecuted(&self) -> bool {
         self.unexecuted
-    }
-
-    pub(crate) fn worker_was_cancelled_before_start(&self) -> bool {
-        self.cancelled_before_start
     }
 }
 
@@ -134,21 +111,12 @@ impl fmt::Display for CodexExecFailure {
     }
 }
 
-impl std::error::Error for CodexExecFailure {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source.as_ref().map(|source| source.as_ref())
-    }
-}
+impl std::error::Error for CodexExecFailure {}
 
 pub(crate) enum CodexExecOutcome {
     Completed(CodexExecOutput),
-    Cancelled {
-        before_start: bool,
-        worker_receipt_id: String,
-    },
+    Cancelled { before_start: bool, evidence: Value },
 }
-
-impl CodexExecOutcome {}
 
 pub(crate) fn run_codex_exec(
     ctx: &RepoContext,
@@ -171,15 +139,12 @@ pub(crate) fn run_codex_exec(
     match result {
         Ok(run) => {
             let exit_status = run.output.status.code().unwrap_or(1);
-            let authoritative_stdout = String::from_utf8_lossy(&run.output.stdout).into_owned();
-            let receipt_id = record_worker_receipt(
-                ctx,
+            let evidence = worker_evidence(
                 &request,
-                WorkerReceiptOutcome {
+                WorkerRunOutcome {
                     started_at_ms: started,
                     ended_at_ms: ended,
                     exit_status,
-                    stdout: &authoritative_stdout,
                     stderr: &run.provider_stderr,
                     provider_stdout: Some(&run.provider_stdout),
                     provider_stdout_truncated: run.provider_stdout_truncated,
@@ -187,21 +152,12 @@ pub(crate) fn run_codex_exec(
                     error: None,
                     status: "completed",
                 },
-                observer,
-            )
-            .map_err(|error| {
-                CodexExecFailure::receipt_recording(
-                    "Codex worker completed but its receipt could not be recorded".into(),
-                    error,
-                    false,
-                    false,
-                )
-            })?;
+            );
             Ok(CodexExecOutcome::Completed(CodexExecOutput {
                 output: run.output,
                 provider_stdout: run.provider_stdout,
                 provider_stdout_truncated: run.provider_stdout_truncated,
-                worker_receipt_id: receipt_id,
+                evidence,
             }))
         }
         Err(
@@ -210,14 +166,12 @@ pub(crate) fn run_codex_exec(
         ) => {
             let before_start = matches!(error, ExecutionCommandError::CancelledBeforeStart);
             let message = format!("{error:#}");
-            let receipt_id = record_worker_receipt(
-                ctx,
+            let evidence = worker_evidence(
                 &request,
-                WorkerReceiptOutcome {
+                WorkerRunOutcome {
                     started_at_ms: started,
                     ended_at_ms: ended,
                     exit_status: 1,
-                    stdout: "",
                     stderr: &message,
                     provider_stdout: None,
                     provider_stdout_truncated: false,
@@ -225,19 +179,10 @@ pub(crate) fn run_codex_exec(
                     error: Some(&message),
                     status: "cancelled",
                 },
-                observer,
-            )
-            .map_err(|receipt_error| {
-                CodexExecFailure::receipt_recording(
-                    format!("{message}; the cancellation receipt could not be recorded"),
-                    receipt_error,
-                    before_start,
-                    before_start,
-                )
-            })?;
+            );
             Ok(CodexExecOutcome::Cancelled {
                 before_start,
-                worker_receipt_id: receipt_id,
+                evidence,
             })
         }
         Err(ExecutionCommandError::Failed {
@@ -245,14 +190,12 @@ pub(crate) fn run_codex_exec(
             process_started,
         }) => {
             let message = format!("{error:#}");
-            let receipt_id = record_worker_receipt(
-                ctx,
+            let evidence = worker_evidence(
                 &request,
-                WorkerReceiptOutcome {
+                WorkerRunOutcome {
                     started_at_ms: started,
                     ended_at_ms: ended,
                     exit_status: 1,
-                    stdout: "",
                     stderr: &message,
                     provider_stdout: None,
                     provider_stdout_truncated: false,
@@ -260,22 +203,11 @@ pub(crate) fn run_codex_exec(
                     error: Some(&message),
                     status: "error",
                 },
-                observer,
-            )
-            .map_err(|receipt_error| {
-                CodexExecFailure::receipt_recording(
-                    format!("{message}; the worker failure receipt could not be recorded"),
-                    receipt_error,
-                    !process_started,
-                    false,
-                )
-            })?;
+            );
             Err(CodexExecFailure {
-                worker_receipt_id: Some(receipt_id.clone()),
+                evidence,
                 unexecuted: !process_started,
-                cancelled_before_start: false,
-                message: format!("Codex worker invocation failed; receipt {receipt_id}: {message}"),
-                source: None,
+                message: format!("Codex worker invocation failed: {message}"),
             }
             .into())
         }
@@ -321,7 +253,7 @@ fn run_codex_exec_inner(
         &mut command,
         Some(request.prompt),
         codex_timeout(ctx)?,
-        request.receipt.purpose,
+        request.run.purpose,
         request.transcript_overflow_policy,
         Some(output_file.path()),
         observer,
@@ -614,11 +546,10 @@ fn worker_process_error(
     }
 }
 
-struct WorkerReceiptOutcome<'a> {
+struct WorkerRunOutcome<'a> {
     started_at_ms: u64,
     ended_at_ms: u64,
     exit_status: i32,
-    stdout: &'a str,
     stderr: &'a str,
     provider_stdout: Option<&'a str>,
     provider_stdout_truncated: bool,
@@ -627,12 +558,9 @@ struct WorkerReceiptOutcome<'a> {
     status: &'static str,
 }
 
-fn record_worker_receipt(
-    ctx: &RepoContext,
-    request: &CodexExecRequest<'_>,
-    outcome: WorkerReceiptOutcome<'_>,
-    observer: &mut dyn ExecutionControl,
-) -> Result<String> {
+/// Describes one worker run for the loop occurrence that started it. The
+/// authoritative final message stays with the caller's action.
+fn worker_evidence(request: &CodexExecRequest<'_>, outcome: WorkerRunOutcome<'_>) -> Value {
     let status = if outcome.status == "completed" && outcome.exit_status == 0 {
         "passed"
     } else if outcome.status == "completed" {
@@ -646,14 +574,19 @@ fn record_worker_receipt(
         .map_or((None, false), |(preview, truncated)| {
             (Some(preview), truncated)
         });
-    let evidence = json!({
+    let (provider_stderr_preview, provider_stderr_preview_truncated) =
+        bounded_provider_preview(outcome.stderr);
+    json!({
         "kind": "worker_run",
-        "schema_version": 1,
+        "schema_version": 2,
         "provider": "codex",
         "runner": "codex_exec",
         "mode": "exec",
-        "purpose": request.receipt.purpose,
+        "purpose": request.run.purpose,
         "status": status,
+        "started_at_ms": outcome.started_at_ms,
+        "ended_at_ms": outcome.ended_at_ms,
+        "exit_status": outcome.exit_status,
         "model": request.model,
         "approval_policy": request.approval_policy,
         "sandbox": request.sandbox,
@@ -668,37 +601,17 @@ fn record_worker_receipt(
         "codex_home_resolved": request
             .codex_home
             .map(|home| home.display().to_string()),
-        "workflow_id": request.receipt.workflow_id,
-        "item_key": request.receipt.item_key,
+        "workflow_id": request.run.workflow_id,
+        "item_key": request.run.item_key,
         "error": outcome.error,
         "stdout_truncated": outcome.provider_stdout_truncated,
         "stderr_truncated": outcome.provider_stderr_truncated,
         "provider_stdout_preview": provider_stdout_preview,
         "provider_stdout_preview_truncated": provider_stdout_preview_truncated,
         "provider_stdout_truncated": outcome.provider_stdout_truncated,
-    });
-    let input = ReceiptInput {
-        tool_name: WORKER_RUN_TOOL,
-        args: json!({
-            "provider": "codex",
-            "runner": "codex_exec",
-            "mode": "exec",
-            "purpose": request.receipt.purpose,
-            "workflow_id": request.receipt.workflow_id,
-            "item_key": request.receipt.item_key,
-        }),
-        invoked_command_key: None,
-        started_at_ms: outcome.started_at_ms,
-        ended_at_ms: outcome.ended_at_ms,
-        exit_status: outcome.exit_status,
-        stdout: outcome.stdout,
-        stderr: outcome.stderr,
-        evidence: Some(evidence),
-        collect_git_metadata: request.receipt.collect_git_metadata,
-        collect_worktree_fingerprint: request.receipt.collect_worktree_fingerprint,
-    };
-    record_receipt_with_cancellation(ctx, input, &|| observer.cancelled())
-        .context("Failed to record worker receipt")
+        "provider_stderr_preview": provider_stderr_preview,
+        "provider_stderr_preview_truncated": provider_stderr_preview_truncated,
+    })
 }
 
 fn bounded_provider_preview(text: &str) -> (String, bool) {
