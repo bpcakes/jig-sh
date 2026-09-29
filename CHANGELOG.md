@@ -11,6 +11,19 @@
 
 ### Changed
 
+- The native SQLx unchecked-call check and TODO inventory now use a Rust AST
+  parser, detecting direct calls separated by comments or newlines and accepting
+  complete `include!` expression fragments. Root-level `tests/` paths are now
+  classified as test code, so production counts can decrease on upgrade.
+  Unreadable or unparseable sources now fail both commands and preserve the
+  existing TODO; parse errors include both file and expression parser locations.
+  Missing worktree paths still listed by Git are skipped. This remains a bounded
+  source inventory, not complete Rust syntax coverage or compiler analysis:
+  macro input is inspected only for recognized expression macros, and aliases,
+  arbitrary cfg expressions, and external module/include relationships are not
+  resolved. Lexical matches in opaque macro bodies and function-value references
+  that the old scanner counted may disappear; newly detected calls can make
+  previously passing checks fail. Review regenerated inventories when upgrading.
 - Automatic Rust focus now compares against the merge base with the default
   branch, like native checks, instead of a work-plan baseline, and falls back to
   the whole workspace when that base cannot be resolved.
