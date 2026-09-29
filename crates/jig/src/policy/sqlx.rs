@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -54,8 +55,17 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     let status_by_key = read_sqlx_statuses(&ctx.root().join(prior_path));
     let mut calls = Vec::new();
     for file in sqlx_rust_files(ctx)? {
-        let text = fs::read_to_string(ctx.root().join(&file))
-            .with_context(|| format!("cannot read SQLx inventory source {file}"))?;
+        let text = match fs::read_to_string(ctx.root().join(&file)) {
+            Ok(text) => text,
+            // `git ls-files` still lists a tracked file whose deletion has not
+            // been staged, and an untracked listing races ordinary edits. An
+            // absent path has no call sites; every other read error is real.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("cannot read SQLx inventory source {file}"));
+            }
+        };
         calls.extend(scan_sqlx_calls(&file, &text)?);
     }
     calls.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
@@ -87,7 +97,7 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     let mut body = String::new();
     body.push_str("# SQLx Unchecked Queries TODO\n\n");
     body.push_str("This checklist tracks detected `sqlx::query*` call sites under the configured Rust crate roots that are not yet using compile-time checked SQLx macros.\n\n");
-    body.push_str("Coverage is a source AST inventory, not complete Rust syntax coverage or compiler analysis. It detects direct SQLx function calls and checked macro invocations. It does not resolve aliases or shadowing, inspect macro input tokens or expansions, or evaluate arbitrary cfg expressions. Test classification uses conventional test paths and exact `#[cfg(test)]` attributes on files and inline modules; external module relationships are not resolved. Unreadable or unparseable Rust files fail the inventory.\n\n");
+    body.push_str("Coverage is a source AST inventory, not complete Rust syntax coverage or compiler analysis. It detects direct SQLx function calls and checked macro invocations. It does not resolve aliases or shadowing, expand macros, or evaluate arbitrary cfg expressions; macro input is read only for a fixed set of standard expression macros such as `vec!` and `assert!`. Test classification uses conventional test paths and exact `#[cfg(test)]` attributes on files and inline modules; external module relationships are not resolved. Paths Git lists that are absent from the worktree are skipped; other unreadable or unparseable Rust files fail the inventory.\n\n");
     body.push_str("- Generated on: native jig\n");
     let _ = writeln!(body, "- Unchecked call sites: {}", unchecked.len());
     let _ = writeln!(

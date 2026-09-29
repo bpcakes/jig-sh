@@ -10,6 +10,7 @@ use crate::policy::SqlxTodoInput;
 use crate::test_env::TestRepoBuilder;
 
 mod boundaries;
+mod discovery;
 mod syntax;
 
 #[test]

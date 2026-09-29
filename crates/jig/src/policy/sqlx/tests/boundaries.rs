@@ -116,3 +116,59 @@ fn native_check_and_todo_share_comment_separated_call_inventory() {
     assert!(body.contains("- [ ] `src/production.rs:2`: `sqlx::query`"));
     assert!(body.contains("not complete Rust syntax coverage"));
 }
+
+#[test]
+fn native_check_and_todo_keep_calls_before_a_nested_macro_parse_failure() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config("rust_crate_roots = [\"src\"]\nrust_test_command = \"cargo test\"\n")
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .write();
+    assert!(
+        Command::new("git")
+            .current_dir(temp.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(
+        temp.path().join("src/lib.rs"),
+        r#"fn production() {
+    matches!(load(sqlx::query("SELECT 1")), Ok(ref row));
+    matches!(load(sqlx::query!("SELECT 2")), Ok(ref row));
+}
+#[cfg(test)]
+mod unit {
+    fn test() {
+        matches!(load(sqlx::query("SELECT 3")), Ok(ref row));
+    }
+}
+"#,
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let checked = check_non_test(&ctx).unwrap();
+    assert_eq!(checked["ok"], false);
+    assert_eq!(checked["non_test_count"], 1);
+    let generated = generate_todo(&ctx, &SqlxTodoInput { output: None }).unwrap();
+    assert_eq!(generated["non_test_count"], 1);
+    let body = fs::read_to_string(temp.path().join("docs/sqlx-unchecked-queries-todo.md")).unwrap();
+    assert!(body.contains("- Unchecked call sites: 2\n"), "{body}");
+    assert!(
+        body.contains("- Compile-checked macro call sites already present: 1\n"),
+        "{body}"
+    );
+    let (production, tests) = body.split_once("## TODO Items (Test Code)").unwrap();
+    assert!(
+        production.contains("- [ ] `src/lib.rs:2`: `sqlx::query`"),
+        "{body}"
+    );
+    assert!(!production.contains("`src/lib.rs:8`"), "{body}");
+    assert!(
+        tests.contains("- [ ] `src/lib.rs:8`: `sqlx::query`"),
+        "{body}"
+    );
+}

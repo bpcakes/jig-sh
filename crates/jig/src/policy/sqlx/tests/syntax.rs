@@ -140,3 +140,108 @@ fn invalid_source_fails_the_check_and_preserves_the_existing_todo() {
         );
     }
 }
+
+#[test]
+fn ast_reads_expression_macro_input_but_not_opaque_grammars() {
+    let text = r#"fn production() {
+    let _ = vec![sqlx::query("SELECT 1")];
+    let _ = vec![sqlx::query("SELECT 2"); 2];
+    println!("{:?}", sqlx::query_as::<_, Row>("SELECT 3"));
+    assert!(matches!(sqlx::query_scalar("SELECT 4"), _));
+    let _ = std::vec![sqlx::query!("SELECT 5")];
+    opaque! { sqlx::query("macro-specific input") }
+    custom_vec![sqlx::query("macro-specific input")];
+}
+"#;
+    let calls = scan_sqlx_calls("src/lib.rs", text).unwrap();
+    let actual = calls
+        .iter()
+        .map(|call| (call.line, call.function.as_str(), call.checked))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        [
+            (2, "sqlx::query", false),
+            (3, "sqlx::query", false),
+            (4, "sqlx::query_as", false),
+            (5, "sqlx::query_scalar", false),
+            (6, "sqlx::query", true),
+        ]
+    );
+}
+
+#[test]
+fn ast_keeps_expressions_read_before_grammar_it_cannot_follow() {
+    let text = r#"fn production() {
+    let _ = matches!(sqlx::query("SELECT 1"), Some(_) if true);
+    // A shadowing macro may claim a familiar name for an internal rule.
+    assert!(@internal sqlx::query("SELECT 2"));
+    println!("{}", @internal sqlx::query("SELECT 3"));
+}
+"#;
+    let calls = scan_sqlx_calls("src/lib.rs", text).unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].line, 2);
+    assert!(!calls[0].checked);
+}
+
+#[test]
+fn ast_keeps_macro_prefix_when_a_nested_pattern_cannot_parse_as_an_expression() {
+    for pattern in ["Ok(ref row)", "Some([ref row])", "[ref row]"] {
+        let text = format!(
+            "fn production() {{\n    assert!(matches!(load(sqlx::query(\"SELECT 1\"),\n        sqlx::query!(\"SELECT 2\")), {pattern}));\n}}\n"
+        );
+        let calls = scan_sqlx_calls("src/lib.rs", &text).unwrap();
+        let actual = calls
+            .iter()
+            .map(|call| {
+                (
+                    call.line,
+                    call.function.as_str(),
+                    call.checked,
+                    call.is_test,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            [
+                (2, "sqlx::query", false, false),
+                (3, "sqlx::query", true, false)
+            ],
+            "{pattern}"
+        );
+    }
+}
+
+#[test]
+fn ast_normalizes_raw_identifiers_and_reports_canonical_names() {
+    let text = r##"
+#[r#cfg(r#test)]
+mod unit {
+    fn f() {
+        let _ = r#sqlx::r#query("SELECT 1");
+        let _ = r#sqlx::query_as!(Row, "SELECT 2");
+    }
+}
+"##;
+    let calls = scan_sqlx_calls("src/lib.rs", text).unwrap();
+    let actual = calls
+        .iter()
+        .map(|call| {
+            (
+                call.line,
+                call.function.as_str(),
+                call.checked,
+                call.is_test,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        [
+            (5, "sqlx::query", false, true),
+            (6, "sqlx::query_as", true, true),
+        ]
+    );
+}
