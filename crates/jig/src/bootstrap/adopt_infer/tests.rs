@@ -13,6 +13,7 @@ mod ecosystem;
 // The suffix avoids shadowing the production `adopt_infer::frontend` module.
 mod frontend_tests;
 mod rust_and_scan;
+mod sqlx_resources;
 mod sqlx_syntax;
 
 fn infer_sqlx(root: &Path, warnings: &mut Vec<String>) -> super::rust_sqlx::SqlxInference {

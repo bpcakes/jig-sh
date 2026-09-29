@@ -1637,6 +1637,7 @@ dependencies = [
  "jsonschema",
  "libc",
  "minijinja",
+ "proc-macro2",
  "reqwest",
  "rpassword",
  "schemars",

@@ -13,8 +13,10 @@
 
 - Rust adoption detects direct `sqlx::migrate!` invocations through the Rust AST,
   including comment-separated paths, without treating strings or comments as
-  code. Unparseable sources produce warnings; macro expansion and name resolution
-  remain outside this adoption signal.
+  code. Non-candidate files skip parsing; a token-complexity budget and fixed
+  parser stack prevent deeply nested or long recursive syntax from aborting
+  adoption. Unparseable or over-budget sources produce warnings; macro expansion
+  and name resolution remain outside this adoption signal.
 - Dev-proxy workspace discovery parses `pnpm-workspace.yaml` with a YAML parser,
   supporting multiline flow lists, escaped strings, and aliases. Malformed YAML
   and non-string package entries now fail explicitly. Empty documents and

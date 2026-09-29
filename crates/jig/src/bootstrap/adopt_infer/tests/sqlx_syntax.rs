@@ -8,6 +8,8 @@ fn sqlx_adoption_detects_rust_macro_syntax() {
         "fn production() { let _ = sqlx /* comment */ :: migrate /* comment */ ! (); }",
         "mod nested { fn production() { let _ = ::r#sqlx::r#migrate!(); } }",
         "static MIGRATOR: Migrator = sqlx::migrate!(\"migrations\");",
+        "#!/usr/bin/env rustx\nfn production() { let _ = sqlx::migrate!(); }",
+        "\u{feff}fn production() { let _ = sqlx::migrate!(); }",
         "sqlx::migrate!()",
         "{ let migrator = sqlx::migrate!(); migrator }",
     ] {
