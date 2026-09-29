@@ -16,6 +16,15 @@
 
 Before publishing a generated repo contract or wiring long-lived MCP clients to it, review [Public Contract](./public-contract.md) for the stable CLI, MCP, and manifest guarantees.
 
+SQLx detection combines dependency, directory, command, and Rust source signals.
+The Rust source signal recognizes direct `sqlx::migrate!` macro paths in parsed
+files or complete expression fragments, including comments and newlines between
+path tokens. Strings and comments do not count. Sources that cannot be parsed
+produce warnings and the scan continues. This is not complete Rust syntax
+coverage: aliases, shadowing, macro expansion, and `include!` relationships are
+not resolved, and cfg conditions are not evaluated. Review inferred answers and
+override `--sqlx-enabled` when these limits affect your repository.
+
 ### Review input declarations
 
 Use `scripts/jig info freshness` to inspect conservative recommendations for each

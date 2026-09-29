@@ -11,6 +11,15 @@
 
 ### Changed
 
+- Rust adoption detects direct `sqlx::migrate!` invocations through the Rust AST,
+  including comment-separated paths, without treating strings or comments as
+  code. Unparseable sources produce warnings; macro expansion and name resolution
+  remain outside this adoption signal.
+- Dev-proxy workspace discovery parses `pnpm-workspace.yaml` with a YAML parser,
+  supporting multiline flow lists, escaped strings, and aliases. Malformed YAML
+  and non-string package entries now fail explicitly. Empty documents and
+  absent/null package lists yield no patterns; glob and filesystem restrictions
+  remain unchanged.
 - Automatic Rust focus now compares against the merge base with the default
   branch, like native checks, instead of a work-plan baseline, and falls back to
   the whole workspace when that base cannot be resolved.
