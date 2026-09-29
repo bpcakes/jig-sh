@@ -9,7 +9,7 @@ use super::{
 
 mod errors;
 
-pub const RECORDER_SCHEMA_VERSION: u64 = 3;
+pub const RECORDER_SCHEMA_VERSION: u64 = 4;
 pub const UI_COMMAND: &str = "ui";
 pub const RECORDER_ROOT_FIELDS: &[&str] = &[
     "ok",
@@ -380,7 +380,7 @@ pub struct ScheduledOccurrence {
     pub finished_at_ms: Option<u64>,
     pub acknowledged_at_ms: Option<u64>,
     pub status: String,
-    pub worker_receipt_id: Option<String>,
+    pub worker_invoked: bool,
     pub worktree: Option<String>,
     pub error: Option<String>,
 }

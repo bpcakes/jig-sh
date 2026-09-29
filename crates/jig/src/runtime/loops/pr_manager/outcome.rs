@@ -45,7 +45,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
         )),
         PrRepairOutcome::WorkerCancelled {
             before_start,
-            worker_receipt_id,
+            worker,
             worktree,
         } => {
             let timing = if before_start {
@@ -59,7 +59,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                     repair,
                     &error,
                     Some(&worktree),
-                    Some(&worker_receipt_id),
+                    Some(&worker),
                     cleanup_authority_error,
                     cleanup,
                 ));
@@ -77,7 +77,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 "worktree": pr_worktree_value(worktree.path()),
                 "lease": repair.lease,
                 "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
-                "worker_receipt_id": worker_receipt_id,
+                "worker": worker,
                 "error": error,
             }), cleanup_authority_error);
             Ok(finalize_pr_worktree(
@@ -90,19 +90,19 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
         PrRepairOutcome::PreExecutionFailed {
             error,
             worktree,
-            worker_receipt_id,
+            worker,
         } => Ok(unexecuted_pr_action(
             repair,
             &format!("{error:#}"),
             worktree.as_ref(),
-            worker_receipt_id.as_deref(),
+            worker.as_ref(),
             cleanup_authority_error,
             UnexecutedReason::PreExecutionError,
             cleanup,
         )),
         PrRepairOutcome::WorkerFailed {
             error,
-            worker_receipt_id,
+            worker,
             worktree,
         } => {
             let action = failed_pr_repair_action(
@@ -110,7 +110,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 attempt_store,
                 &error,
                 Some(&worktree),
-                worker_receipt_id.as_deref(),
+                worker.as_ref(),
             );
             let action = with_branch_lease_result(action, cleanup_authority_error);
             Ok(finalize_failed_pr_worktree(
@@ -134,7 +134,7 @@ fn cancelled_before_start_action<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     detail: &str,
     worktree: Option<&PreparedPrWorktree>,
-    worker_receipt_id: Option<&str>,
+    worker: Option<&Value>,
     cleanup_authority_error: Option<&anyhow::Error>,
     cleanup: &mut PrWorktreeCleanup<'_>,
 ) -> Value {
@@ -142,7 +142,7 @@ fn cancelled_before_start_action<L: serde::Serialize>(
         repair,
         detail,
         worktree,
-        worker_receipt_id,
+        worker,
         cleanup_authority_error,
         UnexecutedReason::CancelledBeforeStart,
         cleanup,
@@ -153,7 +153,7 @@ fn unexecuted_pr_action<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     detail: &str,
     worktree: Option<&PreparedPrWorktree>,
-    worker_receipt_id: Option<&str>,
+    worker: Option<&Value>,
     cleanup_authority_error: Option<&anyhow::Error>,
     reason: UnexecutedReason,
     cleanup: &mut PrWorktreeCleanup<'_>,
@@ -165,7 +165,7 @@ fn unexecuted_pr_action<L: serde::Serialize>(
         "failed",
         detail,
         worktree.map(PreparedPrWorktree::path),
-        worker_receipt_id,
+        worker,
     );
     action["unexecuted_reason"] = json!(reason.as_str());
     if let Some(worktree) = worktree {
@@ -199,7 +199,7 @@ fn failed_pr_repair_action<L: serde::Serialize>(
     attempt_store: &mut AttemptStore,
     error: &anyhow::Error,
     worktree: Option<&Path>,
-    worker_receipt_id: Option<&str>,
+    worker: Option<&Value>,
 ) -> Value {
     let mut action = pr_worker_action(
         repair.item,
@@ -208,7 +208,7 @@ fn failed_pr_repair_action<L: serde::Serialize>(
         "failed",
         &format!("{error:#}"),
         worktree,
-        worker_receipt_id,
+        worker,
     );
     let attempt = attempt_store.record_attempt_for_transition(
         repair.workflow,
@@ -307,7 +307,7 @@ fn pr_worker_action(
     status: &str,
     error: &str,
     worktree: Option<&Path>,
-    worker_receipt_id: Option<&str>,
+    worker: Option<&Value>,
 ) -> Value {
     let mut action = json!({
         "kind": "pr_manager_worker",
@@ -325,8 +325,8 @@ fn pr_worker_action(
     if let Some(worktree) = worktree {
         action["worktree"] = pr_worktree_value(worktree);
     }
-    if let Some(worker_receipt_id) = worker_receipt_id {
-        action["worker_receipt_id"] = json!(worker_receipt_id);
+    if let Some(worker) = worker {
+        action["worker"] = worker.clone();
     }
     action
 }
@@ -412,16 +412,16 @@ enum PrRepairOutcome {
     PreExecutionFailed {
         error: anyhow::Error,
         worktree: Option<PreparedPrWorktree>,
-        worker_receipt_id: Option<String>,
+        worker: Option<Value>,
     },
     WorkerFailed {
         error: anyhow::Error,
-        worker_receipt_id: Option<String>,
+        worker: Option<Value>,
         worktree: PathBuf,
     },
     WorkerCancelled {
         before_start: bool,
-        worker_receipt_id: String,
+        worker: Value,
         worktree: PreparedPrWorktree,
     },
 }

@@ -4,7 +4,7 @@ use super::{
     LoopCodexTask, LoopLease, LoopSchedule, LoopScheduleState, LoopStateError, RecorderEpochId,
 };
 
-pub const STATUS_SCHEMA_VERSION: u64 = 3;
+pub const STATUS_SCHEMA_VERSION: u64 = 4;
 pub const STATUS_COMMAND: &str = "status";
 pub const STATUS_ROOT_FIELDS: &[&str] = &[
     "ok",
@@ -135,8 +135,9 @@ pub struct StatusScheduledOccurrence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acknowledged_at_ms: Option<u64>,
     pub status: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker_receipt_id: Option<String>,
+    /// The occurrence invoked a worker; `jig loop show` reports the run.
+    #[serde(default)]
+    pub worker_invoked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

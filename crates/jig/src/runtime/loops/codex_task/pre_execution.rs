@@ -146,17 +146,9 @@ pub(super) fn prepare_repository_checkout(
         git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer),
         observer,
     )?;
-    if observer.cancelled() {
-        return Err(CheckoutPreparationFailure::cancelled(anyhow!(
-            "Scheduled Codex task was cancelled before receipt-journal preflight"
-        )));
-    }
-    let receipt_journal =
-        classify_checkout_preflight(checkout::ReceiptJournalBaseline::capture(ctx), observer)?;
     Ok(PreparedCheckout::Repo {
         path: ctx.root().to_path_buf(),
         initial_head,
-        receipt_journal,
     })
 }
 
@@ -212,7 +204,7 @@ pub(super) fn unexecuted_task_failure(
         "status": status,
         "item_key": item_key,
         "worker_started": false,
-        "worker_receipt_id": Value::Null,
+        "worker": Value::Null,
         "checkout": {
             "mode": settings.checkout.as_str(),
             "path": retained_worktree,
@@ -238,7 +230,7 @@ pub(super) fn unexecuted_task_failure(
             },
             execution: WorkflowExecution::Unexecuted(reason),
             repository_revision: RepositoryRevisionState::NotApplicable,
-            worker_receipt_id: None,
+            worker_invoked: false,
             worktree: retained_worktree,
             error: Some(error),
         },

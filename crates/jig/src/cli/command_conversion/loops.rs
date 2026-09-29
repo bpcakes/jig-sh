@@ -6,6 +6,9 @@ impl From<LoopCommand> for command::LoopCommand {
             LoopCommand::Tick(opts) => Self::Tick(opts.into()),
             LoopCommand::Dispatch(opts) => Self::Dispatch(opts.into()),
             LoopCommand::Status(opts) => Self::Status(opts.into()),
+            LoopCommand::Show(opts) => Self::Show(command::LoopShowRequest {
+                occurrence: opts.occurrence,
+            }),
             LoopCommand::Run(opts) => Self::Run(opts.into()),
             LoopCommand::ClearAttempt(opts) => Self::ClearAttempt(opts.into()),
             LoopCommand::AcknowledgeOccurrence(opts) => Self::AcknowledgeOccurrence(opts.into()),

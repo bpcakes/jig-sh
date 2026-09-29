@@ -55,8 +55,18 @@ pub(super) struct ScheduleOccurrence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) acknowledged_at_ms: Option<u64>,
     pub(super) status: OccurrenceStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) worker_receipt_id: Option<String>,
+    /// The occurrence invoked a worker; its evidence describes the run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) worker_invoked: bool,
+    /// Set by runtimes before loop evidence, whose worker run was recorded as
+    /// this receipt in `.agent/state/receipts.jsonl`. Kept so a rewrite of the
+    /// schedule preserves it.
+    #[serde(
+        default,
+        rename = "worker_receipt_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(super) legacy_worker_receipt_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) worktree: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,6 +74,12 @@ pub(super) struct ScheduleOccurrence {
 }
 
 impl ScheduleOccurrence {
+    /// Whether a worker was invoked, including by a runtime that recorded the
+    /// run as a receipt.
+    pub(super) fn worker_was_invoked(&self) -> bool {
+        self.worker_invoked || self.legacy_worker_receipt_id.is_some()
+    }
+
     fn is_prunable_history(&self) -> bool {
         matches!(
             self.status,
@@ -83,7 +99,7 @@ impl ScheduleOccurrence {
             finished_at_ms: self.finished_at_ms,
             acknowledged_at_ms: self.acknowledged_at_ms,
             status: self.status.as_str().to_string(),
-            worker_receipt_id: self.worker_receipt_id.clone(),
+            worker_invoked: self.worker_was_invoked(),
             worktree: self.worktree.clone(),
             error: self.error.clone(),
         }
@@ -168,7 +184,7 @@ pub(super) enum OccurrenceAcknowledgement {
 
 pub(super) struct OccurrenceFinish<'a> {
     pub(super) outcome: OccurrenceOutcome,
-    pub(super) worker_receipt_id: Option<&'a str>,
+    pub(super) worker_invoked: bool,
     pub(super) worktree: Option<&'a str>,
     pub(super) error: Option<&'a str>,
 }
@@ -255,6 +271,10 @@ impl OccurrenceGuard {
 
     pub(super) fn renewal_failed(&self) -> bool {
         self.renewal.failed()
+    }
+
+    pub(super) fn occurrence_id(&self) -> &str {
+        &self.occurrence_id
     }
 
     pub(super) fn finish(self, finish: OccurrenceFinish<'_>) -> Result<OccurrenceFinalization> {
@@ -421,7 +441,7 @@ impl OccurrenceStore {
             }
             record.status = finish.outcome.status();
             record.finished_at_ms = Some(now);
-            record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
+            record.worker_invoked = finish.worker_invoked;
             record.worktree = finish.worktree.map(str::to_string);
             record.error = finish.error.map(bounded_error);
             let finished = record.clone();
@@ -669,7 +689,7 @@ fn mark_expired_claim(
 }
 
 fn record_expired_finish_evidence(record: &mut ScheduleOccurrence, finish: &OccurrenceFinish<'_>) {
-    record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
+    record.worker_invoked = finish.worker_invoked;
     record.worktree = finish.worktree.map(str::to_string);
     record.error = Some(bounded_error(&match finish.error {
         Some(error) => format!(

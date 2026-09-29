@@ -63,19 +63,6 @@ pub(crate) fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-pub(super) fn truncate(value: &str) -> String {
-    const LIMIT: usize = 4000;
-    if value.len() <= LIMIT {
-        value.to_string()
-    } else {
-        let mut end = LIMIT;
-        while end > 0 && !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}…", &value[..end])
-    }
-}
-
 pub(super) fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", Ulid::new())
 }

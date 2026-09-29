@@ -11,8 +11,7 @@ use crate::runtime::loops::authority::{
 
 use super::json_cache::{
     read_json_cache_locked_until, read_json_cache_or_default_with_cancellation,
-    recover_unparsable_json_cache, replace_unparsable_json_cache,
-    with_json_cache_lock_compensating_until, with_json_cache_lock_until,
+    recover_unparsable_json_cache, replace_unparsable_json_cache, with_json_cache_lock_until,
 };
 use super::{JsonLocation, JsonWriteMode, LOOP_CACHE_DIR, loop_state_lock_deadline};
 
@@ -108,38 +107,6 @@ impl JsonStatePersistence {
                 primary.require_initialized()?;
                 action(&mut primary.state)
             },
-        )
-    }
-
-    pub(super) fn with_locked_compensating<T, U, S>(
-        &self,
-        cancelled: &dyn Fn() -> bool,
-        action: impl FnOnce(&mut S) -> Result<T>,
-        after_commit: impl FnOnce(&T, Instant) -> Result<U>,
-    ) -> Result<(T, U)>
-    where
-        S: Clone + Default + DeserializeOwned + Serialize,
-    {
-        let deadline = loop_state_lock_deadline();
-        let Some(protected) = self.protected()? else {
-            return with_json_cache_lock_compensating_until(
-                &self.legacy,
-                deadline,
-                cancelled,
-                action,
-                after_commit,
-            );
-        };
-        self.ensure_initialized::<S>(protected, deadline, cancelled)?;
-        with_json_cache_lock_compensating_until(
-            protected,
-            deadline,
-            cancelled,
-            |primary: &mut ProtectedState<S>| {
-                primary.require_initialized()?;
-                action(&mut primary.state)
-            },
-            after_commit,
         )
     }
 

@@ -27,7 +27,7 @@ use crate::execution::{
     run_supervised_execution_command,
 };
 use crate::runtime::worker_runner::{
-    CodexExecOutcome, CodexExecRequest, WorkerReceiptRequest, run_codex_exec,
+    CodexExecOutcome, CodexExecRequest, WorkerRunLabel, run_codex_exec,
 };
 
 mod checkout;
@@ -44,8 +44,10 @@ use preparation::{failed_preparation_tick, run_preparation};
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_CHARS: usize = 16_000;
-const WORKER_RECEIPT_PATH: &str = ".agent/state/receipts.jsonl";
-const WORKER_RECEIPT_EXCLUDE: &str = ":(exclude).agent/state/receipts.jsonl";
+/// Runtimes before loop evidence appended loop receipts to this tracked
+/// journal, so a shared checkout may still carry uncommitted appends. Jig no
+/// longer reads or writes it; leftover changes must not block repo-mode tasks.
+const LEGACY_RECEIPT_JOURNAL_EXCLUDE: &str = ":(exclude).agent/state/receipts.jsonl";
 
 pub(super) struct CodexTaskExecution<'a> {
     pub(super) item_key: &'a str,
@@ -123,7 +125,7 @@ pub(super) fn codex_task_tick(
         ) {
             Ok(evidence) => Some(evidence),
             Err(failure) => {
-                let checkout = checkout.finish(TaskOutcome::Failed, ctx, None);
+                let checkout = checkout.finish(TaskOutcome::Failed, ctx);
                 return Ok(failed_preparation_tick(
                     settings,
                     execution.item_key,
@@ -149,12 +151,10 @@ pub(super) fn codex_task_tick(
             output_schema: None,
             transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: &prompt,
-            receipt: WorkerReceiptRequest {
+            run: WorkerRunLabel {
                 purpose: "scheduled_codex_task",
                 workflow_id: Some(&workflow.id),
                 item_key: Some(execution.item_key),
-                collect_git_metadata: matches!(settings.checkout, CodexTaskCheckout::Repo),
-                collect_worktree_fingerprint: matches!(settings.checkout, CodexTaskCheckout::Repo),
             },
             phase: None,
         },
@@ -171,7 +171,6 @@ pub(super) fn codex_task_tick(
                     TaskOutcome::Failed
                 },
                 ctx,
-                Some(worker.worker_receipt_id()),
             );
             let worker_error = (!worker_succeeded).then(|| {
                 format!(
@@ -194,7 +193,7 @@ pub(super) fn codex_task_tick(
                 outcome,
                 execution: WorkflowExecution::Executed,
                 repository_revision,
-                worker_receipt_id: Some(worker.worker_receipt_id().to_owned()),
+                worker_invoked: true,
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
             };
@@ -206,7 +205,7 @@ pub(super) fn codex_task_tick(
                     WorkflowOutcome::NeedsAttention => "needs_attention",
                 },
                 "item_key": execution.item_key,
-                "worker_receipt_id": worker.worker_receipt_id(),
+                "worker": worker.evidence(),
                 "checkout": checkout.report.value(),
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "output": bounded_bytes(worker.authoritative_stdout()),
@@ -218,7 +217,7 @@ pub(super) fn codex_task_tick(
         }
         Ok(CodexExecOutcome::Cancelled {
             before_start,
-            worker_receipt_id,
+            evidence,
         }) => {
             let checkout = checkout.finish(
                 if before_start && preparation.is_none() {
@@ -227,7 +226,6 @@ pub(super) fn codex_task_tick(
                     TaskOutcome::Failed
                 },
                 ctx,
-                Some(&worker_receipt_id),
             );
             let timing = if before_start {
                 " before the worker started"
@@ -254,7 +252,7 @@ pub(super) fn codex_task_tick(
                     WorkflowExecution::Executed
                 },
                 repository_revision,
-                worker_receipt_id: Some(worker_receipt_id.clone()),
+                worker_invoked: true,
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
             };
@@ -262,7 +260,7 @@ pub(super) fn codex_task_tick(
                 "kind": "codex_task_worker",
                 "status": task_outcome_status(outcome),
                 "item_key": execution.item_key,
-                "worker_receipt_id": worker_receipt_id,
+                "worker": evidence,
                 "checkout": checkout.report.value(),
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "output": Value::Null,
@@ -273,16 +271,8 @@ pub(super) fn codex_task_tick(
         Err(error) => {
             let worker_failure =
                 error.downcast_ref::<crate::runtime::worker_runner::CodexExecFailure>();
-            let worker_receipt_id = worker_failure
-                .and_then(|error| error.worker_receipt_id())
-                .map(str::to_string);
+            let worker_evidence = worker_failure.map(|error| error.evidence().clone());
             let unexecuted = worker_failure.is_some_and(|error| error.worker_was_unexecuted());
-            let unexecuted_reason =
-                if worker_failure.is_some_and(|error| error.worker_was_cancelled_before_start()) {
-                    UnexecutedReason::CancelledBeforeStart
-                } else {
-                    UnexecutedReason::PreExecutionError
-                };
             let checkout = checkout.finish(
                 if unexecuted && preparation.is_none() {
                     TaskOutcome::Succeeded
@@ -290,7 +280,6 @@ pub(super) fn codex_task_tick(
                     TaskOutcome::Failed
                 },
                 ctx,
-                worker_receipt_id.as_deref(),
             );
             let termination = if unexecuted {
                 CheckoutTermination::BeforeStart
@@ -308,12 +297,12 @@ pub(super) fn codex_task_tick(
             let completion = WorkflowCompletion {
                 outcome,
                 execution: if unexecuted {
-                    WorkflowExecution::Unexecuted(unexecuted_reason)
+                    WorkflowExecution::Unexecuted(UnexecutedReason::PreExecutionError)
                 } else {
                     WorkflowExecution::Executed
                 },
                 repository_revision,
-                worker_receipt_id: worker_receipt_id.clone(),
+                worker_invoked: worker_evidence.is_some(),
                 worktree: retained_worktree,
                 error: error.clone(),
             };
@@ -321,7 +310,7 @@ pub(super) fn codex_task_tick(
                 "kind": "codex_task_worker",
                 "status": task_outcome_status(outcome),
                 "item_key": execution.item_key,
-                "worker_receipt_id": worker_receipt_id,
+                "worker": worker_evidence,
                 "checkout": checkout.report.value(),
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "output": Value::Null,
@@ -506,7 +495,7 @@ fn repo_task_has_changes(
 fn git_status_has_changes(
     ctx: &RepoContext,
     worktree: &Path,
-    exclude_worker_receipt: bool,
+    exclude_legacy_receipt_journal: bool,
     observer: &mut dyn ExecutionControl,
 ) -> Result<bool> {
     let mut args = vec![
@@ -516,8 +505,8 @@ fn git_status_has_changes(
         OsString::from("--"),
         OsString::from("."),
     ];
-    if exclude_worker_receipt {
-        args.push(OsString::from(WORKER_RECEIPT_EXCLUDE));
+    if exclude_legacy_receipt_journal {
+        args.push(OsString::from(LEGACY_RECEIPT_JOURNAL_EXCLUDE));
     }
     let (mut command, label) = git_command(worktree, args);
     let timeout = ctx.command_timeout();

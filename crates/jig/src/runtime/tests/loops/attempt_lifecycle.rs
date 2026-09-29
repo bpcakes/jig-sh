@@ -59,8 +59,11 @@ fn loop_status_surfaces_exhausted_attempts_as_needs_attention() {
     assert_eq!(tick["ok"], false);
     assert_eq!(tick["idle"], false);
 
-    let receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, LOOP_TICK_TOOL, false)});
-    assert_eq!(receipts["receipts"][0]["exit_status"], 1);
+    let shown = crate::runtime::tests::common::loop_show(
+        &ctx,
+        tick["occurrence_id"].as_str().unwrap(),
+    );
+    assert_eq!(shown["evidence"]["tick"]["status"], "needs_attention");
 }
 
 #[test]
@@ -135,7 +138,7 @@ timezone = "UTC"
     assert_eq!(output["status"], "failed", "{output:#}");
     assert_eq!(output["state_error_count"], 1, "{output:#}");
     assert_eq!(output["state_errors"][0]["kind"], "attempts_reset");
-    assert!(output["receipt_id"].as_str().is_some(), "{output:#}");
+    assert!(output.get("receipt_id").is_none(), "{output:#}");
     assert_eq!(output["actions"][0]["status"], "succeeded", "{output:#}");
     serde_json::from_slice::<Value>(&fs::read(cache.join("attempts.json")).unwrap()).unwrap();
 }
@@ -208,7 +211,7 @@ fn dispatch_recovers_unparsable_cache_when_no_work_is_due() {
     assert_eq!(output["state_error_count"], 1, "{output:#}");
     assert_eq!(output["state_errors"][0]["kind"], "attempts_reset");
     assert!(output["actions"].as_array().unwrap().is_empty(), "{output:#}");
-    assert!(output["receipt_id"].is_string(), "{output:#}");
+    assert!(output.get("receipt_id").is_none(), "{output:#}");
     serde_json::from_slice::<Value>(&fs::read(cache.join("attempts.json")).unwrap()).unwrap();
 }
 
@@ -248,7 +251,7 @@ timezone = "UTC"
 }
 
 #[test]
-fn loop_clear_attempt_preserves_removed_alias_identity_and_records_receipt() {
+fn loop_clear_attempt_preserves_removed_alias_identity() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     write_attempt(&temp, 3, u64::MAX, true);
@@ -268,7 +271,7 @@ fn loop_clear_attempt_preserves_removed_alias_identity_and_records_receipt() {
     assert_eq!(output["workflow"]["configured"], false);
     assert_eq!(output["workflow"]["removed"], true);
     assert_eq!(output["workflow_id"], "noop-status");
-    assert!(output["receipt_id"].as_str().is_some());
+    assert!(output.get("receipt_id").is_none());
 
     let status = crate::runtime::dispatch(
         &ctx,
@@ -282,38 +285,6 @@ fn loop_clear_attempt_preserves_removed_alias_identity_and_records_receipt() {
             .unwrap()
             .is_empty()
     );
-}
-
-#[test]
-fn loop_clear_attempt_restores_state_when_receipt_publication_fails() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    write_attempt(&temp, 3, u64::MAX, true);
-    fs::create_dir_all(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::Loop(LoopCommand::ClearAttempt(LoopClearAttemptRequest {
-            workflow: "noop-status".into(),
-            item: "item-1".into(),
-        })),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(
-        error.contains("Failed to open receipt journal without following links"),
-        "{error}"
-    );
-    let status = crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
-    )
-    .unwrap();
-    assert_eq!(status["attempts"][0]["workflow_id"], "noop-status");
-    assert_eq!(status["attempts"][0]["item_key"], "item-1");
-    assert_eq!(status["attempts"][0]["attempts"], 3);
 }
 
 #[test]

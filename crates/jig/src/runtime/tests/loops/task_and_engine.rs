@@ -1,5 +1,5 @@
 #[test]
-fn loop_tick_noop_records_idle_receipt() {
+fn loop_tick_noop_records_idle_evidence() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -22,10 +22,15 @@ fn loop_tick_noop_records_idle_receipt() {
     assert_eq!(output["workflow"]["kind"], "noop_status");
     assert_eq!(output["observed"]["repo"]["name"], "demo");
     assert!(output["observed"].get("open_plan_count").is_none());
-    assert!(output["receipt_id"].as_str().is_some());
+    assert!(output.get("receipt_id").is_none());
 
-    let receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, LOOP_TICK_TOOL, false)});
-    assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
+    let shown = crate::runtime::tests::common::loop_show(
+        &ctx,
+        output["occurrence_id"].as_str().unwrap(),
+    );
+    assert_eq!(shown["occurrence"]["status"], "succeeded", "{shown:#}");
+    assert_eq!(shown["evidence"]["tick"]["status"], "idle");
+    assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 }
 
 #[test]
@@ -445,7 +450,7 @@ printf 'authoritative task result\n' > "$out"
     let action = &output["actions"][0];
     assert_eq!(output["ok"], false, "{output:#}");
     assert_eq!(action["status"], "failed");
-    assert!(action["worker_receipt_id"].is_string());
+    assert_eq!(action["worker"]["kind"], "worker_run");
     assert_eq!(action["output"], "authoritative task result\n");
     assert_eq!(action["provider_stdout"], "diagnostic task transcript\n");
     assert_eq!(action["checkout"]["retained"], true);

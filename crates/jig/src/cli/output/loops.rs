@@ -10,6 +10,9 @@ pub(super) fn format_loop_tick_summary(value: &serde_json::Value) -> String {
         format!("Loop tick: {status}"),
         format!("  Workflow: {workflow}"),
     ];
+    if let Some(occurrence_id) = value_str(value, "occurrence_id") {
+        lines.push(format!("  Occurrence: {occurrence_id}"));
+    }
     if let Some(idle) = value_bool(value, "idle") {
         lines.push(format!("  Idle: {}", if idle { "yes" } else { "no" }));
     }
@@ -75,6 +78,75 @@ pub(super) fn format_loop_status_summary(value: &serde_json::Value) -> String {
         "  full report: rerun with --json".into(),
     ]
     .join("\n")
+}
+
+/// Output tails shown per action; the JSON report carries the full evidence.
+const SHOW_OUTPUT_LINES: usize = 12;
+
+pub(super) fn format_loop_show_summary(value: &serde_json::Value) -> String {
+    let occurrence = &value["occurrence"];
+    let tick = &value["evidence"]["tick"];
+    let occurrence_id = value_str(value, "occurrence_id").unwrap_or("<unknown>");
+    let status = value_str(occurrence, "status")
+        .or_else(|| value_str(tick, "status"))
+        .unwrap_or("unknown");
+    let workflow = value_str(occurrence, "workflow_id")
+        .or_else(|| value["evidence"]["workflow_id"].as_str())
+        .unwrap_or("<unknown>");
+    let mut lines = vec![
+        format!("Loop occurrence {occurrence_id}: {status}"),
+        format!("  Workflow: {workflow}"),
+    ];
+    if let Some(error) = value_str(occurrence, "error").or_else(|| value_str(tick, "error")) {
+        lines.push(format!("  Error: {error}"));
+    }
+    if let Some(worktree) = value_str(occurrence, "worktree") {
+        lines.push(format!("  Worktree: {worktree}"));
+    }
+    if tick.is_null() {
+        lines.push("  Evidence: none recorded for this occurrence".into());
+        if let Some(receipt) = value_str(value, "legacy_worker_receipt_id") {
+            lines.push(format!(
+                "  Worker receipt: {receipt} in .agent/state/receipts.jsonl"
+            ));
+        }
+    } else {
+        lines.push(format!(
+            "  Tick: {}",
+            value_str(tick, "status").unwrap_or("unknown")
+        ));
+        for action in tick["actions"].as_array().into_iter().flatten() {
+            push_action_lines(&mut lines, action);
+        }
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+fn push_action_lines(lines: &mut Vec<String>, action: &serde_json::Value) {
+    let kind = value_str(action, "kind").unwrap_or("action");
+    let status = value_str(action, "status").unwrap_or("unknown");
+    lines.push(format!("  - {kind}: {status}"));
+    if let Some(error) = value_str(action, "error") {
+        lines.push(format!("      Error: {error}"));
+    }
+    let worker = &action["worker"];
+    if !worker.is_null() {
+        lines.push(format!(
+            "      Worker: {} (exit {})",
+            value_str(worker, "status").unwrap_or("unknown"),
+            worker["exit_status"]
+                .as_i64()
+                .map_or_else(|| "unknown".into(), |code| code.to_string())
+        ));
+    }
+    if let Some(output) = value_str(action, "output").filter(|output| !output.trim().is_empty()) {
+        lines.push("      Output (last lines):".into());
+        let output_lines = output.lines().collect::<Vec<_>>();
+        for line in &output_lines[output_lines.len().saturating_sub(SHOW_OUTPUT_LINES)..] {
+            lines.push(format!("        {line}"));
+        }
+    }
 }
 
 pub(super) fn format_loop_run_summary(value: &serde_json::Value) -> String {

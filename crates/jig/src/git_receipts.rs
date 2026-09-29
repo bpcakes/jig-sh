@@ -49,7 +49,6 @@ use worktree::*;
 
 const MAX_INLINE_UNTRACKED_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_INLINE_UNTRACKED_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_RECEIPT_CHANGED_PATHS: usize = 100;
 const MAX_CHANGED_PATH_GIT_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CHANGED_PATH_DISCOVERY_ENTRIES: usize = 250_000;
 const MAX_WORKTREE_STATUS_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
@@ -58,7 +57,6 @@ const MAX_GATE_SCOPE_DIFF_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_WORKTREE_STATUS_ENTRIES: usize = 250_000;
 const MAX_GIT_LITERAL_PATHS_PER_DIFF: usize = 512;
 const MAX_GIT_LITERAL_PATHSPEC_BYTES_PER_DIFF: usize = 64 * 1024;
-const CHANGED_PATHS_DIGEST_DOMAIN: &[u8] = b"jig-changed-paths-v1\0";
 const WORKTREE_FINGERPRINT_DOMAIN: &[u8] = b"jig-worktree-fingerprint-v4\0";
 const MAX_GIT_ERROR_PREVIEW_BYTES: u64 = 64 * 1024;
 
@@ -200,141 +198,6 @@ pub(crate) struct DiffStat {
     pub(crate) files: usize,
     pub(crate) insertions: u64,
     pub(crate) deletions: u64,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct GitReceiptMetadata {
-    pub(crate) changed_paths: Vec<String>,
-    pub(crate) changed_path_count: Option<usize>,
-    pub(crate) changed_paths_truncated: bool,
-    pub(crate) changed_paths_digest: Option<String>,
-    pub(crate) diff_stat: DiffStat,
-    pub(crate) git_status_error: Option<String>,
-    pub(crate) git_diff_stat_error: Option<String>,
-    pub(crate) worktree_fingerprint: Option<String>,
-    pub(crate) worktree_fingerprint_error: Option<String>,
-}
-
-pub(crate) fn collect_git_receipt_metadata(root: &Path) -> GitReceiptMetadata {
-    collect_git_receipt_metadata_with_options(root, true, GitReceiptCollection::Blocking)
-}
-
-pub(crate) fn collect_git_receipt_metadata_without_worktree_fingerprint(
-    root: &Path,
-) -> GitReceiptMetadata {
-    collect_git_receipt_metadata_with_options(root, false, GitReceiptCollection::Blocking)
-}
-
-pub(crate) fn collect_git_receipt_metadata_with_cancellation(
-    root: &Path,
-    cancelled: &dyn Fn() -> bool,
-) -> GitReceiptMetadata {
-    collect_git_receipt_metadata_with_options(
-        root,
-        true,
-        GitReceiptCollection::Cancellable(cancelled),
-    )
-}
-
-pub(crate) fn collect_git_receipt_metadata_without_worktree_fingerprint_with_cancellation(
-    root: &Path,
-    cancelled: &dyn Fn() -> bool,
-) -> GitReceiptMetadata {
-    collect_git_receipt_metadata_with_options(
-        root,
-        false,
-        GitReceiptCollection::Cancellable(cancelled),
-    )
-}
-
-fn collect_git_receipt_metadata_with_options(
-    root: &Path,
-    collect_worktree_fingerprint: bool,
-    collection: GitReceiptCollection<'_>,
-) -> GitReceiptMetadata {
-    let (
-        changed_paths,
-        changed_path_count,
-        changed_paths_truncated,
-        changed_paths_digest,
-        git_status_error,
-    ) = match repo_changed_paths_inner(root, collection) {
-        Ok(changed_paths) => {
-            let changed_paths = bounded_changed_paths(changed_paths);
-            (
-                changed_paths.preview,
-                Some(changed_paths.total),
-                changed_paths.truncated,
-                Some(changed_paths.digest),
-                None,
-            )
-        }
-        Err(error) => (Vec::new(), None, false, None, Some(format!("{error:#}"))),
-    };
-    let (diff_stat, git_diff_stat_error) = match repo_diff_stat_inner(root, collection) {
-        Ok(diff_stat) => (diff_stat, None),
-        Err(error) => (DiffStat::default(), Some(format!("{error:#}"))),
-    };
-    let (worktree_fingerprint, worktree_fingerprint_error) = if collect_worktree_fingerprint {
-        match repo_worktree_fingerprint_inner(root, collection) {
-            Ok(fingerprint) => (Some(fingerprint), None),
-            Err(error) => (None, Some(format!("{error:#}"))),
-        }
-    } else {
-        (None, None)
-    };
-
-    GitReceiptMetadata {
-        changed_paths,
-        changed_path_count,
-        changed_paths_truncated,
-        changed_paths_digest,
-        diff_stat,
-        git_status_error,
-        git_diff_stat_error,
-        worktree_fingerprint,
-        worktree_fingerprint_error,
-    }
-}
-
-#[cfg(test)]
-fn repo_changed_paths(root: &Path) -> Result<Vec<String>> {
-    repo_changed_paths_inner(root, GitReceiptCollection::Blocking)
-}
-
-fn repo_changed_paths_inner(
-    root: &Path,
-    collection: GitReceiptCollection<'_>,
-) -> Result<Vec<String>> {
-    collection.ensure_active()?;
-    let output = collection.git_changed_path_stdout(
-        root,
-        &[
-            "-c",
-            "diff.ignoreSubmodules=none",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
-        "git status --porcelain -z",
-    )?;
-    parse_porcelain_status_z(&output).map(|entries| {
-        entries
-            .into_iter()
-            .flat_map(|entry| {
-                let mut paths = vec![entry.path.display().to_string()];
-                if let Some(original_path) = entry.original_path {
-                    paths.push(original_path.display().to_string());
-                }
-                paths
-            })
-            .collect()
-    })
 }
 
 fn parse_name_only_z(stdout: &[u8]) -> Result<Vec<PathBuf>> {
@@ -517,31 +380,8 @@ fn repository_source_snapshot_inner(
     })
 }
 
-fn repo_diff_stat_inner(root: &Path, collection: GitReceiptCollection<'_>) -> Result<DiffStat> {
-    collection.ensure_active()?;
-    let output = collection.git_changed_path_stdout(
-        root,
-        &[
-            "-c",
-            "diff.ignoreSubmodules=none",
-            "diff",
-            "--numstat",
-            "--ignore-submodules=none",
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
-        "git diff --numstat",
-    )?;
-    let stdout = String::from_utf8_lossy(&output);
-    parse_diff_stat_output(&stdout)
-}
-
 mod tail;
-use tail::bounded_changed_paths;
-#[cfg(test)]
-use tail::changed_paths_digest;
-pub(crate) use tail::{is_git_receipt_collection_cancellation, parse_diff_stat_output};
+pub(crate) use tail::is_git_receipt_collection_cancellation;
 #[cfg(test)]
 pub(crate) use tail::{repo_worktree_fingerprint, repo_worktree_fingerprint_with_cancellation};
 

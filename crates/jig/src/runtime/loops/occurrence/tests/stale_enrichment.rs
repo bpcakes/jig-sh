@@ -42,7 +42,7 @@ fn original_owner_can_enrich_stale_reconciliation_after_worktree_reservation() {
             &claim.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::Succeeded,
-                worker_receipt_id: Some("receipt-worker"),
+                worker_invoked: true,
                 worktree: Some(reserved),
                 error: None,
             },
@@ -51,10 +51,7 @@ fn original_owner_can_enrich_stale_reconciliation_after_worktree_reservation() {
         .unwrap();
 
     assert_eq!(finished.status, OccurrenceStatus::NeedsAttention);
-    assert_eq!(
-        finished.worker_receipt_id.as_deref(),
-        Some("receipt-worker")
-    );
+    assert!(finished.worker_invoked);
     assert!(
         finished
             .error
@@ -128,7 +125,7 @@ fn terminal_attention_cannot_impersonate_stale_reconciliation_with_error_text() 
             &claim.owner,
             OccurrenceFinish {
                 outcome: OccurrenceOutcome::NeedsAttention,
-                worker_receipt_id: None,
+                worker_invoked: false,
                 worktree: None,
                 error: Some(STALE_RECONCILIATION_ERROR),
             },
@@ -165,7 +162,7 @@ fn finish_with_evidence(
 fn evidence_finish() -> OccurrenceFinish<'static> {
     OccurrenceFinish {
         outcome: OccurrenceOutcome::Succeeded,
-        worker_receipt_id: Some("receipt-worker"),
+        worker_invoked: true,
         worktree: Some("/tmp/retained-worktree"),
         error: None,
     }
@@ -173,10 +170,7 @@ fn evidence_finish() -> OccurrenceFinish<'static> {
 
 fn assert_expired_evidence(finished: &ScheduleOccurrence) {
     assert_eq!(finished.status, OccurrenceStatus::NeedsAttention);
-    assert_eq!(
-        finished.worker_receipt_id.as_deref(),
-        Some("receipt-worker")
-    );
+    assert!(finished.worker_invoked);
     assert_eq!(finished.worktree.as_deref(), Some("/tmp/retained-worktree"));
     assert!(
         finished

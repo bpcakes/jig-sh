@@ -4,9 +4,9 @@ use serde_json::{Value, json};
 use crate::command::LoopTickRequest;
 use crate::context::RepoContext;
 use crate::execution::{AdditionalCancellationControl, ExecutionControl};
-use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
-use crate::tool_defs::LOOP_TICK_TOOL;
+use crate::state::now_ms;
 
+use super::evidence::{self, OccurrenceEvidence};
 use super::occurrence::OccurrenceWorktreeReservation;
 use super::state::{AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore};
 use super::workflow::{
@@ -132,7 +132,7 @@ impl ScheduledTick {
                 completion,
                 ..
             } if completion.execution.unexecuted_reason().is_some()
-                && completion.worker_receipt_id.is_none() =>
+                && !completion.worker_invoked =>
             {
                 Err(anyhow::anyhow!(completion.error.unwrap_or_else(|| {
                     "Workflow did not start execution".into()
@@ -230,7 +230,10 @@ fn tick_with_execution(
     let mut completion = WorkflowCompletion::default();
     let mut tick_error = None;
     let mut manual_occurrence = None;
-    let mut manual_receipt_guard = None;
+    let mut manual_evidence_guard = None;
+    // A scheduled tick belongs to the occurrence dispatch claimed; a manual
+    // tick only to the occurrence it claims itself.
+    let mut evidence_occurrence_id = (!execution.manual).then(|| execution.item_key.clone());
 
     if !workflow.enabled {
         status = "disabled";
@@ -261,6 +264,8 @@ fn tick_with_execution(
                                 start.prepare_tick(&mut actions, &mut completion);
                             manual_blocked = occurrence.is_some();
                             manual_occurrence = occurrence;
+                            evidence_occurrence_id =
+                                guard.as_ref().map(|guard| guard.occurrence_id().to_owned());
                             guard
                         }
                         Err(error) => {
@@ -344,7 +349,7 @@ fn tick_with_execution(
                     }
                 }
                 if let Some(mut manual_guard) = manual_guard {
-                    if ManualOccurrenceGuard::completion_requires_retention(&completion) {
+                    if ManualOccurrenceGuard::finalizes_before_evidence(&completion) {
                         let (occurrence, error) = manual_guard.complete_tick(&mut completion);
                         manual_occurrence = occurrence;
                         if let Some(error) = error {
@@ -353,11 +358,11 @@ fn tick_with_execution(
                     } else {
                         match manual_guard.stage_tick(&mut completion) {
                             Ok(Some(occurrence)) => manual_occurrence = Some(occurrence),
-                            Ok(None) => manual_receipt_guard = Some(manual_guard),
+                            Ok(None) => manual_evidence_guard = Some(manual_guard),
                             Err(error) => {
                                 completion.outcome = WorkflowOutcome::NeedsAttention;
                                 let error = format!(
-                                    "Failed to stage manual loop occurrence before receipt publication: {error:#}"
+                                    "Failed to stage manual loop occurrence before recording its evidence: {error:#}"
                                 );
                                 match &mut completion.error {
                                     Some(existing) => existing.push_str(&format!("; {error}")),
@@ -458,76 +463,56 @@ fn tick_with_execution(
     let mut post_work_error = release_warning
         .as_ref()
         .map(|error| format!("Loop workflow lease renewal or release failed: {error}"));
-    let receipt_cancelled = || {
-        observer.cancelled()
-            || manual_receipt_guard
-                .as_ref()
-                .is_some_and(ManualOccurrenceGuard::renewal_failed)
-    };
-    let receipt_id = match record_receipt_with_cancellation(
-        ctx,
-        ReceiptInput {
-            tool_name: LOOP_TICK_TOOL,
-            args: json!({
-                "workflow": &workflow.id,
-                "kind": &workflow.kind,
-            }),
-            invoked_command_key: None,
-            started_at_ms: started,
-            ended_at_ms: ended,
-            exit_status: if evidence["error"].is_null() && loop_status_is_success(status) {
-                0
-            } else {
-                1
-            },
-            stdout: "",
-            stderr: evidence["error"]
-                .as_str()
-                .or(release_warning.as_deref())
-                .unwrap_or(""),
-            evidence: Some(evidence.clone()),
-            collect_git_metadata: true,
-            collect_worktree_fingerprint: true,
-        },
-        &receipt_cancelled,
-    ) {
-        Ok(receipt_id) => receipt_id,
-        Err(error) => {
-            let mut error = format!("Failed to record loop tick receipt: {error:#}");
-            if let Some(manual_guard) = manual_receipt_guard.take() {
-                completion.outcome = WorkflowOutcome::NeedsAttention;
-                match &mut completion.error {
-                    Some(existing) => existing.push_str(&format!("; {error}")),
-                    None => completion.error = Some(error.clone()),
-                }
-                let (_occurrence, finalization_error) = manual_guard.complete_tick(&mut completion);
-                if let Some(finalization_error) = finalization_error {
-                    error.push_str(&format!("; {finalization_error}"));
-                }
+    // Recording evidence is the tick's commit point: a staged manual
+    // occurrence is finalized only once its evidence is durable.
+    if let Some(occurrence_id) = &evidence_occurrence_id
+        && let Err(error) = evidence::record(
+            ctx,
+            &OccurrenceEvidence::new(
+                occurrence_id,
+                &workflow.id,
+                started,
+                ended,
+                evidence.clone(),
+            ),
+        )
+    {
+        let mut error = format!("Failed to record loop occurrence evidence: {error:#}");
+        if let Some(manual_guard) = manual_evidence_guard.take() {
+            completion.outcome = WorkflowOutcome::NeedsAttention;
+            match &mut completion.error {
+                Some(existing) => existing.push_str(&format!("; {error}")),
+                None => completion.error = Some(error.clone()),
             }
-            append_tick_error(&mut post_work_error, error.clone());
-            return Ok(ScheduledTick::Errored {
-                value: None,
-                completion,
-                lease_disposition,
-                state_errors,
-                post_work_error,
-                error,
-            });
+            let (_occurrence, finalization_error) = manual_guard.complete_tick(&mut completion);
+            if let Some(finalization_error) = finalization_error {
+                error.push_str(&format!("; {finalization_error}"));
+            }
         }
-    };
+        append_tick_error(&mut post_work_error, error.clone());
+        return Ok(ScheduledTick::Errored {
+            value: None,
+            completion,
+            lease_disposition,
+            state_errors,
+            post_work_error,
+            error,
+        });
+    }
 
-    if let Some(manual_guard) = manual_receipt_guard.take() {
+    if let Some(manual_guard) = manual_evidence_guard.take() {
         let (_occurrence, finalization_error) = manual_guard.complete_tick(&mut completion);
         let unexpected_attention =
             (completion.outcome == WorkflowOutcome::NeedsAttention).then(|| {
                 completion.error.clone().unwrap_or_else(|| {
-                    "Manual loop occurrence required attention after receipt publication".into()
+                    "Manual loop occurrence required attention after its evidence was recorded"
+                        .into()
                 })
             });
         if let Some(error) = finalization_error.or(unexpected_attention) {
             let error = format!(
-                "Manual loop occurrence could not be cleanly finalized after receipt {receipt_id}: {error}"
+                "Manual loop occurrence {} could not be cleanly finalized after its evidence was recorded: {error}",
+                evidence_occurrence_id.as_deref().unwrap_or_default()
             );
             append_tick_error(&mut post_work_error, error.clone());
             return Ok(ScheduledTick::Errored {
@@ -544,7 +529,7 @@ fn tick_with_execution(
     let value = json!({
         "ok": loop_status_is_success(status),
         "command": "loop tick",
-        "receipt_id": receipt_id,
+        "occurrence_id": evidence_occurrence_id,
         "workflow": evidence["workflow"],
         "status": status,
         "idle": idle,
@@ -569,10 +554,13 @@ fn tick_with_execution(
             lease_disposition,
             state_errors,
             post_work_error,
-            error: format!(
-                "Loop workflow '{}' failed; receipt {}: {}",
-                workflow.id, receipt_id, error
-            ),
+            error: match &evidence_occurrence_id {
+                Some(occurrence_id) => format!(
+                    "Loop workflow '{}' failed in occurrence {occurrence_id}: {error}",
+                    workflow.id
+                ),
+                None => format!("Loop workflow '{}' failed: {error}", workflow.id),
+            },
         });
     }
 

@@ -34,7 +34,7 @@ fn read_only_loop_cache_scan_observes_cancellation_between_chunks() {
 
 #[test]
 fn locked_loop_cache_reads_observe_cancellation_between_chunks() {
-    for (name, compensating) in [("leases", false), ("attempts", true)] {
+    for name in ["leases", "attempts"] {
         let temp = tempdir().unwrap();
         let data_path = temp.path().join(format!("{name}.json"));
         let original = format!("{{\"padding\":\"{}\"}}", "x".repeat(256 * 1024));
@@ -49,31 +49,16 @@ fn locked_loop_cache_reads_observe_cancellation_between_chunks() {
         let action_ran = AtomicBool::new(false);
         let cancelled = || checks.fetch_add(1, Ordering::SeqCst) >= 3;
 
-        let error = if compensating {
-            json_cache::with_json_cache_lock_compensating_until(
-                &location,
-                loop_state_lock_deadline(),
-                &cancelled,
-                |_: &mut Value| {
-                    action_ran.store(true, Ordering::SeqCst);
-                    Ok(())
-                },
-                |_, _| Ok(()),
-            )
-            .map(|_| ())
-            .unwrap_err()
-        } else {
-            json_cache::with_json_cache_lock_until(
-                &location,
-                loop_state_lock_deadline(),
-                &cancelled,
-                |_: &mut Value| {
-                    action_ran.store(true, Ordering::SeqCst);
-                    Ok(())
-                },
-            )
-            .unwrap_err()
-        };
+        let error = json_cache::with_json_cache_lock_until(
+            &location,
+            loop_state_lock_deadline(),
+            &cancelled,
+            |_: &mut Value| {
+                action_ran.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .unwrap_err();
 
         assert_eq!(error.to_string(), "status collection was cancelled");
         assert!(!action_ran.load(Ordering::SeqCst));
@@ -407,49 +392,6 @@ fn protected_coordination_state_rejects_an_unknown_schema_without_rewriting_it()
         "{error}"
     );
     assert_eq!(fs::read(protected_path).unwrap(), unsupported);
-}
-
-#[test]
-fn attempt_decision_read_waits_for_compensating_rollback() {
-    let temp = tempdir().unwrap();
-    write_loop_fixture_repo(temp.path());
-    git_init(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let workflow = example_workflow();
-    let mut attempts = AttemptStore::new(&ctx);
-    attempts
-        .record_attempt_for_transition(&workflow, "pr-17", Some("observed"), None, "failed")
-        .unwrap();
-    let (start_read, read_start) = std::sync::mpsc::channel();
-    let (read_result, result_read) = std::sync::mpsc::channel();
-    let root = temp.path().to_path_buf();
-    let reader = std::thread::spawn(move || {
-        read_start.recv().unwrap();
-        let ctx = RepoContext::load_from(&root).unwrap();
-        read_result
-            .send(AttemptStore::new(&ctx).get("ExampleProject", "pr-17"))
-            .unwrap();
-    });
-
-    let error = attempts
-        .clear_attempt_and_then("ExampleProject", "pr-17", &|| false, |cleared, _| {
-            assert!(cleared);
-            start_read.send(()).unwrap();
-            assert!(matches!(
-                result_read.recv_timeout(Duration::from_millis(100)),
-                Err(RecvTimeoutError::Timeout)
-            ));
-            Err::<(), _>(anyhow!("injected receipt failure"))
-        })
-        .unwrap_err();
-
-    assert_eq!(error.to_string(), "injected receipt failure");
-    let restored = result_read
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap();
-    assert!(restored.is_some());
-    reader.join().unwrap();
 }
 
 #[test]

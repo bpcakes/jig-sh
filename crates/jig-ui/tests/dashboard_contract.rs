@@ -14,13 +14,13 @@ use serde_json::Value;
 mod parity_resolver;
 
 #[test]
-fn recorder_schema_three_matches_checked_in_golden() {
+fn recorder_schema_four_matches_checked_in_golden() {
     let actual = serde_json::to_value(scenarios::recorder_snapshot()).unwrap();
-    let expected: Value = serde_json::from_str(include_str!("fixtures/recorder-v3.json")).unwrap();
+    let expected: Value = serde_json::from_str(include_str!("fixtures/recorder-v4.json")).unwrap();
     assert_eq!(actual, expected);
     assert_root_fields(&actual, RECORDER_ROOT_FIELDS);
     assert_eq!(actual["command"], "ui");
-    assert_eq!(actual["schema_version"], 3);
+    assert_eq!(actual["schema_version"], 4);
     assert!(actual["harness"]["jig_version"].is_null());
     assert!(actual["errors"].as_array().unwrap().is_empty());
     for removed in [
@@ -60,11 +60,11 @@ fn versioned_snapshots_round_trip_without_contract_loss() {
 }
 
 #[test]
-fn status_contract_has_the_local_schema_three_root() {
+fn status_contract_has_the_local_schema_four_root() {
     let actual = serde_json::to_value(scenarios::status_snapshot()).unwrap();
     assert_root_fields(&actual, STATUS_ROOT_FIELDS);
     assert_eq!(actual["command"], "status");
-    assert_eq!(actual["schema_version"], 3);
+    assert_eq!(actual["schema_version"], 4);
     assert_eq!(actual["outcome"], "complete");
     assert!(actual.get("providers").is_none());
     assert!(actual.get("work").is_none());

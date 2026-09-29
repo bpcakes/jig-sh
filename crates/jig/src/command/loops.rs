@@ -5,6 +5,7 @@ pub(crate) enum LoopCommand {
     Tick(LoopTickRequest),
     Dispatch(LoopDispatchRequest),
     Status(LoopStatusRequest),
+    Show(LoopShowRequest),
     Run(LoopRunRequest),
     ClearAttempt(LoopClearAttemptRequest),
     AcknowledgeOccurrence(LoopAcknowledgeOccurrenceRequest),
@@ -24,6 +25,11 @@ pub(crate) struct LoopTickRequest {
 #[derive(Debug, Deserialize)]
 pub(crate) struct LoopStatusRequest {
     pub(crate) workflow: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LoopShowRequest {
+    pub(crate) occurrence: String,
 }
 
 #[derive(Debug, Deserialize)]

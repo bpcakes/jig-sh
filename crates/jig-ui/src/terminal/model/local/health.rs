@@ -317,16 +317,18 @@ fn occurrence_health(occurrence: &ScheduledOccurrence, section: &'static str) ->
         ),
         format!("Started: {}", nonzero_timestamp(occurrence.started_at_ms)),
     ];
-    push_optional(
-        &mut lines,
-        "Worker receipt",
-        occurrence.worker_receipt_id.as_deref(),
-    );
+    if occurrence.worker_invoked {
+        lines.push("Worker: invoked".into());
+    }
     push_optional(&mut lines, "Worktree", occurrence.worktree.as_deref());
     push_optional(&mut lines, "Error", occurrence.error.as_deref());
     if let Some(value) = occurrence.uses_shared_checkout {
         lines.push(format!("Shared checkout: {value}"));
     }
+    lines.push(field(
+        "Evidence",
+        &format!("scripts/jig loop show {}", occurrence.occurrence_id),
+    ));
     HealthItemView {
         identity: format!("occurrence:{section}:{}", occurrence.occurrence_id),
         section,

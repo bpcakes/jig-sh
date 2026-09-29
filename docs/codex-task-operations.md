@@ -2,8 +2,8 @@
 
 Jig can run a repository-owned prompt through unattended `codex exec` on a
 five-field cron schedule. Jig owns schedule evaluation, occurrence identity,
-leases, receipts, retained-worktree evidence, and at-most-once execution after a
-worker starts. An external scheduler must invoke `scripts/jig loop dispatch`;
+leases, occurrence evidence, retained worktrees, and at-most-once execution after
+a worker starts. An external scheduler must invoke `scripts/jig loop dispatch`;
 Jig does not install or run a resident service.
 
 ## Configure a task
@@ -35,7 +35,7 @@ policy, and writable cache placement. Keep caches in the worktree if the task
 needs to inspect them. The default task path has no preparation step.
 
 If preparation fails, times out, is cancelled, or cannot start, the worker does
-not run. The task action and tick receipt report `preparation.status`, bounded
+not run. The task action and the occurrence's evidence report `preparation.status`, bounded
 stdout and stderr, and the retained checkout path. Inspect the checkout and
 output, then acknowledge the occurrence and remove or preserve the worktree
 deliberately. Jig does not replay a partially prepared checkout. A successful
@@ -54,7 +54,7 @@ schedule semantics.
 | Checkout | Use it when | Result handling |
 | --- | --- | --- |
 | `worktree` | Results should remain isolated from the selected checkout. This is the default. | Jig removes a clean, unchanged worktree. Any file change or local commit causes Jig to retain the detached worktree for inspection; Jig does not merge it into the main checkout. |
-| `repo` | The task must update the selected checkout, such as recording Beads issues. | The checkout must be clean before the worker starts, apart from Jig's receipt journal. The prompt must leave it clean, normally by committing the explicitly authorized files. A dirty or unverifiable result requires attention and blocks later occurrences. |
+| `repo` | The task must update the selected checkout, such as recording Beads issues. | The checkout must be clean before the worker starts, apart from uncommitted appends that earlier runtimes left in `.agent/state/receipts.jsonl`. The prompt must leave it clean, normally by committing the explicitly authorized files. A dirty or unverifiable result requires attention and blocks later occurrences. |
 
 For a mutating repo-mode task, state its write and commit authority narrowly in
 the prompt. For example:
@@ -70,8 +70,7 @@ Do not run state-writing Jig commands from inside a repo-mode task. For
 example, a nested `scripts/jig check ...` on a contract-v6 or later repository
 appends to `.agent/state/runs.jsonl` while the worker is active, and repo-mode
 completion reports that operational state change as a dirty checkout that
-requires attention. Completion accepts only the scheduled worker's exact receipt
-append; any other append also makes provenance ambiguous. Use direct, focused
+requires attention. Use direct, focused
 test commands inside the prompt, or use an isolated worktree task when its
 changes do not need to land in the selected checkout.
 
@@ -79,19 +78,18 @@ Validation contexts are deliberately different:
 
 | Context | Supported recipe |
 | --- | --- |
-| Standalone diagnostic, including a review's local test command | Outside a repo-mode worker, use `scripts/jig check <target>`. Checks record run history and no receipt. |
+| Standalone diagnostic, including a review's local test command | Outside a repo-mode worker, use `scripts/jig check <target>`. Checks record run history. |
 | Repo-mode worker | Use direct test commands that leave the checkout clean. A legacy contract's named check, such as `scripts/jig check test` on contract v2–v5, writes no state and can be suitable; contract-v6 and later checks append `.agent/state/runs.jsonl`. |
-| Isolated task | Run validation in the task worktree. Receipt and run-journal changes cause the worktree to be retained for inspection, not merged or discarded. |
+| Isolated task | Run validation in the task worktree. Run-journal changes cause the worktree to be retained for inspection, not merged or discarded. |
 
-Completion keeps the original worker output and receipt identity. Additive
-`checkout.diagnostics` fields distinguish `application_changes`,
-`operational_state_changes`, `receipt_ambiguity`, and `journal_unverifiable`;
-`checkout_unverifiable` means status or HEAD could not be fully inspected.
-Diagnostics include observed paths, the parent receipt ID, bounded observed
-appended receipt IDs, and explicit incomplete-observation flags. A well-formed
-unowned append is still ambiguous, even if it came from a legitimate check.
-Staged journal changes, rewritten history, malformed or partial rows, and missing
-parent attribution remain rejected. None of these reasons exempts a write.
+Completion keeps the original worker output in the occurrence's evidence, which
+`scripts/jig loop show '<occurrence>'` reports. Jig records that evidence under
+the repository's Git metadata, outside the checkout, so a worker must leave the
+checkout itself clean. Additive `checkout.diagnostics` fields distinguish
+`application_changes` and `operational_state_changes`; `checkout_unverifiable`
+means status or HEAD could not be fully inspected. Diagnostics include bounded
+observed paths and an explicit incomplete-observation flag. None of these
+reasons exempts a write.
 
 ## Install a dispatcher
 
@@ -216,18 +214,19 @@ scripts/jig loop tick --workflow daily-audit
 ```
 
 `loop tick` executes the prompt regardless of its cron time, so a repo-mode test
-can commit authorized changes. Inspect the final response, repository status,
-receipts, and any retained worktree before enabling unattended runs.
+can commit authorized changes. It reports the occurrence it ran; inspect the
+final response with `scripts/jig loop show '<occurrence>'`, then repository
+status and any retained worktree before enabling unattended runs.
 
 Use `scripts/jig loop status` and scheduler logs for routine monitoring. When an
-occurrence reports `needs_attention`, inspect its receipt and retained checkout,
-then acknowledge the exact occurrence only after resolving its result:
+occurrence reports `needs_attention`, inspect its evidence with
+`scripts/jig loop show '<reported-id>'` and its retained checkout, then
+acknowledge the exact occurrence only after resolving its result. Evidence stays
+available while the occurrence remains in loop history:
 
-Use the diagnostic `inspection_commands` to inspect Git status, staged and
-unstaged journal diffs, and loop status. These commands are read-only. Preserve
-the retained output and append-only evidence; do not truncate the journal, strip
-plan linkage, replay a started worker, or rerun completed checks to clear
-attention. The commands intentionally do not include a new tick, dispatch, or
+Use the diagnostic `inspection_commands` to inspect Git status and loop status.
+These commands are read-only. Preserve the retained output; do not replay a
+started worker or rerun completed checks to clear attention. The commands intentionally do not include a new tick, dispatch, or
 automatic acknowledgement. For unsupported nested validation, choose a supported
 context for future work only.
 

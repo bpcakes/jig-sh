@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::time::Duration;
 
 use fs4::fs_std::FileExt;
 
@@ -110,57 +109,6 @@ fn durable_publish_stops_before_replace_when_file_sync_fails() {
 
     assert!(error.to_string().contains("injected sync failure"));
     assert_eq!(steps.into_inner(), ["sync_file"]);
-}
-
-#[test]
-fn compensation_reports_both_the_effect_and_rollback_failures() {
-    let error = compensate_after_commit(
-        "committed",
-        |_, _| -> Result<()> { anyhow::bail!("receipt publication failed") },
-        || anyhow::bail!("rollback publication failed"),
-    )
-    .unwrap_err();
-    let detail = format!("{error:#}");
-
-    assert!(detail.contains("receipt publication failed"), "{detail}");
-    assert!(
-        detail.contains("Failed to roll back committed loop schedule state"),
-        "{detail}"
-    );
-    assert!(detail.contains("rollback publication failed"), "{detail}");
-}
-
-#[test]
-fn compensation_retains_state_when_receipt_append_may_have_landed() {
-    let rolled_back = std::cell::Cell::new(false);
-
-    let error = compensate_after_commit(
-        "committed",
-        |_, _| -> Result<()> { Err(crate::state::receipt_append_may_have_landed_for_test()) },
-        || {
-            rolled_back.set(true);
-            Ok(())
-        },
-    )
-    .unwrap_err();
-
-    assert!(!rolled_back.get());
-    assert!(
-        format!("{error:#}").contains("receipt append may have landed"),
-        "{error:#}"
-    );
-}
-
-#[test]
-fn schedule_compensation_starts_a_fresh_deadline_after_state_commit() {
-    let (_, followup_remaining) = compensate_after_commit(
-        "committed",
-        |_, deadline| Ok(deadline.saturating_duration_since(Instant::now())),
-        || Ok(()),
-    )
-    .unwrap();
-
-    assert!(followup_remaining > Duration::from_secs(25));
 }
 
 #[test]

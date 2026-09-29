@@ -28,7 +28,7 @@ fn local_status_schema_three_omits_removed_sections() {
             .copied()
             .collect()
     );
-    assert_eq!(snapshot["schema_version"], 3);
+    assert_eq!(snapshot["schema_version"], 4);
     assert_eq!(snapshot["command"], "status");
     assert!(snapshot.get("providers").is_none());
     assert!(snapshot.get("work").is_none());
