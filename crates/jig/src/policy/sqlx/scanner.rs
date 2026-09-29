@@ -40,20 +40,31 @@ const EXPRESSION_MACROS: &[&str] = &[
 const EXPRESSION_MACRO_NAMESPACES: &[&str] = &["alloc", "core", "futures", "std", "tokio"];
 
 pub(super) fn scan_sqlx_calls(path: &str, text: &str) -> Result<Vec<SqlxCall>> {
-    let file = syn::parse_file(text).map_err(|error| {
-        let start = error.span().start();
-        anyhow!(
-            "cannot parse SQLx inventory source {path}:{}:{}: {error}",
-            start.line,
-            start.column + 1
-        )
-    })?;
     let mut scanner = SqlxScanner {
         path,
-        is_test: is_test_path(path) || has_cfg_test(&file.attrs),
+        is_test: is_test_path(path),
         calls: Vec::new(),
     };
-    scanner.visit_file(&file);
+    match syn::parse_file(text) {
+        Ok(file) => {
+            scanner.is_test |= has_cfg_test(&file.attrs);
+            scanner.visit_file(&file);
+        }
+        Err(error) => {
+            // `include!` accepts expression fragments as well as items. Parse
+            // the complete expression without wrapping it so spans stay at
+            // their original lines and trailing invalid input still fails.
+            let expr = syn::parse_str::<syn::Expr>(text).map_err(|_| {
+                let start = error.span().start();
+                anyhow!(
+                    "cannot parse SQLx inventory source {path}:{}:{}: {error}",
+                    start.line,
+                    start.column + 1
+                )
+            })?;
+            scanner.visit_expr(&expr);
+        }
+    }
     Ok(scanner.calls)
 }
 

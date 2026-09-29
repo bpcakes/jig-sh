@@ -11,6 +11,7 @@ use crate::test_env::TestRepoBuilder;
 
 mod boundaries;
 mod discovery;
+mod fragments;
 mod syntax;
 
 #[test]

@@ -66,14 +66,35 @@ rust_test_command = "cargo test"
     fs::write(root.join("tests/integration.rs"), call).unwrap();
     fs::write(
         root.join("src/lib.rs"),
-        format!("#[cfg(test)] mod unit {{ {call} }}"),
+        format!("const EXAMPLE: u32 = include!(\"value.rs\");\n#[cfg(test)] mod unit {{ {call} }}"),
     )
     .unwrap();
+    fs::write(root.join("src/value.rs"), "42\n").unwrap();
     fs::write(
         root.join("src/checked.rs"),
         "fn example() { sqlx::query!(\"SELECT 1\"); }",
     )
     .unwrap();
+    check(root, 0);
+    let args = ["generate-sqlx-unchecked-queries-todo", "--json"];
+    let output = jig(root, &args);
+    assert!(output.status.success(), "{output:?}");
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["non_test_count"], 0);
+
+    let fragment = "// included expression\nsqlx::query // comment\n(\"SELECT 1\")\n";
+    fs::write(root.join("src/value.rs"), fragment).unwrap();
+    check(root, 1);
+    let output = jig(root, &args);
+    assert!(output.status.success(), "{output:?}");
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["non_test_count"], 1);
+    let todo_path = root.join("docs/sqlx-unchecked-queries-todo.md");
+    let todo = fs::read_to_string(&todo_path).unwrap();
+    assert!(todo.contains("- [ ] `src/value.rs:2`: `sqlx::query`"));
+
+    fs::write(root.join("src/value.rs"), "sqlx::query!(\"SELECT 1\")\n").unwrap();
+    fs::write(root.join("tests/value.rs"), fragment).unwrap();
     check(root, 0);
 
     fs::write(
@@ -90,7 +111,6 @@ rust_test_command = "cargo test"
     )
     .unwrap();
     check(root, 1);
-    let args = ["generate-sqlx-unchecked-queries-todo", "--json"];
     let output = jig(root, &args);
     assert!(
         output.status.success(),
@@ -99,25 +119,29 @@ rust_test_command = "cargo test"
     );
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["non_test_count"], 1);
-    let todo_path = root.join("docs/sqlx-unchecked-queries-todo.md");
     let todo = fs::read_to_string(&todo_path).unwrap();
     assert!(todo.contains("- [ ] `src/replacement.rs:2`: `sqlx::query`"));
     assert!(todo.contains("- Non-test call sites: 1\n"));
-    assert!(todo.contains("- Test call sites: 2\n"));
+    assert!(todo.contains("- Test call sites: 3\n"));
+    assert!(todo.contains("- Compile-checked macro call sites already present: 2\n"));
+    let test_items = todo.split("## TODO Items (Test Code)").nth(1).unwrap();
+    assert!(test_items.contains("- [ ] `tests/value.rs:2`: `sqlx::query`"));
 
-    fs::write(root.join("src/broken.rs"), "fn broken(\n").unwrap();
-    for args in [&["check", "sqlx-unchecked-non-test", "--json"][..], &args] {
-        let output = jig(root, args);
-        assert!(!output.status.success());
-        let combined = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            combined.contains("cannot parse SQLx inventory source src/broken.rs:"),
-            "{combined}"
-        );
+    for broken in ["fn broken(\n", "42 trailing\n"] {
+        fs::write(root.join("src/broken.rs"), broken).unwrap();
+        for args in [&["check", "sqlx-unchecked-non-test", "--json"][..], &args] {
+            let output = jig(root, args);
+            assert!(!output.status.success());
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                combined.contains("cannot parse SQLx inventory source src/broken.rs:"),
+                "{combined}"
+            );
+        }
+        assert_eq!(fs::read_to_string(&todo_path).unwrap(), todo);
     }
-    assert_eq!(fs::read_to_string(todo_path).unwrap(), todo);
 }
