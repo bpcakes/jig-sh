@@ -127,7 +127,14 @@ rust_test_command = "cargo test"
     let test_items = todo.split("## TODO Items (Test Code)").nth(1).unwrap();
     assert!(test_items.contains("- [ ] `tests/value.rs:2`: `sqlx::query`"));
 
-    for broken in ["fn broken(\n", "42 trailing\n"] {
+    for (broken, expression_diagnostic) in [
+        ("fn broken(\n", None),
+        ("42 trailing\n", None),
+        (
+            "{\n    let value = 42;\n    let broken = ;\n    value\n}\n",
+            Some("expression parse at src/broken.rs:3:18: expected an expression"),
+        ),
+    ] {
         fs::write(root.join("src/broken.rs"), broken).unwrap();
         for args in [&["check", "sqlx-unchecked-non-test", "--json"][..], &args] {
             let output = jig(root, args);
@@ -141,6 +148,11 @@ rust_test_command = "cargo test"
                 combined.contains("cannot parse SQLx inventory source src/broken.rs:"),
                 "{combined}"
             );
+            if let Some(expected) = expression_diagnostic {
+                let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+                let message = value["error"]["message"].as_str().unwrap();
+                assert!(message.contains(expected), "{message}");
+            }
         }
         assert_eq!(fs::read_to_string(&todo_path).unwrap(), todo);
     }

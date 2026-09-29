@@ -54,12 +54,16 @@ pub(super) fn scan_sqlx_calls(path: &str, text: &str) -> Result<Vec<SqlxCall>> {
             // `include!` accepts expression fragments as well as items. Parse
             // the complete expression without wrapping it so spans stay at
             // their original lines and trailing invalid input still fails.
-            let expr = syn::parse_str::<syn::Expr>(text).map_err(|_| {
+            let expr = syn::parse_str::<syn::Expr>(text).map_err(|expr_error| {
                 let start = error.span().start();
+                let expr_start = expr_error.span().start();
                 anyhow!(
-                    "cannot parse SQLx inventory source {path}:{}:{}: {error}",
+                    "cannot parse SQLx inventory source {path}:{}:{}: {error} (file parse); \
+                     expression parse at {path}:{}:{}: {expr_error}",
                     start.line,
-                    start.column + 1
+                    start.column + 1,
+                    expr_start.line,
+                    expr_start.column + 1
                 )
             })?;
             scanner.visit_expr(&expr);

@@ -41,6 +41,24 @@ fn expression_blocks_reuse_module_and_macro_visitors() {
 }
 
 #[test]
+fn malformed_fragment_retains_both_parser_diagnostics() {
+    let text = "{\n    let value = 42;\n    let broken = ;\n    value\n}\n";
+    let error = scan_sqlx_calls("src/value.rs", text)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.starts_with("cannot parse SQLx inventory source src/value.rs:1:1:"),
+        "{error}"
+    );
+    assert!(error.contains("(file parse)"), "{error}");
+    assert!(
+        error.contains("expression parse at src/value.rs:3:18: expected an expression"),
+        "{error}"
+    );
+}
+
+#[test]
 fn fragments_must_parse_completely() {
     for text in [
         "42 trailing",
