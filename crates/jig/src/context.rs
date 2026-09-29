@@ -30,7 +30,8 @@ pub(crate) use runtime::{
     FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
 };
 pub(crate) use runtime::{
-    JIG_REPO_ROOT_ENV, LAUNCHER_REPAIR_STAGING_PREFIX, RepoConfigProbe, RuntimeCacheProfile,
+    JIG_REPO_ROOT_ENV, LAST_WORK_CONFIG_CONTRACT_VERSION, LAUNCHER_REPAIR_STAGING_PREFIX,
+    RepoConfigProbe, RuntimeCacheProfile, WORK_CONFIG_RETIRED_CONTRACT_VERSION,
     active_contract_versions, active_contract_versions_label, is_active_contract_version,
     is_supported_contract_version, runtime_cache_base, runtime_profile_cache_name,
     runtime_profile_cache_path,
@@ -41,7 +42,7 @@ pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig, parse_five_field_cr
 pub(crate) use migration::{MigrationBackend, RustMigrationLayout, native_migration_backend};
 use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
-    WorkConfig, WorkEvidenceSelector, WorkGate, parse_work_gate, validate_gate_path_pattern,
+    WorkConfig, WorkEvidenceSelector, WorkGate, validate_gate_path_pattern,
 };
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
@@ -150,8 +151,9 @@ struct RepoConfig {
     vault: VaultConfig,
     #[serde(default)]
     dev: DevConfig,
+    /// Retired structured-work settings; only epochs through 8 may declare it.
     #[serde(default)]
-    work: WorkConfig,
+    work: Option<WorkConfig>,
     #[serde(default, rename = "loop")]
     loop_config: LoopConfig,
     #[serde(default)]
@@ -201,9 +203,27 @@ struct AuthoredRepositoryConfig {
     default_check_profile: ProfileId,
     #[serde(default)]
     affected_ignore: Vec<String>,
+    /// Issue-tracker state the repository keeps in its checkout. Checked
+    /// commands never consume it, so it stays out of source identity.
+    #[serde(default)]
+    tracker: Option<RepositoryTracker>,
     components: Vec<ComponentSpec>,
     actions: Vec<ActionSpec>,
     profiles: Vec<ProfileSpec>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RepositoryTracker {
+    Beads,
+}
+
+impl RepositoryTracker {
+    pub(crate) const fn state_path(self) -> &'static str {
+        match self {
+            Self::Beads => ".beads",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -639,11 +659,19 @@ impl RepoContext {
     }
 
     pub(crate) fn work_gates(&self) -> Vec<WorkGate> {
-        self.config.work.gates()
+        self.config
+            .work
+            .as_ref()
+            .map(WorkConfig::gates)
+            .unwrap_or_default()
     }
 
     pub(crate) fn work_check_tools(&self) -> Vec<String> {
-        self.config.work.check_tools()
+        self.config
+            .work
+            .as_ref()
+            .map(WorkConfig::check_tools)
+            .unwrap_or_default()
     }
 
     pub(crate) const fn loop_config(&self) -> &LoopConfig {
@@ -667,110 +695,8 @@ impl RepoContext {
     }
 }
 
-#[derive(Serialize)]
-struct RepositoryExecutionAuthority<'a> {
-    schema_version: u32,
-    manifest: &'a serde_json::Value,
-    harness_footprint: HarnessFootprintConfig,
-    backend_language: BackendLanguage,
-    go_database: GoDatabase,
-    sqlx_enabled: bool,
-    rust_crate_roots: &'a [String],
-    migration_dir: &'a str,
-    rust_migration_dir: &'a str,
-    rust_migration_layout: RustMigrationLayout,
-    rust_sqlx_metadata_dir: &'a str,
-    schema_dump_enabled: bool,
-    commands: BTreeMap<String, &'a str>,
-    frontend_apps: &'a [FrontendAppConfig],
-    work: work_config::WorkExecutionAuthority<'a>,
-    execution: &'a ExecutionConfig,
-}
-
-fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> Result<String> {
-    // This deliberately exhaustive pattern is a compile-time review gate for
-    // every new RepoConfig field: each addition must be classified here as
-    // execution authority or explicitly unrelated runtime/config metadata.
-    let RepoConfig {
-        src_path: _,
-        commit: _,
-        template_mode: _,
-        template_local_path: _,
-        repo_name: _,
-        default_branch: _,
-        ci_github_runner: _,
-        jig_version: _,
-        template_source_url: _,
-        harness_footprint,
-        backend_language,
-        go_database,
-        sqlx_enabled,
-        rust_crate_roots,
-        rust_migration_dir,
-        migration_dir,
-        rust_migration_layout,
-        rust_sqlx_metadata_dir,
-        schema_dump_enabled,
-        schema_dump_command: _,
-        schema_docs_dir: _,
-        schema_check_command: _,
-        sqlx_check_command: _,
-        migration_add_command: _,
-        bootstrap_command: _,
-        contract_check_command: _,
-        dev_command: _,
-        rust_fmt_check_command: _,
-        rust_clippy_command: _,
-        rust_test_command: _,
-        rust_test_locked_command: _,
-        commands,
-        web_package_manager: _,
-        application_contracts_enabled: _,
-        frontend_apps,
-        frontend_workspace_roots: _,
-        repository: _,
-        vault: _,
-        dev: _,
-        work,
-        loop_config: _,
-        execution,
-        agent_tooling: _,
-    } = config;
-    let mut effective_commands = commands
-        .iter()
-        .map(|(key, value)| (key.clone(), value.as_str()))
-        .collect::<BTreeMap<_, _>>();
-    for (key, accessor) in LEGACY_COMMAND_BINDINGS {
-        effective_commands
-            .entry((*key).into())
-            .or_insert_with(|| accessor(config));
-    }
-    let authority = RepositoryExecutionAuthority {
-        schema_version: 2,
-        manifest,
-        harness_footprint: *harness_footprint,
-        backend_language: *backend_language,
-        go_database: *go_database,
-        sqlx_enabled: *sqlx_enabled,
-        rust_crate_roots,
-        migration_dir,
-        rust_migration_dir,
-        rust_migration_layout: *rust_migration_layout,
-        rust_sqlx_metadata_dir,
-        schema_dump_enabled: *schema_dump_enabled,
-        commands: effective_commands,
-        frontend_apps,
-        work: work.execution_authority(),
-        execution,
-    };
-    let encoded = serde_json::to_vec(&authority)
-        .context("Failed to canonicalize repository execution authority")?;
-    let mut hasher = Sha256::new();
-    hasher.update(b"jig-repository-execution-authority-v2\0");
-    hasher.update((encoded.len() as u64).to_be_bytes());
-    hasher.update(encoded);
-    Ok(format!("sha256:{:x}", hasher.finalize()))
-}
+mod execution_authority;
+use execution_authority::contract_source_digest;
 
 include!("context/tail.rs");
 
@@ -787,8 +713,8 @@ pub(crate) use repository_root::{find_repo_root_from, find_repo_root_from_or_env
 
 // Keep launcher protocol constants in this module shell: repository tooling
 // reads their declarations directly without compiling the Rust include tree.
-pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 8;
-pub(crate) const MAX_SUPPORTED_CONTRACT_VERSION: u32 = 8;
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 12;
+pub(crate) const MAX_SUPPORTED_CONTRACT_VERSION: u32 = 12;
 pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";

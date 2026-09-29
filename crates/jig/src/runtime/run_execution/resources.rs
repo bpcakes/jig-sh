@@ -234,7 +234,7 @@ fn fingerprint(
     ctx: &RepoContext,
     control: &TargetExecutionControl<'_>,
 ) -> std::result::Result<String, String> {
-    crate::git_receipts::repository_source_snapshot_with_cancellation(ctx.root(), &|| {
+    crate::source_identity::repository_source_snapshot_with_cancellation(ctx.root(), &|| {
         control.remaining().is_err()
     })
     .map(|snapshot| snapshot.worktree_fingerprint)

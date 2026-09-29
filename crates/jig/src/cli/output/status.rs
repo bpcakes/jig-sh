@@ -14,9 +14,6 @@ pub(super) fn format_summary(value: &serde_json::Value) -> String {
         .map(|dirty| if dirty { "dirty" } else { "clean" })
         .unwrap_or("unknown");
 
-    let work_state = &value["work"]["state"];
-    let open_plans = value_u64(&work_state["counts"], "open_plans").unwrap_or(0);
-    let session = value_str(work_state, "current_session_id").unwrap_or("none");
     let loops = &value["loops"];
     let leases = loops["leases"].as_array().map(Vec::len).unwrap_or(0);
     let attempts = loops["attempts"].as_array().map(Vec::len).unwrap_or(0);
@@ -39,9 +36,6 @@ pub(super) fn format_summary(value: &serde_json::Value) -> String {
     } else {
         lines.push("Tracking: none".into());
     }
-    lines.push(format!(
-        "Work: {open_plans} open plan(s), session {session}"
-    ));
     lines.push(format!(
         "Loops: {leases} lease(s), {attempts} attempt(s), {exhausted} exhausted"
     ));
@@ -68,7 +62,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn surfaces_local_repository_work_loop_and_collection_state() {
+    fn surfaces_local_repository_loop_and_collection_state() {
         let summary = format_summary(&json!({
             "outcome": "partial",
             "repository": {
@@ -80,12 +74,6 @@ mod tests {
                     "reference": "origin/main",
                     "ahead": 2,
                     "behind": 1
-                }
-            },
-            "work": {
-                "state": {
-                    "current_session_id": "session_1",
-                    "counts": { "open_plans": 3 }
                 }
             },
             "loops": {
@@ -102,7 +90,7 @@ mod tests {
         assert!(summary.contains("Collection: partial"));
         assert!(summary.contains("rewrite main@1234567890ab (dirty)"));
         assert!(summary.contains("origin/main (ahead 2, behind 1; local ref)"));
-        assert!(summary.contains("3 open plan(s), session session_1"));
+        assert!(!summary.contains("Work:"));
         assert!(summary.contains("1 lease(s), 2 attempt(s), 1 exhausted"));
         assert!(summary.contains("Collection errors:"));
         assert!(summary.contains("loops: one malformed attempt was omitted"));

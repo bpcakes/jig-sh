@@ -153,9 +153,6 @@ pub(crate) struct PlanRunArgs {
     pub(crate) affected_base: Option<String>,
     #[serde(default)]
     pub(crate) comparison: Option<ComparisonRequestV1>,
-    /// Retired. Accepted and ignored until the next contract epoch.
-    #[serde(default, rename = "work_plan_id")]
-    pub(crate) _retired_work_plan_id: Option<String>,
     #[serde(default)]
     pub(crate) arguments: BTreeMap<String, ActionArguments>,
 }
@@ -164,9 +161,6 @@ pub(crate) struct PlanRunArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExecuteRunArgs {
     pub(crate) plan: RunPlan,
-    /// Retired. Accepted and ignored until the next contract epoch.
-    #[serde(default, rename = "work_plan_id")]
-    pub(crate) _retired_work_plan_id: Option<String>,
     #[serde(default)]
     pub(crate) fail_fast: bool,
     #[serde(default)]
@@ -360,13 +354,12 @@ mod tests {
     }
 
     #[test]
-    fn plan_schema_accepts_closed_comparison_and_ignores_retired_work_plan_id() {
+    fn plan_schema_accepts_closed_comparison_and_rejects_the_removed_work_plan_id() {
         let value = json!({
             "comparison": {
                 "kind": "strict_inventory",
                 "reason": "explicit_check"
-            },
-            "work_plan_id": "plan_example"
+            }
         });
         let schema = RepositoryTool::PlanRun.descriptor()["inputSchema"].clone();
         let validator = jsonschema::validator_for(&schema).unwrap();
@@ -379,6 +372,9 @@ mod tests {
                 "unexpected": true
             }
         })));
+        let with_work_plan = json!({"work_plan_id": "plan_example"});
+        assert!(!validator.is_valid(&with_work_plan));
+        assert!(serde_json::from_value::<PlanRunArgs>(with_work_plan).is_err());
         let parsed = serde_json::from_value::<PlanRunArgs>(value).unwrap();
         assert!(matches!(
             parsed.comparison,

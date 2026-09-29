@@ -154,7 +154,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
             &request.preferred_rendered_commands,
         )?;
     }
-    super::runtime_config::reconcile_optional_work_authority(request.seed_repo_path, &destination)?;
+    super::runtime_config::reconcile_tracker_ownership(request.seed_repo_path, &destination)?;
 
     active_paths.insert(PathBuf::from(managed_paths::MANIFEST_PATH));
     request

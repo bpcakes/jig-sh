@@ -141,7 +141,8 @@ argv = ["<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"")
 command_timeout_seconds = <<[ execution.command_timeout_seconds ]>>
 command_output_limit_bytes = <<[ execution.command_output_limit_bytes ]>>
 
-[% if _jig.contract_version >= 6 %]
+[% if _jig.contract_version >= 12 %]
+[% elif _jig.contract_version >= 6 %]
 [[work.gates]]
 id = "verify"
 kind = "evidence"

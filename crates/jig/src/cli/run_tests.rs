@@ -271,9 +271,6 @@ fn generated_launcher_keeps_bare_check_and_target_selectors_repository_scoped() 
         &["check", "contract"][..],
         &["check", "--help"][..],
         &["check", "--version"][..],
-        &["check", "--plan-id", "plan_example", "contract"][..],
-        &["check", "--plan-id=plan_example", "contract"][..],
-        &["check", "contract", "--plan-id=plan_example"][..],
     ] {
         assert!(generated_launcher_classifies_as_capability_only(args));
     }

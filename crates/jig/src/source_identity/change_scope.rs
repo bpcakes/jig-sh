@@ -86,7 +86,7 @@ pub(crate) fn capture_scope_v1(
     comparison: &ResolvedComparisonV1,
     view: CurrentViewV1,
 ) -> Result<ScopeSnapshotV1> {
-    capture_scope_inner(root, comparison, view, GitReceiptCollection::Blocking)
+    capture_scope_inner(root, comparison, view, GitCollection::Blocking)
 }
 
 #[allow(dead_code, reason = "staged cancellable native file-budget scope API")]
@@ -100,7 +100,7 @@ pub(crate) fn capture_scope_v1_with_cancellation(
         root,
         comparison,
         view,
-        GitReceiptCollection::Cancellable(cancelled),
+        GitCollection::Cancellable(cancelled),
     )
 }
 
@@ -114,7 +114,7 @@ pub(crate) fn capture_all_current_scope_v1_with_cancellation(
         root,
         view,
         include_untracked,
-        GitReceiptCollection::Cancellable(cancelled),
+        GitCollection::Cancellable(cancelled),
     )
 }
 
@@ -133,7 +133,7 @@ pub(crate) fn capture_affected_paths_v1(
             bail!("affected path capture requires a worktree comparison")
         }
     };
-    let collection = GitReceiptCollection::Blocking;
+    let collection = GitCollection::Blocking;
     let raw = raw_scope_diff(root, baseline_oid, false, collection)?;
     let status = worktree_status_output(root, collection)?;
     let mut paths = BTreeSet::new();
@@ -161,7 +161,7 @@ fn capture_scope_inner(
     root: &Path,
     comparison: &ResolvedComparisonV1,
     view: CurrentViewV1,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<ScopeSnapshotV1> {
     collection.ensure_active()?;
     match (comparison, view) {
@@ -200,7 +200,7 @@ fn capture_changed_scope(
     baseline_oid: &str,
     view: CurrentViewV1,
     cached: bool,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<ScopeSnapshotV1> {
     let output = raw_scope_diff(root, baseline_oid, cached, collection)?;
     let mut issues = rename_diagnostics(&output.stderr);
@@ -235,7 +235,7 @@ fn capture_inventory_scope(
     root: &Path,
     view: CurrentViewV1,
     include_untracked: bool,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<ScopeSnapshotV1> {
     let output = scope_git_output(
         root,
@@ -460,7 +460,7 @@ fn append_raw_entry(
 
 fn append_untracked_entries(
     root: &Path,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
     entries: &mut Vec<ScopeEntryV1>,
     issues: &mut Vec<ScopeIssueV1>,
 ) -> Result<()> {
@@ -514,7 +514,7 @@ pub(super) fn append_disappeared_untracked_entry_for_test(
     );
 }
 
-fn worktree_status_output(root: &Path, collection: GitReceiptCollection<'_>) -> Result<Output> {
+fn worktree_status_output(root: &Path, collection: GitCollection<'_>) -> Result<Output> {
     scope_git_output(
         root,
         &[
@@ -539,7 +539,7 @@ fn raw_scope_diff(
     root: &Path,
     baseline_oid: &str,
     cached: bool,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Output> {
     let rename_limit = scope_rename_limit().to_string();
     let mut args = vec![
@@ -576,7 +576,7 @@ fn raw_scope_diff(
 
 pub(super) fn intent_to_add_paths(
     root: &Path,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<(BTreeSet<String>, Vec<ScopeIssueV1>)> {
     let visible = diff_ita_paths(root, "--ita-visible-in-index", collection)?;
     let invisible = diff_ita_paths(root, "--ita-invisible-in-index", collection)?;
@@ -593,7 +593,7 @@ pub(super) fn intent_to_add_paths(
 fn diff_ita_paths(
     root: &Path,
     flag: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<(BTreeSet<String>, Vec<ScopeIssueV1>)> {
     let output = scope_git_output(
         root,
@@ -622,7 +622,7 @@ fn diff_ita_paths(
 
 pub(super) fn sparse_index_paths(
     root: &Path,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<(BTreeSet<String>, Vec<ScopeIssueV1>)> {
     let output = scope_git_output(
         root,

@@ -29,8 +29,6 @@ pub(super) fn dispatch_with_observer(
     command: AgentCommand,
     observer: &mut dyn ExecutionControl,
 ) -> Result<JsonValue> {
-    // Agent tooling commands describe or mutate local client setup, not repo
-    // work evidence, so they intentionally do not record receipts.
     match command {
         AgentCommand::Doctor => Ok(doctor_with_cancellation(ctx, &|| observer.cancelled())),
         AgentCommand::Bootstrap(opts) => bootstrap(ctx, opts, observer),

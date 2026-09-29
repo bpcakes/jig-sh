@@ -425,7 +425,6 @@ fn foreground_run_and_check_record_run_history_without_receipts() {
         }
         let durable =
             crate::state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
-        assert!(durable.work_plan_id.is_none());
         assert_eq!(
             durable.result.targets[0].conclusion,
             Some(jig_contract::RunConclusion::Success)

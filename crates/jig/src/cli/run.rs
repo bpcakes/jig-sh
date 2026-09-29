@@ -145,7 +145,7 @@ impl CommandKind {
             Self::Presets => (tool_defs::cli_command::PRESETS, CapabilityOnly),
             Self::Adopt(_) => (tool_defs::cli_command::ADOPT, CapabilityOnly),
             Self::Update(_) => (tool_defs::cli_command::UPDATE, CapabilityOnly),
-            Self::Bootstrap(_) => (tool_defs::cli_command::BOOTSTRAP, Repository),
+            Self::Bootstrap => (tool_defs::cli_command::BOOTSTRAP, Repository),
             Self::Setup => (tool_defs::cli_command::SETUP, Repository),
             Self::Doctor => (tool_defs::cli_command::DOCTOR, CapabilityOnly),
             Self::Info(_) => (tool_defs::cli_command::INFO, Repository),
@@ -158,12 +158,11 @@ impl CommandKind {
             Self::FileBudget(_) => (tool_defs::cli_command::FILE_BUDGET, Repository),
             Self::Status(_) => (tool_defs::cli_command::STATUS, Repository),
             Self::Ui(_) => (tool_defs::cli_command::UI, Repository),
-            Self::Work(_) => (tool_defs::cli_command::WORK, Repository),
             Self::Loop(_) => (tool_defs::cli_command::LOOP, Repository),
             Self::Migration(_) => (root_commands::MIGRATION.name, Repository),
             Self::Sqlx(_) => (root_commands::SQLX.name, Repository),
             Self::MigrationAdd(_) => (tool_defs::cli_command::MIGRATION_ADD, Repository),
-            Self::SchemaDump(_) => (tool_defs::cli_command::SCHEMA_DUMP, Repository),
+            Self::SchemaDump => (tool_defs::cli_command::SCHEMA_DUMP, Repository),
             Self::Vault(_) => (tool_defs::cli_command::VAULT, Repository),
             Self::GenerateSqlxUncheckedQueriesTodo(_) => (
                 tool_defs::cli_command::GENERATE_SQLX_UNCHECKED_QUERIES_TODO,
@@ -371,7 +370,7 @@ fn run_command(cli: Cli) -> Result<()> {
             emit(json_output, HumanOutput::Proxy, &output)?;
             finish_after_json_output(require_foreground_status(&output), json_output)
         }
-        CommandKind::Bootstrap(_) => dispatch_runtime_command(
+        CommandKind::Bootstrap => dispatch_runtime_command(
             crate::command::RuntimeCommand::Bootstrap,
             false,
             json_output,
@@ -398,7 +397,7 @@ fn run_command(cli: Cli) -> Result<()> {
         }
         CommandKind::Migration(MigrationCommand::Add(opts)) => run_migration_add(opts, json_output),
         CommandKind::Sqlx(command) => run_sqlx_command(command, json_output),
-        CommandKind::SchemaDump(_) => dispatch_runtime_command(
+        CommandKind::SchemaDump => dispatch_runtime_command(
             crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump),
             false,
             json_output,
@@ -431,7 +430,6 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Claude(command) => super::claude_run::run_claude_command(command, json_output),
         CommandKind::Codex(command) => run_codex_command(command, json_output),
         // Argument parsing rejects the retired namespace before dispatch.
-        CommandKind::Work(_) => anyhow::bail!("`jig work` was removed"),
         CommandKind::Loop(command) => {
             let require_ok = loop_command_reports_failure_with_ok(&command);
             let human_output = loop_human_output(&command);
@@ -467,7 +465,7 @@ fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {
         SqlxCommand::Migration(SqlxMigrationCommand::Add(opts)) => {
             run_migration_add(opts, json_output)
         }
-        SqlxCommand::Schema(SqlxSchemaCommand::Dump(_)) => dispatch_runtime_command(
+        SqlxCommand::Schema(SqlxSchemaCommand::Dump) => dispatch_runtime_command(
             crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump),
             false,
             json_output,

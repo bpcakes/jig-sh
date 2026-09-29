@@ -326,7 +326,7 @@ fn native_proof_with_context(ctx: &RepoContext) -> Result<LifecycleProof> {
         .action(&target)
         .context("file-budget action disappeared")?;
     let configuration = action_file_budget_configuration(action)?;
-    let source = crate::git_receipts::repository_source_snapshot(root)?;
+    let source = crate::source_identity::repository_source_snapshot(root)?;
     let result = crate::runtime::run_direct_file_budget(
         ctx,
         None,
@@ -338,7 +338,7 @@ fn native_proof_with_context(ctx: &RepoContext) -> Result<LifecycleProof> {
     if result.conclusion != RunConclusion::Success {
         bail!("repo:file-budget does not pass on the current repository source");
     }
-    if crate::git_receipts::repository_source_snapshot(root)?.worktree_fingerprint
+    if crate::source_identity::repository_source_snapshot(root)?.worktree_fingerprint
         != source.worktree_fingerprint
     {
         bail!("repository source changed while repo:file-budget was evaluated");

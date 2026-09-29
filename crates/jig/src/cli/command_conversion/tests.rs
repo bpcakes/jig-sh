@@ -3,7 +3,6 @@ use super::*;
 #[test]
 fn external_check_selectors_accept_execution_flags_after_targets() {
     let request = command::CheckCommand::try_from(CheckOpts {
-        tool: ToolOpts::default(),
         profile: None,
         affected: None,
         explain: false,
@@ -27,7 +26,6 @@ fn external_check_selectors_accept_execution_flags_after_targets() {
 #[test]
 fn external_check_selectors_reject_the_retired_receipt_flag() {
     let error = command::CheckCommand::try_from(CheckOpts {
-        tool: ToolOpts::default(),
         profile: None,
         affected: None,
         explain: false,
@@ -56,7 +54,6 @@ fn repository_action_selectors_reject_direct_file_budget_mode_flags() {
             selectors.push("origin/main".into());
         }
         let error = command::CheckCommand::try_from(CheckOpts {
-            tool: ToolOpts::default(),
             profile: None,
             affected: None,
             explain: false,
@@ -131,14 +128,12 @@ fn repository_action_comparison_selector_grammar_is_closed() {
 #[test]
 fn built_in_action_names_compose_with_additional_selectors() {
     let request = command::CheckCommand::try_from(CheckOpts {
-        tool: ToolOpts::default(),
         profile: None,
         affected: None,
         explain: false,
         fail_fast: false,
         comparison: CheckComparisonOpts::default(),
         command: Some(CheckCommand::Test(CheckTargetOpts {
-            tool: ToolOpts::default(),
             selectors: vec!["api:lint".into()],
         })),
     })

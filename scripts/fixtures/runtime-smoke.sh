@@ -607,8 +607,6 @@ if "jig.schema_check" in tools_by_name:
 assert "jig.session_start" not in tools, manifest
 PY
 
-    local work_json
-    local plan_id
     local contract_version
     local contract_cache_key
     local install_base
@@ -727,14 +725,14 @@ if missing:
     raise SystemExit(f"Missing expected run results: {', '.join(missing)}")
 PY
 
-    # The retired structured-work namespace parses only to explain its replacement.
-    retired_work_stderr="$(mktemp "$repo_dir/.retired-work-stderr.XXXXXX")"
-    if scripts/jig work status >/dev/null 2>"$retired_work_stderr"; then
+    # The removed structured-work namespace is an unknown command.
+    removed_work_stderr="$(mktemp "$repo_dir/.removed-work-stderr.XXXXXX")"
+    if scripts/jig work status >/dev/null 2>"$removed_work_stderr"; then
       echo "Removed jig work namespace unexpectedly succeeded." >&2
       exit 1
     fi
-    grep -q 'jig work` was removed' "$retired_work_stderr"
-    rm -f "$retired_work_stderr"
+    grep -q "unrecognized subcommand 'work'" "$removed_work_stderr"
+    rm -f "$removed_work_stderr"
 
     [[ -f .agent/state/runs.jsonl ]]
     [[ -f "$install_base/$contract_cache_key-runtime/bin/jig" ]]

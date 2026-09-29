@@ -306,10 +306,7 @@ fn format_run_status_summary(value: &serde_json::Value) -> String {
             let conclusion = target["conclusion"].as_str();
             let state =
                 conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
-            let receipt = target["receipt_id"]
-                .as_str()
-                .map_or_else(String::new, |id| format!(", receipt {id}"));
-            lines.push(format!("  - {address}: {state}{receipt}"));
+            lines.push(format!("  - {address}: {state}"));
         }
     }
     lines.push("  full report: rerun with --json".into());
@@ -413,9 +410,6 @@ pub(super) fn format_tool_execution_summary(value: &serde_json::Value) -> String
         format!("{tool}: {}", if ok { "ok" } else { "failed" }),
         format!("  Exit: {exit_status}"),
     ];
-    if let Some(receipt) = value_str(value, "receipt_id") {
-        lines.push(format!("  Receipt: {receipt}"));
-    }
     append_policy_check_details(&mut lines, value);
     if let Some(preview) = tool_output_preview(value) {
         lines.push(format!("  Output: {preview}"));
@@ -493,9 +487,6 @@ pub(super) fn format_migration_add_summary(value: &serde_json::Value) -> String 
         format!("Migration add: {}", if ok { "ok" } else { "failed" }),
         format!("  Name: {name}"),
     ];
-    if let Some(receipt) = value_str(value, "receipt_id") {
-        lines.push(format!("  Receipt: {receipt}"));
-    }
     if let Some(preview) = tool_output_preview(value) {
         lines.push(format!("  Output: {preview}"));
     }

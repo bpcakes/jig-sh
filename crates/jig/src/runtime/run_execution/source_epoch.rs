@@ -309,7 +309,7 @@ impl ExecutionSourceEpoch {
 pub(super) fn collect_execution_fingerprint(
     ctx: &RepoContext,
 ) -> std::result::Result<String, String> {
-    crate::git_receipts::repository_source_snapshot(ctx.root())
+    crate::source_identity::repository_source_snapshot(ctx.root())
         .map(|snapshot| snapshot.worktree_fingerprint)
         .map_err(|error| format!("{error:#}"))
 }

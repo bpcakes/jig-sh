@@ -72,10 +72,9 @@ def make_fixture(root, case):
     config = {'_src_path': '/tmp/template', '_commit': 'abc123', 'repo_name': 'ExampleVelocityProject',
               'default_branch': 'main', 'commands': {'example_check_command': command},
               'repository': {'components': components, 'actions': actions, 'profiles': profiles,
-                             'default_check_profile': 'verify'},
-              'work': {'gates': [{'id': 'full', 'kind': 'evidence', 'profile': 'verify'}]}}
+                             'default_check_profile': 'verify'}}
     (root / '.jig.toml').write_text('\n'.join(json.dumps(k) + ' = ' + literal(v) for k, v in config.items()) + '\n')
-    manifest = {'contract_version': 11, 'tool_namespace': 'jig', 'required_commands': ['example_check_command'],
+    manifest = {'contract_version': 12, 'tool_namespace': 'jig', 'required_commands': ['example_check_command'],
                 'tools': [], 'components': components, 'actions': actions, 'profiles': profiles,
                 'default_check_profile': 'verify'}
     (root / '.agent/jig-contract.json').write_text(json.dumps(manifest, indent=2) + '\n')

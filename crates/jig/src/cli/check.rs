@@ -4,8 +4,8 @@ use jig_contract::ComparisonRequestV1;
 
 use crate::tool_defs;
 
+use super::AgentMapOpts;
 use super::comparison::{CliExactTreeProvenance, comparison_request};
-use super::{AgentMapOpts, ToolOpts};
 
 pub(super) const CHECK_AFTER_HELP: &str = "\
 Run configured project checks or Jig-owned repository policy checks.
@@ -41,8 +41,6 @@ pub(crate) const CHECK_SUBCOMMAND_NAMES: &[&str] = &[
 
 #[derive(Args, Debug, Default)]
 pub(crate) struct CheckOpts {
-    #[command(flatten)]
-    pub(crate) tool: ToolOpts,
     #[arg(
         long,
         global = true,
@@ -157,8 +155,6 @@ impl CheckComparisonOpts {
 
 #[derive(Args, Clone, Debug, Default)]
 pub(crate) struct CheckTargetOpts {
-    #[command(flatten)]
-    pub(crate) tool: ToolOpts,
     #[arg(
         value_name = "SELECTOR",
         help = "Additional component action or target selectors"

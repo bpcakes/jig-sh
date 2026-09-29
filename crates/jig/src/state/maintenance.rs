@@ -5,7 +5,6 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
@@ -19,13 +18,10 @@ use super::compression::{
     GzipWriteReport, create_dir_all_synced, decompress_gzip_to_temp, gzip_file_atomic, sha256_file,
     sync_directory,
 };
-use super::jsonl::{scan_jsonl_raw, with_jsonl_write_lock};
+use super::jsonl::with_jsonl_write_lock;
 use super::support::now_ms;
 
 const BACKUP_MANIFEST_VERSION: u32 = 1;
-const SESSIONS_STREAM: &str = "sessions";
-const SESSIONS_SOURCE_PATH: &str = ".agent/state/sessions.jsonl";
-const SESSIONS_BACKUP_FILE: &str = "sessions.jsonl.gz";
 const RUNS_STREAM: &str = "runs";
 const RUNS_SOURCE_PATH: &str = ".agent/state/runs.jsonl";
 const RUNS_BACKUP_FILE: &str = "runs.jsonl.gz";
@@ -38,15 +34,6 @@ struct BackupStream {
     source_path: &'static str,
     compressed_file: &'static str,
 }
-
-/// Session compaction was removed with work sessions. Backups it created remain
-/// restorable, but no command creates new ones.
-const SESSION_BACKUP_STREAM: BackupStream = BackupStream {
-    name: SESSIONS_STREAM,
-    state_file: "sessions.jsonl",
-    source_path: SESSIONS_SOURCE_PATH,
-    compressed_file: SESSIONS_BACKUP_FILE,
-};
 
 const RUN_BACKUP_STREAM: BackupStream = BackupStream {
     name: RUNS_STREAM,
@@ -305,7 +292,6 @@ fn validate_manifest(manifest: &StateBackupManifest) -> Result<BackupStream> {
         );
     }
     let stream = match (manifest.stream.as_str(), manifest.source_path.as_str()) {
-        (SESSIONS_STREAM, SESSIONS_SOURCE_PATH) => SESSION_BACKUP_STREAM,
         (RUNS_STREAM, RUNS_SOURCE_PATH) => RUN_BACKUP_STREAM,
         _ => {
             bail!(
@@ -332,21 +318,8 @@ fn validate_manifest(manifest: &StateBackupManifest) -> Result<BackupStream> {
 }
 
 fn validate_restored_stream(stream: BackupStream, path: &Path) -> Result<()> {
-    match stream.name {
-        SESSIONS_STREAM => validate_legacy_session_stream(path),
-        RUNS_STREAM => super::runs::validate_run_stream(path),
-        _ => unreachable!("validated backup streams are exhaustive"),
-    }
-}
-
-/// Sessions are no longer read, so a legacy backup only has to be valid JSONL.
-fn validate_legacy_session_stream(path: &Path) -> Result<()> {
-    scan_jsonl_raw(path, &|| false, |record| {
-        serde_json::from_slice::<IgnoredAny>(record.bytes)
-            .map(|_| ())
-            .with_context(|| format!("Invalid session JSONL record {}", record.line_number))
-    })
-    .map(|_| ())
+    debug_assert_eq!(stream.name, RUNS_STREAM);
+    super::runs::validate_run_stream(path)
 }
 
 fn sha256_file_or_empty(path: &Path) -> Result<super::compression::GzipReadReport> {
@@ -376,47 +349,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_session_backups_restore_exactly() {
+    fn session_backups_are_no_longer_restorable() {
         let temp = tempdir().unwrap();
         TestRepoBuilder::new(temp.path()).write();
         let ctx = RepoContext::load_from(temp.path()).unwrap();
-        fs::create_dir_all(ctx.state_dir()).unwrap();
-        let sessions = ctx.state_file("sessions.jsonl");
-        let original = format!(
-            "{}\n",
-            json!({"id": "event-1", "session_id": "session-1", "event": "start", "timestamp_ms": 1})
-        );
-        fs::write(&sessions, &original).unwrap();
-        let (backup, _) =
-            create_state_backup(&ctx, &sessions, "sessions", SESSION_BACKUP_STREAM, None).unwrap();
-        let current = format!("{original}{}\n", json!({"id": "event-2", "event": "end"}));
-        fs::write(&sessions, &current).unwrap();
-
-        let restored = restore_backup(&ctx, StateRestoreRequest { backup }).unwrap();
-        assert_eq!(restored["changed"], true);
-        assert_eq!(fs::read_to_string(&sessions).unwrap(), original);
-        let recovery = PathBuf::from(restored["recovery_backup_path"].as_str().unwrap());
-        restore_backup(&ctx, StateRestoreRequest { backup: recovery }).unwrap();
-        assert_eq!(fs::read_to_string(&sessions).unwrap(), current);
-    }
-
-    #[test]
-    fn legacy_session_backups_must_hold_valid_jsonl() {
-        let temp = tempdir().unwrap();
-        TestRepoBuilder::new(temp.path()).write();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        fs::create_dir_all(ctx.state_dir()).unwrap();
-        let sessions = ctx.state_file("sessions.jsonl");
-        fs::write(&sessions, "not json\n").unwrap();
-        let (backup, _) =
-            create_state_backup(&ctx, &sessions, "sessions", SESSION_BACKUP_STREAM, None).unwrap();
-        fs::write(&sessions, "").unwrap();
+        let backup = ctx.root().join(".agent/state/backups/sessions-example");
+        fs::create_dir_all(&backup).unwrap();
+        fs::write(
+            backup.join(BACKUP_MANIFEST_FILE),
+            json!({
+                "version": BACKUP_MANIFEST_VERSION,
+                "stream": "sessions",
+                "source_path": ".agent/state/sessions.jsonl",
+                "compressed_file": "sessions.jsonl.gz",
+                "created_at_ms": 1,
+                "original_bytes": 0,
+                "original_sha256": "",
+                "compressed_bytes": 0,
+            })
+            .to_string(),
+        )
+        .unwrap();
 
         let error = restore_backup(&ctx, StateRestoreRequest { backup }).unwrap_err();
-        assert!(
-            format!("{error:#}").contains("not valid sessions state"),
-            "{error:#}"
+        assert_eq!(
+            error.to_string(),
+            "Backup is for unsupported stream sessions at .agent/state/sessions.jsonl"
         );
-        assert_eq!(fs::read_to_string(&sessions).unwrap(), "");
     }
 }

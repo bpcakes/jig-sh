@@ -312,7 +312,6 @@ mod tests {
             run_id: "run_01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
             event: EVENT_QUEUED.into(),
             timestamp_ms: 1,
-            work_plan_id: None,
             plan: Some(plan),
             target: None,
             result: None,

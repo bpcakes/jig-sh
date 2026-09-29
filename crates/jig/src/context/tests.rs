@@ -27,6 +27,35 @@ fn contract_version_probe_keeps_manifest_path_and_parse_cause() {
 }
 
 #[test]
+fn contract_twelve_execution_authority_has_no_work_section() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let config_path = temp.path().join(".jig.toml");
+    let original = fs::read_to_string(&config_path).unwrap();
+    let with_work = format!(
+        "{}\n[work]\nchecks = [\"jig.contract_check\"]\n",
+        original.trim_end()
+    );
+    let mut manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".agent/jig-contract.json")).unwrap(),
+    )
+    .unwrap();
+    let digest = |manifest: &serde_json::Value, source: &str| {
+        fs::write(&config_path, source).unwrap();
+        contract_source_digest(
+            &load_config_snapshot(&config_path).unwrap().config,
+            manifest,
+        )
+        .unwrap()
+    };
+
+    manifest["contract_version"] = json!(8);
+    assert_ne!(digest(&manifest, &original), digest(&manifest, &with_work));
+    manifest["contract_version"] = json!(12);
+    assert_eq!(digest(&manifest, &original), digest(&manifest, &with_work));
+}
+
+#[test]
 fn contract_digest_uses_canonical_execution_authority() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();

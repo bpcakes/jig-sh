@@ -289,7 +289,7 @@ fn update_recopy_seeds_then_preserves_authored_file_budget_policy() {
 }
 
 #[test]
-fn update_and_recopy_drop_retired_iteration_profile() {
+fn update_and_recopy_from_contract_eight_drop_work_and_report_it() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_git_worktree();
@@ -298,6 +298,7 @@ fn update_and_recopy_drop_retired_iteration_profile() {
         let repo = temp.path().join(format!("repo-{recopy}"));
         write_test_crate_guide(&repo);
         adopt_repo_for_test(&repo, template.path(), TemplateMode::Committed);
+        downgrade_to_contract_eight(&repo);
 
         let answers_path = repo.join(".jig.toml");
         let mut answers = read_answers_toml(&answers_path).unwrap();
@@ -311,7 +312,7 @@ fn update_and_recopy_drop_retired_iteration_profile() {
             );
         write_answers_toml(&answers_path, &answers).unwrap();
 
-        run_update(UpdateOpts {
+        let output = run_update(UpdateOpts {
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -326,8 +327,17 @@ fn update_and_recopy_drop_retired_iteration_profile() {
 
         let updated = read_answers_toml(&answers_path).unwrap();
         assert!(
-            updated["work"].get("iteration_profile").is_none(),
-            "retired iteration profile survived recopy={recopy}"
+            updated.get("work").is_none(),
+            "[work] survived recopy={recopy}"
+        );
+        let warnings = output["warnings"].as_array().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.as_str().unwrap().starts_with(
+                    "Retired [work] settings are dropped from .jig.toml: `iteration_profile`."
+                )),
+            "{warnings:#?}"
         );
     }
 }

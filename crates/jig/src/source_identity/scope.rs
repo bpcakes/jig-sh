@@ -15,7 +15,7 @@ impl PlanChangeSnapshot {
 pub(super) fn plan_change_snapshot_inner(
     root: &Path,
     baseline_oid: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<PlanChangeSnapshot> {
     collection.ensure_active()?;
     let baseline_oid = resolve_git_commit_inner(root, baseline_oid, collection)
@@ -26,7 +26,7 @@ pub(super) fn plan_change_snapshot_inner(
 pub(super) fn plan_change_snapshot_from_empty_tree_inner(
     root: &Path,
     expected_oid: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<PlanChangeSnapshot> {
     collection.ensure_active()?;
     let actual_oid = resolve_empty_tree_oid_inner(root, collection)?;
@@ -41,7 +41,7 @@ pub(super) fn plan_change_snapshot_from_empty_tree_inner(
 pub(super) fn plan_change_snapshot_from_resolved_oid(
     root: &Path,
     baseline_oid: String,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<PlanChangeSnapshot> {
     #[cfg(test)]
     PLAN_CHANGE_COLLECTION_COUNT.set(PLAN_CHANGE_COLLECTION_COUNT.get() + 1);
@@ -56,7 +56,7 @@ pub(super) fn plan_change_snapshot_from_resolved_oid(
 pub(super) fn changed_paths_since_baseline(
     root: &Path,
     baseline_oid: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<(Vec<String>, Vec<String>)> {
     collection.ensure_active()?;
     let mut discovered_entries = 0;

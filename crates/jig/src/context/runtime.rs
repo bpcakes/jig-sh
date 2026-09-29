@@ -34,8 +34,14 @@ static PREVALIDATED_LAUNCHER_CONTEXT: Mutex<Option<RepoContext>> = Mutex::new(No
 
 pub(crate) const JIG_REPO_ROOT_ENV: &str = "JIG_REPO_ROOT";
 pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = 2;
+/// The last epoch whose `.jig.toml` may declare the retired `[work]` section.
+pub(crate) const LAST_WORK_CONFIG_CONTRACT_VERSION: u32 = 8;
 // Epochs 9 and 10 remain reserved for historical, unreleased receipt formats,
-// and 11 for the retired work-link journal. The next epoch is 12.
+// and 11 for the retired work-link journal, which released 0.5 and 0.6
+// runtimes accepted without activating.
+/// The first epoch without `[work]`; it moves tracker ownership to
+/// `[repository] tracker`.
+pub(crate) const WORK_CONFIG_RETIRED_CONTRACT_VERSION: u32 = 12;
 pub(crate) const GIT_RUNTIME_CACHE_BASE: &str = ".git/jig-tools";
 pub(crate) const FALLBACK_RUNTIME_CACHE_BASE: &str = ".agent/.cache/jig";
 pub(crate) const RUNTIME_CACHE_PROFILE_SUFFIX: &str = "-runtime";
@@ -85,7 +91,9 @@ pub(crate) fn runtime_profile_cache_path(
 }
 
 pub(crate) const fn is_supported_contract_version(version: u32) -> bool {
-    version >= MIN_SUPPORTED_CONTRACT_VERSION && version <= MAX_SUPPORTED_CONTRACT_VERSION
+    (version >= MIN_SUPPORTED_CONTRACT_VERSION && version <= LAST_WORK_CONFIG_CONTRACT_VERSION)
+        || (version >= WORK_CONFIG_RETIRED_CONTRACT_VERSION
+            && version <= MAX_SUPPORTED_CONTRACT_VERSION)
 }
 
 /// A cached launcher advertises only epochs already active in generated

@@ -299,6 +299,12 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
         contract_version: None,
         progress,
     })?;
+    warnings.extend(
+        progress.log_blocked_on_err(super::runtime_config::retired_work_notes(
+            Some(&destination),
+            &staged.destination,
+        ))?,
+    );
     progress.step("plan lifecycle", "legacy file-budget migration");
     let lifecycle = progress.log_blocked_on_err(prepare_legacy_migration(
         &destination,

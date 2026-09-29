@@ -138,6 +138,10 @@ pub(super) fn render_and_copy_bootstrap_template(
         contract_version: None,
         progress: request.progress,
     })?;
+    notes.extend(super::runtime_config::retired_work_notes(
+        request.seed_repo_path,
+        &staged.destination,
+    )?);
     let file_budget_audit_available = super::renderer::file_budget_audit_available(
         &staged.destination,
         Some(request.destination),

@@ -54,7 +54,6 @@ mod dev_proxy {
         }
     }
 }
-mod git_receipts;
 mod home_paths;
 mod info;
 mod mcp;
@@ -68,6 +67,7 @@ mod runtime_artifacts;
 mod runtime_cache_lock;
 mod shell;
 mod signal_supervision;
+mod source_identity;
 mod source_projection;
 mod state;
 mod status;

@@ -2,7 +2,7 @@ fn scope_git_output(
     root: &Path,
     args: &[&str],
     label: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Output> {
     collection.git_bounded_output(
         root,

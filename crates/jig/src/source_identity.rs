@@ -82,11 +82,7 @@ pub(crate) fn plan_change_snapshot_with_cancellation(
     baseline_oid: &str,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<PlanChangeSnapshot> {
-    plan_change_snapshot_inner(
-        root,
-        baseline_oid,
-        GitReceiptCollection::Cancellable(cancelled),
-    )
+    plan_change_snapshot_inner(root, baseline_oid, GitCollection::Cancellable(cancelled))
 }
 
 pub(crate) fn plan_change_snapshot_from_empty_tree_with_cancellation(
@@ -97,23 +93,23 @@ pub(crate) fn plan_change_snapshot_from_empty_tree_with_cancellation(
     plan_change_snapshot_from_empty_tree_inner(
         root,
         expected_oid,
-        GitReceiptCollection::Cancellable(cancelled),
+        GitCollection::Cancellable(cancelled),
     )
 }
 
 pub(crate) fn resolve_git_commit(root: &Path, reference: &str) -> Result<String> {
-    resolve_git_commit_inner(root, reference, GitReceiptCollection::Blocking)
+    resolve_git_commit_inner(root, reference, GitCollection::Blocking)
 }
 
 pub(crate) fn resolve_empty_tree_for_unborn_repository(root: &Path) -> Result<Option<String>> {
-    resolve_empty_tree_for_unborn_repository_inner(root, GitReceiptCollection::Blocking)
+    resolve_empty_tree_for_unborn_repository_inner(root, GitCollection::Blocking)
 }
 
 /// Makes one narrow attempt to obtain an exact push-before object without
 /// updating refs, tags, or FETCH_HEAD. Resolution and authentication remain a
 /// separate step after this object transfer.
 pub(crate) fn fetch_exact_push_before_object_v1(root: &Path, oid: &str) -> Result<()> {
-    GitReceiptCollection::Blocking
+    GitCollection::Blocking
         .git_bounded_output_with_timeout(
             root,
             &[
@@ -136,7 +132,7 @@ pub(crate) fn fetch_exact_push_before_object_v1(root: &Path, oid: &str) -> Resul
 
 fn resolve_empty_tree_for_unborn_repository_inner(
     root: &Path,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Option<String>> {
     if !has_unborn_symbolic_head(root, collection)? {
         return Ok(None);
@@ -144,10 +140,7 @@ fn resolve_empty_tree_for_unborn_repository_inner(
     Ok(Some(resolve_empty_tree_oid_inner(root, collection)?))
 }
 
-fn resolve_empty_tree_oid_inner(
-    root: &Path,
-    collection: GitReceiptCollection<'_>,
-) -> Result<String> {
+fn resolve_empty_tree_oid_inner(root: &Path, collection: GitCollection<'_>) -> Result<String> {
     let output = collection.git_bounded_output(
         root,
         &[
@@ -177,7 +170,7 @@ fn parse_git_object_oid(stdout: &[u8], label: &str) -> Result<String> {
 fn resolve_git_commit_inner(
     root: &Path,
     reference: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<String> {
     let reference = reference.trim();
     if reference.is_empty() || reference.starts_with('-') || reference.contains(['\0', '\n', '\r'])
@@ -237,7 +230,7 @@ pub(crate) fn repo_changed_paths_since(root: &Path, base: &str) -> Result<Vec<St
 }
 
 fn ignored_dotenv_paths(root: &Path) -> Result<Vec<PathBuf>> {
-    let output = GitReceiptCollection::Blocking.git_changed_path_stdout(
+    let output = GitCollection::Blocking.git_changed_path_stdout(
         root,
         &[
             "ls-files",
@@ -310,19 +303,19 @@ pub(crate) struct RepositorySourceSnapshot {
 }
 
 pub(crate) fn repository_source_snapshot(root: &Path) -> Result<RepositorySourceSnapshot> {
-    repository_source_snapshot_inner(root, GitReceiptCollection::Blocking)
+    repository_source_snapshot_inner(root, GitCollection::Blocking)
 }
 
 pub(crate) fn repository_source_snapshot_with_cancellation(
     root: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<RepositorySourceSnapshot> {
-    repository_source_snapshot_inner(root, GitReceiptCollection::Cancellable(cancelled))
+    repository_source_snapshot_inner(root, GitCollection::Cancellable(cancelled))
 }
 
 fn repository_source_snapshot_inner(
     root: &Path,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<RepositorySourceSnapshot> {
     collection.ensure_active()?;
     let head_commit = match resolve_git_commit_inner(root, "HEAD", collection) {
@@ -343,7 +336,7 @@ fn repository_source_snapshot_inner(
         )?;
         metadata::committed_source_tree_without_agent_state(
             &tree,
-            &metadata::receipt_metadata_paths(root)?,
+            &metadata::tracker_state_paths(root)?,
             collection,
         )?
     } else {
@@ -374,20 +367,20 @@ fn repository_source_snapshot_inner(
 }
 
 mod tail;
-pub(crate) use tail::is_git_receipt_collection_cancellation;
+pub(crate) use tail::is_git_collection_cancellation;
 #[cfg(test)]
 pub(crate) use tail::{repo_worktree_fingerprint, repo_worktree_fingerprint_with_cancellation};
 
 #[derive(Clone, Copy)]
-enum GitReceiptCollection<'a> {
+enum GitCollection<'a> {
     Blocking,
     Cancellable(&'a dyn Fn() -> bool),
 }
 
-impl GitReceiptCollection<'_> {
+impl GitCollection<'_> {
     fn ensure_active(self) -> Result<()> {
         if matches!(self, Self::Cancellable(cancelled) if cancelled()) {
-            return Err(GitReceiptCollectionCancelled.into());
+            return Err(GitCollectionCancelled.into());
         }
         Ok(())
     }
@@ -439,15 +432,15 @@ impl GitReceiptCollection<'_> {
 }
 
 #[derive(Debug)]
-struct GitReceiptCollectionCancelled;
+struct GitCollectionCancelled;
 
-impl std::fmt::Display for GitReceiptCollectionCancelled {
+impl std::fmt::Display for GitCollectionCancelled {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("Git receipt metadata collection was cancelled")
+        formatter.write_str("Git source collection was cancelled")
     }
 }
 
-impl std::error::Error for GitReceiptCollectionCancelled {}
+impl std::error::Error for GitCollectionCancelled {}
 
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,5 @@
 fn normalize_external_check_args(
     raw: Vec<String>,
-    tool: &mut ToolOpts,
     profile: &mut Option<String>,
     affected: &mut Option<String>,
     explain: &mut bool,
@@ -15,10 +14,6 @@ fn normalize_external_check_args(
             "--fail-fast" => *fail_fast = true,
             "--comparison-staged" => comparison.comparison_staged = true,
             "--comparison-strict-inventory" => comparison.comparison_strict_inventory = true,
-            "--plan-id" => {
-                let value = args.next().ok_or_else(|| anyhow::anyhow!("--plan-id requires a value"))?;
-                set_external_value(&mut tool.plan_id, value, "--plan-id")?;
-            }
             "--profile" => {
                 let value = args.next().ok_or_else(|| anyhow::anyhow!("--profile requires a value"))?;
                 set_external_value(profile, value, "--profile")?;
@@ -39,7 +34,6 @@ fn normalize_external_check_args(
                 let value = args.next().ok_or_else(|| anyhow::anyhow!("--comparison-provenance requires a value"))?;
                 set_external_provenance(comparison, &value)?;
             }
-            _ if arg.starts_with("--plan-id=") => set_external_value(&mut tool.plan_id, arg["--plan-id=".len()..].to_owned(), "--plan-id")?,
             _ if arg.starts_with("--profile=") => set_external_value(profile, arg["--profile=".len()..].to_owned(), "--profile")?,
             _ if arg.starts_with("--affected=") => set_external_value(affected, arg["--affected=".len()..].to_owned(), "--affected")?,
             _ if arg.starts_with("--comparison-base=") => set_external_value(&mut comparison.comparison_base, arg["--comparison-base=".len()..].to_owned(), "--comparison-base")?,

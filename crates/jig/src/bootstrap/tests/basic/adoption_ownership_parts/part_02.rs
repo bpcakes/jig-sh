@@ -383,7 +383,7 @@ fn forced_minimal_adoption_with_invalid_prior_config_preserves_omitted_paths() {
 }
 
 #[test]
-fn invalid_runtime_config_is_repaired_without_dropping_optional_work_authority() {
+fn invalid_runtime_config_is_repaired_without_dropping_tracker_ownership() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
@@ -415,7 +415,7 @@ fn invalid_runtime_config_is_repaired_without_dropping_optional_work_authority()
                 .unwrap();
         assert!(repaired["commands"].as_table().is_some());
         assert!(repaired["commands"]["api_test_command"].as_str().is_some());
-        assert_optional_work_authority(&repaired);
+        assert_tracker_ownership(&repaired);
         crate::context::RepoContext::load_from(&repo).unwrap();
     }
 }
@@ -507,7 +507,7 @@ fn update_preserves_project_runtime_tables_for_minimal_and_full_harnesses() {
 }
 
 #[test]
-fn update_does_not_enable_tracker_ownership_when_work_metadata_is_absent() {
+fn update_does_not_enable_tracker_ownership_when_it_was_never_declared() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
@@ -522,35 +522,32 @@ fn update_does_not_enable_tracker_ownership_when_work_metadata_is_absent() {
         let config =
             toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
                 .unwrap();
-        let work = config["work"].as_table().unwrap();
-        assert!(!work.contains_key("tracker"));
-        assert!(!work.contains_key("receipt_metadata"));
+        assert!(config.get("work").is_none());
+        assert!(config["repository"].get("tracker").is_none());
         crate::context::RepoContext::load_from(&repo).unwrap();
     }
 }
 
 #[test]
-fn update_and_readoption_refuse_to_delete_invalid_optional_work_authority() {
+fn update_and_readoption_refuse_to_delete_invalid_tracker_ownership() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
     for refresh in ["update", "readopt"] {
-        for (name, minimal, field, value) in [
+        for (name, minimal, contract_eight, table, field, value) in [
             (
                 "full-tracker",
                 false,
+                false,
+                "repository",
                 "tracker",
-                toml::Value::Table(toml::Table::from_iter([
-                    ("kind".into(), toml::Value::String("beads".into())),
-                    (
-                        "workspace_id".into(),
-                        toml::Value::String("not-a-canonical-ulid".into()),
-                    ),
-                ])),
+                toml::Value::from("linear"),
             ),
             (
                 "minimal-receipt-metadata",
                 true,
+                true,
+                "work",
                 "receipt_metadata",
                 toml::Value::Integer(7),
             ),
@@ -558,10 +555,13 @@ fn update_and_readoption_refuse_to_delete_invalid_optional_work_authority() {
             let repo = temp.path().join(format!("{refresh}-{name}"));
             fs::create_dir_all(&repo).unwrap();
             run_adopt(footprint_adopt_opts(&repo, template.path(), minimal, false)).unwrap();
+            if contract_eight {
+                downgrade_to_contract_eight(&repo);
+            }
             let config_path = repo.join(".jig.toml");
             let mut config =
                 toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
-            config["work"]
+            config[table]
                 .as_table_mut()
                 .unwrap()
                 .insert(field.into(), value);
@@ -577,10 +577,47 @@ fn update_and_readoption_refuse_to_delete_invalid_optional_work_authority() {
             assert!(
                 error
                     .to_string()
-                    .contains(&format!("existing [work].{field} is invalid"))
+                    .contains(&format!("existing [{table}].{field} is invalid")),
+                "{error:#}"
             );
             assert_eq!(fs::read_to_string(config_path).unwrap(), authored);
         }
+    }
+}
+
+#[test]
+fn update_from_contract_eight_moves_tracker_ownership_and_drops_work() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+
+    for minimal in [true, false] {
+        let repo = temp.path().join(if minimal { "minimal" } else { "full" });
+        fs::create_dir_all(&repo).unwrap();
+        run_adopt(footprint_adopt_opts(&repo, template.path(), minimal, false)).unwrap();
+        downgrade_to_contract_eight(&repo);
+        add_contract_eight_work_authority(&repo);
+
+        // Moving to a new contract rewrites the manifest, which needs --force.
+        let output = run_update(update_opts(&repo, template.path(), true)).unwrap();
+
+        let config =
+            toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
+                .unwrap();
+        assert_tracker_ownership(&config);
+        assert_contains_note(
+            &output["warnings"],
+            &["`[work] receipt_metadata = [\"beads\"]` moves to `[repository] tracker = \"beads\"`"],
+        );
+        assert_contains_note(
+            &output["warnings"],
+            &["Retired [work] settings are dropped from .jig.toml: `checks`; `tracker`."],
+        );
+        let ctx = crate::context::RepoContext::load_from_root(repo.clone()).unwrap();
+        assert_eq!(
+            ctx.contract_version(),
+            crate::context::CURRENT_CONTRACT_VERSION
+        );
     }
 }
 

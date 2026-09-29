@@ -213,35 +213,10 @@ fn add_project_runtime_tables(repo: &Path) {
             toml::Value::String("just release".into()),
         );
 
-    root.get_mut("work")
+    root.get_mut("repository")
+        .and_then(toml::Value::as_table_mut)
         .unwrap()
-        .as_table_mut()
-        .unwrap()
-        .extend([
-            (
-                "receipt_metadata".into(),
-                toml::Value::Array(vec![toml::Value::String("beads".into())]),
-            ),
-            (
-                "tracker".into(),
-                toml::Value::Table(toml::Table::from_iter([
-                    ("kind".into(), toml::Value::String("beads".into())),
-                    (
-                        "workspace_id".into(),
-                        toml::Value::String("01ARZ3NDEKTSV4RRFFQ69G5FAV".into()),
-                    ),
-                    ("export".into(), toml::Value::String("manual".into())),
-                    (
-                        "manual_export_guidance".into(),
-                        toml::Value::String("Run the ExampleProject export helper.".into()),
-                    ),
-                ])),
-            ),
-            (
-                "checks".into(),
-                toml::Value::Array(vec![toml::Value::String("jig.fmt_check".into())]),
-            ),
-        ]);
+        .insert("tracker".into(), toml::Value::String("beads".into()));
 
     let mut workflow = toml::Table::new();
     workflow.insert("id".into(), toml::Value::String("project-status".into()));
@@ -261,8 +236,7 @@ fn assert_project_runtime_tables(config: &toml::Value) {
         config["commands"]["release_command"].as_str(),
         Some("just release")
     );
-    assert_eq!(config["work"]["checks"][0].as_str(), Some("jig.fmt_check"));
-    assert_optional_work_authority(config);
+    assert_tracker_ownership(config);
     assert_eq!(
         config["loop"]["workflows"][0]["id"].as_str(),
         Some("project-status")
@@ -273,20 +247,47 @@ fn assert_project_runtime_tables(config: &toml::Value) {
     );
 }
 
-fn assert_optional_work_authority(config: &toml::Value) {
-    assert_eq!(
-        config["work"]["receipt_metadata"][0].as_str(),
-        Some("beads")
-    );
-    assert_eq!(config["work"]["tracker"]["kind"].as_str(), Some("beads"));
-    assert_eq!(
-        config["work"]["tracker"]["workspace_id"].as_str(),
-        Some("01ARZ3NDEKTSV4RRFFQ69G5FAV")
-    );
-    assert_eq!(config["work"]["tracker"]["export"].as_str(), Some("manual"));
-    assert_eq!(
-        config["work"]["tracker"]["manual_export_guidance"].as_str(),
-        Some("Run the ExampleProject export helper.")
+fn assert_tracker_ownership(config: &toml::Value) {
+    assert_eq!(config["repository"]["tracker"].as_str(), Some("beads"));
+    assert!(config.get("work").is_none());
+}
+
+/// Adds the optional `[work]` authority contract 8 accepted.
+fn add_contract_eight_work_authority(repo: &Path) {
+    let path = repo.join(".jig.toml");
+    let mut config = toml::from_str::<toml::Value>(&fs::read_to_string(&path).unwrap()).unwrap();
+    config["work"].as_table_mut().unwrap().extend([
+        (
+            "receipt_metadata".into(),
+            toml::Value::Array(vec![toml::Value::from("beads")]),
+        ),
+        (
+            "tracker".into(),
+            toml::Value::Table(toml::Table::from_iter([
+                ("kind".into(), toml::Value::from("beads")),
+                (
+                    "workspace_id".into(),
+                    toml::Value::from("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+                ),
+                ("export".into(), toml::Value::from("manual")),
+            ])),
+        ),
+        (
+            "checks".into(),
+            toml::Value::Array(vec![toml::Value::from("jig.fmt_check")]),
+        ),
+    ]);
+    fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
+}
+
+fn assert_contains_note(notes: &serde_json::Value, expected: &[&str]) {
+    let notes = notes.as_array().unwrap();
+    assert!(
+        notes.iter().any(|note| {
+            let note = note.as_str().unwrap();
+            expected.iter().all(|fragment| note.contains(fragment))
+        }),
+        "no note contains {expected:?}: {notes:#?}"
     );
 }
 

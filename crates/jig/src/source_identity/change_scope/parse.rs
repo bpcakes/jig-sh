@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Debug, Eq, PartialEq)]
-pub(in crate::git_receipts) struct RawDiffEntry {
+pub(in crate::source_identity) struct RawDiffEntry {
     pub(super) old_mode: String,
     pub(super) new_mode: String,
     pub(super) old_oid: String,
@@ -12,14 +12,14 @@ pub(in crate::git_receipts) struct RawDiffEntry {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(in crate::git_receipts) struct IndexStageEntry {
-    pub(in crate::git_receipts) mode: String,
-    pub(in crate::git_receipts) oid: String,
-    pub(in crate::git_receipts) stage: String,
-    pub(in crate::git_receipts) path: Vec<u8>,
+pub(in crate::source_identity) struct IndexStageEntry {
+    pub(in crate::source_identity) mode: String,
+    pub(in crate::source_identity) oid: String,
+    pub(in crate::source_identity) stage: String,
+    pub(in crate::source_identity) path: Vec<u8>,
 }
 
-pub(in crate::git_receipts) fn parse_raw_diff_z(
+pub(in crate::source_identity) fn parse_raw_diff_z(
     stdout: &[u8],
     limit: usize,
 ) -> Result<Vec<RawDiffEntry>> {
@@ -75,7 +75,7 @@ pub(in crate::git_receipts) fn parse_raw_diff_z(
     Ok(entries)
 }
 
-pub(in crate::git_receipts) fn parse_index_stage_z(
+pub(in crate::source_identity) fn parse_index_stage_z(
     stdout: &[u8],
     limit: usize,
 ) -> Result<Vec<IndexStageEntry>> {

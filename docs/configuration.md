@@ -105,7 +105,7 @@ For local git template checkouts, `jig init` / `jig adopt` use a committed sourc
   `ubuntu-latest` because service containers and the Docker daemon require Linux.
   Other generated jobs retain this configured runner and select Bash explicitly
   for repository-owned `run` steps.
-- `work.gates`: gate declarations that are still parsed and validated but no longer evaluated as completion policy; on legacy contract v2–v5 repositories they define the default check profile, and adoption uses them for its gate preview. See [`work` Shape](#work-shape)
+- `work.gates` (contracts through v8): gate declarations that are still parsed and validated but no longer evaluated as completion policy; on legacy contract v2–v5 repositories they define the default check profile, and adoption uses them for its gate preview. See [`work` Shape](#work-shape)
 - `agent_tooling`: agent-client tooling expected for this repository, including Jig Codex skills
 - `template_source_url`: optional canonical template source URL for portable recopy/update
 - `sqlx_enabled`: whether to generate SQLx and migration-specific contract pieces
@@ -141,9 +141,10 @@ Generated Go repositories use the root `go.mod` as their Go toolchain authority.
 - `frontend_apps`: list of app definitions. A frontend app may use `dir = "."` when the app lives at the repository root.
 - `dev`: Jig-native local development proxy settings and app definitions
 - `execution`: supervision limits for long-running configured commands and workers
-- `[work.tracker]`: optional read-only task-snapshot authority. Current source accepts
-  only `kind = "beads"`, requires a portable canonical ULID `workspace_id`, fixes the
-  store at the repository-root `.beads/`, and defaults `export` to `"manual"`.
+- `[work.tracker]` (contracts through v8): optional task-snapshot declaration that
+  Jig no longer reads. It accepts only `kind = "beads"`, requires a portable canonical
+  ULID `workspace_id`, fixes the store at the repository-root `.beads/`, and defaults
+  `export` to `"manual"`.
 
 The generated no-root-`Cargo.toml` Cargo defaults exit 0 and print a stable stdout prefix. The removed `work check` summary rendered that prefix as an intentional harness skip; no current command gives it special treatment.
 
@@ -156,6 +157,7 @@ Full-harness templates seed `.jig/file-budget.toml` once and declare the languag
 `[repository]` is the reviewed source of workspace identity. Its generated records are repeated as `components`, `actions`, `profiles`, and `default_check_profile` in `.agent/jig-contract.json`; runtime loading rejects a mismatch.
 
 - `[[repository.components]]` declares `id`, a literal repository-relative `root` (`.` is allowed), optional description/tags/dependencies, affected propagation, adapter ids, guidance, and per-field provenance. A non-root component may not live under `.agent/`, whose harness and runtime contents are deliberately excluded from source identity. Component dependencies must be acyclic; action dependencies form a separate acyclic execution graph.
+- `repository.tracker` (contract v12 or later) optionally declares `"beads"`: the root `.beads/` directory holds issue-tracker state that no check consumes, so it stays out of the source identity behind plan staleness and run input digests. It replaces `[work] receipt_metadata = ["beads"]`; see [Tracker state](public-contract.md#tracker-state).
 - `repository.affected_ignore` is a reviewed list of repository-relative globs whose changes do not select executable targets during affected planning. Generated full repositories ignore `.env`, `.env.*`, their nested forms, named guidance files such as `README.md` and `AGENTS.md`, `docs/**`, license files, and `.github/**`; remove or narrow those defaults when a check consumes one of those paths. Patterns may never match `.jig.toml` or `scripts/jig`, and an explicit action input always takes precedence over an ignore. Every remaining unignored, unclaimed path continues to fail closed: generated defaults deliberately do not ignore arbitrary Markdown fixtures, `.gitignore`, `Makefile`, or `justfile`, because those files can change program inputs, source discovery, or invoked commands. The ordinary source fingerprint remains conservative and still records observed ignored dotenv paths for plan identity and run input digests, so a dotenv edit changes those digests even when it does not widen a Git-affected plan. Jig prunes a wholly ignored directory instead of searching generated dependency and build trees; unignore the containing path when it holds an intentional dotenv input.
 - `[[repository.actions]]` declares a structured `{ component, action }` target, intent, effects, runner, repository-relative forward-slash input globs, target dependencies, optional `timeout_seconds`, result parser, compatibility aliases, and provenance. Action timeouts use the same valid 1–86,400 second range as `[execution].command_timeout_seconds`; omission inherits that repository default, while an action value is the more-specific override. Overrides are accepted for supervised command runners and the cooperatively supervised native schema runner. Other bounded in-process native operations reject an override because Jig cannot safely preempt them midway through a mutation; they check the deadline before entry, and a returned completion is authoritative because effects may already be durable. Inputs may intentionally name paths outside the component root to declare repository-global inputs, but may not be anchored under the unobserved `.agent/` tree. Affected selection unions action inputs at component scope: a matching path retains every selected candidate target on that component rather than pruning sibling actions independently.
 - `[[repository.profiles]]` declares a stable id and exact structured targets. `repository.default_check_profile` selects the profile used by bare `jig check`.
@@ -385,12 +387,12 @@ deleted. Current templates and binaries contain no legacy checker source.
 
 **Upgrade from 0.3.0:** `[status]` and `[[status.providers]]` are unknown configuration. Remove those tables when upgrading. 0.3.0 still accepted them.
 
-Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `backend_language`, `go_database`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `migration_dir`, `rust_migration_layout`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_docs_dir`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `application_contracts_enabled`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `frontend_workspace_roots`, `repository`, `commands`, `vault`, `dev`, `work`, `loop`, `execution`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 and later renders omit and ignore it. `backend_language`, `go_database`, and the language-shaped command fields remain accepted for v5 migration but are omitted from v6 renders. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
+Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `backend_language`, `go_database`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `migration_dir`, `rust_migration_layout`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_docs_dir`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `application_contracts_enabled`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `frontend_workspace_roots`, `repository`, `commands`, `vault`, `dev`, `work` (through contract v8), `loop`, `execution`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 and later renders omit and ignore it. `backend_language`, `go_database`, and the language-shaped command fields remain accepted for v5 migration but are omitted from v6 renders. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
 
 Nested accepted keys are:
 
 - `[commands]`: command names made from lowercase ASCII letters, numbers, and underscores; names must start with a letter and end in `_command`
-- `[repository]`: `default_check_profile`, `affected_ignore`, `components`, `actions`, `profiles`
+- `[repository]`: `default_check_profile`, `affected_ignore`, `tracker` (contract v12 or later), `components`, `actions`, `profiles`
 - `[[repository.components]]`: `id`, `root`, `description`, `tags`, `depends_on`, `propagate_affected_to_dependents`, `adapters`, `guidance`, `provenance`
 - `[[repository.actions]]`: `target`, `description`, `intent`, `effects`, `runner`, `inputs`, `depends_on`, `timeout_seconds`, `result_parser`, `legacy_aliases`, `provenance`
 - `[[repository.profiles]]`: `id`, `description`, `targets`, `provenance`
@@ -399,7 +401,7 @@ Nested accepted keys are:
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`
 - `[[dev.apps]]`: `name`, `dir`, `kind`, `command`, `argv`, `port`, `host`, `proxy`
 - `[execution]`: `command_timeout_seconds`, `command_output_limit_bytes`
-- `[work]`: `receipt_metadata`, `tracker`, `checks`, `gates`, `iteration_profile`, `refinements`; `iteration_profile` and `refinements` are accepted with any value but ignored, and `jig update` drops them
+- `[work]` (contracts through v8; v12 rejects it): `receipt_metadata`, `tracker`, `checks`, `gates`, `iteration_profile`, `refinements`; `iteration_profile` and `refinements` are accepted with any value but ignored, and `jig update` drops them
 - `[work.tracker]`: `kind`, `workspace_id`, `export`, `manual_export_guidance`; the
   current `beads` kind accepts only manual export and no configurable store root
 - `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`; check gates also accept `paths`, `paths_ignore`, and `reuse`
@@ -583,14 +585,15 @@ Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars)
 
 ## `work` Shape
 
-The `jig work` commands were removed, but the `work` block is still parsed and
-validated strictly, so existing repositories load unchanged and the
-execution-authority digest does not change. `receipt_metadata` and `tracker`
-keep working. `checks` and `gates` still define the default check profile for
-legacy contract v2–v5 repositories and adoption's gate preview, and generated
-repositories still render `[[work.gates]]`. `iteration_profile` and
-`refinements` are accepted with any value but ignored, never enter execution
-authority, and are dropped by `jig update`. See
+Contract v12 has no `work` block: `.jig.toml` rejects it, and `jig update`
+moves `receipt_metadata = ["beads"]` to `[repository] tracker = "beads"`, drops
+the rest, and reports what it dropped. Through contract v8 the block is still
+parsed and validated strictly, so those repositories load unchanged and their
+execution-authority digest does not change. `receipt_metadata` keeps working,
+while `tracker` is only validated. `checks` and `gates` still define the default
+check profile for legacy contract v2–v5 repositories and adoption's gate
+preview. `iteration_profile` and `refinements` are accepted with any value but
+ignored, never enter execution authority, and are dropped by `jig update`. See
 [Removed Work Commands](public-contract.md#removed-work-commands) for the
 command-level compatibility rules.
 

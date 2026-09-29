@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn repo_worktree_fingerprint_inner(
     root: &Path,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<String> {
     collection.ensure_active()?;
     #[cfg(test)]
@@ -74,7 +74,7 @@ pub(super) fn repo_worktree_fingerprint_inner(
 pub(super) fn untracked_file_contents(
     root: &Path,
     status_stdout: &[u8],
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Vec<u8>> {
     let mut contents = Vec::new();
     let mut remaining_inline_bytes = MAX_TOTAL_INLINE_UNTRACKED_BYTES;
@@ -224,7 +224,7 @@ pub(super) fn append_untracked_path_fingerprint(
     full_path: &Path,
     metadata: &fs::Metadata,
     remaining_inline_bytes: &mut u64,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<()> {
     collection.ensure_active()?;
     let file_type = metadata.file_type();
@@ -266,7 +266,7 @@ pub(super) fn append_untracked_file_fingerprint(
     full_path: &Path,
     metadata: &fs::Metadata,
     remaining_inline_bytes: &mut u64,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<()> {
     collection.ensure_active()?;
     contents.extend_from_slice(b"mode\0");
@@ -303,7 +303,7 @@ pub(super) fn append_hashed_file_fingerprint(
     contents: &mut Vec<u8>,
     root: &Path,
     full_path: &Path,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<()> {
     contents.extend_from_slice(b"file-hash\0");
     contents.extend_from_slice(collection.git_hash_file(root, full_path)?.as_bytes());

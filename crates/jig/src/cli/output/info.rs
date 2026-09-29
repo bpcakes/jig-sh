@@ -30,14 +30,15 @@ pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
         "Capabilities: {}",
         enabled_capabilities(value).join(", ")
     ));
-    lines.push(format!(
-        "Check tools: {}",
-        string_list(value["check_tools"].as_array()).join(", ")
-    ));
-    lines.push(format!(
-        "Work gates: {}",
-        value["work_gates"].as_array().map(Vec::len).unwrap_or(0)
-    ));
+    if let Some(check_tools) = value["check_tools"].as_array() {
+        lines.push(format!(
+            "Check tools: {}",
+            string_list(Some(check_tools)).join(", ")
+        ));
+    }
+    if let Some(work_gates) = value["work_gates"].as_array() {
+        lines.push(format!("Work gates: {}", work_gates.len()));
+    }
     lines.push(format!(
         "Dev apps: {}",
         value["dev_apps"].as_array().map(Vec::len).unwrap_or(0)

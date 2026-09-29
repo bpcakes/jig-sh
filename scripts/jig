@@ -5,7 +5,7 @@ set -eu
 # jig-release-runtime-pin:v1
 # jig-check-subcommands:fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test
 # jig-capability-only-subcommands:adopt,claude,codex,doctor,init,presets,update
-# jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault,work
+# jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault
 # jig-global-flags:--json
 
 # Keep launcher behavior synchronized with scripts/jig in the jig-sh source
@@ -208,7 +208,7 @@ jig_capability_only_requested() {
           check)
             ;;
           # jig-repository-scope-subcommands-begin
-          agent | agent-map | bootstrap | dev | file-budget | generate-sqlx-unchecked-queries-todo | info | loop | mcp | migration | migration-add | proxy | run | schema-dump | setup | sqlx | state | status | ui | vault | work)
+          agent | agent-map | bootstrap | dev | file-budget | generate-sqlx-unchecked-queries-todo | info | loop | mcp | migration | migration-add | proxy | run | schema-dump | setup | sqlx | state | status | ui | vault)
             # jig-repository-scope-subcommands-end
             return 1
             ;;
@@ -223,11 +223,6 @@ jig_capability_only_requested() {
         case "$arg" in
           -h | --help | -V | --version)
             return 0
-            ;;
-          --plan-id)
-            capability_command=check-plan-id
-            ;;
-          --plan-id=*)
             ;;
           contract)
             capability_command=check-contract
@@ -245,34 +240,22 @@ jig_capability_only_requested() {
             ;;
         esac
         ;;
-      check-plan-id)
-        capability_command=check
-        ;;
       check-contract)
         case "$arg" in
           -h | --help | -V | --version)
             return 0
-            ;;
-          --plan-id)
-            capability_command=check-contract-plan-id
-            ;;
-          --plan-id=*)
             ;;
           *)
             return 1
             ;;
         esac
         ;;
-      check-contract-plan-id)
-        capability_command=check-contract
-        ;;
     esac
   done
   # A global-only invocation behaves like bare help. Bare `check` is a valid
   # repository operation and therefore stays repository-scoped.
   [ -z "$capability_command" ] \
-    || [ "$capability_command" = check-contract ] \
-    || [ "$capability_command" = check-contract-plan-id ]
+    || [ "$capability_command" = check-contract ]
 }
 
 resolve_cached_binary() {

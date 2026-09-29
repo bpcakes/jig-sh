@@ -523,7 +523,6 @@ fn assert_npm_adoption_answers(repo: &Path) {
             "[commands]",
             "web_lint_command = \"scripts/check-webapps.sh check-one",
             "repo_compat_typescript_lint_command = \"scripts/check-webapps.sh lint\"",
-            "kind = \"evidence\"",
             "profile = \"verify\"",
             "[[dev.apps]]",
             "argv = [\"npm\", \"--prefix=.\", \"--workspace=.\", \"--workspaces=true\", \"--include-workspace-root=true\", \"--global=false\", \"--location=project\", \"--if-present=false\", \"--include=dev\", \"--include=optional\", \"--include=peer\", \"run\", \"dev\"]",
@@ -533,6 +532,8 @@ fn assert_npm_adoption_answers(repo: &Path) {
         &answers,
         &[
             "tool = \"jig.typescript_lint\"",
+            "[work]",
+            "[[work.gates]]",
             "frontend-contract-drift",
             "frontend-public-boundary",
             "dev_command",

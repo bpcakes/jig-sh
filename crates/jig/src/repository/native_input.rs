@@ -14,7 +14,7 @@ use jig_file_budget::{
 use sha2::{Digest, Sha256};
 
 use crate::context::RepoContext;
-use crate::git_receipts::{
+use crate::source_identity::{
     fetch_exact_push_before_object_v1, read_index_blob_v1, resolve_comparison_v1,
 };
 
@@ -66,9 +66,9 @@ fn prepare_file_budget_input_at_v1(
 /// names none: the merge base with the default branch, or the empty tree
 /// before the first commit.
 pub(super) fn default_comparison_request(ctx: &RepoContext) -> Result<ComparisonRequestV1> {
-    if crate::git_receipts::resolve_git_commit(ctx.root(), "HEAD").is_err()
+    if crate::source_identity::resolve_git_commit(ctx.root(), "HEAD").is_err()
         && let Ok(Some(empty_tree_oid)) =
-            crate::git_receipts::resolve_empty_tree_for_unborn_repository(ctx.root())
+            crate::source_identity::resolve_empty_tree_for_unborn_repository(ctx.root())
     {
         return Ok(ComparisonRequestV1::ExactTree {
             requested_oid: empty_tree_oid,

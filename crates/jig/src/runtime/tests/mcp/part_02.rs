@@ -389,7 +389,7 @@ fn read_only_targets_use_a_fresh_epoch_after_worktree_targets() {
         fs::read_to_string(temp.path().join("generated.txt")).unwrap(),
         "generated"
     );
-    let current_fingerprint = crate::git_receipts::repository_source_snapshot(ctx.root())
+    let current_fingerprint = crate::source_identity::repository_source_snapshot(ctx.root())
         .unwrap()
         .worktree_fingerprint;
     assert_ne!(planned_fingerprint, current_fingerprint);

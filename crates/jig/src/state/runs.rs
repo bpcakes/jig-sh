@@ -54,8 +54,6 @@ const REVERSE_RUN_READ_CHUNK: usize = 16 * 1024;
 #[derive(Clone, Debug, JsonSchema, Serialize)]
 pub(crate) struct DurableRun {
     pub(crate) plan: RunPlan,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) work_plan_id: Option<String>,
     pub(crate) result: RunResult,
     pub(crate) cancel_requested: bool,
 }
@@ -119,7 +117,6 @@ pub(crate) fn start_run_with_event_cursor_and_execution_lease(
             run_id: run_id.clone(),
             event: EVENT_QUEUED.into(),
             timestamp_ms,
-            work_plan_id: None,
             plan: Some(plan.clone()),
             target: None,
             result: None,
@@ -143,7 +140,6 @@ pub(crate) fn start_run_with_event_cursor_and_execution_lease(
                 .collect(),
         ),
         plan,
-        work_plan_id: None,
         cancel_requested: false,
     };
     Ok((run, lease, event_cursor))
@@ -286,7 +282,6 @@ pub(crate) fn record_target_result(
             run_id: run_id.to_owned(),
             event: EVENT_TARGET_COMPLETED.into(),
             timestamp_ms: result.ended_at_ms.unwrap_or_else(now_ms),
-            work_plan_id: None,
             plan: None,
             target: Some(result.target.clone()),
             result: Some(result),
@@ -595,7 +590,6 @@ fn append_simple_event(
             run_id: run_id.to_owned(),
             event: event.into(),
             timestamp_ms: now_ms(),
-            work_plan_id: None,
             plan: None,
             target,
             result: None,
@@ -645,7 +639,6 @@ fn fold_events(run_id: &str, events: Vec<RunEventRecord>) -> Result<DurableRun> 
                 run = Some(DurableRun {
                     result: RunResult::queued(run_id, plan.id.clone(), event.timestamp_ms, targets),
                     plan,
-                    work_plan_id: event.work_plan_id,
                     cancel_requested: false,
                 });
             }

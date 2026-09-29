@@ -37,7 +37,7 @@ pub(crate) fn observe_exact_paths_v1(
     view: CurrentViewV1,
     paths: &[String],
 ) -> Result<Vec<ExactCurrentPathFactV1>> {
-    observe_exact_paths_inner(root, view, paths, GitReceiptCollection::Blocking)
+    observe_exact_paths_inner(root, view, paths, GitCollection::Blocking)
 }
 
 #[allow(dead_code, reason = "staged cancellable native exact-path API")]
@@ -47,19 +47,14 @@ pub(crate) fn observe_exact_paths_v1_with_cancellation(
     paths: &[String],
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<ExactCurrentPathFactV1>> {
-    observe_exact_paths_inner(
-        root,
-        view,
-        paths,
-        GitReceiptCollection::Cancellable(cancelled),
-    )
+    observe_exact_paths_inner(root, view, paths, GitCollection::Cancellable(cancelled))
 }
 
 fn observe_exact_paths_inner(
     root: &Path,
     view: CurrentViewV1,
     paths: &[String],
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Vec<ExactCurrentPathFactV1>> {
     let paths = validate_exact_paths(paths)?;
     collection.ensure_active()?;
@@ -249,7 +244,7 @@ pub(super) fn inspect_worktree_path(root: &Path, path: &str) -> Result<Inspected
 fn index_entries_for_paths(
     root: &Path,
     paths: &[&str],
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<BTreeMap<String, Vec<IndexStageEntry>>> {
     let mut by_path = BTreeMap::<String, Vec<IndexStageEntry>>::new();
     for chunk in independent_exact_path_chunks(paths) {

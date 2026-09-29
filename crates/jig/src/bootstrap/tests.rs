@@ -894,7 +894,7 @@ fn with_test_build_template_pin_policy<T>(
 }
 
 mod adoption_fixture;
-use adoption_fixture::adopt_repo_for_test;
+use adoption_fixture::{adopt_repo_for_test, downgrade_to_contract_eight};
 
 fn commit_template_root_guide(template: &Path, contents: &str, message: &str) -> String {
     fs::write(

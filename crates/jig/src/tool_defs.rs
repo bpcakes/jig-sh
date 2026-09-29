@@ -13,7 +13,6 @@ pub(crate) use repository::{
 
 pub(crate) mod args {
     pub(crate) const NAME: &str = "name";
-    pub(crate) const PLAN_ID: &str = "plan_id";
 }
 
 pub(crate) mod cli_command {
@@ -130,7 +129,6 @@ pub(crate) mod cli_command {
     pub(crate) const VAULT_SECRET_SET: &str = "set";
     pub(crate) const VAULT_STATUS: &str = "status";
     pub(crate) const VAULT_TUI: &str = "tui";
-    pub(crate) const WORK: &str = "work";
 }
 
 pub(crate) type JsonObject = Map<String, Value>;
@@ -233,12 +231,15 @@ pub(crate) fn is_execution_tool(tool: &ManifestTool) -> bool {
     is_command_tool(tool) || is_native_tool(tool)
 }
 
-pub(crate) fn is_no_arg_execution_tool(tool: &ManifestTool) -> bool {
-    is_execution_tool(tool) && !execution_tool_requires_name(tool)
-}
-
 pub(crate) fn execution_tool_args(tool: &ManifestTool, args_obj: &JsonObject) -> Result<Value> {
-    if execution_tool_requires_name(tool) {
+    let requires_name = execution_tool_requires_name(tool);
+    if let Some(unknown) = args_obj
+        .keys()
+        .find(|key| !(requires_name && key.as_str() == args::NAME))
+    {
+        return Err(anyhow!("Unknown argument: {unknown}"));
+    }
+    if requires_name {
         let name = required_string_arg(args_obj, args::NAME)?;
         return Ok(object_value([(args::NAME, Value::String(name))]));
     }
@@ -262,16 +263,10 @@ pub(crate) fn execution_tool_requires_name_for_native_operation(
 
 fn execution_input_schema(tool: &ManifestTool) -> Value {
     if execution_tool_requires_name(tool) {
-        return object_schema(
-            &[
-                (args::NAME, string_schema()),
-                (args::PLAN_ID, string_schema()),
-            ],
-            &[args::NAME],
-        );
+        return object_schema(&[(args::NAME, string_schema())], &[args::NAME]);
     }
 
-    object_schema(&[(args::PLAN_ID, string_schema())], &[])
+    empty_input_schema()
 }
 
 fn empty_input_schema() -> Value {
@@ -343,16 +338,39 @@ mod tests {
     }
 
     #[test]
-    fn no_arg_execution_tool_excludes_argument_taking_native_tools() {
-        let command =
-            ManifestTool::new("jig.test", kind::COMMAND, "Test.").with_command("rust_test_command");
+    fn legacy_execution_tools_reject_undeclared_arguments() {
         let contract = ManifestTool::new(tool::CONTRACT_CHECK, kind::NATIVE, "Contract.");
         let migration = ManifestTool::new(tool::MIGRATION_ADD, kind::NATIVE, "Migration.");
-        let unsupported = ManifestTool::new("jig.memory", "memory", "Memory.");
+        let args = |value: Value| value.as_object().unwrap().clone();
 
-        assert!(is_no_arg_execution_tool(&command));
-        assert!(is_no_arg_execution_tool(&contract));
-        assert!(!is_no_arg_execution_tool(&migration));
-        assert!(!is_no_arg_execution_tool(&unsupported));
+        assert_eq!(
+            execution_tool_args(&contract, &args(json!({}))).unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            execution_tool_args(&migration, &args(json!({"name": "create_examples"}))).unwrap(),
+            json!({"name": "create_examples"})
+        );
+        for (tool, value, unknown) in [
+            (&contract, json!({"plan_id": "plan_example"}), "plan_id"),
+            (&contract, json!({"name": "create_examples"}), "name"),
+            (
+                &migration,
+                json!({"name": "create_examples", "plan_id": "plan_example"}),
+                "plan_id",
+            ),
+        ] {
+            assert_eq!(
+                execution_tool_args(tool, &args(value))
+                    .unwrap_err()
+                    .to_string(),
+                format!("Unknown argument: {unknown}")
+            );
+        }
+        assert_eq!(execution_input_schema(&contract)["properties"], json!({}));
+        assert_eq!(
+            execution_input_schema(&migration)["required"],
+            json!(["name"])
+        );
     }
 }

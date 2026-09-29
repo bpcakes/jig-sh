@@ -166,7 +166,6 @@ pub(super) fn call_manifest_tool_with_observer(
     args_obj: &JsonObject,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    // A legacy `plan_id` argument is accepted and ignored.
     let args = tool_defs::execution_tool_args(tool, args_obj)?;
     execute_manifest_tool_with_observer(ctx, &tool.name, args, observer)
 }
