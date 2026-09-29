@@ -142,12 +142,6 @@ pub(crate) enum ReviewScopeArg<'a> {
     Commit(&'a str),
 }
 
-impl super::RepoContext {
-    pub(crate) fn work_receipt_metadata_paths(&self) -> Vec<&'static str> {
-        self.config.work.receipt_metadata_paths()
-    }
-}
-
 impl WorkConfig {
     pub(crate) fn receipt_metadata_paths(&self) -> Vec<&'static str> {
         self.receipt_metadata

@@ -1,5 +1,5 @@
 use super::*;
-use crate::command::{MigrationAddRequest, RuntimeCommand, ToolRequest};
+use crate::command::{MigrationAddRequest, RuntimeCommand};
 use crate::context::{CURRENT_CONTRACT_VERSION, RepoContext};
 
 #[test]
@@ -165,10 +165,7 @@ fn assert_migration_alias(repo: &Path, version: u32, name: &str) {
     assert_eq!(ctx.contract_version(), version);
     crate::runtime::dispatch(
         &ctx,
-        RuntimeCommand::MigrationAdd(MigrationAddRequest {
-            name: name.into(),
-            tool: ToolRequest::default(),
-        }),
+        RuntimeCommand::MigrationAdd(MigrationAddRequest { name: name.into() }),
     )
     .unwrap();
     assert_eq!(

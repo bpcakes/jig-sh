@@ -209,7 +209,6 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
     let worker_plan = args.plan;
     let request = ExecuteCheckRunRequest {
         alias_override: None,
-        record_receipts: args.record_receipts,
         fail_fast: args.fail_fast,
     };
     let (started_tx, started_rx) = mpsc::sync_channel::<Result<crate::state::DurableRun>>(1);

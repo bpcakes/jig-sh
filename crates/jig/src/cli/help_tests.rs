@@ -552,8 +552,8 @@ fn dev_help_describes_launch_and_session_management() {
 fn migration_help_includes_examples() {
     let migration_help = rendered_help(&["migration", "add"]);
     assert_help_contains(&migration_help, "jig migration add create_users");
-    assert_help_contains(&migration_help, "add_login_tokens --no-receipt");
     assert!(!migration_help.contains("--plan-id"));
+    assert!(!migration_help.contains("--no-receipt"));
 
     let sqlx_migration_help = rendered_help(&["sqlx", "migration", "add"]);
     assert_help_contains(&sqlx_migration_help, "jig migration add create_users");

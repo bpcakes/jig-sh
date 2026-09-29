@@ -651,10 +651,10 @@ run_ci_checks() {
   local base_ref
 
   run cargo build -p jig-sh --bin jig --locked
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check fmt --no-receipt
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check clippy --no-receipt
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check test-locked --no-receipt
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check contract --no-receipt
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check fmt
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check clippy
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check test-locked
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check contract
 
   if git rev-parse --verify origin/master >/dev/null 2>&1; then
     base_ref="$(git merge-base HEAD origin/master)"
@@ -665,8 +665,7 @@ run_ci_checks() {
   fi
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check repo:file-budget \
     --comparison-exact-tree "$base_ref" \
-    --comparison-provenance explicit \
-    --no-receipt
+    --comparison-provenance explicit
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-map
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-guides
   check_launcher_template

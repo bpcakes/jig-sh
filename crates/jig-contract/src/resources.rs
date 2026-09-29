@@ -22,14 +22,5 @@ pub enum ExecutionResourceV1 {
     PlaywrightServersV1 {},
 }
 
-/// Original durable evidence reused without inventing a newly executed target.
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReusedTargetEvidenceV1 {
-    pub receipt_id: String,
-    pub run_id: String,
-    pub plan_id: String,
-}
-
 #[cfg(test)]
 mod tests;

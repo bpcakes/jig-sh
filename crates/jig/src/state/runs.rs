@@ -770,4 +770,6 @@ mod tests;
 
 mod cancellation;
 use cancellation::append_event_with_cursor;
+mod history;
 pub(crate) use cancellation::{RunEventCursor, run_cancel_requested_since};
+pub(crate) use history::{CompletedTargetEvent, RunHistoryEvent, run_history_event};

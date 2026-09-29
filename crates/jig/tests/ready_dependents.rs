@@ -30,37 +30,22 @@ fn assert_ready_dependent(fixture: fixture::Fixture) {
     assert!(run.running());
     assert!(!fixture.signals.join("release-slow").exists());
     assert!(!fixture.signals.join("completed-slow").exists());
-    let first = records(&fixture, "receipts.jsonl");
+    let first = records(&fixture, "runs.jsonl");
     assert_eq!(
         first
             .iter()
-            .filter(|receipt| receipt["target"].is_object())
+            .filter(|event| event["event"] == "target_completed")
             .count(),
         1,
         "dependent must start while slow is still running: {first:#?}"
     );
-    let prerequisite = receipt(&first, "prerequisite");
-    assert_eq!(prerequisite["exit_status"], 0);
-    assert_eq!(prerequisite["target_freshness"]["state"], "complete");
+    let prerequisite = result(&first, "prerequisite").clone();
+    assert_eq!(prerequisite["conclusion"], "success");
     release(&fixture, "dependent");
     run.wait_target_publication("dependent");
-    let published = records(&fixture, "receipts.jsonl");
-    let dependent = receipt(&published, "dependent");
-    assert_eq!(dependent["exit_status"], 0);
-    let proofs = dependent["target_freshness"]["dependency_execution_proof"]
-        .as_array()
-        .unwrap();
-    assert_eq!(proofs.len(), 1);
-    assert_eq!(proofs[0]["receipt_id"], prerequisite["id"]);
-    assert_eq!(proofs[0]["run_id"], prerequisite["run_id"]);
-    assert_eq!(proofs[0]["plan_id"], "");
-    assert_eq!(
-        proofs[0]["identity_digest"],
-        prerequisite["target_freshness"]["identity"]["identity_digest"]
-    );
-    assert_eq!(proofs[0]["conclusion"], "success");
-    assert_eq!(receipt(&published, "prerequisite"), prerequisite);
     let events = records(&fixture, "runs.jsonl");
+    assert_eq!(result(&events, "dependent")["conclusion"], "success");
+    assert_eq!(result(&events, "prerequisite"), &prerequisite);
     let at = |event: &str, action: &str| {
         events
             .iter()
@@ -77,7 +62,7 @@ fn assert_ready_dependent(fixture: fixture::Fixture) {
     release(&fixture, "slow");
     run.finish_success();
     assert_eq!(
-        receipt(&records(&fixture, "receipts.jsonl"), "slow")["exit_status"],
-        0
+        result(&records(&fixture, "runs.jsonl"), "slow")["conclusion"],
+        "success"
     );
 }

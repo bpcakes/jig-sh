@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
+use jig_contract::{RunConclusion, TargetOutputTailV1};
 use jig_ui::dashboard::*;
 use sha2::{Digest, Sha256};
 
 use crate::context::RepoContext;
 use crate::state::{
-    DashboardReceiptRecord, JsonlRecordTooLarge, RawJsonlRecord, receipt_diff_summary,
+    CompletedTargetEvent, JsonlRecordTooLarge, RawJsonlRecord, RunHistoryEvent, run_history_event,
     scan_dashboard_jsonl_raw,
 };
 
@@ -18,7 +19,7 @@ pub(super) struct LocalObservationEpoch {
     context: RepoContext,
     repository: StatusRepositoryObservation,
     status_repository_errors: Vec<StatusCollectionError>,
-    receipts: StreamSection<ReceiptFacts>,
+    runs: StreamSection<RunFacts>,
     loops: Option<StatusLoopObservation>,
     loop_error: Option<SnapshotError>,
 }
@@ -30,30 +31,30 @@ struct StreamSection<T> {
 }
 
 #[derive(Clone, Default)]
-struct ReceiptFacts {
+struct RunFacts {
     count: u64,
     failed: u64,
     failures: Vec<Failure>,
-    tool_stats: Vec<ToolStat>,
-    tool_count: usize,
+    target_stats: Vec<TargetStat>,
+    target_count: usize,
     timeline: Vec<TimelineRow>,
 }
 
 #[derive(Clone, Default)]
-struct MutableReceiptFacts {
+struct MutableRunFacts {
     count: u64,
     failed: u64,
     failures: Vec<Failure>,
-    tools: BTreeMap<String, MutableToolStat>,
+    targets: BTreeMap<String, MutableTargetStat>,
     timeline: Vec<TimelineRow>,
 }
 
 #[derive(Clone)]
-struct MutableToolStat {
+struct MutableTargetStat {
     runs: u64,
     failures: u64,
     total_duration_ms: u64,
-    last_exit_status: i64,
+    last_conclusion: Option<String>,
     last_ended_at_ms: u64,
 }
 
@@ -71,7 +72,7 @@ impl LocalObservationEpoch {
                     collection_error_for(CollectionDomain::Repository, error, cancelled)
                 })?;
 
-        let receipts = collect_receipts(context, cancelled)?;
+        let runs = collect_runs(context, cancelled)?;
         ensure_active(cancelled)?;
 
         let (loops, loop_error) = match crate::runtime::typed_loop_status_snapshot_with_cancellation(
@@ -99,7 +100,7 @@ impl LocalObservationEpoch {
             context: context.clone(),
             repository,
             status_repository_errors,
-            receipts,
+            runs,
             loops,
             loop_error,
         })
@@ -139,27 +140,27 @@ impl LocalObservationEpoch {
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             contract_version: u64::from(self.context.contract_version()),
         };
-        snapshot.failures = self.receipts.data.failures.clone();
-        snapshot.tool_stats = self.receipts.data.tool_stats.clone();
+        snapshot.failures = self.runs.data.failures.clone();
+        snapshot.target_stats = self.runs.data.target_stats.clone();
         snapshot.loops = self.loops.as_ref().map(recorder_loops).transpose()?;
         snapshot.timeline = self.timeline(timeline_limit.get());
         snapshot.limits = RecorderLimits {
             failures: root_limit(
                 LimitId::Failures,
                 Some(
-                    usize::try_from(self.receipts.data.failed)
+                    usize::try_from(self.runs.data.failed)
                         .unwrap_or(usize::MAX)
                         .saturating_sub(snapshot.failures.len()),
                 ),
             )
             .map_err(limit_error)?,
-            tool_stats: root_limit(
-                LimitId::ToolStats,
+            target_stats: root_limit(
+                LimitId::TargetStats,
                 Some(
-                    self.receipts
+                    self.runs
                         .data
-                        .tool_count
-                        .saturating_sub(snapshot.tool_stats.len()),
+                        .target_count
+                        .saturating_sub(snapshot.target_stats.len()),
                 ),
             )
             .map_err(limit_error)?,
@@ -176,7 +177,7 @@ impl LocalObservationEpoch {
     }
 
     fn timeline(&self, limit: usize) -> Vec<TimelineRow> {
-        let mut rows = self.receipts.data.timeline.clone();
+        let mut rows = self.runs.data.timeline.clone();
         rows.sort_by(|left, right| {
             timeline_timestamp(right)
                 .cmp(&timeline_timestamp(left))
@@ -187,7 +188,7 @@ impl LocalObservationEpoch {
     }
 
     fn timeline_total(&self) -> usize {
-        usize::try_from(self.receipts.data.count).unwrap_or(usize::MAX)
+        usize::try_from(self.runs.data.count).unwrap_or(usize::MAX)
     }
 
     fn recorder_errors(&self) -> Vec<SnapshotError> {
@@ -208,7 +209,7 @@ impl LocalObservationEpoch {
                     error.message.clone(),
                 )
             })
-            .chain(self.receipts.error.clone())
+            .chain(self.runs.error.clone())
             .chain(self.loop_error.clone())
             .collect()
     }

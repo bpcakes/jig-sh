@@ -11,7 +11,6 @@ fn normalize_external_check_args(
     let mut args = raw.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--no-receipt" => tool.no_receipt = true,
             "--explain" => *explain = true,
             "--fail-fast" => *fail_fast = true,
             "--comparison-staged" => comparison.comparison_staged = true,

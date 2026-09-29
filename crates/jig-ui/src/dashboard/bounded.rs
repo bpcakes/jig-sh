@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 pub const DEFAULT_TIMELINE_ROWS: usize = 120;
 pub const MAX_TIMELINE_ROWS: usize = 1_000;
-pub const ROOT_LIMIT_KEYS: &[&str] = &["failures", "tool_stats", "timeline"];
+pub const ROOT_LIMIT_KEYS: &[&str] = &["failures", "target_stats", "timeline"];
 
 /// A bounded row collection with explicit information about omitted input.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -276,7 +276,7 @@ pub struct AppliedLimit {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RecorderLimits {
     pub failures: AppliedLimit,
-    pub tool_stats: AppliedLimit,
+    pub target_stats: AppliedLimit,
     pub timeline: AppliedLimit,
 }
 
@@ -298,8 +298,8 @@ pub struct LimitSpec {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum LimitId {
     Failures,
-    FailureStderrChars,
-    ToolStats,
+    FailureOutputChars,
+    TargetStats,
     LoopWorkflows,
     LoopLeases,
     LoopAttempts,
@@ -314,8 +314,8 @@ impl LimitId {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Failures => "failures",
-            Self::FailureStderrChars => "failure_stderr_chars",
-            Self::ToolStats => "tool_stats",
+            Self::FailureOutputChars => "failure_output_chars",
+            Self::TargetStats => "target_stats",
             Self::LoopWorkflows => "loop_workflows",
             Self::LoopLeases => "loop_leases",
             Self::LoopAttempts => "loop_attempts",
@@ -411,13 +411,13 @@ pub const LIMIT_SPECS: &[LimitSpec] = &[
         serialized_at_root: true,
     },
     LimitSpec {
-        id: LimitId::FailureStderrChars,
+        id: LimitId::FailureOutputChars,
         ceiling: 400,
         shape: LimitShape::NestedText,
         serialized_at_root: false,
     },
     LimitSpec {
-        id: LimitId::ToolStats,
+        id: LimitId::TargetStats,
         ceiling: 256,
         shape: LimitShape::RootRows,
         serialized_at_root: true,

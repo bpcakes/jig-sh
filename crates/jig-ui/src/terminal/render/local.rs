@@ -88,9 +88,9 @@ pub(super) fn draw_health(frame: &mut Frame, area: Rect, app: &App) {
         frame,
         chunks[0],
         format!(
-            "Health · {} failures / {} tools",
+            "Health · {} failures / {} targets",
             local.failures.len(),
-            local.tools.len()
+            local.targets.len()
         ),
         items,
         app.health_index,
@@ -102,7 +102,7 @@ pub(super) fn draw_health(frame: &mut Frame, area: Rect, app: &App) {
     lines.push(Line::from(format!(
         "Limits: {} · {}",
         local.limits.failures.label("failures"),
-        local.limits.tools.label("tools")
+        local.limits.targets.label("targets")
     )));
     append_local_notices(&mut lines, app);
     frame.render_widget(

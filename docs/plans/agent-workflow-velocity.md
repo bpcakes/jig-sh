@@ -100,8 +100,9 @@ Facts checked at the baseline:
   identity, prefix, index, append bounds, schema, and the exact parent receipt ID.
   `checkout_tests.rs` covers accepted parent appends and rejected ambiguity.
   `docs/codex-task-operations.md` explicitly forbids nested receipt-producing
-  commands in repo mode. `docs/configuration.md` documents that `--no-receipt`
-  conflicts with `--plan-id`. An entire `.agent` exclusion is not equivalent.
+  commands in repo mode. `docs/configuration.md` then documented that
+  `--no-receipt` conflicted with `--plan-id`; `--no-receipt` was later removed
+  when checks stopped writing receipts. An entire `.agent` exclusion is not equivalent.
 - Current review-skill reconciliation already addresses some historical receipt
   drift. This is context, not a dependency on an installed plugin cache; the
   reproducible supported integration contract is part of T-02.
@@ -165,7 +166,8 @@ finish readiness; `work finish` still evaluates every required gate independentl
 Keep parent-owned append verification and append-only history. Deliver supported
 recipes plus structured distinction between application dirtiness, receipt
 ambiguity, and an unverifiable journal. A repo-mode standalone diagnostic can
-use supported `--no-receipt` execution; a linked check must retain receipts and
+use supported `--no-receipt` execution (since removed, because checks no longer
+write receipts); a linked check must retain receipts and
 use a supported context instead. Never silently strip `--plan-id` or suppress a
 required receipt. Review consumers assess validation applicability; Jig does not
 declare arbitrary receipt paths irrelevant to a review.

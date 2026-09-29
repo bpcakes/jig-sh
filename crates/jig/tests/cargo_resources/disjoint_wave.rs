@@ -12,20 +12,13 @@ fn completed_ordinary_target_keeps_success_while_cargo_peer_outlives_its_timeout
     // Intentionally cross the ordinary command's two-second timeout only
     // after its child has completed. Its peer still owns the wave barrier.
     std::thread::sleep(std::time::Duration::from_secs(3));
-    assert!(records(&fixture.root.join(".agent/state/receipts.jsonl")).is_empty());
+    assert!(!completed_any(&fixture));
     release(&fixture, "cargo-a");
     run.finish_success();
-    let receipts = records(&fixture.root.join(".agent/state/receipts.jsonl"));
-    assert_eq!(receipt_for(&receipts, "ordinary-a")["exit_status"], 0);
     let events = records(&fixture.root.join(".agent/state/runs.jsonl"));
-    let ordinary = events
-        .iter()
-        .find(|event| {
-            event["event"] == "target_completed" && event["target"]["action"] == "ordinary-a"
-        })
-        .unwrap();
-    assert_eq!(ordinary["result"]["conclusion"], "success", "{ordinary:#}");
-    assert_eq!(ordinary["result"]["exit_code"], 0);
+    let ordinary = result_for(&events, "ordinary-a");
+    assert_eq!(ordinary["conclusion"], "success", "{ordinary:#}");
+    assert_eq!(ordinary["exit_code"], 0);
 }
 
 #[test]
@@ -44,8 +37,8 @@ fn blocked_first_resource_does_not_prevent_later_disjoint_target_admission() {
     assert!(!fixture.signals.join("entered-cargo-a").exists());
     release(&fixture, "cargo-b");
     run.wait_target_publication("cargo-b");
-    let receipts = records(&fixture.root.join(".agent/state/receipts.jsonl"));
-    assert_eq!(receipt_for(&receipts, "cargo-b")["exit_status"], 0);
+    let events = records(&fixture.root.join(".agent/state/runs.jsonl"));
+    assert_eq!(result_for(&events, "cargo-b")["conclusion"], "success");
     assert!(
         owner.running(),
         "available work must publish without waiting for an unrelated owner"
@@ -67,15 +60,15 @@ fn distinct_cargo_resources_in_one_run_enter_before_either_is_released() {
     run.wait_named_entry("cargo-b");
     assert!(run.running());
     assert!(
-        records(&fixture.root.join(".agent/state/receipts.jsonl")).is_empty(),
+        !completed_any(&fixture),
         "both resource owners are still held inside their child barriers"
     );
     release(&fixture, "cargo-a");
     release(&fixture, "cargo-b");
     run.finish_success();
-    let receipts = records(&fixture.root.join(".agent/state/receipts.jsonl"));
-    assert_eq!(receipt_for(&receipts, "cargo-a")["exit_status"], 0);
-    assert_eq!(receipt_for(&receipts, "cargo-b")["exit_status"], 0);
+    let events = records(&fixture.root.join(".agent/state/runs.jsonl"));
+    assert_eq!(result_for(&events, "cargo-a")["conclusion"], "success");
+    assert_eq!(result_for(&events, "cargo-b")["conclusion"], "success");
     assert!(!fixture.signals.join("overlap").exists());
 }
 
@@ -89,7 +82,7 @@ fn independent_wave_sibling_source_mutation_invalidates_every_wave_success() {
     release(&fixture, "cargo-b");
     run.wait_signal("completed-cargo-b");
     assert!(
-        records(&fixture.root.join(".agent/state/receipts.jsonl")).is_empty(),
+        !completed_any(&fixture),
         "no success may publish while the mutating sibling is still held"
     );
     release(&fixture, "cargo-a");
@@ -101,17 +94,10 @@ fn independent_wave_sibling_source_mutation_invalidates_every_wave_success() {
         .filter(|event| event["event"] == "target_completed")
         .collect::<Vec<_>>();
     assert_eq!(completed.len(), 2, "{events:#?}");
-    let receipts = records(&fixture.root.join(".agent/state/receipts.jsonl"));
     for event in completed {
         assert_ne!(
             event["result"]["conclusion"], "success",
             "common postcondition must reject every provisional success: {event:#}"
-        );
-        let receipt = receipt_for(&receipts, event["target"]["action"].as_str().unwrap());
-        assert_ne!(receipt["exit_status"], 0, "{receipt:#}");
-        assert_eq!(
-            receipt["target_freshness"]["state"], "incomplete",
-            "source drift cannot publish valid proof: {receipt:#}"
         );
     }
     assert!(!fixture.signals.join("overlap").exists());

@@ -7,21 +7,6 @@ pub(crate) fn read_index_blob_v1(root: &Path, path: &str, limit: usize) -> Resul
     read_index_blob_inner(root, path, limit, GitReceiptCollection::Blocking)
 }
 
-pub(crate) fn read_index_blob_v1_observed(
-    root: &Path,
-    path: &str,
-    limit: usize,
-    cancelled: &dyn Fn() -> bool,
-    bytes: &std::cell::Cell<u64>,
-) -> Result<Option<Vec<u8>>> {
-    read_index_blob_inner(
-        root,
-        path,
-        limit,
-        GitReceiptCollection::Observed { cancelled, bytes },
-    )
-}
-
 fn read_index_blob_inner(
     root: &Path,
     path: &str,

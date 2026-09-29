@@ -48,7 +48,7 @@ fn json_lines_error_finding_fails_a_zero_exit_target() {
 
     assert_eq!(capture.conclusion, RunConclusion::Failure);
     assert_eq!(capture.exit_code, Some(0));
-    assert_eq!(capture.receipt_exit_status, 1);
+    assert_eq!(capture.envelope_exit_status, 1);
     assert_eq!(capture.findings.len(), 1);
 }
 
@@ -82,7 +82,7 @@ fn cancellation_poll_failures_block_poll_induced_cancellation_without_masking_a_
     ));
 
     assert_eq!(capture.conclusion, RunConclusion::Blocked);
-    assert_eq!(capture.receipt_exit_status, 1);
+    assert_eq!(capture.envelope_exit_status, 1);
     assert!(capture.stderr.contains("durable state is unavailable"));
     assert_eq!(capture.findings[0].source.as_deref(), Some("cancellation"));
 
@@ -92,7 +92,7 @@ fn cancellation_poll_failures_block_poll_induced_cancellation_without_masking_a_
     ));
 
     assert_eq!(cancelled.conclusion, RunConclusion::Blocked);
-    assert_eq!(cancelled.receipt_exit_status, 1);
+    assert_eq!(cancelled.envelope_exit_status, 1);
     assert!(cancelled.stderr.contains("durable state is unavailable"));
 
     let failed = control.enforce_poll_health(TargetCapture::from_process(
@@ -103,7 +103,7 @@ fn cancellation_poll_failures_block_poll_induced_cancellation_without_masking_a_
     ));
 
     assert_eq!(failed.conclusion, RunConclusion::Failure);
-    assert_eq!(failed.receipt_exit_status, 7);
+    assert_eq!(failed.envelope_exit_status, 7);
     assert!(failed.stderr.contains("test failure"));
     assert!(failed.stderr.contains("durable state is unavailable"));
 }
@@ -353,7 +353,7 @@ fn an_unverifiable_mutating_postcondition_blocks_success() {
 
     assert!(fingerprint.is_err());
     assert_eq!(capture.conclusion, RunConclusion::Blocked);
-    assert_eq!(capture.receipt_exit_status, 1);
+    assert_eq!(capture.envelope_exit_status, 1);
     assert!(
         capture
             .findings

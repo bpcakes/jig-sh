@@ -66,20 +66,21 @@ changes. Do not change product code, push, publish, or deploy. If there are no
 new findings, create nothing and do not make an empty commit.
 ```
 
-Do not run receipt-producing Jig commands from inside a repo-mode task. For
-example, a nested `scripts/jig check ...` appends another receipt while the
-worker is active. Repo-mode completion accepts only the scheduled worker's exact
-receipt append; another append makes provenance ambiguous and the occurrence
-requires attention. Use direct, focused test commands inside the prompt, or use
-an isolated worktree task when its changes do not need to land in the selected
-checkout.
+Do not run state-writing Jig commands from inside a repo-mode task. For
+example, a nested `scripts/jig check ...` on a contract-v6 or later repository
+appends to `.agent/state/runs.jsonl` while the worker is active, and repo-mode
+completion reports that operational state change as a dirty checkout that
+requires attention. Completion accepts only the scheduled worker's exact receipt
+append; any other append also makes provenance ambiguous. Use direct, focused
+test commands inside the prompt, or use an isolated worktree task when its
+changes do not need to land in the selected checkout.
 
 Validation contexts are deliberately different:
 
 | Context | Supported recipe |
 | --- | --- |
-| Standalone diagnostic, including a review's local test command | Outside a repo-mode worker, use `scripts/jig check <target> --no-receipt` when no receipt is required. This suppresses receipts, not native run metadata. |
-| Repo-mode worker | Use direct test commands that leave the checkout clean. A legacy contract's receipt-free command can be suitable when it writes no other tracked state; native checks still append `.agent/state/runs.jsonl`. Do not treat `--no-receipt` as a blanket safe-nesting flag. |
+| Standalone diagnostic, including a review's local test command | Outside a repo-mode worker, use `scripts/jig check <target>`. Checks record run history and no receipt. |
+| Repo-mode worker | Use direct test commands that leave the checkout clean. A legacy contract's named check, such as `scripts/jig check test` on contract v2–v5, writes no state and can be suitable; contract-v6 and later checks append `.agent/state/runs.jsonl`. |
 | Isolated task | Run validation in the task worktree. Receipt and run-journal changes cause the worktree to be retained for inspection, not merged or discarded. |
 
 Completion keeps the original worker output and receipt identity. Additive

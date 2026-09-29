@@ -14,25 +14,15 @@ fn resource_timeout_does_not_cancel_unrelated_dependency_chain() {
     run.finish_failure();
 
     let events = records(&fixture, "runs.jsonl");
-    let receipts = records(&fixture, "receipts.jsonl");
-    for (action, conclusion, freshness) in [
-        ("slow", "timed_out", "incomplete"),
-        ("prerequisite", "success", "complete"),
-        ("dependent", "success", "complete"),
+    for (action, conclusion) in [
+        ("slow", "timed_out"),
+        ("prerequisite", "success"),
+        ("dependent", "success"),
     ] {
-        let completions = events
-            .iter()
-            .filter(|event| {
-                event["event"] == "target_completed" && event["target"]["action"] == action
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(completions.len(), 1, "{events:#?}");
-        assert_eq!(completions[0]["result"]["conclusion"], conclusion);
         assert_eq!(
-            receipt(&receipts, action)["target_freshness"]["state"],
-            freshness,
-            "{action}: {:#}",
-            receipt(&receipts, action)
+            result(&events, action)["conclusion"],
+            conclusion,
+            "{action}"
         );
     }
 }
@@ -49,12 +39,9 @@ fn timed_out_resource_wave_retries_source_only_once_for_all_members() {
     run.finish_failure();
     let output: serde_json::Value = serde_json::from_str(&run.output()).unwrap();
     assert_eq!(output["source_observations"]["count"], 3, "{output:#}");
-    let receipts = records(&fixture, "receipts.jsonl");
+    let events = records(&fixture, "runs.jsonl");
     for action in ["prerequisite", "slow"] {
-        assert_eq!(
-            receipt(&receipts, action)["target_freshness"]["state"],
-            "incomplete"
-        );
+        assert_ne!(result(&events, action)["conclusion"], "success", "{action}");
     }
 }
 
@@ -68,11 +55,9 @@ fn source_mutation_during_resource_timeout_still_stops_unrelated_work() {
     release(&fixture, "prerequisite");
     run.finish_failure();
     assert_dependent_skipped(&fixture);
-    let receipts = records(&fixture, "receipts.jsonl");
+    let events = records(&fixture, "runs.jsonl");
     for action in ["prerequisite", "slow"] {
-        let result = receipt(&receipts, action);
-        assert_ne!(result["exit_status"], 0);
-        assert_eq!(result["target_freshness"]["state"], "incomplete");
+        assert_ne!(result(&events, action)["conclusion"], "success", "{action}");
     }
 }
 
@@ -99,7 +84,7 @@ fn failed_prerequisite_never_releases_dependent() {
     release(&fixture, "prerequisite");
     run.wait_target_publication("prerequisite");
     assert_eq!(
-        receipt(&records(&fixture, "receipts.jsonl"), "prerequisite")["exit_status"],
+        result(&records(&fixture, "runs.jsonl"), "prerequisite")["exit_code"],
         7
     );
     release(&fixture, "slow");
@@ -114,10 +99,8 @@ fn mutation_before_prerequisite_validation_prevents_dependent_start() {
     mutate(&fixture);
     release(&fixture, "prerequisite");
     run.wait_target_publication("prerequisite");
-    let receipts = records(&fixture, "receipts.jsonl");
-    let prerequisite = receipt(&receipts, "prerequisite");
-    assert_ne!(prerequisite["exit_status"], 0);
-    assert_eq!(prerequisite["target_freshness"]["state"], "incomplete");
+    let events = records(&fixture, "runs.jsonl");
+    assert_ne!(result(&events, "prerequisite")["conclusion"], "success");
     release(&fixture, "slow");
     run.finish_failure();
     assert_dependent_skipped(&fixture);
@@ -134,11 +117,9 @@ fn mutation_during_dependent_rejects_its_success() {
     run.wait_target_publication("dependent");
     release(&fixture, "slow");
     run.finish_failure();
-    let receipts = records(&fixture, "receipts.jsonl");
-    assert_eq!(receipt(&receipts, "prerequisite")["exit_status"], 0);
-    let dependent = receipt(&receipts, "dependent");
-    assert_ne!(dependent["exit_status"], 0);
-    assert_eq!(dependent["target_freshness"]["state"], "incomplete");
+    let events = records(&fixture, "runs.jsonl");
+    assert_eq!(result(&events, "prerequisite")["conclusion"], "success");
+    assert_ne!(result(&events, "dependent")["conclusion"], "success");
 }
 
 #[test]
@@ -149,18 +130,18 @@ fn late_mutation_preserves_historical_success() {
     run.wait_named_entry("dependent");
     release(&fixture, "dependent");
     run.wait_target_publication("dependent");
-    let originals = records(&fixture, "receipts.jsonl");
+    let originals = records(&fixture, "runs.jsonl");
     for action in ["prerequisite", "dependent"] {
-        assert_eq!(receipt(&originals, action)["exit_status"], 0);
+        assert_eq!(result(&originals, action)["conclusion"], "success");
     }
     mutate(&fixture);
     release(&fixture, "slow");
     run.finish_failure();
-    let after = records(&fixture, "receipts.jsonl");
+    let after = records(&fixture, "runs.jsonl");
     for action in ["prerequisite", "dependent"] {
-        assert_eq!(receipt(&after, action), receipt(&originals, action));
+        assert_eq!(result(&after, action), result(&originals, action));
     }
-    assert_ne!(receipt(&after, "slow")["exit_status"], 0);
+    assert_ne!(result(&after, "slow")["conclusion"], "success");
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use super::*;
-use crate::command::{RepositoryRunRequest, RuntimeCommand, ToolRequest};
+use crate::command::{RepositoryRunRequest, RuntimeCommand};
 
 fn request(selectors: &[&str]) -> RepositoryRunRequest {
     RepositoryRunRequest {
@@ -11,7 +11,6 @@ fn request(selectors: &[&str]) -> RepositoryRunRequest {
         explain: false,
         fail_fast: false,
         approved_effects: Vec::new(),
-        tool: ToolRequest::default(),
     }
 }
 
@@ -336,7 +335,6 @@ fn foreground_prestart_cancellation_keeps_existing_check_run_evidence() {
             plan,
             crate::runtime::run_execution::ExecuteCheckRunRequest {
                 alias_override: None,
-                record_receipts: true,
                 fail_fast: false,
             },
             &mut AlreadyCancelled,
@@ -362,7 +360,7 @@ fn foreground_prestart_cancellation_keeps_existing_check_run_evidence() {
 }
 
 #[test]
-fn foreground_run_and_check_record_receipts_without_a_work_plan() {
+fn foreground_run_and_check_record_run_history_without_receipts() {
     for (native, check) in [(false, false), (true, false), (false, true), (true, true)] {
         let temp = tempdir().unwrap();
         write_non_rust_file_budget_fixture_repo(temp.path());
@@ -404,7 +402,6 @@ fn foreground_run_and_check_record_receipts_without_a_work_plan() {
                 reason: jig_contract::StrictInventoryReasonV1::ExplicitCheck,
             });
         }
-        args.tool = ToolRequest::new(true);
         let command = if check {
             RuntimeCommand::Check(crate::command::CheckCommand::Repository(
                 crate::command::RepositoryCheckRequest {
@@ -414,7 +411,6 @@ fn foreground_run_and_check_record_receipts_without_a_work_plan() {
                     comparison: args.comparison,
                     explain: args.explain,
                     fail_fast: args.fail_fast,
-                    tool: args.tool,
                 },
             ))
         } else {
@@ -430,13 +426,11 @@ fn foreground_run_and_check_record_receipts_without_a_work_plan() {
         let durable =
             crate::state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
         assert!(durable.work_plan_id.is_none());
-        let receipt = output["run"]["targets"][0]["receipt_id"].as_str().unwrap();
-        let receipts = fs::read_to_string(ctx.state_file("receipts.jsonl")).unwrap();
-        let receipt: Value = receipts
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .find(|r| r["id"] == receipt)
-            .unwrap();
-        assert!(receipt["plan_id"].is_null(), "{receipt:#}");
+        assert_eq!(
+            durable.result.targets[0].conclusion,
+            Some(jig_contract::RunConclusion::Success)
+        );
+        assert!(output["run"]["targets"][0].get("receipt_id").is_none());
+        assert!(!ctx.state_file("receipts.jsonl").exists());
     }
 }

@@ -434,7 +434,7 @@ exec "$@""#,
 
 #[cfg(unix)]
 #[test]
-fn repo_worker_rejects_a_nested_receipt_writing_jig_command() {
+fn repo_worker_accepts_a_nested_jig_command_now_that_it_writes_no_receipt() {
     let repo = tempdir().unwrap();
     let bin = tempdir().unwrap();
     write_failing_loop_repo(repo.path());
@@ -470,21 +470,7 @@ printf 'nested Jig completed\n' > "$out"
         .output()
         .unwrap();
 
-    assert!(!output.status.success(), "{output:?}");
     let dispatch: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(dispatch["ok"], false, "{dispatch:#}");
-    assert_eq!(dispatch["actions"][0]["status"], "needs_attention");
-    assert_eq!(
-        dispatch["actions"][0]["tick"]["actions"][0]["checkout"]
-            ["receipt_append_valid"],
-        false
-    );
-    assert!(
-        dispatch["actions"][0]["occurrence"]["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("only appended record")),
-        "{dispatch:#}"
-    );
     assert!(
         fs::read_to_string(&nested_log)
             .unwrap_or_default()
@@ -492,14 +478,21 @@ printf 'nested Jig completed\n' > "$out"
         "nested Jig command did not finish: {}",
         fs::read_to_string(&nested_log).unwrap_or_default()
     );
-    let receipts = fs::read_to_string(repo.path().join(".agent/state/receipts.jsonl")).unwrap();
+    assert_ne!(
+        dispatch["actions"][0]["tick"]["actions"][0]["checkout"]
+            ["receipt_append_valid"],
+        false,
+        "{dispatch:#}"
+    );
+    let receipts =
+        fs::read_to_string(repo.path().join(".agent/state/receipts.jsonl")).unwrap_or_default();
     assert!(
-        receipts.lines().any(|line| {
+        !receipts.lines().any(|line| {
             serde_json::from_str::<Value>(line)
                 .ok()
                 .is_some_and(|receipt| receipt["tool_name"] == "jig.bootstrap")
         }),
-        "nested Jig receipt was not retained: {receipts}"
+        "nested Jig command wrote a receipt: {receipts}"
     );
 }
 

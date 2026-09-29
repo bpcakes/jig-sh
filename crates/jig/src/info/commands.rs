@@ -412,7 +412,7 @@ fn migration_command(ctx: &RepoContext) -> Value {
                 Some(ReasonCode::MigrationAddToolInvalid),
                 Some(&reason),
                 Some(
-                    "Run `scripts/jig check contract --no-receipt`, correct the repository migration owner, then run `jig update --recopy`.",
+                    "Run `scripts/jig check contract`, correct the repository migration owner, then run `jig update --recopy`.",
                 ),
             );
         }

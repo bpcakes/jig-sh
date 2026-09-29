@@ -12,7 +12,6 @@ fn external_check_selectors_accept_execution_flags_after_targets() {
         command: Some(CheckCommand::Selectors(vec![
             "api:test".into(),
             "web:lint".into(),
-            "--no-receipt".into(),
             "--fail-fast".into(),
         ])),
     })
@@ -23,7 +22,30 @@ fn external_check_selectors_accept_execution_flags_after_targets() {
     };
     assert_eq!(request.selectors, ["api:test", "web:lint"]);
     assert!(request.fail_fast);
-    assert!(!request.tool.record_receipt());
+}
+
+#[test]
+fn external_check_selectors_reject_the_retired_receipt_flag() {
+    let error = command::CheckCommand::try_from(CheckOpts {
+        tool: ToolOpts::default(),
+        profile: None,
+        affected: None,
+        explain: false,
+        fail_fast: false,
+        comparison: CheckComparisonOpts::default(),
+        command: Some(CheckCommand::Selectors(vec![
+            "api:test".into(),
+            "--no-receipt".into(),
+        ])),
+    })
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("unknown check option '--no-receipt'"),
+        "{error:#}"
+    );
 }
 
 #[test]

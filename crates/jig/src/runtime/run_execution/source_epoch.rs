@@ -47,7 +47,7 @@ impl ExecutionSourceEpoch {
         }
     }
 
-    pub(super) fn receipt_fingerprint(&self) -> std::result::Result<String, String> {
+    pub(super) fn observed_fingerprint(&self) -> std::result::Result<String, String> {
         self.observed_fingerprint.clone()
     }
 
@@ -270,7 +270,7 @@ impl ExecutionSourceEpoch {
             // still validating or spawning it. Preserve the trusted epoch
             // when execution definitely never began.
             self.discard_reusable_observation();
-            return (capture, self.receipt_fingerprint());
+            return (capture, self.observed_fingerprint());
         }
         let current = self.observe_with(collect);
         self.observed_fingerprint = current.clone();
@@ -327,7 +327,7 @@ pub(super) fn block_for_unverifiable_effect_policy(
     capture.findings.push(finding(message, "effect_policy"));
     if capture.conclusion == RunConclusion::Success {
         capture.conclusion = RunConclusion::Blocked;
-        capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+        capture.envelope_exit_status = capture.envelope_exit_status.max(1);
     }
     capture
 }
@@ -357,7 +357,7 @@ pub(super) fn enforce_declared_worktree_effect(
             capture.findings.push(finding(message, "effect_policy"));
             if capture.conclusion == RunConclusion::Success {
                 capture.conclusion = RunConclusion::Failure;
-                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+                capture.envelope_exit_status = capture.envelope_exit_status.max(1);
             }
             capture
         }
@@ -383,7 +383,7 @@ fn enforce_read_only_layer_worktree_effect(
             capture.findings.push(finding(message, "effect_policy"));
             if capture.conclusion == RunConclusion::Success {
                 capture.conclusion = RunConclusion::Failure;
-                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+                capture.envelope_exit_status = capture.envelope_exit_status.max(1);
             }
             capture
         }
@@ -415,7 +415,7 @@ pub(super) fn enforce_current_repository_authority(
         .push(finding(message, "execution_authority"));
     if capture.conclusion == RunConclusion::Success {
         capture.conclusion = RunConclusion::Blocked;
-        capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+        capture.envelope_exit_status = capture.envelope_exit_status.max(1);
     }
     capture
 }

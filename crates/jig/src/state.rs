@@ -16,27 +16,21 @@ use jsonl::read_jsonl;
 pub(crate) use jsonl::{JsonlRecordTooLarge, RawJsonlRecord, scan_dashboard_jsonl_raw};
 #[cfg(test)]
 pub(crate) use jsonl::{dashboard_scan_count, reset_dashboard_scan_counts};
+pub(crate) use receipts::WORK_CHECK_EVIDENCE_SCHEMA;
 pub(crate) use receipts::WORK_CHECK_TARGETS_SCHEMA;
-pub(crate) use receipts::evidence_requires_time_validity;
-pub(crate) use receipts::metadata_time;
+pub(crate) use receipts::receipt_append_may_have_landed;
 #[cfg(test)]
 pub(crate) use receipts::receipt_append_may_have_landed_for_test;
-pub(crate) use receipts::receipt_diff_summary;
 #[cfg(test)]
 pub(crate) use receipts::record_receipt;
-pub(crate) use receipts::{OriginalReceiptIndex, TargetReceiptMetadata, record_target_receipt};
 pub(crate) use receipts::{
     ReceiptInput, record_receipt_with_cancellation, record_receipt_with_cancellation_until,
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
-pub(crate) use receipts::{
-    TargetReceiptStatus, WORK_CHECK_EVIDENCE_SCHEMA, time_validity_is_current,
-};
-pub(crate) use receipts::{latest_file_budget_lifecycle_receipt, receipt_append_may_have_landed};
 pub(crate) use receipts::{receipt_record_id, with_receipt_journal_writer};
-pub(crate) use records::ReceiptRecord as DashboardReceiptRecord;
 #[cfg(test)]
 use records::ReceiptRecord;
+pub(crate) use runs::{CompletedTargetEvent, RunHistoryEvent, run_history_event};
 pub(crate) use runs::{
     DurableRun, RunEventCursor, RunLease, block_nonterminal_run, complete_run, mark_run_running,
     mark_target_started, reconcile_run_for_inspection, record_target_result, request_run_cancel,

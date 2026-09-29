@@ -11,8 +11,7 @@ use crate::context::RepoContext;
 
 use super::jsonl::{scan_dashboard_jsonl_raw, scan_jsonl_raw};
 use super::privacy::{redact_repository_root, repository_root_spellings};
-use super::receipts::receipt_diff_summary;
-use super::records::ReceiptRecord;
+use super::runs::{CompletedTargetEvent, RunHistoryEvent, run_history_event};
 
 const STATE_SUMMARY_RECENT_LIMIT: usize = 10;
 
@@ -38,8 +37,8 @@ fn state_summary_impl(
     bounded: bool,
 ) -> Result<Value> {
     ensure_status_collection_active(cancelled)?;
-    let receipts = summarize_receipts(
-        &ctx.state_file("receipts.jsonl"),
+    let runs = summarize_runs(
+        &ctx.state_file("runs.jsonl"),
         STATE_SUMMARY_RECENT_LIMIT,
         cancelled,
         bounded,
@@ -55,43 +54,52 @@ fn state_summary_impl(
             "source_path": public_source_path(ctx),
         },
         "counts": {
-            "receipts": receipts.count,
-            "failed_receipts": receipts.failed,
+            "runs": runs.runs,
+            "target_results": runs.target_results,
+            "failed_target_results": runs.failed,
         },
-        "recent_receipts": receipts.recent,
+        "recent_target_results": runs.recent,
     }))
 }
 
-struct ReceiptStreamSummary {
-    count: usize,
+struct RunHistorySummary {
+    runs: usize,
+    target_results: usize,
     failed: usize,
     recent: Vec<Value>,
 }
 
-fn summarize_receipts(
+fn summarize_runs(
     path: &Path,
     limit: usize,
     cancelled: &dyn Fn() -> bool,
     bounded: bool,
-) -> Result<ReceiptStreamSummary> {
-    let mut count = 0usize;
+) -> Result<RunHistorySummary> {
+    let mut runs = 0usize;
+    let mut target_results = 0usize;
     let mut failed = 0usize;
     let mut recent = VecDeque::with_capacity(limit);
     let mut visit = |record: super::jsonl::RawJsonlRecord<'_>| {
-        let receipt = serde_json::from_slice::<ReceiptRecord>(record.bytes).with_context(|| {
+        let event = run_history_event(record.bytes).with_context(|| {
             format!(
-                "Failed to parse receipt JSONL record {} in {}",
+                "Failed to parse run record {} in {}",
                 record.line_number,
                 path.display()
             )
         })?;
-        count = count.saturating_add(1);
-        failed = failed.saturating_add(usize::from(receipt.exit_status != 0));
-        if limit > 0 {
-            if recent.len() == limit {
-                recent.pop_front();
+        match event {
+            RunHistoryEvent::Queued => runs = runs.saturating_add(1),
+            RunHistoryEvent::TargetCompleted(event) => {
+                target_results = target_results.saturating_add(1);
+                failed = failed.saturating_add(usize::from(event.failed()));
+                if limit > 0 {
+                    if recent.len() == limit {
+                        recent.pop_front();
+                    }
+                    recent.push_back(target_result_summary(*event));
+                }
             }
-            recent.push_back(receipt_summary(&receipt));
+            RunHistoryEvent::Other => {}
         }
         Ok(())
     };
@@ -100,21 +108,23 @@ fn summarize_receipts(
     } else {
         scan_jsonl_raw(path, cancelled, &mut visit)?;
     }
-    Ok(ReceiptStreamSummary {
-        count,
+    Ok(RunHistorySummary {
+        runs,
+        target_results,
         failed,
         recent: recent.into_iter().rev().collect(),
     })
 }
 
-fn receipt_summary(receipt: &ReceiptRecord) -> Value {
+fn target_result_summary(event: CompletedTargetEvent) -> Value {
+    let CompletedTargetEvent { run_id, result } = event;
     json!({
-        "id": receipt.id,
-        "tool_name": receipt.tool_name,
-        "invoked_command_key": receipt.invoked_command_key,
-        "exit_status": receipt.exit_status,
-        "started_at_ms": receipt.started_at_ms,
-        "ended_at_ms": receipt.ended_at_ms,
-        "diff_summary": receipt_diff_summary(receipt),
+        "run_id": run_id,
+        "target": result.target,
+        "status": result.status,
+        "conclusion": result.conclusion,
+        "exit_code": result.exit_code,
+        "started_at_ms": result.started_at_ms,
+        "ended_at_ms": result.ended_at_ms,
     })
 }

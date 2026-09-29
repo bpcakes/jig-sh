@@ -390,12 +390,7 @@ fn assert_resource_authority_change(
             .contains("modified")
     );
 
-    let first_invocation = plan.targets[0]
-        .target_identity
-        .as_ref()
-        .unwrap()
-        .invocation_digest
-        .clone();
+    let first_resources = plan.targets[0].resources.clone();
     manifest["actions"][0]["resources"] = json!(changed_resources);
     fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     assert!(
@@ -420,12 +415,5 @@ fn assert_resource_authority_change(
         &|| false,
     )
     .unwrap();
-    assert_ne!(
-        first_invocation,
-        next.targets[0]
-            .target_identity
-            .as_ref()
-            .unwrap()
-            .invocation_digest
-    );
+    assert_ne!(first_resources, next.targets[0].resources);
 }

@@ -14,14 +14,11 @@ pub(super) fn dispatch_with_observer(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     match command {
-        SqlxCommand::SchemaDump(request) => {
-            tool_execution::execute_manifest_tool_request_with_observer(
-                ctx,
-                tool::SCHEMA_DUMP,
-                json!({}),
-                request,
-                observer,
-            )
-        }
+        SqlxCommand::SchemaDump => tool_execution::execute_manifest_tool_with_observer(
+            ctx,
+            tool::SCHEMA_DUMP,
+            json!({}),
+            observer,
+        ),
     }
 }

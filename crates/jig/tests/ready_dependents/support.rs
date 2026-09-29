@@ -331,17 +331,23 @@ pub fn records(fixture: &Fixture, name: &str) -> Vec<Value> {
         .collect()
 }
 
-pub fn receipt<'a>(records: &'a [Value], name: &str) -> &'a Value {
-    let matches = records
+/// Every published target result, in publication order.
+pub fn completed_results(fixture: &Fixture) -> Vec<Value> {
+    records(fixture, "runs.jsonl")
+        .into_iter()
+        .filter(|event| event["event"] == "target_completed")
+        .map(|event| event["result"].clone())
+        .collect()
+}
+
+/// The single published result for `name` in run-history events.
+pub fn result<'a>(events: &'a [Value], name: &str) -> &'a Value {
+    let matches = events
         .iter()
-        .filter(|r| r["target"]["action"] == name)
+        .filter(|event| event["event"] == "target_completed" && event["target"]["action"] == name)
         .collect::<Vec<_>>();
-    assert_eq!(
-        matches.len(),
-        1,
-        "one original receipt for {name}: {records:#?}"
-    );
-    matches[0]
+    assert_eq!(matches.len(), 1, "one result for {name}: {events:#?}");
+    &matches[0]["result"]
 }
 
 pub fn assert_dependent_skipped(fixture: &Fixture) {

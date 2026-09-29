@@ -25,43 +25,44 @@ pub fn recorder_snapshot() -> RecorderSnapshot {
         contract_version: 8,
     };
     snapshot.failures = vec![Failure {
-        id: "receipt_failed".to_string(),
-        tool_name: "jig.test".to_string(),
+        run_id: "run_failed".to_string(),
+        target: "api:test".to_string(),
+        conclusion: "failure".to_string(),
+        exit_code: Some(1),
         ended_at_ms: Some(OBSERVED_AT_MS - 1_000),
-        exit_status: 1,
-        stderr_preview: BoundedText::for_limit(
+        output_tail: BoundedText::for_limit(
             "example failure",
             Some(15),
-            LimitId::FailureStderrChars,
+            LimitId::FailureOutputChars,
         )
         .unwrap(),
     }];
-    snapshot.tool_stats = vec![ToolStat {
-        tool: "jig.test".to_string(),
+    snapshot.target_stats = vec![TargetStat {
+        target: "api:test".to_string(),
         runs: 3,
         failures: 1,
-        last_exit_status: 1,
+        last_conclusion: Some("failure".to_string()),
         last_ended_at_ms: OBSERVED_AT_MS - 1_000,
         avg_duration_ms: 250,
     }];
     snapshot.loops = Some(loops());
-    snapshot.timeline = vec![TimelineRow::Receipt(ReceiptTimelineRow {
-        stable_identity: "receipt:receipt_failed".to_string(),
+    snapshot.timeline = vec![TimelineRow {
+        stable_identity: "run_failed:api:test".to_string(),
         timestamp_ms: Some(OBSERVED_AT_MS - 1_000),
-        id: "receipt_failed".to_string(),
-        tool_name: "jig.test".to_string(),
-        invoked_command_key: Some("test".to_string()),
-        exit_status: 1,
+        run_id: "run_failed".to_string(),
+        target: "api:test".to_string(),
+        status: "completed".to_string(),
+        conclusion: Some("failure".to_string()),
+        exit_code: Some(1),
         started_at_ms: Some(OBSERVED_AT_MS - 1_250),
         ended_at_ms: Some(OBSERVED_AT_MS - 1_000),
         duration_ms: Some(250),
-        diff_summary: Some("1 file changed".to_string()),
-        changed_path_count: Some(1),
-        stderr_preview: Some(
-            BoundedText::for_limit("example failure", Some(15), LimitId::FailureStderrChars)
+        finding_count: Some(2),
+        output_tail: Some(
+            BoundedText::for_limit("example failure", Some(15), LimitId::FailureOutputChars)
                 .unwrap(),
         ),
-    })];
+    }];
     snapshot
 }
 

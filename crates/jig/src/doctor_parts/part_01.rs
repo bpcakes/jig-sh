@@ -120,7 +120,7 @@ fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Resul
                     "blocked",
                     context_error.clone(),
                 )
-                .with_fix("Run `scripts/jig check contract --no-receipt` after fixing the reported repo configuration issue."),
+                .with_fix("Run `scripts/jig check contract` after fixing the reported repo configuration issue."),
             );
             checks.push(
                 check(
@@ -131,7 +131,7 @@ fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Resul
                     "blocked",
                     format!("Skipped until repo context loads successfully: {context_error}"),
                 )
-                .with_fix("Run `scripts/jig check contract --no-receipt` first."),
+                .with_fix("Run `scripts/jig check contract` first."),
             );
             checks.push(
                 check(
@@ -290,7 +290,7 @@ fn contract_check(ctx: &RepoContext) -> DoctorCheck {
             "invalid",
             output.stderr.trim().to_string(),
         )
-        .with_fix("Run `scripts/jig check contract --no-receipt` for the full contract report.")
+        .with_fix("Run `scripts/jig check contract` for the full contract report.")
         .with_data(json!({
             "exit_status": output.exit_status,
             "stdout": output.stdout,

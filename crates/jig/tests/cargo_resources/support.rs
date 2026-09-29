@@ -305,9 +305,7 @@ impl Running {
                     .lines()
                     .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
                     .any(|event| {
-                        event["event"] == "target_completed"
-                            && event["target"]["action"] == action
-                            && event["result"]["receipt_id"].is_string()
+                        event["event"] == "target_completed" && event["target"]["action"] == action
                     })
             },
             "target result publication",

@@ -9,7 +9,7 @@ use super::{
 
 mod errors;
 
-pub const RECORDER_SCHEMA_VERSION: u64 = 2;
+pub const RECORDER_SCHEMA_VERSION: u64 = 3;
 pub const UI_COMMAND: &str = "ui";
 pub const RECORDER_ROOT_FIELDS: &[&str] = &[
     "ok",
@@ -20,7 +20,7 @@ pub const RECORDER_ROOT_FIELDS: &[&str] = &[
     "repo",
     "harness",
     "failures",
-    "tool_stats",
+    "target_stats",
     "loops",
     "timeline",
     "timeline_show",
@@ -39,7 +39,7 @@ pub struct RecorderSnapshot {
     pub repo: RepositoryObservation,
     pub harness: HarnessObservation,
     pub failures: Vec<Failure>,
-    pub tool_stats: Vec<ToolStat>,
+    pub target_stats: Vec<TargetStat>,
     pub loops: Option<LoopObservation>,
     pub timeline: Vec<TimelineRow>,
     pub timeline_show: String,
@@ -65,7 +65,7 @@ impl RecorderSnapshot {
             repo: RepositoryObservation::default(),
             harness: HarnessObservation::default(),
             failures: Vec::new(),
-            tool_stats: Vec::new(),
+            target_stats: Vec::new(),
             loops: None,
             timeline: Vec::new(),
             timeline_show: "all".to_string(),
@@ -75,8 +75,8 @@ impl RecorderSnapshot {
                     applied: LimitId::Failures.ceiling(),
                     omitted: Some(0),
                 },
-                tool_stats: super::AppliedLimit {
-                    applied: LimitId::ToolStats.ceiling(),
+                target_stats: super::AppliedLimit {
+                    applied: LimitId::TargetStats.ceiling(),
                     omitted: Some(0),
                 },
                 timeline: super::AppliedLimit {
@@ -96,10 +96,10 @@ impl RecorderSnapshot {
             LimitId::Failures.ceiling(),
         )?;
         validate_root_rows(
-            LimitId::ToolStats,
-            self.tool_stats.len(),
-            self.limits.tool_stats,
-            LimitId::ToolStats.ceiling(),
+            LimitId::TargetStats,
+            self.target_stats.len(),
+            self.limits.target_stats,
+            LimitId::TargetStats.ceiling(),
         )?;
         if self.timeline_limit == 0 || self.timeline_limit > super::MAX_TIMELINE_ROWS {
             return Err(format!(
@@ -118,7 +118,7 @@ impl RecorderSnapshot {
         )?;
 
         for failure in &self.failures {
-            validate_text(&failure.stderr_preview, LimitId::FailureStderrChars)?;
+            validate_text(&failure.output_tail, LimitId::FailureOutputChars)?;
         }
         if let Some(loops) = &self.loops {
             loops.validate()?;
@@ -141,7 +141,7 @@ struct RecorderSnapshotWire {
     repo: RepositoryObservation,
     harness: HarnessObservation,
     failures: Vec<Failure>,
-    tool_stats: Vec<ToolStat>,
+    target_stats: Vec<TargetStat>,
     loops: Option<LoopObservation>,
     timeline: Vec<TimelineRow>,
     timeline_show: String,
@@ -228,21 +228,24 @@ pub struct Remediation {
     pub display: String,
 }
 
+/// A target result from run history that did not succeed.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Failure {
-    pub id: String,
-    pub tool_name: String,
+    pub run_id: String,
+    pub target: String,
+    pub conclusion: String,
+    pub exit_code: Option<i64>,
     pub ended_at_ms: Option<u64>,
-    pub exit_status: i64,
-    pub stderr_preview: BoundedText,
+    pub output_tail: BoundedText,
 }
 
+/// Run-history aggregate for one target.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ToolStat {
-    pub tool: String,
+pub struct TargetStat {
+    pub target: String,
     pub runs: u64,
     pub failures: u64,
-    pub last_exit_status: i64,
+    pub last_conclusion: Option<String>,
     pub last_ended_at_ms: u64,
     pub avg_duration_ms: u64,
 }
@@ -389,44 +392,39 @@ pub struct LoopStateError {
     pub error: String,
 }
 
+/// One target result from run history.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum TimelineRow {
-    Receipt(ReceiptTimelineRow),
+pub struct TimelineRow {
+    pub stable_identity: String,
+    pub timestamp_ms: Option<u64>,
+    pub run_id: String,
+    pub target: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub exit_code: Option<i64>,
+    pub started_at_ms: Option<u64>,
+    pub ended_at_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub finding_count: Option<u64>,
+    /// Present only for a target that did not succeed.
+    pub output_tail: Option<BoundedText>,
 }
 
 impl TimelineRow {
     #[must_use]
     pub fn stable_identity(&self) -> &str {
-        match self {
-            Self::Receipt(row) => &row.stable_identity,
-        }
+        &self.stable_identity
+    }
+
+    #[must_use]
+    pub fn succeeded(&self) -> bool {
+        self.conclusion.as_deref() == Some("success")
     }
 
     fn validate(&self) -> Result<(), String> {
-        match self {
-            Self::Receipt(row) => {
-                if let Some(stderr) = &row.stderr_preview {
-                    validate_text(stderr, LimitId::FailureStderrChars)?;
-                }
-            }
+        if let Some(output) = &self.output_tail {
+            validate_text(output, LimitId::FailureOutputChars)?;
         }
         Ok(())
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ReceiptTimelineRow {
-    pub stable_identity: String,
-    pub timestamp_ms: Option<u64>,
-    pub id: String,
-    pub tool_name: String,
-    pub invoked_command_key: Option<String>,
-    pub exit_status: i64,
-    pub started_at_ms: Option<u64>,
-    pub ended_at_ms: Option<u64>,
-    pub duration_ms: Option<u64>,
-    pub diff_summary: Option<String>,
-    pub changed_path_count: Option<u64>,
-    pub stderr_preview: Option<BoundedText>,
 }

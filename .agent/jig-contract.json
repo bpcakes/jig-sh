@@ -476,8 +476,7 @@
     "runner": {
       "args": [
         "check",
-        "contract",
-        "--no-receipt"
+        "contract"
       ],
       "kind": "argv",
       "program": "scripts/jig-dev"

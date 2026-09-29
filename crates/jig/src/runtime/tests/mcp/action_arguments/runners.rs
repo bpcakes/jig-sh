@@ -1,10 +1,14 @@
 use super::*;
 
+const ARGV_CAPTURE: &str = "argv-capture.json";
+
 fn argv_fixture() -> tempfile::TempDir {
     let temp = fixture();
     let root = temp.path();
     let script = root.join("capture ; $(touch injected)");
-    fs::write(&script, "#!/usr/bin/env python3\nimport json, sys, os\nprint(json.dumps([sys.argv[1:], os.environ.get('EXAMPLE_VALUE'), os.getcwd()]))\n").unwrap();
+    // Successful targets keep no output, so the capture is also written to a
+    // file the test reads after a durable run.
+    fs::write(&script, "#!/usr/bin/env python3\nimport json, sys, os\ncapture = json.dumps([sys.argv[1:], os.environ.get('EXAMPLE_VALUE'), os.getcwd()])\nprint(capture)\nopen(ARGV_CAPTURE, 'w').write(capture)\n".replace("ARGV_CAPTURE", &format!("{ARGV_CAPTURE:?}"))).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -75,10 +79,8 @@ fn argv_literal_program_positions_and_alias_preserve_bytes() {
         terminal["result"]["run"]["result"]["conclusion"], "success",
         "{terminal:#}"
     );
-    let receipts = fs::read_to_string(ctx.state_file("receipts.jsonl")).unwrap();
-    let receipt: Value = serde_json::from_str(receipts.lines().last().unwrap()).unwrap();
     let captured: Value =
-        serde_json::from_str(receipt["stdout_preview"].as_str().unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(temp.path().join(ARGV_CAPTURE)).unwrap()).unwrap();
     assert_eq!(
         captured[0],
         json!(["literal * ; $HOME", literal, "", "tail"])
@@ -133,11 +135,10 @@ fn argv_changed_source_rejects_prepared_plan() {
 }
 
 fn execute_alias(ctx: &RepoContext, name: &str, values: Value) -> anyhow::Result<Value> {
-    crate::runtime::tool_execution::execute_manifest_tool_request_with_observer(
+    crate::runtime::tool_execution::execute_manifest_tool_with_observer(
         ctx,
         name,
         values,
-        ToolRequest::default(),
         &mut crate::execution::NoopExecutionObserver,
     )
 }
@@ -197,12 +198,17 @@ fn argv_timeout_and_nonzero_results_remain_jig_owned() {
             terminal["result"]["run"]["result"]["conclusion"], conclusion,
             "{terminal:#}"
         );
-        let receipts = fs::read_to_string(ctx.state_file("receipts.jsonl")).unwrap();
-        let receipt: Value = serde_json::from_str(receipts.lines().last().unwrap()).unwrap();
-        if let Some(exit) = exit {
-            assert_eq!(receipt["exit_status"], exit);
+        let target = &terminal["result"]["run"]["result"]["targets"][0];
+        assert_eq!(target["exit_code"], json!(exit), "{target:#}");
+        if exit.is_some() {
+            assert!(
+                target["output_tail"]["stdout"]
+                    .as_str()
+                    .unwrap()
+                    .contains("ordinary failure"),
+                "{target:#}"
+            );
         }
-        assert!(receipt["invoked_command_key"].is_null());
     }
 }
 

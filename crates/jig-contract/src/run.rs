@@ -92,10 +92,6 @@ pub struct PlannedTarget {
     pub prepared_native_input: Option<PreparedNativeInputV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prepared_rust_input: Option<crate::PreparedRustInputV1>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_identity: Option<crate::freshness::TargetIdentityV1>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_identity_error: Option<crate::freshness::FreshnessReason>,
 }
 
 impl PlannedTarget {
@@ -124,8 +120,6 @@ impl PlannedTarget {
             selection_reasons_digest: None,
             prepared_native_input: None,
             prepared_rust_input: None,
-            target_identity: None,
-            target_identity_error: None,
         }
     }
 }
@@ -438,8 +432,6 @@ pub struct EvidenceReference {
 #[serde(deny_unknown_fields)]
 pub struct TargetRunResult {
     pub target: TargetId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_freshness: Option<crate::freshness::TargetFreshnessMetadata>,
     pub status: RunStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conclusion: Option<RunConclusion>,
@@ -449,10 +441,9 @@ pub struct TargetRunResult {
     pub ended_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// Bounded output of a target that did not succeed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub receipt_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reused_from: Option<crate::ReusedTargetEvidenceV1>,
+    pub output_tail: Option<TargetOutputTailV1>,
     pub config_digest: String,
     pub input_digest: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -482,14 +473,12 @@ impl TargetRunResult {
     ) -> Self {
         Self {
             target,
-            target_freshness: None,
             status: RunStatus::Queued,
             conclusion: None,
             started_at_ms: None,
             ended_at_ms: None,
             exit_code: None,
-            receipt_id: None,
-            reused_from: None,
+            output_tail: None,
             config_digest: config_digest.into(),
             input_digest: input_digest.into(),
             findings: Vec::new(),
@@ -502,6 +491,55 @@ impl TargetRunResult {
             valid_until_ms: None,
         }
     }
+}
+
+/// The final bytes of a non-successful target's output streams. Each stream
+/// keeps at most [`TargetOutputTailV1::MAX_BYTES`] bytes, cut at a character
+/// boundary, and reports how many earlier bytes were omitted.
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetOutputTailV1 {
+    pub stdout: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stdout_omitted_bytes: u64,
+    pub stderr: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stderr_omitted_bytes: u64,
+}
+
+impl TargetOutputTailV1 {
+    pub const MAX_BYTES: usize = 4_000;
+
+    /// Keeps the tail of each stream; `None` when both streams are empty.
+    #[must_use]
+    pub fn from_streams(stdout: &str, stderr: &str) -> Option<Self> {
+        if stdout.is_empty() && stderr.is_empty() {
+            return None;
+        }
+        let (stdout, stdout_omitted_bytes) = tail(stdout);
+        let (stderr, stderr_omitted_bytes) = tail(stderr);
+        Some(Self {
+            stdout,
+            stdout_omitted_bytes,
+            stderr,
+            stderr_omitted_bytes,
+        })
+    }
+}
+
+fn tail(value: &str) -> (String, u64) {
+    if value.len() <= TargetOutputTailV1::MAX_BYTES {
+        return (value.to_owned(), 0);
+    }
+    let mut start = value.len() - TargetOutputTailV1::MAX_BYTES;
+    while !value.is_char_boundary(start) {
+        start += 1;
+    }
+    (value[start..].to_owned(), start as u64)
+}
+
+const fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// A typed, bounded result returned directly by an in-process native action.
@@ -686,5 +724,33 @@ mod tests {
         let result: TargetRunResult = serde_json::from_value(old_result).unwrap();
         assert_eq!(result.finding_count, None);
         assert_eq!(result.valid_until_ms, None);
+    }
+
+    #[test]
+    fn output_tails_keep_the_final_bytes_at_character_boundaries() {
+        use crate::TargetOutputTailV1;
+
+        assert_eq!(TargetOutputTailV1::from_streams("", ""), None);
+        let stderr = format!(
+            "{}é{}",
+            "a".repeat(10),
+            "b".repeat(TargetOutputTailV1::MAX_BYTES - 1)
+        );
+        let tail = TargetOutputTailV1::from_streams("done\n", &stderr).unwrap();
+        assert_eq!(tail.stdout, "done\n");
+        assert_eq!(tail.stdout_omitted_bytes, 0);
+        assert!(tail.stderr.len() <= TargetOutputTailV1::MAX_BYTES);
+        assert!(stderr.ends_with(&tail.stderr));
+        assert_eq!(
+            tail.stderr_omitted_bytes as usize + tail.stderr.len(),
+            stderr.len()
+        );
+
+        let value = serde_json::to_value(&tail).unwrap();
+        assert!(value.get("stdout_omitted_bytes").is_none());
+        assert_eq!(
+            serde_json::from_value::<TargetOutputTailV1>(value).unwrap(),
+            tail
+        );
     }
 }

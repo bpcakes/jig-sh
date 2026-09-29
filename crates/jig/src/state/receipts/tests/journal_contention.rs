@@ -116,6 +116,5 @@ fn receipt_input() -> ReceiptInput<'static> {
         evidence: None,
         collect_git_metadata: false,
         collect_worktree_fingerprint: false,
-        worktree_fingerprint_override: None,
     }
 }

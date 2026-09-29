@@ -14,7 +14,7 @@ produces durable evidence tied to the exact repository state it validated.
 Jig is a repository API and evidence control plane. It is not a replacement for
 Cargo, Go tooling, package managers, Nx, Turborepo, Dagger, Taskfile, or a CI
 provider. It gives those systems one stack-neutral interface and connects their
-results to repository guidance and durable receipts.
+results to repository guidance and durable run history.
 
 ## Problem
 
@@ -85,8 +85,9 @@ runner, or configuration value was unavailable. It is distinct from a command
 that ran and found invalid code.
 
 **Evidence** is the structured output of a target run: findings, log and
-artifact references, timestamps, exit information, receipt identity, source
-identity, configuration digest, input digest, and worktree fingerprint. Raw
+artifact references, timestamps, exit information, source identity,
+configuration digest, input digest, worktree fingerprint, and, for a target that
+did not succeed, a bounded tail of its output. Raw
 logs remain available, but consumers must not need to parse human text to learn
 the target, result, affected files, or normalized findings.
 
@@ -198,7 +199,7 @@ Every contract-v6 manifest tool maps to exactly one owning action through
 `legacy_aliases`, so compatibility dispatch cannot fall back around the action
 contract. Contract-v6 compatibility aliases acquire the same lease from their
 owning action's effects, reload action and command authority after any wait,
-and retain the lease through receipt recording. If reloaded effects require a
+and retain the lease through result recording. If reloaded effects require a
 stronger lease, dispatch repeats acquisition before it runs. MCP execution
 requests do not wait for an incompatible lease: they fail through
 the pre-acceptance protocol error channel so the transport remains able to
@@ -215,8 +216,8 @@ for each claim beyond the initial worker cohort, and a shared postcondition.
 
 For entirely read-only plans with both parallel work and dependencies, ordinary
 checks use a ready queue across the topological layers. A prerequisite releases
-its dependents after process cleanup, source validation, and durable result and
-receipt publication. An unrelated running check does not delay that release.
+its dependents after process cleanup, source validation, and durable result
+publication. An unrelated running check does not delay that release.
 Source observations cover completions already available to the coordinator;
 they do not wait for the other workers. A later source mutation fails the run
 and stops admission, while earlier validated results remain historical successes.
@@ -335,8 +336,8 @@ that could change behavior without a reviewable contract diff.
 
 Contract versions 2 through 5 remain readable. For those contracts, the
 runtime synthesizes a `repo` component and maps each legacy manifest tool onto
-a compatible repo-scoped action. Existing command names, tool calls, and
-receipts keep working. Contract version 6 templates emit native component and
+a compatible repo-scoped action. Existing command names and tool calls keep
+working, and receipts they recorded under earlier runtimes remain readable. Contract version 6 templates emit native component and
 action records and still render target-aware `[[work.gates]]` entries, which are
 accepted but no longer evaluated.
 
@@ -347,10 +348,11 @@ contribute adapter metadata and component-scoped actions instead.
 
 ## Evidence
 
-Receipt records gain optional `run_id`, structured target identity,
-configuration digest, input digest, and normalized findings. Existing JSONL
-records remain readable and append-only. A run produces one receipt for every
-target result and an aggregate receipt only when compatibility requires it.
+Run history records each target result with its run id, structured target,
+configuration digest, input digest, exit code, and normalized findings. A target
+that did not succeed also records a bounded tail of its stdout and stderr.
+Checks no longer write receipts; receipts written by earlier runtimes, which
+carried the same target fields, remain readable and append-only.
 
 Gate evaluation, agent-review gates, and structured work plans were removed
 with `jig work`. Receipts linked to plans recorded before that removal remain
@@ -371,8 +373,8 @@ source tree and the complete non-`.agent/` staged, unstaged, and untracked
 worktree projection together with the target's declared inputs. This safely
 invalidates evidence when relevant content changes but can also invalidate it
 for an unrelated source change. Commits containing only append-only `.agent/`
-state do not invalidate the evidence they record. The digest is freshness proof,
-not an artifact-cache key.
+state do not change the digests of the results they record. The digest
+identifies the evaluated source; it is not an artifact-cache key.
 
 ## Implementation migration
 

@@ -140,7 +140,7 @@ impl<'a> TargetExecutionControl<'a> {
             RunConclusion::Success | RunConclusion::Cancelled
         ) {
             capture.conclusion = RunConclusion::Blocked;
-            capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+            capture.envelope_exit_status = capture.envelope_exit_status.max(1);
         }
         capture
     }

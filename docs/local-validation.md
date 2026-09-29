@@ -5,7 +5,7 @@
 Choose checks for the affected behavior. For example, run a focused Rust regression:
 
 ```sh
-cargo test -p jig-sh --lib repository::freshness::proof::tests
+cargo test -p jig-sh --lib repository::freshness::tests
 ```
 
 Use `scripts/jig info targets` to discover configured checks, then run the relevant

@@ -51,16 +51,13 @@ fn cancellation_interrupts_stalled_ordinary_source_scan_and_releases_claims() {
     run.finish_failure();
     assert!(!fixture.signals.join("release-source-scan").exists());
     assert!(!fixture.signals.join("entered-dependent").exists());
-    for receipt in records(&fixture, "receipts.jsonl") {
-        assert_eq!(receipt["target_freshness"]["state"], "incomplete");
-    }
     waiter.wait_entered();
     waiter.release();
     waiter.finish_success();
 }
 
 #[test]
-fn publication_error_closes_resource_arrivals_and_terminalizes_run() {
+fn publication_error_closes_resource_arrivals() {
     // The resource worker has finished one root, but stays alive for the
     // resource-backed dependent of the ordinary prerequisite.
     let fixture = resource_dependent_fixture();
@@ -69,21 +66,28 @@ fn publication_error_closes_resource_arrivals_and_terminalizes_run() {
     run.wait_target_publication("slow");
     assert!(!fixture.signals.join("entered-dependent").exists());
 
-    let journal = UnavailableReceiptJournal::new(&fixture);
+    let journal = UnavailableRunJournal::new(&fixture);
     release(&fixture, "prerequisite");
     let failed_at = Instant::now();
     while run.running() {
         assert!(
             failed_at.elapsed() < Duration::from_secs(10),
-            "receipt publication error left the resource worker waiting for arrivals"
+            "result publication error left the resource worker waiting for arrivals"
         );
         thread::sleep(Duration::from_millis(20));
     }
     run.finish_failure();
     drop(journal);
-    run.assert_single_completion("blocked");
     assert!(!fixture.signals.join("entered-dependent").exists());
-    assert_eq!(records(&fixture, "receipts.jsonl").len(), 1);
+    let events = records(&fixture, "runs.jsonl");
+    assert_eq!(result(&events, "slow")["conclusion"], "success");
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["event"] == "target_completed"
+                && event["target"]["action"] == "prerequisite"),
+        "{events:#?}"
+    );
 }
 
 fn assert_cancellation_releases_claims(during_scan: bool) {
@@ -137,9 +141,6 @@ fn assert_cancellation_releases_claims(during_scan: bool) {
             .iter()
             .all(|event| event["result"]["conclusion"] != "success")
     );
-    for receipt in records(&fixture, "receipts.jsonl") {
-        assert_eq!(receipt["target_freshness"]["state"], "incomplete");
-    }
     waiter.wait_entered();
     waiter.release();
     waiter.finish_success();
@@ -191,22 +192,22 @@ impl Drop for UnblockOnDrop {
     }
 }
 
-struct UnavailableReceiptJournal {
+struct UnavailableRunJournal {
     path: PathBuf,
     backup: PathBuf,
 }
 
-impl UnavailableReceiptJournal {
+impl UnavailableRunJournal {
     fn new(fixture: &Fixture) -> Self {
-        let path = fixture.root.join(".agent/state/receipts.jsonl");
-        let backup = fixture.signals.join("receipts-backup.jsonl");
+        let path = fixture.root.join(".agent/state/runs.jsonl");
+        let backup = fixture.signals.join("runs-backup.jsonl");
         fs::rename(&path, &backup).unwrap();
         fs::create_dir(&path).unwrap();
         Self { path, backup }
     }
 }
 
-impl Drop for UnavailableReceiptJournal {
+impl Drop for UnavailableRunJournal {
     fn drop(&mut self) {
         let _ = fs::remove_dir(&self.path);
         let _ = fs::rename(&self.backup, &self.path);

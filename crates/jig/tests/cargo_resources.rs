@@ -88,7 +88,7 @@ fn source_edit_during_resource_wait_prevents_child_start() {
 }
 
 #[test]
-fn cross_repository_symlink_artifact_aliases_collide_without_receipt_sharing() {
+fn cross_repository_symlink_artifact_aliases_collide_without_result_sharing() {
     let fixture = Fixture::new(true, 60);
     let other = fixture.other_repository("example-alias", 60, true);
     let mut owner = fixture.spawn("owner", &[]);
@@ -104,16 +104,17 @@ fn cross_repository_symlink_artifact_aliases_collide_without_receipt_sharing() {
     assert_eq!(fixture.launches(), "owner\nalias\n");
     assert!(!fixture.signals.join("overlap").exists());
     for root in [&fixture.root, &other] {
-        let receipts = fs::read_to_string(root.join(".agent/state/receipts.jsonl")).unwrap();
+        let events = fs::read_to_string(root.join(".agent/state/runs.jsonl")).unwrap();
         assert_eq!(
-            receipts
+            events
                 .lines()
                 .filter(|line| {
-                    serde_json::from_str::<serde_json::Value>(line).unwrap()["target"].is_object()
+                    serde_json::from_str::<serde_json::Value>(line).unwrap()["event"]
+                        == "target_completed"
                 })
                 .count(),
             1,
-            "each repository must retain only its own execution receipt"
+            "each repository must retain only its own execution result"
         );
     }
 }

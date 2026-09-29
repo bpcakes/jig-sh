@@ -9,12 +9,13 @@
 > `jig work` in the release after v0.6.0, together with the `work gates`,
 > `work evidence`, finish, and status gate evaluation it measured. The numbers
 > below are historical and the command-level instructions no longer run.
-> `scripts/benchmark-target-freshness.py` remains for collector measurements.
+> Jig then stopped recording target freshness altogether, so the collector these
+> numbers measure no longer exists and none of the instructions below run.
 
 The retained results below qualified target freshness before the contract
 consolidation: the then-unreleased epoch 8 was the runner-only baseline and
 epoch 9 was the freshness treatment. They establish the performance of
-[Target Freshness Policy v1](public-contract.md#target-freshness-policy-v1-design),
+Target Freshness Policy v1 (now [Action Input Declarations](public-contract.md#action-input-declarations)),
 but do not by themselves qualify the consolidated v8 receipt shape. The current
 qualification driver measures the released v7 baseline against consolidated v8.
 Earlier measurements, including failed experiments, remain under their original

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure dependency scheduling with real invocations, receipts, and source scans.
+"""Measure dependency scheduling with real invocations, run history, and source scans.
 
 Run each binary with a distinct --phase (before/after) and a fresh --outdir.
 Each case gets three fresh generic Git repositories. Setup is outside the timed
@@ -118,32 +118,21 @@ def run_sample(binary, root, case, phase, repetition):
     (cache / 'check.stderr').write_text(result.stderr)
     response = json.loads(result.stdout)
     events = records(root / '.agent/state/runs.jsonl')
-    receipts = records(root / '.agent/state/receipts.jsonl')
     finished = [e for e in events if e.get('event') == 'target_completed']
-    targets = [{k: e['result'].get(k) for k in ['target', 'conclusion', 'started_at_ms', 'ended_at_ms', 'receipt_id']}
+    targets = [{k: e['result'].get(k) for k in ['target', 'conclusion', 'started_at_ms', 'ended_at_ms']}
                for e in finished]
     for target in targets:
         target['start_from_invocation_ms'] = target['started_at_ms'] - started_wall_ms
         target['end_from_invocation_ms'] = target['ended_at_ms'] - started_wall_ms
-    own_receipts = [r for r in receipts if isinstance(r.get('target'), dict)]
-    states = [r.get('target_freshness', {}).get('state') for r in own_receipts]
-    dependent = next(r for r in own_receipts if r['target']['action'] == 'dependent')
-    proofs = dependent.get('target_freshness', {}).get('dependency_execution_proof', [])
     assert len(targets) == (3 if case == 'critical-path' else 17), targets
     assert all(target['conclusion'] == 'success' for target in targets), targets
-    assert all(state == 'complete' for state in states), states
-    assert len(proofs) == 1, dependent
-    predecessor = next(r for r in own_receipts if r['target']['action'] ==
+    dependent = next(t for t in targets if t['target']['action'] == 'dependent')
+    predecessor = next(t for t in targets if t['target']['action'] ==
                        ('prerequisite' if case == 'critical-path' else 'root-00'))
-    for key in ['run_id', 'plan_id']:
-        assert proofs[0][key] == predecessor[key], proofs
-    assert proofs[0]['receipt_id'] == predecessor['id'], proofs
-    assert proofs[0]['identity_digest'] == predecessor['target_freshness']['identity']['identity_digest'], proofs
+    assert dependent['started_at_ms'] >= predecessor['ended_at_ms'], (dependent, predecessor)
     return {'phase': phase, 'case': case, 'repetition': repetition, 'fixture': str(root), 'argv': argv,
             'wall_seconds': wall_seconds, 'source_observations': find_key(response, 'source_observations'),
-            'targets': targets, 'receipt_count': len(own_receipts), 'freshness_states': states,
-            'dependent_proofs': proofs}
-
+            'targets': targets}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

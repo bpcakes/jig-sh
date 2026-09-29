@@ -3,22 +3,16 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 fn assert_published_before_sibling(fixture: &Fixture, first: &str, second: &str, failed: bool) {
-    let receipts = records(&fixture.root.join(".agent/state/receipts.jsonl"));
-    let first_receipt = receipt_for(&receipts, first);
-    assert_eq!(first_receipt["exit_status"], if failed { 7 } else { 0 });
+    // The first sibling must publish its result before the second is admitted.
     let events = records(&fixture.root.join(".agent/state/runs.jsonl"));
-    assert!(
-        events
-            .iter()
-            .any(|event| event["event"] == "target_completed"
-                && event["target"]["action"] == first
-                && event["result"]["receipt_id"] == first_receipt["id"]),
-        "first sibling must publish its receipt and result before second admission: {events:#?}"
+    assert_eq!(
+        result_for(&events, first)["exit_code"],
+        if failed { 7 } else { 0 }
     );
     assert!(
-        !receipts
-            .iter()
-            .any(|receipt| receipt["target"]["action"] == second)
+        !events.iter().any(
+            |event| event["event"] == "target_completed" && event["target"]["action"] == second
+        )
     );
 }
 
@@ -74,7 +68,7 @@ fn release_cargo(
 }
 
 fn assert_mixed_results(fixture: &Fixture, first_cargo: &str, failed: bool) {
-    let receipts = records(&fixture.root.join(".agent/state/receipts.jsonl"));
+    let events = records(&fixture.root.join(".agent/state/runs.jsonl"));
     for action in ["ordinary-a", "ordinary-b", "cargo-a", "cargo-b"] {
         let expected = if failed && action == first_cargo {
             7
@@ -82,7 +76,7 @@ fn assert_mixed_results(fixture: &Fixture, first_cargo: &str, failed: bool) {
             0
         };
         assert_eq!(
-            receipt_for(&receipts, action)["exit_status"],
+            result_for(&events, action)["exit_code"],
             expected,
             "a failed Cargo sibling must not propagate through an invented dependency"
         );

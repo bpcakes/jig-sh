@@ -253,61 +253,6 @@ fn git_bounded_proof_command_capture_with_timeout(
     Ok(output)
 }
 
-#[derive(Debug)]
-pub(crate) struct FreshnessGitObservationFailure(pub(crate) String);
-
-impl std::fmt::Display for FreshnessGitObservationFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for FreshnessGitObservationFailure {}
-
-fn freshness_git_diagnostic(output: &Output) -> FreshnessGitObservationFailure {
-    // Git diagnostics can contain config values and private paths. Persist a
-    // bounded category, exit status, and a concrete local diagnostic command.
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let detail = if stderr.contains("Permission denied") || stderr.contains("unable to access") {
-        "Git could not access configuration or source; check permissions for the current user"
-    } else if stderr.contains("fsmonitor") {
-        "Git reported an fsmonitor problem; inspect repository fsmonitor configuration"
-    } else if stderr.contains("dubious ownership") {
-        "Git rejected repository ownership; inspect repository ownership and safe.directory"
-    } else if stderr.contains("not a git repository") {
-        "Git could not resolve repository metadata"
-    } else if stderr.contains("Needed a single revision") || stderr.contains("unknown revision") {
-        "Git could not resolve HEAD; verify that a commit exists"
-    } else {
-        "Git returned diagnostics or failed; run git status --porcelain=v1 and git ls-files --stage directly to inspect the failure"
-    };
-    FreshnessGitObservationFailure(format!("{detail} ({})", format_exit_status(&output.status)))
-}
-
-/// One bounded owned process tree for a fixed read-only Git batch. The caller
-/// validates its complete framed output; diagnostics never become source bytes.
-pub(crate) fn read_freshness_git_batch(
-    root: &Path,
-    command: &mut Command,
-    limit: usize,
-    timeout: Duration,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Vec<u8>> {
-    let output = git_bounded_proof_command_capture_with_timeout(
-        root,
-        command,
-        "git freshness observation",
-        limit,
-        "target freshness",
-        GitReceiptCollection::Cancellable(cancelled),
-        timeout,
-    )?;
-    if !output.status.success() || !output.stderr.is_empty() {
-        return Err(freshness_git_diagnostic(&output).into());
-    }
-    Ok(output.stdout)
-}
-
 pub(super) struct GitReceiptProcessObserver<'a> {
     pub(super) collection: GitReceiptCollection<'a>,
 }
@@ -316,15 +261,11 @@ impl OwnedProcessObserver for GitReceiptProcessObserver<'_> {
     fn cancelled(&mut self) -> bool {
         matches!(
             self.collection,
-            GitReceiptCollection::Cancellable(cancelled) | GitReceiptCollection::Observed { cancelled, .. } if cancelled()
+            GitReceiptCollection::Cancellable(cancelled) if cancelled()
         )
     }
 
-    fn output(&mut self, _stream: OwnedProcessOutputStream, output: &[u8]) {
-        if let GitReceiptCollection::Observed { bytes, .. } = self.collection {
-            bytes.set(bytes.get().saturating_add(output.len() as u64));
-        }
-    }
+    fn output(&mut self, _stream: OwnedProcessOutputStream, _output: &[u8]) {}
 }
 
 pub(super) fn git_changed_path_stdout(

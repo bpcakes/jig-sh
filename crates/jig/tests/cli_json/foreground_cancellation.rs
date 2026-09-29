@@ -19,7 +19,7 @@ fn foreground_signal_cleans_up_child_while_run_journal_is_locked() {
         fs::write(config_path, toml::to_string(&config).unwrap()).unwrap();
         let mut child = jig()
             .current_dir(temp.path())
-            .args(["run", "api:test", "--no-receipt", "--json"])
+            .args(["run", "api:test", "--json"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

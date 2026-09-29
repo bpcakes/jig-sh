@@ -6,12 +6,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::git_receipts::DiffStat;
-use jig_contract::{Finding, RunConclusion, RunPlan, TargetId, TargetRunResult};
+use jig_contract::{RunConclusion, RunPlan, TargetId, TargetRunResult};
 
+/// A receipt written by loop workflows. Check receipts from earlier runtimes
+/// also carried target, run and freshness fields; readers ignore them.
 #[derive(Debug, Serialize, serde::Deserialize)]
 pub(crate) struct ReceiptRecord {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) target_freshness: Option<jig_contract::freshness::TargetFreshnessMetadata>,
     pub(crate) id: String,
     pub(crate) session_id: Option<String>,
     pub(crate) plan_id: Option<String>,
@@ -26,26 +26,9 @@ pub(crate) struct ReceiptRecord {
     pub(crate) stderr_preview: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) evidence: Option<Value>,
+    /// Only on check receipts from earlier runtimes; linkage diagnosis reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) run_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) target: Option<TargetId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) config_digest: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) input_digest: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) findings: Vec<Finding>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) finding_count: Option<u64>,
-    #[serde(default)]
-    pub(crate) findings_truncated: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) findings_digest: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) evaluated_at_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) valid_until_ms: Option<u64>,
     pub(crate) changed_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) changed_path_count: Option<usize>,
@@ -76,12 +59,82 @@ pub(super) struct RunEventRecord {
     pub(super) timestamp_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) work_plan_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "legacy_run_history::plan"
+    )]
     pub(super) plan: Option<RunPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) target: Option<TargetId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "legacy_run_history::result"
+    )]
     pub(super) result: Option<TargetRunResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) conclusion: Option<RunConclusion>,
+}
+
+/// Run history written before receipts and target freshness were removed.
+/// Planned targets and target results then carried identity, freshness and
+/// receipt fields; they are dropped on read so existing journals, archives
+/// and backups stay readable under the strict current contract types.
+mod legacy_run_history {
+    use serde::de::{Deserialize, DeserializeOwned, Deserializer, Error};
+    use serde_json::Value;
+
+    const RETIRED_PLANNED_TARGET_FIELDS: &[&str] = &["target_identity", "target_identity_error"];
+    const RETIRED_TARGET_RESULT_FIELDS: &[&str] =
+        &["target_freshness", "receipt_id", "reused_from"];
+
+    pub(super) fn plan<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: DeserializeOwned,
+    {
+        read(deserializer, |value| {
+            if let Some(targets) = value.get_mut("targets").and_then(Value::as_array_mut) {
+                for target in targets {
+                    strip(target, RETIRED_PLANNED_TARGET_FIELDS);
+                }
+            }
+        })
+    }
+
+    pub(super) fn result<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: DeserializeOwned,
+    {
+        read(deserializer, |value| {
+            strip(value, RETIRED_TARGET_RESULT_FIELDS)
+        })
+    }
+
+    fn read<'de, D, T>(
+        deserializer: D,
+        retire: impl FnOnce(&mut Value),
+    ) -> Result<Option<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: DeserializeOwned,
+    {
+        let Some(mut value) = Option::<Value>::deserialize(deserializer)? else {
+            return Ok(None);
+        };
+        retire(&mut value);
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(D::Error::custom)
+    }
+
+    fn strip(value: &mut Value, fields: &[&str]) {
+        if let Some(object) = value.as_object_mut() {
+            for field in fields {
+                object.remove(*field);
+            }
+        }
+    }
 }

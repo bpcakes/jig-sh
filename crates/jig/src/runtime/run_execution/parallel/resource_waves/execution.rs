@@ -100,7 +100,6 @@ pub(super) fn execute_wave(
                             (pending.planned, pending.position),
                             &mut run_control,
                             None,
-                            finisher.freshness,
                         )
                         .map(|execution| match execution {
                             ParallelTargetExecution::NotStarted { completed, .. } => {

@@ -111,7 +111,7 @@ pub struct RecorderRefresh {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CollectionDomain {
     Repository,
-    Receipts,
+    Runs,
     Loops,
 }
 
@@ -120,7 +120,7 @@ impl CollectionDomain {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Repository => "repository",
-            Self::Receipts => "state.receipts",
+            Self::Runs => "state.runs",
             Self::Loops => "loops",
         }
     }

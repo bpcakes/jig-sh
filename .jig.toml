@@ -371,7 +371,7 @@ target = "declared"
 [repository.actions.runner]
 kind = "argv"
 program = "scripts/jig-dev"
-args = ["check", "contract", "--no-receipt"]
+args = ["check", "contract"]
 
 [repository.actions.target]
 action = "source-runtime-check"

@@ -1,4 +1,3 @@
-use super::ToolRequest;
 use jig_contract::{ActionEffect, ComparisonRequestV1};
 
 #[derive(Clone, Debug)]
@@ -12,5 +11,4 @@ pub(crate) struct RepositoryRunRequest {
     pub(crate) explain: bool,
     pub(crate) fail_fast: bool,
     pub(crate) approved_effects: Vec<ActionEffect>,
-    pub(crate) tool: ToolRequest,
 }

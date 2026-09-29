@@ -80,12 +80,12 @@ When a backend package or crate has an `AGENTS.md`, use these sections:
 
 - Never put names, paths, identifiers, or operational details from downstream, customer, or private projects in this repository.
 - Use unmistakably generic fixtures such as `ExampleProject`, `ExampleVault`, and `vault-consumer-fixture` in source, tests, documentation, plans, and generated evidence.
-- Check fixture and test names before running receipt-producing commands because repository paths can be captured in append-only state.
+- Check fixture and test names before running state-writing commands because repository paths can be captured in append-only state.
 - If an accidentally captured private identifier requires historical state redaction, treat the edit as an explicit privacy migration: preserve record IDs and every unaffected field, then append a durable decision naming the affected record IDs and the reason for redaction without repeating the removed text.
 
 ## Dogfooding This Harness
 
-This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, MCP, contract, and receipt paths that generated repos use.
+This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, MCP, contract, and run-history paths that generated repos use.
 
 Follow [local validation](docs/local-validation.md) to choose between focused checks, the preflight profile, and the full `verify` profile.
 

@@ -261,7 +261,6 @@ fn read_only_target_rejects_stable_drift_after_plan_validation() {
         run,
         crate::runtime::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: true,
             fail_fast: false,
         },
         &|| Ok(false),
@@ -311,7 +310,6 @@ fn worktree_target_rejects_stable_drift_before_it_starts() {
         run,
         crate::runtime::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            record_receipts: true,
             fail_fast: false,
         },
         &|| Ok(false),
@@ -402,12 +400,12 @@ fn read_only_targets_use_a_fresh_epoch_after_worktree_targets() {
         .find(|target| target["target"]["action"] == "test")
         .unwrap();
     assert_ne!(test_result["input_digest"], planned_test_input_digest);
-    let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .find(|receipt| receipt["target"]["action"] == "test")
-        .unwrap();
-    assert_eq!(receipt["worktree_fingerprint"], current_fingerprint);
-    assert_eq!(receipt["input_digest"], test_result["input_digest"]);
+    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let expected = crate::repository::target_input_digest(
+        &catalog,
+        &serde_json::from_value(test_result["target"].clone()).unwrap(),
+        &current_fingerprint,
+    )
+    .unwrap();
+    assert_eq!(test_result["input_digest"], expected);
 }

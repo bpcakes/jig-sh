@@ -195,7 +195,9 @@ fn assert_human_dashboard_guidance(documents: &[(&str, String)]) {
     assert!(developer_ux.contains("may stop parsing in a later release"));
     assert!(developer_ux.contains("public-contract.md#dashboard-and-status-output"));
     assert!(developer_ux.contains("one cancellable worker"));
-    assert!(developer_ux.contains("schema version 2"));
+    assert!(developer_ux.contains(&format!(
+        "recorder JSON document uses schema version {RECORDER_SCHEMA_VERSION}"
+    )));
 
     let repo_intent = document(documents, "docs/repo-intent.md");
     assert!(repo_intent.contains("no replacement server or HTTP compatibility layer"));

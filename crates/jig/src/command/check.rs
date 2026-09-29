@@ -4,24 +4,22 @@ use std::path::PathBuf;
 
 use jig_contract::ComparisonRequestV1;
 
-use super::ToolRequest;
-
 #[derive(Debug)]
 pub(crate) enum CheckCommand {
     Repository(RepositoryCheckRequest),
-    Fmt(ToolRequest),
-    Lint(ToolRequest),
-    Clippy(ToolRequest),
-    Test(ToolRequest),
-    TestLocked(ToolRequest),
-    TypeScriptLint(ToolRequest),
-    TypeScriptTypecheck(ToolRequest),
-    TypeScriptBuild(ToolRequest),
-    TypeScriptCoverage(ToolRequest),
-    Sqlx(ToolRequest),
-    Sqlc(ToolRequest),
-    Schema(ToolRequest),
-    Contract(ToolRequest),
+    Fmt,
+    Lint,
+    Clippy,
+    Test,
+    TestLocked,
+    TypeScriptLint,
+    TypeScriptTypecheck,
+    TypeScriptBuild,
+    TypeScriptCoverage,
+    Sqlx,
+    Sqlc,
+    Schema,
+    Contract,
     AgentMap(AgentMapRequest),
     AgentGuides,
     MigrationImmutability(MigrationImmutabilityRequest),
@@ -36,7 +34,6 @@ pub(crate) struct RepositoryCheckRequest {
     pub(crate) comparison: Option<ComparisonRequestV1>,
     pub(crate) explain: bool,
     pub(crate) fail_fast: bool,
-    pub(crate) tool: ToolRequest,
 }
 
 // Top-level `jig agent-map generate` and `jig check agent-map` share the same

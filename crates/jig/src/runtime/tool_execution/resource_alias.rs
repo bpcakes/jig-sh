@@ -1,5 +1,5 @@
-//! Compatibility aliases share prepared-target resource admission, dependency
-//! execution and receipt publication. This adapter owns only the old envelope.
+//! Compatibility aliases share prepared-target resource admission and
+//! dependency execution. This adapter owns only the old envelope.
 
 use std::collections::BTreeMap;
 
@@ -15,7 +15,6 @@ pub(super) fn execute(
     tool: &ManifestTool,
     action: ActionSpec,
     args: Value,
-    options: ManifestToolExecutionOptions,
     observer: &mut dyn ExecutionControl,
     repository_execution: crate::state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
@@ -55,7 +54,6 @@ pub(super) fn execute(
         &catalog,
         plan,
         ExecuteCheckRunRequest {
-            record_receipts: options.record_receipt,
             fail_fast: true,
             alias_override: Some(ExecutionAliasOverride {
                 target: target.clone(),
@@ -103,7 +101,6 @@ pub(super) fn execute(
                         .collect::<Vec<_>>()
                         .join("\n"),
                 },
-                receipt_id: result.receipt_id.clone(),
             })
         })?;
     // The compatibility envelope indicates successful dispatch. Its process
@@ -115,7 +112,7 @@ pub(super) fn execute(
         return Ok(ManifestToolExecutionOutcome::Cancelled(response));
     }
     let failure = manifest_tool_result_failure(&response)?.map(|(_, message)| message);
-    receipt_id_or_preserve_tool_error(failure, Ok(result.receipt_id.clone()))?;
+    fail_on_tool_failure(failure)?;
     Ok(ManifestToolExecutionOutcome::Completed(response))
 }
 

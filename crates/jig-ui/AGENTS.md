@@ -19,14 +19,14 @@
 - Change tabs, navigation, selection preservation, filters, or detail state: `src/terminal/model/`.
 - Change terminal layout or presentation: `src/terminal/render/`.
 - Change refresh timing, preemption, keyboard events, or terminal cleanup: `src/terminal/runtime/`.
-- Change how repository state or loops become snapshots: `crates/jig/src/ui/source/`, not this crate.
+- Change how repository state, run history, or loops become snapshots: `crates/jig/src/ui/source/`, not this crate.
 
 ## Invariants
 
 - Keep this crate independent from `RepoContext`, state storage, runtime policy, MCP, and templates.
 - Consume repository data only through `DashboardSource`; do not read `.agent/state` directly.
 - Keep every rendered collection and text field within its declared bound, preserving explicit omission counts.
-- Keep the dashboard read-only. It must not mutate state, record receipts, fetch remotes, or execute displayed remediation commands.
+- Keep the dashboard read-only. It must not mutate state, append run history or other state records, fetch remotes, or execute displayed remediation commands.
 - Never overlap refresh workers. Cancellation must reach the typed source, and the worker must be joined before terminal restoration.
 - Restore raw mode, alternate-screen state, and cursor visibility on every ordinary return or unwind.
 - Use explicit text in addition to color for all statuses.

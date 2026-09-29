@@ -88,7 +88,7 @@ fn direct_file_budget_json_uses_stable_exits_and_creates_no_durable_state() {
 
     let authored = jig()
         .current_dir(repo.path())
-        .args(["check", "repo:file-budget", "--no-receipt", "--json"])
+        .args(["check", "repo:file-budget", "--json"])
         .output()
         .unwrap();
     assert_authored_file_budget(&authored);
@@ -102,7 +102,6 @@ fn direct_file_budget_json_uses_stable_exits_and_creates_no_durable_state() {
             &before,
             "--comparison-provenance",
             "push_before",
-            "--no-receipt",
             "--json",
         ])
         .output()
@@ -145,7 +144,7 @@ fn repository_check_prints_lease_contention_before_the_lease_is_released() {
     let stderr = File::create(&stderr_path).unwrap();
     let mut child = jig()
         .current_dir(repo.path())
-        .args(["check", "api:test", "--no-receipt"])
+        .args(["check", "api:test"])
         .stdout(Stdio::null())
         .stderr(Stdio::from(stderr))
         .spawn()
@@ -340,7 +339,7 @@ fn foreground_run_json_failure_and_human_explain_use_run_output() {
 
     let result = jig()
         .current_dir(repo.path())
-        .args(["run", "api:test", "--json", "--no-receipt"])
+        .args(["run", "api:test", "--json"])
         .output()
         .unwrap();
     assert!(!result.status.success());

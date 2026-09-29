@@ -7,7 +7,6 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use crate::context::RepoContext;
-use crate::state::{ReceiptInput, record_receipt};
 use crate::test_env::TestRepoBuilder;
 
 use super::RepoDashboardSource;
@@ -33,25 +32,69 @@ custom_check_command = "true"
         }))
         .write();
     let context = RepoContext::load_from(root.path()).unwrap();
-    record_receipt(
+    append_target_results(
         &context,
-        ReceiptInput {
-            tool_name: "jig.custom_check",
-            args: json!({}),
-            invoked_command_key: Some("custom_check_command".to_string()),
-            started_at_ms: 10,
-            ended_at_ms: 20,
-            exit_status: 0,
-            stdout: "ok",
-            stderr: "",
-            evidence: None,
-            collect_git_metadata: false,
-            collect_worktree_fingerprint: false,
-            worktree_fingerprint_override: None,
-        },
-    )
-    .unwrap();
+        [target_result("repo:custom-check", "success", 10, 20)],
+    );
     (root, RepoDashboardSource::new(context))
+}
+
+/// A finished target as run history records it.
+fn target_result(
+    target: &str,
+    conclusion: &str,
+    started_at_ms: u64,
+    ended_at_ms: u64,
+) -> serde_json::Value {
+    let (component, action) = target.split_once(':').unwrap();
+    json!({
+        "target": {"component": component, "action": action},
+        "status": "completed",
+        "conclusion": conclusion,
+        "started_at_ms": started_at_ms,
+        "ended_at_ms": ended_at_ms,
+        "exit_code": i32::from(conclusion != "success"),
+        "config_digest": "sha256:config",
+        "input_digest": "sha256:input",
+    })
+}
+
+/// Appends each result to run history as its own run's `target_completed`
+/// event.
+fn append_target_results(
+    context: &RepoContext,
+    results: impl IntoIterator<Item = serde_json::Value>,
+) {
+    use std::io::Write;
+
+    let path = context.state_file("runs.jsonl");
+    fs::create_dir_all(context.state_dir()).unwrap();
+    let first = fs::read_to_string(&path).map_or(0, |existing| existing.lines().count());
+    let records = results
+        .into_iter()
+        .enumerate()
+        .map(|(offset, result)| {
+            let index = first + offset;
+            format!(
+                "{}\n",
+                json!({
+                    "id": format!("run_event_{index}"),
+                    "run_id": format!("run_{index}"),
+                    "event": "target_completed",
+                    "timestamp_ms": result["ended_at_ms"],
+                    "target": result["target"],
+                    "result": result,
+                })
+            )
+        })
+        .collect::<String>();
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(records.as_bytes())
+        .unwrap();
 }
 
 fn recorder_request(mode: RecorderMode) -> RecorderRequest {
@@ -179,9 +222,9 @@ fn recorder_refresh_pairs_one_epoch_and_reuse_performs_no_refresh() {
     assert_eq!(reused.recorder.epoch_id, first.recorder.epoch_id);
     assert_eq!(reused.status_local.epoch_id, first.status_local.epoch_id);
     assert_eq!(
-        crate::state::dashboard_scan_count(&source.context.state_file("receipts.jsonl")),
+        crate::state::dashboard_scan_count(&source.context.state_file("runs.jsonl")),
         0,
-        "ReuseCurrent must not traverse receipts"
+        "ReuseCurrent must not traverse run history"
     );
 }
 
@@ -267,26 +310,17 @@ fn real_loop_attempt_identity_and_recovery_argv_survive_the_source_boundary() {
 #[test]
 fn recorder_status_projection_matches_local_status_command_data() {
     let (root, source) = source_fixture();
-    for index in 0..12 {
-        record_receipt(
-            &source.context,
-            ReceiptInput {
-                tool_name: "jig.custom_check",
-                args: json!({}),
-                invoked_command_key: Some("custom_check_command".to_string()),
-                started_at_ms: 100,
-                ended_at_ms: if index == 11 { 5 } else { 200 },
-                exit_status: 0,
-                stdout: "ok",
-                stderr: "",
-                evidence: None,
-                collect_git_metadata: false,
-                collect_worktree_fingerprint: false,
-                worktree_fingerprint_override: None,
-            },
-        )
-        .unwrap();
-    }
+    append_target_results(
+        &source.context,
+        (0..12).map(|index| {
+            target_result(
+                "repo:custom-check",
+                "success",
+                100,
+                if index == 11 { 5 } else { 200 },
+            )
+        }),
+    );
     let source = RepoDashboardSource::new(RepoContext::load_from(root.path()).unwrap());
     let _clock = crate::state::set_test_now_ms(1_900_000_000_000);
     let legacy = crate::status::snapshot_with_cancellation(&source.context, &|| false).unwrap();
@@ -340,10 +374,15 @@ fn recorder_status_projection_matches_status_errors() {
 }
 
 #[test]
-fn local_epoch_traverses_receipts_once_and_ignores_legacy_streams() {
+fn local_epoch_traverses_run_history_once_and_ignores_retired_streams() {
     let (_root, source) = source_fixture();
     let context = &source.context;
-    for stream in ["sessions.jsonl", "plans.jsonl", "decisions.jsonl"] {
+    for stream in [
+        "receipts.jsonl",
+        "sessions.jsonl",
+        "plans.jsonl",
+        "decisions.jsonl",
+    ] {
         fs::write(context.state_file(stream), "{}\n").unwrap();
     }
     crate::state::reset_dashboard_scan_counts();
@@ -352,11 +391,16 @@ fn local_epoch_traverses_receipts_once_and_ignores_legacy_streams() {
         .unwrap();
 
     assert_eq!(
-        crate::state::dashboard_scan_count(&context.state_file("receipts.jsonl")),
+        crate::state::dashboard_scan_count(&context.state_file("runs.jsonl")),
         1,
-        "receipts should be traversed exactly once"
+        "run history should be traversed exactly once"
     );
-    for stream in ["sessions.jsonl", "plans.jsonl", "decisions.jsonl"] {
+    for stream in [
+        "receipts.jsonl",
+        "sessions.jsonl",
+        "plans.jsonl",
+        "decisions.jsonl",
+    ] {
         assert_eq!(
             crate::state::dashboard_scan_count(&context.state_file(stream)),
             0,

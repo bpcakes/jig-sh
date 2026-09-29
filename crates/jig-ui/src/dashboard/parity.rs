@@ -47,7 +47,7 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "Repository, harness, and default-branch identity",
         Shared,
         DASHBOARD_LOCAL_PARITY_TESTS,
-        "repository_failures_and_tool_times_keep_exact_semantics"
+        "repository_failures_and_target_times_keep_exact_semantics"
     ),
     parity!(
         "current_revision",
@@ -61,21 +61,21 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "Recent failures",
         Recorder,
         DASHBOARD_LOCAL_PARITY_TESTS,
-        "repository_failures_and_tool_times_keep_exact_semantics"
+        "repository_failures_and_target_times_keep_exact_semantics"
     ),
     parity!(
-        "failure_stderr",
-        "Failure stderr",
+        "failure_output",
+        "Failure output tail",
         Recorder,
         DASHBOARD_LOCAL_TESTS,
-        "failure_stderr_is_bounded_and_scrollable"
+        "failure_output_is_bounded_and_scrollable"
     ),
     parity!(
-        "tool_statistics",
-        "Tool statistics",
+        "target_statistics",
+        "Target statistics",
         Recorder,
         DASHBOARD_LOCAL_TESTS,
-        "tool_health_renders_all_aggregates"
+        "target_health_renders_all_aggregates"
     ),
     parity!(
         "loop_workflows",
@@ -106,11 +106,11 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "exhausted_attempt_keeps_identity_and_inert_recovery_argv"
     ),
     parity!(
-        "receipt_timeline",
-        "Receipt timeline",
+        "target_result_timeline",
+        "Target result timeline",
         Recorder,
         DASHBOARD_LOCAL_PARITY_TESTS,
-        "receipt_timeline_is_newest_first_and_rows_open_their_detail"
+        "target_result_timeline_is_newest_first_and_rows_open_their_detail"
     ),
     parity!(
         "timeline_filter",
@@ -127,11 +127,11 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "timeline_limit_endpoints_and_plus_minus_controls_are_enforced"
     ),
     parity!(
-        "receipt_diff_duration",
-        "Receipt diff and duration",
+        "target_result_duration",
+        "Target result conclusion and duration",
         Recorder,
         DASHBOARD_LOCAL_PARITY_TESTS,
-        "receipt_timeline_is_newest_first_and_rows_open_their_detail"
+        "target_result_timeline_is_newest_first_and_rows_open_their_detail"
     ),
     parity!(
         "dashboard_json",

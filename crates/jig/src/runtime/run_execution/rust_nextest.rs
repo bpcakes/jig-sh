@@ -39,7 +39,7 @@ fn rust_command(prepared: &PreparedRustInputV1) -> (Command, BTreeMap<String, St
 fn classify_empty_selection(mut capture: TargetCapture) -> TargetCapture {
     if capture.exit_code == Some(4) {
         capture.conclusion = RunConclusion::Failure;
-        capture.receipt_exit_status = 4;
+        capture.envelope_exit_status = 4;
         let message = "nextest selected no tests; empty selection is not passing test evidence";
         capture.stderr.push_str(message);
         capture.stderr.push('\n');
@@ -102,7 +102,7 @@ mod tests {
             ResultParser::ExitCode,
         ));
         assert_eq!(capture.conclusion, RunConclusion::Failure);
-        assert_eq!(capture.receipt_exit_status, 4);
+        assert_eq!(capture.envelope_exit_status, 4);
         assert!(
             capture
                 .findings

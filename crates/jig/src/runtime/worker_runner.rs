@@ -696,7 +696,6 @@ fn record_worker_receipt(
         evidence: Some(evidence),
         collect_git_metadata: request.receipt.collect_git_metadata,
         collect_worktree_fingerprint: request.receipt.collect_worktree_fingerprint,
-        worktree_fingerprint_override: None,
     };
     record_receipt_with_cancellation(ctx, input, &|| observer.cancelled())
         .context("Failed to record worker receipt")

@@ -40,7 +40,6 @@ fn repository_affected_check_explains_and_executes_only_matching_v6_targets() {
                 comparison: None,
                 explain,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(true),
             },
         ))
     };

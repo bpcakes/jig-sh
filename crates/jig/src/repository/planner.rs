@@ -103,7 +103,7 @@ fn plan_run_with_policy(
     mut request: PlanRunRequest,
     arguments: BTreeMap<TargetId, ActionArguments>,
     policy: PlanningPolicy,
-    freshness_cancelled: Option<&dyn Fn() -> bool>,
+    cancelled: Option<&dyn Fn() -> bool>,
 ) -> Result<RunPlan> {
     normalize_affected_base(&mut request.affected_base)?;
     if request.affected_base.is_some() && catalog.contract_version() < 6 {
@@ -138,7 +138,7 @@ fn plan_run_with_policy(
             &mut plan,
             changed_paths.as_deref().unwrap_or(&[]),
             &observed_input_paths,
-            freshness_cancelled,
+            cancelled,
         )?;
         validate_source_after_cargo_discovery(ctx, &source)?;
         validate_current_repository_authority(ctx, catalog.config_digest())?;
@@ -169,17 +169,8 @@ fn plan_run_with_policy(
         }
         plan.id = plan_digest(&plan)?;
     }
-    if super::rust_focus::prepare_plan(ctx, &mut plan, freshness_cancelled)? {
+    if super::rust_focus::prepare_plan(ctx, &mut plan, cancelled)? {
         validate_source_after_cargo_discovery(ctx, &source)?;
-    }
-    if let Some(cancelled) = freshness_cancelled {
-        let mut budget = super::freshness::CollectionBudget::new(
-            super::freshness::CollectionLimits::with_timeout(std::time::Duration::from_millis(
-                super::freshness::RECORDING_TIMEOUT_MS,
-            )),
-            cancelled,
-        );
-        super::freshness::prepare_plan_identities(ctx, catalog, &mut plan, &mut budget)?;
     }
     plan.id = plan_digest(&plan)?;
     Ok(plan)
@@ -292,9 +283,7 @@ pub(crate) fn validate_run_plan(
         policy,
         None,
     )?;
-    let mut execution_authority = plan.clone();
-    clear_freshness_metadata(&mut execution_authority);
-    if expected != execution_authority {
+    if &expected != plan {
         bail!(
             "run plan '{}' is stale or was modified after planning; inspect a fresh plan before execution",
             plan.id
@@ -304,17 +293,7 @@ pub(crate) fn validate_run_plan(
     // change that races that work cannot escape through the `.agent/**`
     // exclusion in the source fingerprint.
     validate_current_repository_authority(ctx, catalog.config_digest())?;
-    // Optional proof supplied by a client never gains trust through execution
-    // authority validation. Return the re-resolved plan with that proof absent;
-    // the execution worker can collect it under its live cancellation control.
     Ok(expected)
-}
-
-fn clear_freshness_metadata(plan: &mut RunPlan) {
-    for target in &mut plan.targets {
-        target.target_identity = None;
-        target.target_identity_error = None;
-    }
 }
 
 #[cfg(test)]
@@ -721,13 +700,6 @@ struct PlanDigestInput<'a> {
 }
 
 fn plan_digest(plan: &RunPlan) -> Result<String> {
-    // Timing-dependent observation availability is not execution authority.
-    // Global source/config and every executable target field remain included.
-    let mut targets = plan.targets.clone();
-    for target in &mut targets {
-        target.target_identity = None;
-        target.target_identity_error = None;
-    }
     let input = PlanDigestInput {
         schema_version: plan.schema_version,
         config_digest: &plan.config_digest,
@@ -735,7 +707,7 @@ fn plan_digest(plan: &RunPlan) -> Result<String> {
         selectors: &plan.selectors,
         profile: &plan.profile,
         affected_base: &plan.affected_base,
-        targets: &targets,
+        targets: &plan.targets,
         execution_layers: &plan.execution_layers,
         effects: &plan.effects,
         cargo_impacts: &plan.cargo_impacts,
