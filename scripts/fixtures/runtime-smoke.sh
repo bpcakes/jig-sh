@@ -609,7 +609,6 @@ PY
 
     local work_json
     local plan_id
-    local receipts_json
     local contract_version
     local contract_cache_key
     local install_base
@@ -695,25 +694,37 @@ PY
     # native checks with the current commit, as the removed plan baseline did.
     scripts/jig check --comparison-base HEAD >/dev/null
 
-    RECEIPTS_PATH=.agent/state/receipts.jsonl EXPECT_SQLX="$expect_sqlx" EXPECT_SCHEMA_DUMP="$expect_schema_dump" python3 <<'PY'
+    # Checks record their results in run history. Map each finished target
+    # back to its compatibility tool name through the manifest.
+    EXPECT_SQLX="$expect_sqlx" EXPECT_SCHEMA_DUMP="$expect_schema_dump" python3 <<'PY'
 import json
 import os
 
-with open(os.environ["RECEIPTS_PATH"], encoding="utf-8") as receipts:
-    tools = {json.loads(line)["tool_name"] for line in receipts if line.strip()}
+with open(".agent/jig-contract.json", encoding="utf-8") as manifest:
+    aliases = {
+        (action["target"]["component"], action["target"]["action"]): action.get("legacy_aliases", [])
+        for action in json.load(manifest)["actions"]
+    }
+tools = set()
+with open(".agent/state/runs.jsonl", encoding="utf-8") as runs:
+    for line in runs:
+        event = json.loads(line) if line.strip() else {}
+        if event.get("event") == "target_completed":
+            target = event["result"]["target"]
+            tools.update(aliases.get((target["component"], target["action"]), []))
 required = {
     "jig.contract_check",
     "jig.file_budget",
     "jig.test",
 }
 if os.environ["EXPECT_SQLX"] == "1":
-    required.update({"jig.sqlx_check", "jig.migration_add"})
+    required.add("jig.sqlx_check")
 if os.environ["EXPECT_SCHEMA_DUMP"] == "1":
     required.add("jig.schema_check")
 
 missing = sorted(required - tools)
 if missing:
-    raise SystemExit(f"Missing expected runtime receipts: {', '.join(missing)}")
+    raise SystemExit(f"Missing expected run results: {', '.join(missing)}")
 PY
 
     # The retired structured-work namespace parses only to explain its replacement.
@@ -725,7 +736,7 @@ PY
     grep -q 'jig work` was removed' "$retired_work_stderr"
     rm -f "$retired_work_stderr"
 
-    [[ -f .agent/state/receipts.jsonl ]]
+    [[ -f .agent/state/runs.jsonl ]]
     [[ -f "$install_base/$contract_cache_key-runtime/bin/jig" ]]
     [[ -f "$install_base/$contract_cache_key/bin/jig" ]]
     if [[ "$expect_sqlx" == "1" ]]; then
