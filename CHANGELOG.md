@@ -30,7 +30,18 @@
   contract 12, so move a `.jig/runtime-version` pin to a release that supports it
   before updating a pinned repository. `jig doctor`'s optional contract
   migration check now describes the move to the current contract.
-
+- Rust adoption detects direct `sqlx::migrate!` invocations through the Rust AST,
+  including comment-separated paths, without treating strings or comments as
+  code. This is bounded syntax coverage: large valid sources can be skipped
+  with a warning. Non-candidate files skip parsing; a token-complexity budget and fixed
+  parser stack prevent deeply nested or long recursive syntax from aborting
+  adoption. Unparseable or over-budget sources produce warnings; macro expansion
+  and name resolution remain outside this adoption signal.
+- Dev-proxy workspace discovery parses `pnpm-workspace.yaml` with a YAML parser,
+  supporting multiline flow lists, escaped strings, and aliases. Malformed YAML
+  and non-string package entries now fail explicitly. Empty documents and
+  absent/null package lists yield no patterns; glob and filesystem restrictions
+  remain unchanged.
 - The native SQLx unchecked-call check and TODO inventory now use a Rust AST
   parser, detecting direct calls separated by comments or newlines and accepting
   complete `include!` expression fragments. Root-level `tests/` paths are now
