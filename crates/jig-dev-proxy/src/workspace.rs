@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use jig_typescript::{dev_script::script_looks_like_vite, workspace::glob_escapes_root};
 use serde_json::Value;
 
@@ -154,87 +154,33 @@ fn read_workspace_text(path: &Path) -> Result<String> {
 }
 
 fn parse_pnpm_workspace(text: &str) -> Result<Vec<String>> {
+    use serde_yaml_ng::Value as YamlValue;
+
+    let document: YamlValue =
+        serde_yaml_ng::from_str(text).context("Failed to parse pnpm-workspace.yaml")?;
+    // Treat empty files and absent/null packages as an empty workspace list.
+    if document.is_null() {
+        return Ok(Vec::new());
+    }
+    let mapping = document
+        .as_mapping()
+        .context("pnpm-workspace.yaml must contain a mapping")?;
+    let Some(packages) = mapping.get("packages").filter(|value| !value.is_null()) else {
+        return Ok(Vec::new());
+    };
+    let packages = packages
+        .as_sequence()
+        .context("pnpm-workspace.yaml packages must be a list of strings")?;
     let mut globs = Vec::new();
-    let mut in_packages = false;
-    for raw in text.lines() {
-        let line = raw.trim_end();
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("packages:") {
-            let rest = strip_inline_yaml_comment(rest.trim()).trim();
-            if rest.starts_with('[') && rest.ends_with(']') {
-                return Ok(rest
-                    .trim_matches(['[', ']'])
-                    .split(',')
-                    .map(|item| item.trim().trim_matches(['"', '\'']).to_string())
-                    .filter(|item| !item.is_empty())
-                    .collect());
-            }
-            if rest.starts_with('[') {
-                bail!("pnpm-workspace.yaml uses unsupported multi-line flow-style packages list");
-            }
-            if !rest.is_empty() {
-                bail!("pnpm-workspace.yaml uses unsupported inline packages value");
-            }
-            in_packages = true;
-            continue;
-        }
-        if in_packages {
-            if !line.starts_with(' ') && !line.starts_with('\t') && !trimmed.starts_with('-') {
-                in_packages = false;
-            } else {
-                if trimmed.starts_with('[') {
-                    bail!(
-                        "pnpm-workspace.yaml uses unsupported multi-line flow-style packages list"
-                    );
-                }
-                if let Some(item) = trimmed.strip_prefix('-') {
-                    let item = strip_inline_yaml_comment(item.trim())
-                        .trim()
-                        .trim_matches(['"', '\''])
-                        .to_string();
-                    if !item.is_empty() {
-                        globs.push(item);
-                    }
-                } else if !trimmed.is_empty() {
-                    bail!("pnpm-workspace.yaml uses unsupported non-list packages entry");
-                }
-            }
+    for (index, value) in packages.iter().enumerate() {
+        let glob = value
+            .as_str()
+            .with_context(|| format!("pnpm-workspace.yaml packages[{index}] must be a string"))?;
+        if !glob.is_empty() {
+            globs.push(glob.to_owned());
         }
     }
     Ok(globs)
-}
-
-fn strip_inline_yaml_comment(value: &str) -> &str {
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut backslashes = 0usize;
-    for (index, ch) in value.char_indices() {
-        let escaped = in_double && backslashes % 2 == 1;
-        match ch {
-            '\'' if !in_double => in_single = !in_single,
-            '"' if !in_single && !escaped => in_double = !in_double,
-            '#' if !in_single
-                && !in_double
-                && (index == 0
-                    || value[..index]
-                        .chars()
-                        .next_back()
-                        .is_some_and(char::is_whitespace)) =>
-            {
-                return value[..index].trim_end();
-            }
-            _ => {}
-        }
-        if ch == '\\' && in_double {
-            backslashes += 1;
-        } else {
-            backslashes = 0;
-        }
-    }
-    value.trim_end()
 }
 
 fn expand_globs(root: &Path, globs: &[String]) -> Result<Vec<PathBuf>> {

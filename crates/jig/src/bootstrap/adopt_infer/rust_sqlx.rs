@@ -6,6 +6,8 @@ use super::scan::{
 };
 use crate::bootstrap::crate_classification::non_production_crate_reason;
 
+mod migrate;
+
 const MAX_MIGRATION_SQL_DEPTH: usize = 3;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -261,9 +263,9 @@ pub(super) fn infer_sqlx(
             ));
         }
     }
-    if let Some(source) = first_text_file_matching(root, scan, &["rs"], warnings, |text| {
-        text.lines().any(rust_line_invokes_sqlx_migrate)
-    }) {
+    if let Some(source) =
+        first_text_file_matching(root, scan, &["rs"], warnings, migrate::has_migrate_macro)
+    {
         out.enabled.value = true;
         out.signals.push("sqlx::migrate! macro".into());
         out.enabled
@@ -271,7 +273,7 @@ pub(super) fn infer_sqlx(
             .push(format!("sqlx::migrate! macro in {source}"));
     }
     if let Some(source) = first_text_file_matching(root, scan, &["sh"], warnings, |text| {
-        text.lines().any(shell_line_invokes_cargo_sqlx)
+        Ok(text.lines().any(shell_line_invokes_cargo_sqlx))
     }) {
         out.enabled.value = true;
         out.signals.push("cargo sqlx command".into());
@@ -280,7 +282,7 @@ pub(super) fn infer_sqlx(
             .push(format!("cargo sqlx command in {source}"));
     } else if let Some(source) =
         first_text_file_matching(root, scan, &["yml", "yaml"], warnings, |text| {
-            text.lines().any(yaml_run_invokes_cargo_sqlx)
+            Ok(text.lines().any(yaml_run_invokes_cargo_sqlx))
         })
     {
         out.enabled.value = true;
@@ -457,12 +459,19 @@ fn first_text_file_matching<F>(
     mut predicate: F,
 ) -> Option<String>
 where
-    F: FnMut(&str) -> bool,
+    F: FnMut(&str) -> anyhow::Result<bool>,
 {
     for path in scan.files_with_extensions(extensions) {
         match read_limited_text(path) {
-            Ok(text) if predicate(&text) => return Some(relative_source_path(root, path)),
-            Ok(_) => {}
+            Ok(text) => match predicate(&text) {
+                Ok(true) => return Some(relative_source_path(root, path)),
+                Ok(false) => {}
+                Err(error) => push_scan_warning(
+                    warnings,
+                    path,
+                    &format!("could not parse source for inference: {error:#}"),
+                ),
+            },
             Err(error) => push_scan_warning(
                 warnings,
                 path,
@@ -501,14 +510,6 @@ fn strip_yaml_inline_comment(value: &str) -> &str {
         }
     }
     value
-}
-
-fn rust_line_invokes_sqlx_migrate(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    !trimmed.starts_with("//")
-        && !trimmed.starts_with("/*")
-        && !trimmed.starts_with('*')
-        && trimmed.contains("sqlx::migrate!")
 }
 
 fn shell_line_invokes_cargo_sqlx(line: &str) -> bool {
