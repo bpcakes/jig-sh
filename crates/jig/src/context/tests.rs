@@ -27,7 +27,7 @@ fn contract_version_probe_keeps_manifest_path_and_parse_cause() {
 }
 
 #[test]
-fn contract_twelve_execution_authority_has_no_work_section() {
+fn contract_nine_execution_authority_has_no_work_section() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
     let config_path = temp.path().join(".jig.toml");
@@ -51,7 +51,7 @@ fn contract_twelve_execution_authority_has_no_work_section() {
 
     manifest["contract_version"] = json!(8);
     assert_ne!(digest(&manifest, &original), digest(&manifest, &with_work));
-    manifest["contract_version"] = json!(12);
+    manifest["contract_version"] = json!(9);
     assert_eq!(digest(&manifest, &original), digest(&manifest, &with_work));
 }
 

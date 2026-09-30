@@ -1,4 +1,4 @@
-//! Contract 12 retires `[work]`. A refresh that renders it keeps tracker
+//! Contract 9 retires `[work]`. A refresh that renders it keeps tracker
 //! ownership as `[repository] tracker` and reports the settings it drops.
 
 use super::*;
@@ -61,7 +61,7 @@ fn existing_work(existing: &toml::Table) -> Result<Option<&toml::Table>> {
         .transpose()
 }
 
-/// Describes how a refresh that renders contract 12 or later treated an
+/// Describes how a refresh that renders contract 9 or later treated an
 /// existing `[work]` section. Generated gates are not listed.
 pub(in crate::bootstrap) fn retired_work_notes(
     seed_repo_path: Option<&Path>,

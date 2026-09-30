@@ -1,6 +1,6 @@
 use super::*;
 
-/// Contract 12 declares tracker ownership in `[repository]`; earlier
+/// Contract 9 declares tracker ownership in `[repository]`; earlier
 /// contracts use `[work]` receipt metadata.
 const OPT_INS: [&str; 2] = [
     "[repository]\ntracker = \"beads\"\n",

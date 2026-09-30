@@ -64,26 +64,27 @@ targets = [{ component = "repo", action = "contract" }]
 }
 
 #[test]
-fn reserved_epochs_are_neither_supported_nor_active() {
-    assert_eq!(CURRENT_CONTRACT_VERSION, 12);
-    assert_eq!(MAX_SUPPORTED_CONTRACT_VERSION, 12);
+fn supported_epochs_are_contiguous_through_nine() {
+    assert_eq!(CURRENT_CONTRACT_VERSION, 9);
+    assert_eq!(MAX_SUPPORTED_CONTRACT_VERSION, 9);
 
-    for version in (MIN_SUPPORTED_CONTRACT_VERSION..=8).chain([12]) {
+    for version in MIN_SUPPORTED_CONTRACT_VERSION..=9 {
         assert!(is_supported_contract_version(version));
         assert!(is_active_contract_version(version));
     }
-    for version in [9, 10, 11] {
+    for version in [1, 10, 11, 12, 13, u32::MAX] {
         assert!(!is_supported_contract_version(version));
+        assert!(!is_active_contract_version(version));
         assert!(!is_active_contract_version_at(version, version));
     }
-    assert_eq!(supported_contract_versions_label(), "2 through 8 and 12");
-    assert_eq!(active_contract_versions_label(), "2 through 8 and 12");
+    assert_eq!(supported_contract_versions_label(), "2 through 9");
+    assert_eq!(active_contract_versions_label(), "2 through 9");
     assert_eq!(active_contract_versions_label_at(8), "2 through 8");
 }
 
 #[test]
 fn repository_loading_accepts_the_last_work_epoch_and_the_current_epoch() {
-    for version in [8, 12] {
+    for version in [8, 9] {
         let temp = tempdir().unwrap();
         write_native_contract_fixture(temp.path(), version);
         let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
@@ -92,9 +93,9 @@ fn repository_loading_accepts_the_last_work_epoch_and_the_current_epoch() {
 }
 
 #[test]
-fn contract_twelve_rejects_work_and_accepts_the_repository_tracker() {
+fn contract_nine_rejects_work_and_accepts_the_repository_tracker() {
     let temp = tempdir().unwrap();
-    write_native_contract_fixture(temp.path(), 12);
+    write_native_contract_fixture(temp.path(), 9);
     let config_path = temp.path().join(".jig.toml");
     let config = fs::read_to_string(&config_path).unwrap();
     fs::write(
@@ -106,7 +107,7 @@ fn contract_twelve_rejects_work_and_accepts_the_repository_tracker() {
         .unwrap_err()
         .to_string();
     assert!(
-        error.starts_with("[work] is not supported by jig contract version 12;"),
+        error.starts_with("[work] is not supported by jig contract version 9;"),
         "{error}"
     );
 
@@ -115,7 +116,7 @@ fn contract_twelve_rejects_work_and_accepts_the_repository_tracker() {
 }
 
 #[test]
-fn the_repository_tracker_requires_contract_twelve() {
+fn the_repository_tracker_requires_contract_nine() {
     let temp = tempdir().unwrap();
     write_native_contract_fixture(temp.path(), 8);
     let config_path = temp.path().join(".jig.toml");
@@ -126,7 +127,7 @@ fn the_repository_tracker_requires_contract_twelve() {
         .to_string();
     assert_eq!(
         error,
-        "[repository] tracker requires jig contract version 12 or later; repository contract is 8"
+        "[repository] tracker requires jig contract version 9 or later; repository contract is 8"
     );
 
     fs::write(
@@ -146,16 +147,16 @@ fn with_tracker(config: &str) -> String {
 }
 
 #[test]
-fn repository_loading_rejects_reserved_epochs() {
-    for reserved in [9, 10, 11] {
+fn repository_loading_rejects_superseded_unreleased_epochs() {
+    for superseded in [10, 11, 12] {
         let rejected = tempdir().unwrap();
-        write_native_contract_fixture(rejected.path(), reserved);
+        write_native_contract_fixture(rejected.path(), superseded);
         let error = RepoContext::load_from_root(rejected.path().to_path_buf())
             .unwrap_err()
             .to_string();
         assert_eq!(
             error,
-            format!("Unsupported jig contract version: {reserved}")
+            format!("Unsupported jig contract version: {superseded}")
         );
     }
 }

@@ -3,7 +3,7 @@ use super::*;
 /// Keep this separate from affected-selection ignores: documentation and other
 /// non-code inputs remain source authority even when they do not select a
 /// command. Tracker exclusion requires an explicit typed repository opt-in:
-/// `[repository] tracker` from contract 12, `[work] receipt_metadata` before.
+/// `[repository] tracker` from contract 9, `[work] receipt_metadata` before.
 pub(super) fn tracker_state_paths(root: &Path) -> Result<Vec<&'static str>> {
     let contents = match fs::read_to_string(root.join(".jig.toml")) {
         Ok(contents) => contents,

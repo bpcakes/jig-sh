@@ -34,7 +34,7 @@ mod retired_work;
 pub(super) use retired_work::retired_work_notes;
 
 /// Carries tracker ownership into the refreshed configuration. Refreshes
-/// render contract 12 or later, which declare it as `[repository] tracker`.
+/// render contract 9 or later, which declare it as `[repository] tracker`.
 pub(super) fn reconcile_tracker_ownership(
     seed_repo_path: Option<&Path>,
     destination: &Path,

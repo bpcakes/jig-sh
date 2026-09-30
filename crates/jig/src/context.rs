@@ -713,8 +713,8 @@ pub(crate) use repository_root::{find_repo_root_from, find_repo_root_from_or_env
 
 // Keep launcher protocol constants in this module shell: repository tooling
 // reads their declarations directly without compiling the Rust include tree.
-pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 12;
-pub(crate) const MAX_SUPPORTED_CONTRACT_VERSION: u32 = 12;
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 9;
+pub(crate) const MAX_SUPPORTED_CONTRACT_VERSION: u32 = 9;
 pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";

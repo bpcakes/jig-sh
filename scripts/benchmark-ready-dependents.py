@@ -74,7 +74,7 @@ def make_fixture(root, case):
               'repository': {'components': components, 'actions': actions, 'profiles': profiles,
                              'default_check_profile': 'verify'}}
     (root / '.jig.toml').write_text('\n'.join(json.dumps(k) + ' = ' + literal(v) for k, v in config.items()) + '\n')
-    manifest = {'contract_version': 12, 'tool_namespace': 'jig', 'required_commands': ['example_check_command'],
+    manifest = {'contract_version': 9, 'tool_namespace': 'jig', 'required_commands': ['example_check_command'],
                 'tools': [], 'components': components, 'actions': actions, 'profiles': profiles,
                 'default_check_profile': 'verify'}
     (root / '.agent/jig-contract.json').write_text(json.dumps(manifest, indent=2) + '\n')

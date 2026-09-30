@@ -157,7 +157,7 @@ Full-harness templates seed `.jig/file-budget.toml` once and declare the languag
 `[repository]` is the reviewed source of workspace identity. Its generated records are repeated as `components`, `actions`, `profiles`, and `default_check_profile` in `.agent/jig-contract.json`; runtime loading rejects a mismatch.
 
 - `[[repository.components]]` declares `id`, a literal repository-relative `root` (`.` is allowed), optional description/tags/dependencies, affected propagation, adapter ids, guidance, and per-field provenance. A non-root component may not live under `.agent/`, whose harness and runtime contents are deliberately excluded from source identity. Component dependencies must be acyclic; action dependencies form a separate acyclic execution graph.
-- `repository.tracker` (contract v12 or later) optionally declares `"beads"`: the root `.beads/` directory holds issue-tracker state that no check consumes, so it stays out of the source identity behind plan staleness and run input digests. It replaces `[work] receipt_metadata = ["beads"]`; see [Tracker state](public-contract.md#tracker-state).
+- `repository.tracker` (contract v9 or later) optionally declares `"beads"`: the root `.beads/` directory holds issue-tracker state that no check consumes, so it stays out of the source identity behind plan staleness and run input digests. It replaces `[work] receipt_metadata = ["beads"]`; see [Tracker state](public-contract.md#tracker-state).
 - `repository.affected_ignore` is a reviewed list of repository-relative globs whose changes do not select executable targets during affected planning. Generated full repositories ignore `.env`, `.env.*`, their nested forms, named guidance files such as `README.md` and `AGENTS.md`, `docs/**`, license files, and `.github/**`; remove or narrow those defaults when a check consumes one of those paths. Patterns may never match `.jig.toml` or `scripts/jig`, and an explicit action input always takes precedence over an ignore. Every remaining unignored, unclaimed path continues to fail closed: generated defaults deliberately do not ignore arbitrary Markdown fixtures, `.gitignore`, `Makefile`, or `justfile`, because those files can change program inputs, source discovery, or invoked commands. The ordinary source fingerprint remains conservative and still records observed ignored dotenv paths for plan identity and run input digests, so a dotenv edit changes those digests even when it does not widen a Git-affected plan. Jig prunes a wholly ignored directory instead of searching generated dependency and build trees; unignore the containing path when it holds an intentional dotenv input.
 - `[[repository.actions]]` declares a structured `{ component, action }` target, intent, effects, runner, repository-relative forward-slash input globs, target dependencies, optional `timeout_seconds`, result parser, compatibility aliases, and provenance. Action timeouts use the same valid 1–86,400 second range as `[execution].command_timeout_seconds`; omission inherits that repository default, while an action value is the more-specific override. Overrides are accepted for supervised command runners and the cooperatively supervised native schema runner. Other bounded in-process native operations reject an override because Jig cannot safely preempt them midway through a mutation; they check the deadline before entry, and a returned completion is authoritative because effects may already be durable. Inputs may intentionally name paths outside the component root to declare repository-global inputs, but may not be anchored under the unobserved `.agent/` tree. Affected selection unions action inputs at component scope: a matching path retains every selected candidate target on that component rather than pruning sibling actions independently.
 - `[[repository.profiles]]` declares a stable id and exact structured targets. `repository.default_check_profile` selects the profile used by bare `jig check`.
@@ -392,7 +392,7 @@ Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The a
 Nested accepted keys are:
 
 - `[commands]`: command names made from lowercase ASCII letters, numbers, and underscores; names must start with a letter and end in `_command`
-- `[repository]`: `default_check_profile`, `affected_ignore`, `tracker` (contract v12 or later), `components`, `actions`, `profiles`
+- `[repository]`: `default_check_profile`, `affected_ignore`, `tracker` (contract v9 or later), `components`, `actions`, `profiles`
 - `[[repository.components]]`: `id`, `root`, `description`, `tags`, `depends_on`, `propagate_affected_to_dependents`, `adapters`, `guidance`, `provenance`
 - `[[repository.actions]]`: `target`, `description`, `intent`, `effects`, `runner`, `inputs`, `depends_on`, `timeout_seconds`, `result_parser`, `legacy_aliases`, `provenance`
 - `[[repository.profiles]]`: `id`, `description`, `targets`, `provenance`
@@ -401,7 +401,7 @@ Nested accepted keys are:
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`
 - `[[dev.apps]]`: `name`, `dir`, `kind`, `command`, `argv`, `port`, `host`, `proxy`
 - `[execution]`: `command_timeout_seconds`, `command_output_limit_bytes`
-- `[work]` (contracts through v8; v12 rejects it): `receipt_metadata`, `tracker`, `checks`, `gates`, `iteration_profile`, `refinements`; `iteration_profile` and `refinements` are accepted with any value but ignored, and `jig update` drops them
+- `[work]` (contracts through v8; v9 rejects it): `receipt_metadata`, `tracker`, `checks`, `gates`, `iteration_profile`, `refinements`; `iteration_profile` and `refinements` are accepted with any value but ignored, and `jig update` drops them
 - `[work.tracker]`: `kind`, `workspace_id`, `export`, `manual_export_guidance`; the
   current `beads` kind accepts only manual export and no configurable store root
 - `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`; check gates also accept `paths`, `paths_ignore`, and `reuse`
@@ -585,7 +585,7 @@ Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars)
 
 ## `work` Shape
 
-Contract v12 has no `work` block: `.jig.toml` rejects it, and `jig update`
+Contract v9 has no `work` block: `.jig.toml` rejects it, and `jig update`
 moves `receipt_metadata = ["beads"]` to `[repository] tracker = "beads"`, drops
 the rest, and reports what it dropped. Through contract v8 the block is still
 parsed and validated strictly, so those repositories load unchanged and their

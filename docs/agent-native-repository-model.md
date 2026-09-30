@@ -93,7 +93,7 @@ the target, result, affected files, or normalized findings.
 
 A **gate** was a policy over evidence evaluated by the removed `jig work`
 commands. Contracts through v8 still accept `[work]` gate configuration, but no
-command evaluates it; contract v12 removes `[work]`.
+command evaluates it; contract v9 removes `[work]`.
 
 An **adapter** discovers or contributes component and action defaults for a
 stack or delegated runner. Rust, Go, TypeScript, SQLx, Nx, Turborepo, and
@@ -340,7 +340,7 @@ a compatible repo-scoped action. Existing command names and tool calls keep
 working. Contract version 6 templates emit native component and
 action records. Templates through contract version 8 also render target-aware
 `[[work.gates]]` entries, which are accepted but no longer evaluated; contract
-version 12 templates render no `[work]` section.
+version 9 templates render no `[work]` section.
 
 The singular `backend_language` and legacy language command keys remain
 accepted for version 5 and earlier migrations. Version 6 does not use them as
