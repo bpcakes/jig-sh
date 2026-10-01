@@ -117,6 +117,21 @@ Generated agent maps escape Markdown labels and URL-encode filesystem paths, so
 literal percent signs and other reserved characters retain their filename meaning.
 Links resolve from the map's directory, including when the map is stored below the root.
 
+`scripts/jig check agent-map` uses these CommonMark and repository-path checks in
+every supported contract epoch, including v2 through v8. This is a runtime upgrade
+change, separate from the epoch-gated `agent-guides` policy. Previously generated
+maps with literal percent signs in destinations (such as `./100%/AGENTS.md`) can
+fail after upgrading the runtime without changing the repository's contract epoch.
+Symlinked maps or targets and undefined explicit reference labels are also rejected.
+
+For a generated map, run `scripts/jig agent-map generate`, then
+`scripts/jig check agent-map` and inspect the diff. Regeneration replaces the map's
+contents; preserve authored material before doing so. For a custom map, correct
+the reported destinations and reference definitions directly, encoding a literal
+percent sign as `%25`. Replace symlinked maps, targets, or ancestor directories with
+regular repository entries before regenerating or checking. Neither regeneration
+nor checking changes the recorded contract epoch.
+
 Human output reports error/warning counts and up to five diagnostics of each severity,
 including component and guidance identity for owner-guide failures;
 full locations and references remain available with `--json`. A valid or warnings-only

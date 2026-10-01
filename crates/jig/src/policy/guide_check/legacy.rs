@@ -1,4 +1,4 @@
-// Preserve the guide policy recorded by contract epochs 2 through 7. Upgrading
+// Preserve the guide policy recorded by contract epochs 2 through 8. Upgrading
 // the runtime alone must not broaden discovery or introduce link failures.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

@@ -5,6 +5,9 @@ use std::process::{Command, Output, Stdio};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+#[path = "guide_checks/map_upgrade.rs"]
+mod map_upgrade;
+
 fn run(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_jig"))
         .args(args)
