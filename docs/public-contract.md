@@ -667,9 +667,10 @@ longer records or reads receipts or target freshness at all (see
 [Runtime State](#runtime-state)). Run records carrying older reuse and
 `target_freshness` fields remain readable.
 
-Through contract v8, `.jig.toml` `[work]` is still parsed and validated strictly,
-so those repositories load unchanged and their execution-authority digest does not
-change. `receipt_metadata` keeps working. `checks` and `gates` still define the
+Through contract v8, `.jig.toml` `[work]` is still parsed and validated strictly.
+Its execution-authority digest stays unchanged unless `iteration_profile` was
+set or `refinements` was nonempty: those retired values no longer enter execution
+authority. `receipt_metadata` keeps working. `checks` and `gates` still define the
 default check profile for legacy contract v2–v5 repositories and adoption's gate
 preview; `iteration_profile` and `refinements` are accepted with any value but
 ignored, and `jig update` drops them. Contract v9 rejects `[work]`; see

@@ -136,6 +136,97 @@ fn manual_tick_evidence_failure_preserves_attention_and_blocks_reentry() {
 
 #[cfg(unix)]
 #[test]
+fn retained_manual_worktree_evidence_failure_blocks_reentry_after_cleanup() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    configure_scheduled_task(&temp, "manual-task", "checkout = \"worktree\"", false);
+    let run_log = temp.path().join(".agent/.cache/manual-task-runs");
+    let codex_path = bin.path().join("codex-manual-evidence-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+set -eu
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$arg"; fi
+  prev="$arg"
+done
+cat >/dev/null
+printf 'run\n' >> "$JIG_TEST_RUN_LOG"
+printf 'manual change\n' > manual-change.txt
+printf 'task complete\n' > "$out"
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _run_log = EnvVarGuard::set("JIG_TEST_RUN_LOG", run_log.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let evidence_path = crate::runtime::loops::evidence_directory_for_test(&ctx);
+    fs::create_dir_all(evidence_path.parent().unwrap()).unwrap();
+    fs::write(&evidence_path, "not a directory").unwrap();
+
+    let tick = || {
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("manual-task".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        }))
+    };
+    let error = crate::runtime::dispatch(&ctx, tick()).unwrap_err();
+    assert!(format!("{error:#}").contains("Failed to record loop occurrence evidence"));
+    let status = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest {
+            workflow: Some("manual-task".into()),
+        })),
+    )
+    .unwrap();
+    let records = status["scheduled_occurrences"].as_array().unwrap();
+    assert_eq!(records.len(), 1, "{status:#}");
+    let occurrence = &records[0];
+    assert_eq!(occurrence["status"], "needs_attention", "{status:#}");
+    assert_eq!(occurrence["worker_invoked"], true);
+    assert!(occurrence["error"].as_str().is_some_and(|error| {
+        error.contains("Failed to record loop occurrence evidence")
+    }));
+    assert_eq!(
+        status["needs_attention"]["scheduled_occurrences"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let retained = occurrence["worktree"].as_str().unwrap();
+    assert!(Path::new(retained).join("manual-change.txt").exists());
+
+    // Clear the disk obstruction and preserve the result before ordinary
+    // worktree removal; neither operation acknowledges the evidence failure.
+    fs::remove_file(&evidence_path).unwrap();
+    git_ok(Path::new(retained), ["add", "manual-change.txt"]);
+    git_ok(Path::new(retained), ["commit", "-m", "preserve fixture result"]);
+    git_ok(temp.path(), ["worktree", "remove", retained]);
+    assert!(!Path::new(retained).exists());
+    let blocked = crate::runtime::dispatch(&ctx, tick()).unwrap();
+    assert_eq!(blocked["status"], "needs_attention", "{blocked:#}");
+    assert_eq!(blocked["actions"][0]["reason"], "manual_occurrence_blocked");
+    assert_eq!(
+        blocked["actions"][0]["occurrence"]["occurrence_id"],
+        occurrence["occurrence_id"]
+    );
+    assert!(blocked["actions"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("requires acknowledgement"));
+    let scheduled = crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+    assert_eq!(scheduled["executed_count"], 0, "{scheduled:#}");
+    assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
+}
+
+#[cfg(unix)]
+#[test]
 fn tick_and_run_report_attention_owned_by_another_workflow() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

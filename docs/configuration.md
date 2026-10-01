@@ -587,8 +587,9 @@ Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars)
 Contract v9 has no `work` block: `.jig.toml` rejects it, and `jig update`
 moves `receipt_metadata = ["beads"]` to `[repository] tracker = "beads"`, drops
 the rest, and reports what it dropped. Through contract v8 the block is still
-parsed and validated strictly, so those repositories load unchanged and their
-execution-authority digest does not change. `receipt_metadata` keeps working,
+parsed and validated strictly. Their execution-authority digest stays unchanged
+unless `iteration_profile` was set or `refinements` was nonempty: those retired
+values no longer enter execution authority. `receipt_metadata` keeps working,
 while `tracker` is only validated. `checks` and `gates` still define the default
 check profile for legacy contract v2–v5 repositories and adoption's gate
 preview. `iteration_profile` and `refinements` are accepted with any value but
@@ -1261,9 +1262,9 @@ Checks and runs on contract v6 and later append run history to
 `receipt_id`: loop occurrences record their evidence under Git metadata instead
 (see [Loop evidence](public-contract.md#loop-evidence)). Read-only inspection
 commands such as `state summary`, `status`, and `loop show` write nothing. The
-removed `--no-receipt` option is rejected; the retired `--plan-id` is accepted
-and ignored. Repo-mode scheduled workers must leave the shared checkout clean,
-including nested run history. Their additive `checkout.diagnostics` classifies
+removed `--no-receipt` and `--plan-id` options are rejected. Repo-mode scheduled
+workers must leave the shared checkout clean, including nested run history.
+Their additive `checkout.diagnostics` classifies
 application changes and operational-state changes with bounded observations and
 read-only inspection commands. See the
 [validation context matrix](codex-task-operations.md#choose-the-checkout-deliberately)
@@ -1280,10 +1281,10 @@ longer writes or reads; keep them as history or remove them. It also includes
 local disk usage from maintenance backups under `.agent/.cache/state-backups/`
 and compressed run archives under `.agent/.cache/state-archives/`. The removed
 `--deep` flag, which analyzed receipt payloads and joined receipts to run
-history, is rejected. `state compact sessions` was removed; pass a sessions
-backup directory it created, or its `manifest.json`, to
-`state restore --backup ...` to verify and restore the exact pre-compaction
-stream. Receipt backups from earlier runtimes can no longer be restored.
+history, is rejected. `state compact sessions` was removed. `state restore`
+no longer accepts session or receipt backups from earlier runtimes. Those
+backups remain under `.agent/.cache/state-backups/` as gzip JSONL and can be
+extracted manually to recover their historical records.
 
 Use `scripts/jig state archive --before ...` to shrink `runs.jsonl`; diagnosis
 recommends it once the stream reaches 8 MiB.

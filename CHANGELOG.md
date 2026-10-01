@@ -27,8 +27,10 @@
   `[work] receipt_metadata = ["beads"]` to `[repository] tracker = "beads"`,
   drop the rest of `[work]`, and report any project-authored gates, checks,
   tracker, or other settings they dropped in `warnings` (update) or `notes`
-  (adopt). Repositories on contracts 2 through 8 load `[work]` as before, with
-  unchanged execution-authority digests. Runtimes 0.6.0 and earlier reject
+  (adopt). Repositories on contracts 2 through 8 still load `[work]`. Their
+  execution-authority digests stay unchanged unless `iteration_profile` was
+  set or `refinements` was nonempty; those retired values no longer enter
+  execution authority. Runtimes 0.6.0 and earlier reject
   contract 9, so move a `.jig/runtime-version` pin to a release that supports it
   before updating a pinned repository. `jig doctor`'s optional contract
   migration check now describes the move to the current contract.
@@ -109,13 +111,14 @@
   record a plan, and `jig status run` and MCP run inspection no longer report
   `work_plan_id`; run history that recorded one in a prepared native input
   still loads. jig-contract drops `RustFocusV1::Automatic::plan_id` and
-  `PreparedNativeInputV1::work_plan_id`. `jig state summary` reports only receipt counts and recent
-  receipts. `jig status --json` moves to `schema_version: 3` without its `work`
+  `PreparedNativeInputV1::work_plan_id`.
+  `jig state summary` reports run-history counts and recent target results.
+  `jig status --json` uses `schema_version: 4` without its `work`
   section. `jig ui` drops the Work tab, plan detail, and session, plan, and
   decision timeline rows, starts on Timeline, and removes `--plan`; its recorder
-  document moves to `schema_version: 2` without `snapshot_kind`,
-  `current_session_id`, `counts`, `open_plans`, or `history`, and receipt rows and
-  failures no longer carry `plan_id` or `session_id`. `jig state archive` no
+  document uses `schema_version: 4` without `snapshot_kind`,
+  `current_session_id`, `counts`, `open_plans`, or `history`. Run-history rows and
+  failures carry no `plan_id` or `session_id`. `jig state archive` no
   longer retains receipts and runs for open plans, `jig state compact sessions` is
   removed, and `jig state restore` no longer accepts the sessions backups it
   created.
@@ -137,7 +140,7 @@
   load. `jig state summary` now reports `runs`, `target_results`,
   `failed_target_results`, and `recent_target_results` from run history. `jig ui`
   reads its Timeline and Health tabs from run history, and its recorder document
-  moves to `schema_version: 3`: `target_stats` replaces `tool_stats`, timeline
+  uses `schema_version: 4`: `target_stats` replaces `tool_stats`, timeline
   rows are target results, failures carry `output_tail` instead of
   `stderr_preview`, the `failure_output_chars` limit replaces
   `failure_stderr_chars`, and the `state.runs` error scope replaces
