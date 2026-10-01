@@ -245,7 +245,7 @@ fn selectors_reject_options_raw_ids_missing_identity_and_unbounded_tokens() {
 }
 
 #[test]
-fn target_names_and_automatic_plan_ids_reject_options_and_control_characters() {
+fn target_names_reject_options_and_control_characters() {
     for name in ["", "--all-targets", "two names", "bad\nname", "bad\0name"] {
         assert!(
             normalize_focus(&mut explicit(
@@ -254,14 +254,8 @@ fn target_names_and_automatic_plan_ids_reject_options_and_control_characters() {
             ))
             .is_err()
         );
-        assert!(
-            normalize_focus(&mut RustFocusV1::Automatic {
-                plan_id: Some(name.into())
-            })
-            .is_err()
-        );
     }
-    assert!(normalize_focus(&mut RustFocusV1::Automatic { plan_id: None }).is_ok());
+    assert!(normalize_focus(&mut RustFocusV1::Automatic {}).is_ok());
 }
 
 #[test]

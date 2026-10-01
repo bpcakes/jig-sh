@@ -379,8 +379,8 @@ target with finding source `empty_selection`, never a passing test requirement.
 Explicit target existence is independent of Cargo's default test-participation
 flag. Automatic focus compares against the merge base with the default branch
 (the empty tree before the first commit), the same base native checks use, and
-falls back to workspace scope when that comparison cannot be resolved. Its
-retired `plan_id` field is accepted and ignored. Automatic package narrowing
+falls back to workspace scope when that comparison cannot be resolved. It
+rejects the removed `plan_id` field. Automatic package narrowing
 preserves the configured feature policy, falling back to workspace scope when
 its meaning for the subset is unproved.
 Metadata discovery always enforces `--locked`, independently of execution's

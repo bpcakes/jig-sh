@@ -34,15 +34,17 @@ pub(super) struct RunEventRecord {
     pub(super) conclusion: Option<RunConclusion>,
 }
 
-/// Run history written before receipts and target freshness were removed.
-/// Planned targets and target results then carried identity, freshness and
-/// receipt fields; they are dropped on read so existing journals, archives
-/// and backups stay readable under the strict current contract types.
+/// Run history written before receipts, target freshness and work plans were
+/// removed. Planned targets and target results then carried identity,
+/// freshness, receipt and work-plan fields; they are dropped on read so
+/// existing journals, archives and backups stay readable under the strict
+/// current contract types.
 mod legacy_run_history {
     use serde::de::{Deserialize, DeserializeOwned, Deserializer, Error};
     use serde_json::Value;
 
     const RETIRED_PLANNED_TARGET_FIELDS: &[&str] = &["target_identity", "target_identity_error"];
+    const RETIRED_PREPARED_NATIVE_INPUT_FIELDS: &[&str] = &["work_plan_id"];
     const RETIRED_TARGET_RESULT_FIELDS: &[&str] =
         &["target_freshness", "receipt_id", "reused_from"];
 
@@ -55,6 +57,9 @@ mod legacy_run_history {
             if let Some(targets) = value.get_mut("targets").and_then(Value::as_array_mut) {
                 for target in targets {
                     strip(target, RETIRED_PLANNED_TARGET_FIELDS);
+                    if let Some(prepared) = target.get_mut("prepared_native_input") {
+                        strip(prepared, RETIRED_PREPARED_NATIVE_INPUT_FIELDS);
+                    }
                 }
             }
         })
@@ -92,6 +97,32 @@ mod legacy_run_history {
             for field in fields {
                 object.remove(*field);
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use serde::Deserialize;
+        use serde_json::{Value, json};
+
+        #[derive(Deserialize)]
+        struct Event {
+            #[serde(deserialize_with = "super::plan")]
+            plan: Option<Value>,
+        }
+
+        #[test]
+        fn plans_drop_retired_target_and_prepared_input_fields() {
+            let event: Event = serde_json::from_value(json!({"plan": {"targets": [{
+                "target_identity": "sha256:example",
+                "prepared_native_input": {"schema_version": 1, "work_plan_id": "plan_example"},
+            }]}}))
+            .unwrap();
+
+            assert_eq!(
+                event.plan.unwrap(),
+                json!({"targets": [{"prepared_native_input": {"schema_version": 1}}]})
+            );
         }
     }
 }

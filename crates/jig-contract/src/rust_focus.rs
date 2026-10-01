@@ -42,10 +42,7 @@ pub enum RustTargetV1 {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RustFocusV1 {
-    Automatic {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        plan_id: Option<String>,
-    },
+    Automatic {},
     Explicit {
         packages: Vec<String>,
         #[serde(default)]

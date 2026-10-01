@@ -167,8 +167,7 @@ fn prepare(
                     prepared.targets = targets.clone();
                     filter = requested_filter.as_deref();
                 }
-                // A legacy plan id is accepted and ignored.
-                RustFocusV1::Automatic { .. } => {
+                RustFocusV1::Automatic {} => {
                     let comparison = automatic_paths(ctx, cancelled)?;
                     match comparison {
                         Some((base, paths)) => {

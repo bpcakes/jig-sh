@@ -28,11 +28,7 @@ pub fn validate_config(config: &RustNextestConfigV1) -> Result<(), &'static str>
 
 pub fn normalize_focus(focus: &mut RustFocusV1) -> Result<(), &'static str> {
     match focus {
-        RustFocusV1::Automatic { plan_id } => {
-            if let Some(id) = plan_id {
-                token(id)?;
-            }
-        }
+        RustFocusV1::Automatic {} => {}
         RustFocusV1::Explicit {
             packages,
             targets,

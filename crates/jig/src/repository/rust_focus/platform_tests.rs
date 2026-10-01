@@ -113,7 +113,7 @@ fn automatic_cross_target_focus_preserves_host_proc_macro_consumers() {
     assert!(has_edge(&unfiltered, "example-derive", "example-leaf"));
     assert!(!has_edge(&filtered, "example-derive", "example-leaf"));
 
-    let automatic = RustFocusV1::Automatic { plan_id: None };
+    let automatic = RustFocusV1::Automatic {};
     write(root, "leaf/src/lib.rs", "pub const VALUE: u32 = 2;\n");
 
     // The unfiltered graph still proves the ordinary reverse-dependency

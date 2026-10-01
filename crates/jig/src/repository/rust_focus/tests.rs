@@ -249,11 +249,7 @@ fn automatic_focus_uses_the_default_branch_merge_base_across_commits_and_uncommi
         "other/src/lib.rs",
         "#[test]\nfn other_lib_passes() { assert_eq!(6 + 6, 12); }\n",
     );
-    let prepared = prepare_focus(
-        &ctx,
-        &config(true),
-        Some(RustFocusV1::Automatic { plan_id: None }),
-    );
+    let prepared = prepare_focus(&ctx, &config(true), Some(RustFocusV1::Automatic {}));
     assert_eq!(prepared.comparison_base.as_deref(), Some(baseline.as_str()));
     assert_eq!(
         prepared.disposition,
@@ -298,19 +294,12 @@ fn automatic_focus_without_the_default_branch_uses_explicit_broad_fallback() {
         temp.path(),
         &["branch", "--quiet", "-m", "example-unrelated"],
     );
-    // A retired plan id is accepted and ignored.
-    for plan_id in [None, Some("plan_example_legacy".into())] {
-        let prepared = prepare_focus(
-            &ctx,
-            &config(true),
-            Some(RustFocusV1::Automatic { plan_id }),
-        );
-        assert_eq!(prepared.disposition, RustScopeDispositionV1::BroadFallback);
-        assert_eq!(prepared.reasons, ["comparison_unavailable"]);
-        assert!(prepared.packages.is_empty());
-        assert!(prepared.comparison_base.is_none());
-        assert!(prepared.args.iter().any(|arg| arg == "--workspace"));
-    }
+    let prepared = prepare_focus(&ctx, &config(true), Some(RustFocusV1::Automatic {}));
+    assert_eq!(prepared.disposition, RustScopeDispositionV1::BroadFallback);
+    assert_eq!(prepared.reasons, ["comparison_unavailable"]);
+    assert!(prepared.packages.is_empty());
+    assert!(prepared.comparison_base.is_none());
+    assert!(prepared.args.iter().any(|arg| arg == "--workspace"));
 }
 
 #[test]
@@ -318,11 +307,7 @@ fn unavailable_metadata_broadens_automatic_scope_but_rejects_explicit_scope() {
     let (_temp, ctx) = fixture();
     let mut missing = config(true);
     missing.workspace_manifest = "missing/Cargo.toml".into();
-    let automatic = prepare_focus(
-        &ctx,
-        &missing,
-        Some(RustFocusV1::Automatic { plan_id: None }),
-    );
+    let automatic = prepare_focus(&ctx, &missing, Some(RustFocusV1::Automatic {}));
     assert_eq!(automatic.disposition, RustScopeDispositionV1::BroadFallback);
     assert!(
         automatic
@@ -345,11 +330,7 @@ fn unavailable_metadata_broadens_automatic_scope_but_rejects_explicit_scope() {
     // An extant, invalid manifest exercises Cargo's real nonzero acquisition
     // path, independently from the missing-file preflight path above.
     write(ctx.root(), "selected/Cargo.toml", "not valid TOML {{{\n");
-    let automatic = prepare_focus(
-        &ctx,
-        &config(true),
-        Some(RustFocusV1::Automatic { plan_id: None }),
-    );
+    let automatic = prepare_focus(&ctx, &config(true), Some(RustFocusV1::Automatic {}));
     assert_eq!(automatic.disposition, RustScopeDispositionV1::BroadFallback);
     assert!(
         automatic
@@ -410,7 +391,7 @@ fn automatic_focus_accounts_for_root_library_relocated_inside_another_member() {
             "Example relocated root library baseline",
         ],
     );
-    let automatic = RustFocusV1::Automatic { plan_id: None };
+    let automatic = RustFocusV1::Automatic {};
 
     for (changed_path, changed_source) in [
         (

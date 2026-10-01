@@ -22,7 +22,6 @@ fn minimal_config_is_full_locked_offline_with_separate_optional_profiles() {
 fn focus_variants_and_named_targets_round_trip_without_opaque_ids() {
     for value in [
         json!({"kind": "automatic"}),
-        json!({"kind": "automatic", "plan_id": "plan_example"}),
         json!({
             "kind": "explicit", "packages": ["example@1.2.3"],
             "targets": [
@@ -50,6 +49,7 @@ fn all_focus_variants_reject_unknown_fields_tags_and_shell_argv_extensions() {
     for value in [
         json!({"kind": "future"}),
         json!({"kind": "automatic", "filter": "all()"}),
+        json!({"kind": "automatic", "plan_id": "plan_example"}),
         json!({"kind": "explicit", "packages": ["example@1.0.0"], "args": ["--workspace"]}),
         json!({"kind": "explicit", "packages": ["example@1.0.0"], "targets": [{"kind": "future", "name": "example"}]}),
         json!({"kind": "explicit", "packages": ["example@1.0.0"], "targets": [{"kind": "bin", "name": "example", "args": []}]}),

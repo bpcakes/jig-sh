@@ -104,8 +104,12 @@
   `jig.execute_run`, and the `plan_id` argument of contract 2–5 manifest tools
   are removed in every contract version and rejected; those manifest tools now
   reject any argument they do not declare. Generated launchers no longer
-  special-case `check --plan-id … contract`. Runs no longer record a plan, and
-  `jig status run` and MCP run inspection no longer report `work_plan_id`. `jig state summary` reports only receipt counts and recent
+  special-case `check --plan-id … contract`. Automatic Rust focus
+  (`{"kind": "automatic"}`) rejects its former `plan_id` field. Runs no longer
+  record a plan, and `jig status run` and MCP run inspection no longer report
+  `work_plan_id`; run history that recorded one in a prepared native input
+  still loads. jig-contract drops `RustFocusV1::Automatic::plan_id` and
+  `PreparedNativeInputV1::work_plan_id`. `jig state summary` reports only receipt counts and recent
   receipts. `jig status --json` moves to `schema_version: 3` without its `work`
   section. `jig ui` drops the Work tab, plan detail, and session, plan, and
   decision timeline rows, starts on Timeline, and removes `--plan`; its recorder
