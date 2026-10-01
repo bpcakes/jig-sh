@@ -21,8 +21,8 @@ an older Jig product release receives security backports.
 ## Vault boundary
 
 Jig Vault is a local development tool, not a production secret manager. It
-keeps plaintext out of repository state, structured command output, MCP
-results, and receipts, but a child process that receives a value can still use
-or disclose it. Output redaction reduces accidental exposure; it cannot stop a
+keeps plaintext out of repository state, structured command output, and
+receipts, but a child process that receives a value can still use or disclose
+it. Output redaction reduces accidental exposure; it cannot stop a
 malicious child, transformed output, operating-system inspection, or side
 channels.

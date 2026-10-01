@@ -3,20 +3,19 @@
 `jig` exposes a repo command contract through three surfaces:
 
 - CLI commands from `scripts/jig`
-- MCP tools from `scripts/jig mcp`
 - `.agent/jig-contract.json`
 
 Generated repositories declare a `contract_version` in `.agent/jig-contract.json`. During discovery, `scripts/jig` accepts a candidate only when the binary supports that contract epoch and requested build profile; this capability-only probe intentionally does not validate unrelated repository policy. Immediately before ordinary command dispatch, the launcher passes its epoch, selected profile, and repository root through hidden root options so the chosen binary validates the complete repository contract in-process and reuses the loaded context; malformed configuration therefore produces its specific validation error without a redundant startup subprocess or reinstall loop. Those `--__launcher-*` options are a private generated-launcher protocol, not a supported user interface; direct callers should select repositories through cwd or `JIG_REPO_ROOT`. `doctor` and `check contract` retain the capability-only final probe because they must remain reachable to report strict repository validation failures themselves. Generated repositories may pin an exact published release with `.jig/runtime-version`; release caches require that version plus contract/profile compatibility, independently of template provenance. Without a release pin, managed caches are trusted only while their source stamp matches the repository's configured source revision; local-source stamps additionally cover the source checkout contents. When `.jig.toml` is unreadable, capability-only commands may use an existing contract-compatible cache without proving source-stamp freshness so diagnostics remain reachable; mutating commands still reparse their required inputs before applying changes. Explicit `JIG_DEV_BIN` values remain authoritative trusted runtime sources. Without a release pin, reuse of an otherwise compatible binary found on `PATH` is disabled unless `JIG_INSTALL_ALLOW_PATH_BINARY=1` is set, in which case the installer reports the selected absolute path on stderr. Opted-in PATH candidates must have a validated ELF or Mach-O header and pass the direct compatibility probe; shell wrappers are never accepted through this path.
 
-That final strict validation is a deliberate fail-closed launcher boundary and runs once inside the selected process before every ordinary command, including MCP startup. The launcher-provided canonical root is authoritative over inherited `JIG_REPO_ROOT`, and the validated context remains available process-wide if dispatch later crosses a worker thread. Validation expands beyond `check contract`: commands such as `check fmt` and `info` do not execute while required contract configuration is invalid. Help, version output, `init`, `presets`, `adopt`, `codex`, `claude`, `doctor`, `update`, and `check contract` remain reachable through capability-only validation so failures can be explained or repaired and account-scoped agent homes remain independent of repository policy. Bare `check` and selector-shaped values after it require strict repository validation because contract v6 resolves them against checked-in targets; unrecognized top-level commands still reach Clap without strict validation so their usage diagnostics are not hidden by unrelated repository errors.
+That final strict validation is a deliberate fail-closed launcher boundary and runs once inside the selected process before every ordinary command. The launcher-provided canonical root is authoritative over inherited `JIG_REPO_ROOT`, and the validated context remains available process-wide if dispatch later crosses a worker thread. Validation expands beyond `check contract`: commands such as `check fmt` and `info` do not execute while required contract configuration is invalid. Help, version output, `init`, `presets`, `adopt`, `codex`, `claude`, `doctor`, `update`, and `check contract` remain reachable through capability-only validation so failures can be explained or repaired and account-scoped agent homes remain independent of repository policy. Bare `check` and selector-shaped values after it require strict repository validation because contract v6 resolves them against checked-in targets; unrecognized top-level commands still reach Clap without strict validation so their usage diagnostics are not hidden by unrelated repository errors.
 
 Without `.jig/runtime-version`, `_commit` selects the source revision when the installer must build a runtime; it is not a product-version or binary-provenance lock. Once a binary has proven the requested contract and profile, the cache may reuse it while its recorded configured-source state remains current. Git-backed local-source caches recompute their Git/content fingerprint on every resolution so an edit invalidates the runtime immediately. Non-Git and unborn-Git sources first compare a path, identity, size, mode, and nanosecond timestamp summary; unchanged trees avoid rereading file contents, while a metadata change triggers a stable full-content comparison before reuse. Local source inputs under `Cargo.toml`, `Cargo.lock`, and `crates` may not be symbolic links: links fail closed because changing content behind one does not necessarily change the Git blob or link metadata being fingerprinted. This includes tracked regular files replaced by worktree symlinks, not only symlinks recorded in the Git index. The non-Git fallback also fails closed rather than traversing more than 100,000 entries, 512 MiB of regular-file content, or 128 directory levels; unusually large or symlinked source trees should use regular committed source entries or an explicitly rebuilt `JIG_DEV_BIN`. Launcher-only repair seeds are recorded distinctly with the seeded binary digest, a cheap file-identity key used to avoid rehashing an unchanged binary, and the source state they shadow, rather than pretending the binary was built from that source. Full refresh runtime policy combines the rendered source and harness footprint: minimal harnesses do not seed a removed installer, while full repositories rendered from embedded templates try to publish the running binary with durable embedded-runtime provenance. Cache publication occurs after repository rendering is committed; a failure is returned as a warning and does not misreport the durable render as rolled back, and an existing launcher-repair seed is retained as the last known fallback. Repair provenance across supported contract epochs is retired only after replacement is available or the rendered policy no longer manages an embedded runtime. A changed file identity falls back to the recorded digest check, while a source change invalidates either kind of seeded stamp. Deliberately unpinned mutable-source caches emit a periodic refresh reminder; `--refresh` or `JIG_INSTALL_REFRESH=1` forces the installer to recheck the source. Installer `--resolve-only` calls are read-only: they neither refresh seeded identity/source metadata nor write mutable-source reminder state.
 
 Runtime seeding selects Bash and its helper-command path as one platform policy. Linux and macOS accept only root-owned, non-writable Bash and helper directories, preventing repository-local and unrelated ambient directories from entering the seeding path.
 
-State hygiene commands, first-run setup, the unified doctor, status aggregation, Codex-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, and the MCP tool `jig.agent_doctor`, but they are not individually declared in `.agent/jig-contract.json`. The former runtime-owned `scripts/jig work ...` commands and `jig.work_*` MCP tools were removed without a contract-version bump; see [Removed Work Commands](#removed-work-commands). Contract v9 is the current compatibility epoch. Contract v8 remains supported with its `.jig.toml` `[work]` section, contract v6 with its original component-aggregate affected selection, and versions 2 through 5 through the legacy repository projection. A runtime may add behavior that repositories in an epoch can ignore, but a breaking CLI, JSON/state, configuration, safety, launcher, dev, or vault change requires a contract bump or an explicit end to support for the affected epoch. The removal of the runtime-owned `jig work` commands, the `jig.work_*` MCP tools, and the retired `--plan-id` and MCP `work_plan_id` inputs is such an explicit end of support in every epoch; see [Removed Work Commands](#removed-work-commands). Status text, JSON, and TUI modes and the `codex` and `claude` namespaces remain CLI-only.
+State hygiene commands, first-run setup, the unified doctor, status aggregation, agent-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, but are not individually declared in `.agent/jig-contract.json`. Contract v9 is the current compatibility epoch. Contract v8 remains supported with its `.jig.toml` `[work]` section, contract v6 with its original component-aggregate affected selection, and versions 2 through 5 through the legacy repository projection. Breaking changes require a contract bump or an explicit end of support for the affected surface. MCP support and the retired structured-work runtime end in every epoch; see [Removed MCP Surface](#removed-mcp-surface) and [Removed Work Commands](#removed-work-commands).
 
-CLI commands print human-readable output by default. Long-running human-mode commands collect bounded child-output previews, phase changes, and periodic heartbeats while supervised work runs, then make a deadline-bounded best-effort write of that progress to stderr after supervised execution returns and before any restored terminating signal is redelivered. A stalled presentation sink may therefore lose the remaining preview, but it cannot indefinitely delay command completion or signal retirement. Because delivery is deferred, heartbeat wording is historical (for example, a phase “reached 25s”) rather than a claim that it is still running when rendered. The deferred boundary keeps transport backpressure from suspending timeout, cancellation, or cleanup and preserves already-collected progress during ordinary interruption. Pass global `--json` for structured automation output (for example `scripts/jig doctor --json`, `scripts/jig status --json`, or `scripts/jig state summary --json`); JSON mode disables that human progress output. Usage and pre-output command failures in JSON mode write one object to stdout with `ok: false`, `error.kind` (`usage` or `command_failed`), `error.message`, and `exit_status`, while preserving the nonzero process status. Commands that already emitted JSON do not append a second error document, and `scripts/jig mcp` always reserves stdout for MCP framing. `scripts/jig status --tui` is an explicit interactive consumer and conflicts with `--json`; it requires terminal stdin and stdout. For other commands, output selection is independent of interactivity: `--json` does not suppress terminal prompts. For init automation, `--defaults` applies documented project-shape defaults but can still prompt for initial vault setup; supply `JIG_VAULT_PASSPHRASE` or `--no-vault` when that must be noninteractive. `--no-input` and implicit non-terminal execution require an explicit complete shape such as `--preset harness-only`; stored `harness_footprint = "minimal"` is also a complete harness-only shape. Human text and TUI presentation are for terminal use and are not stable machine-readable contract output; automation should pass `--json` or use MCP tools.
+CLI commands print human-readable output by default. Long-running human-mode commands collect bounded child-output previews, phase changes, and periodic heartbeats while supervised work runs, then make a deadline-bounded best-effort write of that progress to stderr after supervised execution returns and before any restored terminating signal is redelivered. A stalled presentation sink may therefore lose the remaining preview, but it cannot indefinitely delay command completion or signal retirement. Because delivery is deferred, heartbeat wording is historical (for example, a phase “reached 25s”) rather than a claim that it is still running when rendered. The deferred boundary keeps transport backpressure from suspending timeout, cancellation, or cleanup and preserves already-collected progress during ordinary interruption. Pass global `--json` for structured automation output (for example `scripts/jig doctor --json`, `scripts/jig status --json`, or `scripts/jig state summary --json`); JSON mode disables that human progress output. Usage and pre-output command failures in JSON mode write one object to stdout with `ok: false`, `error.kind` (`usage` or `command_failed`), `error.message`, and `exit_status`, while preserving the nonzero process status. Commands that already emitted JSON do not append a second error document. `scripts/jig status --tui` is an explicit interactive consumer and conflicts with `--json`; it requires terminal stdin and stdout. For other commands, output selection is independent of interactivity: `--json` does not suppress terminal prompts. For init automation, `--defaults` applies documented project-shape defaults but can still prompt for initial vault setup; supply `JIG_VAULT_PASSPHRASE` or `--no-vault` when that must be noninteractive. `--no-input` and implicit non-terminal execution require an explicit complete shape such as `--preset harness-only`; stored `harness_footprint = "minimal"` is also a complete harness-only shape. Human text and TUI presentation are for terminal use and are not stable machine-readable contract output; automation should pass `--json`.
 
 Contract v4 introduced structured runtime identity through `runtime_version`, and later epochs retain it. The former `jig_version` key remains as a compatibility alias in `info`, `doctor`, and UI snapshots: it contains the legacy generated pin for v2/v3 repositories and is `null` for v4 and later repositories. Doctor runtime data likewise retains deprecated `current_version`, `launcher_version`, and `config_jig_version` aliases alongside the clearer epoch-aware fields.
 
@@ -62,7 +61,7 @@ proves installed tools, ambient environment or live services. `--patch` emits a
 paired unified diff for `.jig.toml` and `.agent/jig-contract.json` (an empty diff
 for a no-op); with `--json`, it adds the string `patch` to the report. The preview
 executes no configured action and writes no repository files. Patch generation
-and assertions require epoch 8 or later. Existing inspection projections and MCP
+and assertions require epoch 8 or later. Existing inspection projections
 tools are unchanged. See [declaration adoption](target-freshness-integration.md#preview-and-apply-declarations)
 for qualification boundaries and the review/apply workflow.
 
@@ -72,7 +71,7 @@ Dev proxy and vault JSON are also runtime-owned. Proxy status may include machin
 
 Local development proxy commands are also runtime-owned. `scripts/jig dev`, `scripts/jig dev status`, `scripts/jig dev recover`, `scripts/jig dev stop`, and `scripts/jig proxy ...` manage machine-local processes, ports, routes, certificates, and optional user services. Repository-scoped forms use `.jig.toml`; the contextless selectors use persisted state. These commands are intentionally absent from `.agent/jig-contract.json` because they do not represent repository checks.
 
-Runtime-owned local development commands include `dev`, `dev status`, `dev recover`, `dev stop`, `proxy start`, `proxy stop`, `proxy list`, `proxy prune`, `proxy run`, `proxy alias`, `proxy cert generate`, `proxy cert status`, `proxy cert trust --accept-trust-scope`, `proxy cert untrust --accept-trust-scope`, `proxy service install --accept-service-scope`, `proxy service status`, and `proxy service uninstall`. Bare `dev` launches apps, while its `--replace` option retires only conflicting registered sessions owned by the same canonical repository; it is not a general process takeover option. Foreground `dev` and `proxy run` interruption is structured same-contract-epoch output with `interrupted`, numeric `exit_signal`, named `termination_signal`, and shell `exit_status`; SIGINT, SIGHUP, and SIGTERM map to 130, 129, and 143 on Unix. Builds made with `--no-default-features` keep the contract, MCP, and check runtime but return clear errors for every `dev` action and `proxy`; the launcher profile probe prevents such a binary from serving `dev` or `proxy` execution.
+Runtime-owned local development commands include `dev`, `dev status`, `dev recover`, `dev stop`, `proxy start`, `proxy stop`, `proxy list`, `proxy prune`, `proxy run`, `proxy alias`, `proxy cert generate`, `proxy cert status`, `proxy cert trust --accept-trust-scope`, `proxy cert untrust --accept-trust-scope`, `proxy service install --accept-service-scope`, `proxy service status`, and `proxy service uninstall`. Bare `dev` launches apps, while its `--replace` option retires only conflicting registered sessions owned by the same canonical repository; it is not a general process takeover option. Foreground `dev` and `proxy run` interruption is structured same-contract-epoch output with `interrupted`, numeric `exit_signal`, named `termination_signal`, and shell `exit_status`; SIGINT, SIGHUP, and SIGTERM map to 130, 129, and 143 on Unix. Builds made with `--no-default-features` keep the contract and check runtime but return clear errors for every `dev` action and `proxy`; the launcher profile probe prevents such a binary from serving `dev` or `proxy` execution.
 
 `dev status --all` and `dev status --session ID` inspect the selected proxy state directory without repository discovery, including saved roots of deleted repositories and sessions with no hostname. `--all` and `--session` cannot be combined. Every session includes its saved repository name and root. `dev recover --session ID` performs strict metadata-only retirement of one eligible exact record and its exact-owned routes; it never requests process shutdown. Missing IDs return success with zero retired sessions. `dev stop --session ID` selects one record without repository discovery and retains authenticated live-supervisor shutdown and the explicit stop-only `--forget-ambiguous-orphans` repair. Exact selectors never expand prefixes or wildcards, never signal persisted PIDs, and accept `--state-dir` to choose an isolated registry. Bare status and stop remain scoped to the current canonical repository.
 
@@ -80,9 +79,9 @@ Dev-session JSON is same-contract-epoch runtime output. Bare `dev status` report
 
 The session file reader accepts versions 1 and 2. A missing version 1 `preflight_cleanup_pending` field is unknown cleanup evidence, even when every app has tracked spawn state; strict orphan retirement retains that record. Status keeps the existing boolean `preflight_cleanup_pending` field and adds `preflight_cleanup_evidence` (`pending`, `clear`, or `unknown`) so callers can distinguish missing legacy evidence. Version 2 requires explicit cleanup, preflight, and per-app spawn/process fields. Older version 1 readers reject version 2 before mutation. The version 2 writer cutover is enabled alongside contextless exact-session discovery and repair. Only an empty legacy store may be promoted under the shared state lock as part of a new claim. A populated legacy store remains readable and explicitly cleanable, but new claims must wait until its sessions are drained or repaired; no other repository's session is stopped automatically.
 
-Local vault commands are runtime-owned as well. The surface includes init/status/audit, an explicit keyboard-first TUI, explicit format migration, field and compatible secret management, controlled read/inject, transparent exec, constrained run, one-time 1Password import, passphrase change, and encrypted backup/restore. Generated repos carry non-secret `[vault]` scope metadata in `.jig.toml`; when present, vault commands default to that repo scope rather than the user-level global vault. A canonical `jig://ITEM/FIELD` reference is relative to that selected scope and never embeds or overrides the project. These commands are intentionally absent from `.agent/jig-contract.json`, MCP tool listing, and repo-local state records because local values and child output must not be persisted into `.agent/state`.
+Local vault commands are runtime-owned as well. The surface includes init/status/audit, an explicit keyboard-first TUI, explicit format migration, field and compatible secret management, controlled read/inject, transparent exec, constrained run, one-time 1Password import, passphrase change, and encrypted backup/restore. Generated repos carry non-secret `[vault]` scope metadata in `.jig.toml`; when present, vault commands default to that repo scope rather than the user-level global vault. A canonical `jig://ITEM/FIELD` reference is relative to that selected scope and never embeds or overrides the project. These commands are intentionally absent from `.agent/jig-contract.json` and repo-local state records because local values and child output must not be persisted into `.agent/state`.
 
-`vault tui` is terminal-only, rejects `--json`, and fixes one resolved scope for its process lifetime. Ordinary frames, activity, errors, and action results contain authenticated metadata only. Private-file export and the exact-confirmation Peek path are controlled reveal sinks: Peek bypasses Ratatui, terminal-safely escapes and bounds the displayed source prefix, then clears the alternate screen before metadata redraw. Its deliberately disclosed window may still be retained by terminal scrollback, multiplexers, remote transport, or recording. The process-local credential is removed by explicit or five-minute idle lock and on authentication/audit failure; this is not a clipboard feature, unlock daemon, remote service, or contract/MCP surface.
+`vault tui` is terminal-only, rejects `--json`, and fixes one resolved scope for its process lifetime. Ordinary frames, activity, errors, and action results contain authenticated metadata only. Private-file export and the exact-confirmation Peek path are controlled reveal sinks: Peek bypasses Ratatui, terminal-safely escapes and bounds the displayed source prefix, then clears the alternate screen before metadata redraw. Its deliberately disclosed window may still be retained by terminal scrollback, multiplexers, remote transport, or recording. The process-local credential is removed by explicit or five-minute idle lock and on authentication/audit failure; this is not a clipboard feature, unlock daemon, remote service, or repository contract surface.
 
 Vault JSON is runtime-owned same-contract-epoch behavior, not an individually declared manifest tool schema. Structured vault responses contain metadata only, never field values. `vault status` currently reports both `exists` and `vault_file_exists`; both mean the encrypted `vault.json` file exists, not that the vault home directory exists. Structured responses report `vault_scope`, `vault_scope_id`, and `vault_repo_name`; the latter two are null when not applicable. Current `vault_scope` values are `repo`, `global`, `legacy`, and `explicit-home`. Field/import results expose references, kinds, counts, and create/replace actions. Passphrase change reports completion metadata; backup create reports byte count, backup version, and creation time; restore reports the installed vault home, vault ID, and format version. None returns passphrases, field bytes, backup plaintext, or external resolver diagnostics.
 
@@ -94,13 +93,13 @@ LAN mode exposes the Jig proxy listener to the local network, not child app list
 
 Proxy reuse authenticates the existing PID health response and a versioned capability response using the same private health token and loopback address/Host restrictions. The capability response reports the serving process's PID, LAN bind scope, HTTPS listener, and effective HTTPS HTTP/2 setting; LAN clients cannot read it. Reuse rejects unknown capabilities, PID/token generation changes, either LAN mismatch, and either HTTP/2 mismatch when HTTPS is requested. A caller requesting only HTTP may reuse an additional HTTPS listener. These checks occur before app spawn or route publication and never restart the shared proxy; errors give the selected state directory and an explicit matching-settings or restart action.
 
-The `tool_defs::cli_command` names for these runtime-owned commands are parser labels only. They do not add generated tools to `.agent/jig-contract.json` and do not expose MCP tools for proxy process or service management.
+The `tool_defs::cli_command` names for these runtime-owned commands are parser labels only. They do not add generated tools to `.agent/jig-contract.json`.
 
 Because the local development proxy and local vault are runtime-owned, their detailed JSON response fields, machine-local state layouts under `JIG_PROXY_STATE_DIR` / `~/.jig/proxy` and `JIG_VAULT_HOME` / `~/.jig/vault`, service-file contents, certificate files, vault/backup envelope formats, route hostname format, and nonzero error exit statuses are not individually enumerated in `.agent/jig-contract.json`. The vault audit JSONL is HMAC-chained but plaintext local metadata; field names, environment variable names, timestamps, run IDs, and vault IDs are not opaque payload. It detects edits and broken links but is not remote or independent evidence of deletion, truncation, or rollback. Breaking generated-repository assumptions in these surfaces requires a contract-epoch change even though compatible additions do not require new manifest fields.
 
 The current explicit acknowledgement flags, including `--accept-trust-scope` and `--accept-service-scope`, are runtime safety gates rather than generated contract fields. Automation should use a launcher-selected binary that supports the repository contract; removing or weakening those required flags is a breaking contract-epoch change.
 
-Runtime-owned `.jig.toml` sections are intentionally strict: unknown keys are rejected so local typos fail fast. New optional keys in `[repository]`, `[loop]`, `[[loop.workflows]]`, `[execution]`, `[agent_tooling]`, `[agent_tooling.codex]`, `[dev]`, or app tables require a Jig runtime/template update and a documented migration note. The `[execution]` keys are backward-compatible in contract v4 through v6: omission defaults `command_timeout_seconds` to 1,800 seconds and `command_output_limit_bytes` to 67,108,864 bytes for configured commands. Internal protocol commands and Codex worker transcripts retain separate fixed limits. Any addition or change that makes an existing repository unreadable or changes generated behavior incompatibly requires a contract bump. Loop workflow keys `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, and `checkout`, the compiled `codex_task` kind, and the `loop dispatch` CLI are additive runtime behavior for supported legacy repositories; no generated MCP tool is added. A `pr_manager` or `codex_task` workflow may set `codex_home` to choose the exact `CODEX_HOME` for its unattended `codex exec` worker; omission inherits the caller environment for compatibility. Bare names resolve only to their conventional home-directory locations, while non-conventional homes require explicit paths. Same-contract-epoch loop JSON preserves the input as `codex_home_configured`; repair-attempt and task-worker actions and receipts report the canonical worker directory as `codex_home_resolved` when resolved, while actions that do not attempt work omit that field.
+Runtime-owned `.jig.toml` sections are intentionally strict: unknown keys are rejected so local typos fail fast. New optional keys in `[repository]`, `[loop]`, `[[loop.workflows]]`, `[execution]`, `[agent_tooling]`, `[agent_tooling.codex]`, `[dev]`, or app tables require a Jig runtime/template update and a documented migration note. The `[execution]` keys are backward-compatible in contract v4 through v6: omission defaults `command_timeout_seconds` to 1,800 seconds and `command_output_limit_bytes` to 67,108,864 bytes for configured commands. Internal protocol commands and Codex worker transcripts retain separate fixed limits. Any addition or change that makes an existing repository unreadable or changes generated behavior incompatibly requires a contract bump. Loop workflow keys `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, and `checkout`, the compiled `codex_task` kind, and the `loop dispatch` CLI are additive runtime behavior for supported legacy repositories. A `pr_manager` or `codex_task` workflow may set `codex_home` to choose the exact `CODEX_HOME` for its unattended `codex exec` worker; omission inherits the caller environment for compatibility. Bare names resolve only to their conventional home-directory locations, while non-conventional homes require explicit paths. Same-contract-epoch loop JSON preserves the input as `codex_home_configured`; repair-attempt and task-worker actions and receipts report the canonical worker directory as `codex_home_resolved` when resolved, while actions that do not attempt work omit that field.
 
 Contracts through v8 also accept an optional strict `[work.tracker]` section with
 `kind = "beads"`, a required canonical portable ULID `workspace_id`, fixed root
@@ -132,7 +131,7 @@ Breaking `contract_version` changes include:
 
 ## Stable Manifest Fields
 
-Generated repos and MCP clients may rely on these top-level fields in `.agent/jig-contract.json`:
+Generated repos and CLI consumers may rely on these top-level fields in `.agent/jig-contract.json`:
 
 - `contract_version`
 - `tool_namespace`
@@ -178,11 +177,11 @@ SQLx-specific tools are stable when `sqlx_enabled` rendered them into the manife
 - `jig.schema_dump`
 - `jig.migration_add` only for `flat_migrations`; `versioned_artifacts` contracts omit it
 
-A generated repo may omit optional tools that do not apply to its configuration. Clients must discover available tools from `.agent/jig-contract.json` or MCP tool listing instead of assuming SQLx or schema-dump support.
+A generated repo may omit optional tools that do not apply to its configuration. Clients must discover available tools from `.agent/jig-contract.json` instead of assuming SQLx or schema-dump support.
 
 ## Stable JSON Behavior
 
-All successful stable CLI and MCP command responses are JSON objects unless a runtime-owned command explicitly documents a human-output flag. Stable response fields are additive: existing fields should keep their names, types, and meanings for the current contract version, and new fields may be added.
+All successful stable CLI JSON command responses are JSON objects unless a runtime-owned command explicitly documents a human-output flag. Stable response fields are additive: existing fields should keep their names, types, and meanings for the current contract version, and new fields may be added.
 
 Stable common response fields:
 
@@ -199,7 +198,7 @@ Make-backed tools return:
 
 Command-backed tools return the same common fields plus `command_key`, which identifies the `.jig.toml` command key that was executed.
 
-Jig no longer records receipts. Check, run, manifest-tool, `migration add`, policy-check, and loop responses no longer include `receipt_id`; run target results no longer include `receipt_id`, `reused_from`, or `target_freshness`; and planned targets no longer include `target_identity` or `target_identity_error`. `loop tick` instead returns the `occurrence_id` whose evidence `jig loop show` reports. The `--no-receipt` option and the MCP `record_receipts` field are rejected. These removals shipped without a contract-version bump.
+Jig no longer records receipts. Check, run, manifest-tool, `migration add`, policy-check, and loop responses no longer include `receipt_id`; run target results no longer include `receipt_id`, `reused_from`, or `target_freshness`; and planned targets no longer include `target_identity` or `target_identity_error`. `loop tick` instead returns the `occurrence_id` whose evidence `jig loop show` reports. The `--no-receipt` option is rejected. These removals shipped without a contract-version bump.
 
 Common usage errors include contextual recovery without executing a correction.
 `--summary` points to the existing `--projection agent-v1` only on commands
@@ -320,16 +319,7 @@ not projected. Human output renders the same effective values and metadata.
 This is configuration inspection only: Jig records no freshness evidence from
 these policies.
 
-MCP uses the same typed projection. Starting the server with
-`scripts/jig mcp --surface agent-v1` advertises a matching strict output schema
-for `jig.inspect`; omitting the option, or selecting `standard`,
-keeps the baseline descriptor and response shapes. Surface selection is fixed
-for the process lifetime and is not negotiated through MCP `initialize`.
-Unknown projection or surface values fail during command parsing, before an
-inspection runs or an MCP server starts. A caller can roll back by omitting the
-option. The catalog schema remains version 1 because the baseline schema is
-unchanged and the additive shape is isolated behind an explicitly versioned
-projection.
+Unknown projection values fail during command parsing before inspection runs. Omit `--projection agent-v1` to return to the standard projection. The catalog schema remains version 1 because the baseline schema is unchanged and the additive shape is explicitly versioned.
 
 Input globs alone do not describe source authority. These otherwise identical
 policies declare different source authority:
@@ -558,57 +548,11 @@ queued event and materializes only matching lifecycle records. Explicit
 `state archive --before ...` maintenance moves completed old runs out of the
 active journal.
 
-## MCP Repository Operations
+## Removed MCP Surface
 
-Contract v6 advertises four repository operations rather than one MCP tool per
-action:
+The MCP stdio server, `jig mcp`, all MCP tools, and the `mcp` runtime/install profile are removed in every contract epoch. `jig mcp` is an unknown command and exits with status 2. Agents use `jig info ... --json`, `jig run --explain --json`, `jig run ... --json`, and `jig status run ID --json`. Effectful execution still requires the declared worktree or external effect approvals; Unix signals cancel foreground execution through its existing supervisor.
 
-- `jig.inspect` reads the workspace, component, target, and profile catalogs or
-  one durable run. Its `kind` discriminator determines whether `id` or `run_id`
-  is required.
-- `jig.plan_run` resolves explicit `selectors`, a mutually exclusive `profile`,
-  optional `affected_base`, optional typed `comparison`, and closed per-target
-  `arguments` through the same
-  deterministic planner as the CLI. Effectful actions require explicit
-  selectors. Native actions that need a name bind it into the immutable plan;
-  unsupported or unselected-target arguments are rejected. Planning does not
-  execute or write run state.
-- `jig.execute_run` accepts the exact returned plan plus an optional
-  `fail_fast` control. The retired `record_receipts` field is rejected as an
-  unknown field, as is a plan that carries fields a current runtime no longer
-  produces, such as `target_identity`; plan again before executing. Plans containing
-  `worktree` or `external` effects also require an exact `approved_effects`
-  acknowledgement. It validates the plan and approvals again, creates durable
-  queued state, and returns an accepted run handle without waiting for target
-  execution.
-- `jig.cancel_run` durably records an idempotent cancellation request. The
-  owning worker observes that event even when it came from another MCP process;
-  an in-process registry also signals the owned process tree immediately.
-
-All four descriptors contain strict input and output JSON Schemas and reject
-unknown input fields. Their successful MCP responses put the canonical object
-in `structuredContent` and include a text rendering for compatibility. After
-`jig.execute_run` returns, clients poll with
-`jig.inspect {"kind":"run","run_id":"..."}` until the run status is
-`completed`; each target then has its own terminal conclusion. A failed,
-cancelled, timed-out, skipped, or blocked target is inspectable execution data,
-not an MCP protocol error. Invalid arguments, an unknown identity, a stale or
-modified plan, corrupt durable state, and failures before a durable handle is
-accepted use the MCP error response. If an accepted background worker later
-encounters an internal infrastructure failure, Jig best-effort closes its
-unfinished targets and run with the `blocked` conclusion so polling does not
-silently strand a live-looking handle.
-
-Contract v6 manifest tools are compatibility aliases and are not individually
-advertised or callable over MCP. Contracts v2 through v5 retain their existing
-per-manifest-tool discovery, calls, and response shapes. The 13 `jig.work_*`
-lifecycle tools were removed without a contract-version bump; calling one returns
-the ordinary `Unsupported tool` JSON-RPC error. `jig.agent_doctor` is the only
-remaining tool outside the repository operations. Successful tool results always
-report `isError: false`; it was previously true only for a failing
-`jig.work_check`. Planning and execution reject the removed `work_plan_id` field,
-and v2–v5 manifest tools reject any argument their input schema does not declare,
-including the removed `plan_id`.
+Fresh init and adoption no longer render `.mcp.json`; contract validation no longer requires it, and `jig info` no longer emits `mcp_command`, `mcp_command_source`, or `mcp_command_error`. Update and re-adoption retire a previously managed, exact generated Jig registration with `--force`. Other servers and top-level settings remain, and the file leaves Jig's managed-path manifest. Unmanaged, customized, malformed, or nonregular MCP configuration remains untouched; remove a customized Jig registration manually if it still invokes `jig mcp`.
 
 ## Runtime State
 
@@ -709,9 +653,7 @@ a manual tick blocked by attention.
 unknown command: it fails with Clap's unrecognized-subcommand error and exit
 status 2, and generated launchers no longer list it. Validate changes with
 `jig check COMPONENT:ACTION`; `jig state summary` summarizes run history. The `partial_completion` error data that
-`work finish` and `work retire` reported no longer occurs in CLI JSON or MCP
-errors. The matching MCP tools are covered in
-[MCP Repository Operations](#mcp-repository-operations).
+`work finish` and `work retire` reported no longer occurs in CLI JSON errors.
 
 Work-gate evaluation is removed everywhere. `jig status --json` schema 3 and the
 `jig ui` recorder carry no work or gate fields (see
@@ -734,7 +676,7 @@ ignored, and `jig update` drops them. Contract v9 rejects `[work]`; see
 [Configuration](configuration.md) for the accepted keys.
 
 `--plan-id` (formerly accepted on `check`, `run`, `bootstrap`, `migration add`,
-`sqlx`, and similar commands) and MCP `work_plan_id` were removed in every
+`sqlx`, and similar commands) were removed in every
 contract epoch and are rejected. Runs no longer record a plan, and run inspection
 no longer reports `work_plan_id`. Jig no longer reads plan, session, or decision streams or
 `.agent/plans/*.md`, so plans that were open at upgrade are not listed anywhere
@@ -809,7 +751,7 @@ ignore that metadata.
 Use this sequence for public contract changes:
 
 1. Add the new field, tool, or command in a backward-compatible way.
-2. Update `.agent/jig-contract.json.jinja`, runtime dispatch, MCP exposure, and docs in the same change.
+2. Update `.agent/jig-contract.json.jinja`, runtime dispatch, and docs in the same change.
 3. Keep old fields and commands working for the current contract version.
 4. Run the configured release checks before release.
 5. Only remove or redefine stable behavior after incrementing `contract_version`.
@@ -819,7 +761,7 @@ Generated repos can rely on:
 - `scripts/jig` executing only a binary that validates the repository contract and requested profile
 - `scripts/jig check contract` detecting missing generated runtime wiring
 - stable command keys listed in `required_commands` for command-backed contract versions
-- tool availability being discoverable from `.agent/jig-contract.json` and MCP
+- tool availability being discoverable from `.agent/jig-contract.json`
 - state files being runtime-owned append-only records
 
 Generated repos should not rely on:
@@ -837,7 +779,7 @@ With no selectors or `--profile`, `jig run` executes the repository’s default 
 profile. Use `jig run --explain` to inspect that selection first.
 
 `jig run [SELECTOR ...]` exposes the repository action planner and durable execution
-engine used by MCP. It accepts `--profile`, `--affected BASE`, `--explain`,
+engine. It accepts `--profile`, `--affected BASE`, `--explain`,
 `--fail-fast`, global `--json`, and the native `--comparison-*` options supported
 by `jig check`. The removed `--plan-id` and `--no-receipt` options are
 rejected. Existing command and native
@@ -846,8 +788,6 @@ migration guidance. Contract v8 adds repeatable `--arg TARGET:NAME=VALUE` bindin
 for example `jig run api:migration-add --arg api:migration-add:name=create_examples
 --approve-effect worktree`. The canonical target must be selected, either directly
 or in the resolved dependency closure. Bindings never select targets themselves.
-MCP `jig.plan_run` accepts the same values as
-`"arguments": {"api:migration-add": {"name": "create_examples"}}`.
 
 Arguments use only named strings declared by the action. Unknown, missing required,
 duplicate, forbidden-empty, oversized, NUL-containing, and unselected-target
@@ -855,7 +795,7 @@ arguments fail before execution. Keys are sorted and empty target maps omitted
 before hashing; string bytes, whitespace, Unicode, and embedded `=` are preserved.
 An omitted optional value differs from an explicitly supplied empty string. Values
 are included in immutable plans and durable run records, so these are ordinary
-non-secret inputs. MCP rejects duplicate JSON keys before parsing a request.
+non-secret inputs.
 
 Versions 6 and 7 retain their existing native migration `name` input contract:
 the name must not be blank or start with `-`, and has no declared byte limit.
@@ -864,8 +804,7 @@ limits. Version 8 writes a bounded `name` declaration to both source and resolve
 native migration actions. V8 names are required, nonempty, at most 200 UTF-8 bytes,
 cannot start with `-`, and must contain an ASCII alphanumeric character.
 For native migrations, `jig migration add NAME` uses the same epoch-specific
-validation as target execution;
-MCP v6+ callers use `jig.plan_run` and `jig.execute_run`. Historical
+validation as target execution. Historical
 plans remain deserializable (including `arguments: {"name": "..."}`); execution
 still requires revalidation against current source and configuration. A changed
 epoch or declaration requires a fresh plan, without rewriting historical records.
@@ -898,9 +837,7 @@ Executed results also include `run`, `results`, `failed_targets`, and
 including targets skipped by fail-fast or cancelled before starting. Failure and
 cancellation produce unsuccessful command status. Human output summarizes these
 results. Unix signals use the existing cooperative CLI supervisor and owned child
-cleanup; durable MCP cancellation requests are also observed. The CLI waits
-cooperatively for conflicting repository execution, while MCP execution retains
-nonblocking acquisition so its transport can continue accepting cancellation.
+cleanup. The CLI waits cooperatively for conflicting repository execution.
 
 Command inventory schema version 4 adds `run` and the reason code
 `repository_contract_upgrade_required` for pre-v6 repositories.

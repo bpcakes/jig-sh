@@ -318,8 +318,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         | CommandKind::Claude(_)
         | CommandKind::Codex(_)
         | CommandKind::Vault(_)
-        | CommandKind::Ui(_)
-        | CommandKind::Mcp(_) => {
+        | CommandKind::Ui(_) => {
             panic!("runtime test helper only accepts runtime commands")
         }
     }
@@ -623,9 +622,10 @@ checks = ["jig.test"]
 
 mod affected_check;
 mod agent;
+mod argv_runners;
 mod common;
+mod foreground_run;
 mod legacy_loc;
 mod loops;
-mod mcp;
 mod repository_execution;
 mod validation_contexts;

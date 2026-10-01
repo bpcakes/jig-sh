@@ -35,10 +35,6 @@ pub(super) fn dispatch_with_observer(
     }
 }
 
-pub(super) fn doctor(ctx: &RepoContext) -> JsonValue {
-    doctor_with_codex_support_probe(ctx, codex_supports_plugin_marketplaces)
-}
-
 pub(super) fn doctor_for_inventory(ctx: &RepoContext, human_progress: bool) -> JsonValue {
     let progress = if human_progress && !ctx.codex_marketplaces().is_empty() {
         CliProgress::new("info --commands")

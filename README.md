@@ -7,7 +7,7 @@
 
 Jig is a repo-local operating harness for coding agents. It gives supported Rust, Go, and TypeScript repositories a versioned command catalog and append-only run history. You can adopt an existing repository or scaffold one of Jig's supported project shapes.
 
-Agents should not have to infer how to operate a repository from scattered scripts and prose. Jig makes the repository's commands, ownership boundaries, checks, and definition of done explicit to humans, CI, CLI clients, and MCP clients.
+Agents should not have to infer how to operate a repository from scattered scripts and prose. Jig makes the repository's commands, ownership boundaries, checks, and definition of done explicit to humans, CI, and agents through its CLI and JSON output.
 
 ## Contents
 
@@ -27,7 +27,6 @@ Agents should not have to infer how to operate a repository from scattered scrip
 - **A typed command catalog** in `.agent/jig-contract.json`, executed through the repo-local `scripts/jig` launcher.
 - **Append-only run history** under `.agent/state/` for checks and runs.
 - **Affected checks and file budgets** so agents can select work from checked-in component policy and enforce repository-owned source limits.
-- **A bounded MCP runtime** for repository inspection, immutable planning, execution, and cancellation.
 - **Local runtime tools** for orchestration loops, a terminal dashboard, development hostnames, and encrypted local secrets.
 - **Conservative template updates** that preserve project-owned application code and refuse to overwrite customized managed files without `--force`.
 
@@ -108,7 +107,6 @@ A full harness contains this core structure:
 ```text
 .
 ├── .jig.toml                   # public configuration and renderer answers
-├── .mcp.json                   # MCP client wiring
 ├── AGENTS.md                   # repo-wide agent guidance
 ├── agent-map.md                # index of nested agent guides
 ├── .agent/
@@ -149,7 +147,7 @@ Inspect recorded state with `scripts/jig state summary`.
 
 `.agent/jig-contract.json` is the stable repository authority. Current contract v9 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, target-local affected selection, declared bounded string arguments, literal argv runners, and explicit shell execution.
 
-Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, scheduled task prompts, local status, or secrets outside the generated command catalog.
+Contract v6 and later expose repository inspection through `jig info`, plan previews through `jig run --explain`, and execution through `jig check` and `jig run`. Agents use `--json` for structured results. Contracts v2 through v5 retain their declared command tools through the CLI legacy projection. Runtime-owned commands manage local workflow state, processes, scheduled task prompts, local status, or secrets outside the generated command catalog.
 
 | Surface | Stable contract? | Records history? | Machine-local? |
 | --- | --- | --- | --- |
@@ -291,7 +289,7 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-Vault metadata, child output, and plaintext do not enter run history, loop evidence, or MCP results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
+Vault metadata, child output, and plaintext do not enter run history, loop evidence, or structured command results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
 
 ### Local development proxy
 
@@ -327,7 +325,7 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 - [Developer UX](docs/developer-ux.md): command surface and daily workflow
 - [Configuration](docs/configuration.md): `.jig.toml`, presets, package managers, and runtime options
 - [Adoption](docs/adoption.md): previewing and adding Jig to an existing repository
-- [Public Contract](docs/public-contract.md): contract epochs, CLI, MCP, runs, and state
+- [Public Contract](docs/public-contract.md): contract epochs, CLI, runs, and state
 - [Action input declarations](docs/target-freshness-integration.md): input and source-state declarations and their preview
 - [Scheduled Codex Tasks](docs/codex-task-operations.md): unattended `codex_task` workflows
 - [Platform Support](docs/platform-support.md): supported hosts and feature limits
@@ -335,7 +333,7 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 
 ## Repository layout
 
-- `crates/jig/`: publishable CLI, bootstrapper, and MCP runtime
+- `crates/jig/`: publishable CLI, bootstrapper, and repository runtime
 - `crates/jig-contract/`: shared DTOs and identifiers
 - `crates/jig-{rust,go,typescript,sqlx}/`: repository model adapters
 - `crates/jig-file-budget/`: native file-budget policy and evaluation

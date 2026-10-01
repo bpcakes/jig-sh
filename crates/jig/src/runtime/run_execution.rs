@@ -205,21 +205,7 @@ pub(super) fn start_check_run(
     crate::state::start_run_with_execution_lease(ctx, plan, repository_execution)
 }
 
-pub(super) fn start_check_run_with_event_cursor(
-    ctx: &RepoContext,
-    catalog: &RepositoryCatalog,
-    plan: RunPlan,
-) -> Result<(
-    crate::state::DurableRun,
-    crate::state::RunLease,
-    crate::state::RunEventCursor,
-)> {
-    let repository_execution =
-        crate::state::acquire_repository_execution_lease_without_wait(ctx, &plan.effects)?;
-    let plan = crate::repository::validate_run_plan(ctx, catalog, &plan)?;
-    crate::state::start_run_with_event_cursor_and_execution_lease(ctx, plan, repository_execution)
-}
-
+#[cfg(test)]
 pub(super) fn execute_started_check_run(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
@@ -685,12 +671,15 @@ impl RepositoryRunControl for ObservedRunControl<'_> {
     }
 }
 
+#[cfg(test)]
 struct CancellationOnlyRunControl<'a> {
     cancelled: &'a dyn Fn() -> Result<bool>,
 }
 
+#[cfg(test)]
 impl ExecutionObserver for CancellationOnlyRunControl<'_> {}
 
+#[cfg(test)]
 impl RepositoryRunControl for CancellationOnlyRunControl<'_> {
     fn cancelled(&self) -> Result<bool> {
         (self.cancelled)()

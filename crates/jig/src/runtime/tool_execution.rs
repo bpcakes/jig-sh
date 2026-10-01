@@ -153,22 +153,12 @@ fn native_result(
     }
 }
 use crate::repository::RepositoryCatalog;
-use crate::tool_defs::{self, JsonObject, args, kind, tool};
+use crate::tool_defs::{args, kind, tool};
 
 mod failure;
 
 pub(in crate::runtime) use failure::manifest_tool_result_failure;
 use failure::tool_failure_message;
-
-pub(super) fn call_manifest_tool_with_observer(
-    ctx: &RepoContext,
-    tool: &ManifestTool,
-    args_obj: &JsonObject,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    let args = tool_defs::execution_tool_args(tool, args_obj)?;
-    execute_manifest_tool_with_observer(ctx, &tool.name, args, observer)
-}
 
 pub(super) fn execute_manifest_tool_with_observer(
     ctx: &RepoContext,

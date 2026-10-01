@@ -150,7 +150,7 @@ pub struct AdoptOpts {
     #[arg(
         long,
         help = "Render only .jig.toml and .agent/ scaffolding (no scripts, workflows, or agent context files)",
-        long_help = "Render a loop-ready minimal footprint: .jig.toml, .agent/jig-contract.json, and .agent/ scaffolding, plus block-managed .gitignore/.gitattributes. Omits scripts/, .github/workflows/, AGENTS.md, agent-map.md, and .mcp.json. Stores harness_footprint = \"minimal\" so jig update keeps the same footprint until you re-adopt without --minimal."
+        long_help = "Render a loop-ready minimal footprint: .jig.toml, .agent/jig-contract.json, and .agent/ scaffolding, plus block-managed .gitignore/.gitattributes. Omits scripts/, .github/workflows/, AGENTS.md, agent-map.md. Stores harness_footprint = \"minimal\" so jig update keeps the same footprint until you re-adopt without --minimal."
     )]
     pub minimal: bool,
     #[arg(

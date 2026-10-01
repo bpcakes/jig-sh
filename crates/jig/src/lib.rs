@@ -56,7 +56,6 @@ mod dev_proxy {
 }
 mod home_paths;
 mod info;
-mod mcp;
 mod policy;
 mod progress;
 mod repository;

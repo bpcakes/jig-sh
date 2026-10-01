@@ -21,7 +21,7 @@ write_fake_cargo_installer() {
     '  printf "%s\n" "// changed while cargo install was running" >>"$JIG_FIXTURE_MUTATE_SOURCE_PATH"' \
     'fi' \
     'mkdir -p "$install_root/bin"' \
-    'printf "%s\n" "#!/bin/sh" "if [ \"\${1:-}\" = \"__runtime-compatible\" ]; then exit 0; fi" "if [ \"\${1:-}\" = \"--version\" ]; then printf \"%s\\n\" \"jig 99.0.0\"; exit 0; fi" "while [ \"\$#\" -ge 2 ]; do case \"\$1\" in --__launcher-contract-version|--__launcher-profile|--__launcher-repo-root) shift 2 ;; *) break ;; esac; done" "if [ \"\${1:-}\" = \"--help\" ] || [ \"\${1:-}\" = \"mcp\" ] || [ \"\${1:-}\" = \"doctor\" ]; then exit 0; fi" "exit 99" >"$install_root/bin/jig"' \
+    'printf "%s\n" "#!/bin/sh" "if [ \"\${1:-}\" = \"__runtime-compatible\" ]; then exit 0; fi" "if [ \"\${1:-}\" = \"--version\" ]; then printf \"%s\\n\" \"jig 99.0.0\"; exit 0; fi" "while [ \"\$#\" -ge 2 ]; do case \"\$1\" in --__launcher-contract-version|--__launcher-profile|--__launcher-repo-root) shift 2 ;; *) break ;; esac; done" "if [ \"\${1:-}\" = \"--help\" ] || [ \"\${1:-}\" = \"doctor\" ]; then exit 0; fi" "exit 99" >"$install_root/bin/jig"' \
     'chmod +x "$install_root/bin/jig"' \
     >"$bin_dir/cargo"
   chmod +x "$bin_dir/cargo"
@@ -824,7 +824,7 @@ validate_contract_cache_tracks_remote_source_revision() {
   local rendered_dir="$TMP_DIR/render-cache-revision"
   local fake_bin_dir="$TMP_DIR/cache-revision-bin"
   local cargo_log="$TMP_DIR/cache-revision-cargo.log"
-  local mcp_stderr="$TMP_DIR/cache-revision-mcp.stderr"
+  local resolve_stderr="$TMP_DIR/cache-revision-resolve.stderr"
   local launcher_stderr="$TMP_DIR/cache-revision-launcher.stderr"
   local installer_stderr="$TMP_DIR/cache-revision-installer.stderr"
   local source_url="https://example.invalid/cache-revision.git"
@@ -896,13 +896,12 @@ validate_contract_cache_tracks_remote_source_revision() {
   if (
     cd "$rendered_dir"
     env -u JIG_DEV_BIN PATH="$fake_bin_dir:$PATH" JIG_FIXTURE_CARGO_LOG="$cargo_log" \
-      scripts/jig mcp >/dev/null 2>"$mcp_stderr"
+      scripts/install-jig.sh --profile runtime --resolve-only >/dev/null 2>"$resolve_stderr"
   ); then
-    echo "MCP unexpectedly reused a cache from the prior template revision." >&2
+    echo "Resolve-only unexpectedly reused a cache from the prior template revision." >&2
     exit 1
   fi
   [[ ! -e "$cargo_log" ]]
-  grep -q 'No prebuilt Jig' "$mcp_stderr"
 
   (
     cd "$rendered_dir"
@@ -915,7 +914,7 @@ validate_contract_cache_tracks_remote_source_revision() {
   (
     cd "$rendered_dir"
     env -u JIG_DEV_BIN PATH="$fake_bin_dir:$PATH" JIG_FIXTURE_CARGO_LOG="$cargo_log" \
-      scripts/jig mcp >/dev/null
+      scripts/install-jig.sh --profile runtime --resolve-only >/dev/null
   )
   [[ ! -e "$cargo_log" ]]
 
@@ -932,7 +931,7 @@ PY
   (
     cd "$rendered_dir"
     env -u JIG_DEV_BIN PATH="$fake_bin_dir:$PATH" JIG_FIXTURE_CARGO_LOG="$cargo_log" \
-      scripts/jig mcp >/dev/null
+      scripts/install-jig.sh --profile runtime --resolve-only >/dev/null
   )
   [[ ! -e "$cargo_log" ]]
 
@@ -1218,12 +1217,6 @@ validate_source_checkout_requires_explicit_dev_binary_and_honors_refresh() {
     cd "$rendered_dir"
     env -u JIG_DEV_BIN PATH="$fake_bin_dir:$PATH" JIG_FIXTURE_CARGO_LOG="$cargo_log" \
       scripts/install-jig.sh --profile runtime --resolve-only
-  })"
-  [[ "$(realpath "$selected")" == "$(realpath "$full_install_root/bin/jig")" ]]
-  selected="$({
-    cd "$rendered_dir"
-    env -u JIG_DEV_BIN PATH="$fake_bin_dir:$PATH" JIG_FIXTURE_CARGO_LOG="$cargo_log" \
-      scripts/install-jig.sh --profile mcp --resolve-only
   })"
   [[ "$(realpath "$selected")" == "$(realpath "$full_install_root/bin/jig")" ]]
   [[ ! -e "$cargo_log" ]]
@@ -1825,7 +1818,7 @@ PY
   if (
     cd "$rendered_dir"
     env -u JIG_DEV_BIN scripts/install-jig.sh --contract-version 3 \
-      --repository-scope --profile mcp --resolve-only >/dev/null 2>"$resolve_only_stderr"
+      --repository-scope --profile runtime --resolve-only >/dev/null 2>"$resolve_only_stderr"
   ); then
     echo "Repository-scoped resolve-only unexpectedly accepted a malformed contract manifest." >&2
     exit 1

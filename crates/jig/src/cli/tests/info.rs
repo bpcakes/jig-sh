@@ -111,22 +111,8 @@ fn parses_explicit_agent_surfaces_and_rejects_unknown_values() {
     assert_eq!(opts.projection, crate::surface::ResponseSurface::AgentV1);
     opts.validate_projection().unwrap();
 
-    let mcp = Cli::try_parse_from(["jig", "mcp", "--surface", "agent-v1"]).unwrap();
-    assert!(matches!(
-        mcp.command,
-        CommandKind::Mcp(McpOpts {
-            surface: crate::surface::ResponseSurface::AgentV1
-        })
-    ));
-
     assert!(
         Cli::try_parse_from(["jig", "info", "--projection", "future"])
-            .unwrap_err()
-            .to_string()
-            .contains("invalid value 'future'")
-    );
-    assert!(
-        Cli::try_parse_from(["jig", "mcp", "--surface", "future"])
             .unwrap_err()
             .to_string()
             .contains("invalid value 'future'")

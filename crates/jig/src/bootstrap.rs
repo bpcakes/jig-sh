@@ -91,6 +91,7 @@ mod presets;
 mod preview_seed;
 mod renderer;
 mod repository_model;
+mod retired_mcp;
 mod runtime_config;
 mod scaffold;
 mod source_inputs;

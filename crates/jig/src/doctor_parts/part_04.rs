@@ -612,7 +612,7 @@ fn agent_check(ctx: &RepoContext, process_control: DoctorProcessControl<'_>) -> 
         .as_array()
         .and_then(|steps| agent_next_step(steps))
         .map(str::to_string);
-    // Agent skills improve the Codex/MCP experience, but a repository
+    // Agent skills improve the Codex experience, but a repository
     // with valid config, runtime, contract, and tools is operational.
     check(
         "agent_skills",

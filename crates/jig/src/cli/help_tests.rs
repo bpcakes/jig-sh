@@ -82,7 +82,6 @@ fn top_level_help_orders_commands_by_user_intent() {
         "  agent ",
         "  agent-map ",
         "  state ",
-        "  mcp ",
     ];
 
     let mut previous = 0;

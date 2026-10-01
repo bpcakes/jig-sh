@@ -186,8 +186,6 @@ pub(super) fn info_with_capabilities(
         ready_command(root_commands::AGENT_MAP),
         ready_command(root_commands::STATE),
     ]);
-    // `.mcp.json` registers clients; the root stdio server does not read it.
-    commands.push(ready_command(root_commands::MCP));
 
     json!({
         "ok": true,
@@ -263,7 +261,6 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
         ready_command(root_commands::CLAUDE),
         repo_context_command_with_next_step(root_commands::AGENT_MAP, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::STATE, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::MCP, repo_context_next_step),
     ];
 
     json!({

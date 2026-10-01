@@ -320,7 +320,7 @@ impl Fixture {
         };
         let root = fixture.root.path();
         fs::create_dir(root.join(".agent")).unwrap();
-        fs::write(root.join(".mcp.json"), "{}\n").unwrap();
+
         fs::write(
             root.join(".agent/jig-contract.json"),
             serde_json::to_vec(&json!({

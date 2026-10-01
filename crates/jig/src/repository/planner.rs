@@ -228,6 +228,7 @@ pub(crate) fn validate_current_repository_authority(
 /// Re-resolves a plan request against current checked-in configuration and
 /// source identity. An accepted plan is executable only while it remains the
 /// exact deterministic result of that resolution.
+#[cfg(test)]
 pub(crate) fn validate_run_plan(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,

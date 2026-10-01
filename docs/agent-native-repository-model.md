@@ -170,8 +170,7 @@ Every action declares an intent and effects independently:
 `jig check` can select only read-only check actions. A generator or autofix
 produces a reviewable changeset and never silently edits the worktree through a
 read-only check. Long-running services use `jig dev`. Other declared actions
-use an action-specific command or the MCP `jig.plan_run` and `jig.execute_run`
-tools, which expose and require approval for their effects before execution.
+use an action-specific command or `jig run`, which requires approval for worktree and external effects before execution.
 
 A runner is the checked-in implementation of an action. Contract v8 supports
 literal `argv`, explicit compatibility `shell`, and Jig-owned `native` runners.
@@ -200,10 +199,7 @@ Every contract-v6 manifest tool maps to exactly one owning action through
 contract. Contract-v6 compatibility aliases acquire the same lease from their
 owning action's effects, reload action and command authority after any wait,
 and retain the lease through result recording. If reloaded effects require a
-stronger lease, dispatch repeats acquisition before it runs. MCP execution
-requests do not wait for an incompatible lease: they fail through
-the pre-acceptance protocol error channel so the transport remains able to
-inspect or cancel the active run. Independent
+stronger lease, dispatch repeats acquisition before it runs. Independent
 read-only members of one execution layer use a bounded worker pool and bounded,
 backpressured event and outcome queues. The layer-entry source observation
 authorizes the initial worker cohort; every later queue claim takes a fresh
@@ -253,11 +249,12 @@ unqualified action name such as `test` selects that action across components.
 A qualified selector addresses an exact target or uses a simple `*` wildcard
 for either side. Named profiles are selected with `--profile`, not an ambiguous
 positional token. `--explain` resolves and prints the plan without execution.
-JSON output uses the same resolver and schema as MCP.
+JSON output uses the same resolver as human CLI output.
 
 Affected planning is available only to component-native contract-v6
 repositories, where the required inputs and propagation policy are inspectable.
-The same request and reasons are available through CLI JSON and `jig.plan_run`.
+Use `jig --json check --affected BASE --explain` to inspect the resolved plan and
+selection reasons without executing checks.
 
 Independent safe read-only checks run concurrently within each dependency
 layer, with at most eight target workers and deterministic result recording
@@ -273,53 +270,17 @@ target, profile, and configuration provenance. `jig status` is the dynamic
 surface for local runs, recorded plans, loops, and repository state. The distinction
 prevents another overlapping inspection command.
 
-## Agent and MCP experience
+## Agent experience
 
-The MCP server exposes a small, stable tool surface rather than one tool for
-every target:
+Agents use the same command-line interface as humans, with `--json` for structured output:
 
-- `jig.inspect` reads workspace, component, target, profile, and durable run
-  information. Inspecting a nonterminal run also reconciles it to a blocked
-  terminal result when its process-owned worker lease has disappeared.
-- `jig.plan_run` resolves selectors and closed per-target arguments, then
-  returns an immutable run plan without executing it. Effectful actions require
-  explicit selectors.
-- `jig.execute_run` executes an unchanged plan and returns a durable run handle;
-  worktree and external effects require exact `approved_effects` acknowledgement.
-  Once that handle is accepted, the serving process drains the process-owned
-  worker to a terminal durable state even if its MCP transport reaches EOF or
-  fails while the worker is still running.
-- `jig.cancel_run` requests cancellation of a running execution.
-- `jig.agent_doctor` is the only tool outside these repository operations; the
-  former `jig.work_*` lifecycle tools were removed.
+- `jig info workspace`, `jig info targets`, and `jig info target ID` inspect the catalog.
+- `jig run --explain` previews a deterministic plan without starting execution.
+- `jig check` executes read-only checks; `jig run` executes other declared actions with explicit effect approval.
+- `jig status run ID` reads durable run results; foreground execution responds to cancellation signals.
+- `jig agent doctor` reports agent tooling readiness.
 
-MCP resources are a compatible later projection, not a prerequisite for the
-repository model. A future client-capability-aware surface can publish:
-
-    jig://workspace
-    jig://components/COMPONENT_ID
-    jig://targets/COMPONENT_ID:ACTION_ID
-    jig://runs/RUN_ID
-    jig://guidance/COMPONENT_ID
-
-Tools have strict input and output JSON schemas. The canonical response is
-`structuredContent`; a text rendering is included only for compatibility. A
-target conclusion of `failure` is a successful execution result, not an MCP
-protocol error. Invalid arguments, stale plans, state corruption, and runtime
-infrastructure failures before a run handle is accepted use the protocol's
-error channels. If an accepted worker later fails internally, Jig best-effort
-closes its unfinished targets and run as `blocked` for durable inspection.
-
-Jig owns durable run ids and lifecycle state. The initial transport works for
-every client by returning a run id and polling through `jig.inspect`. A later
-Tasks-extension projection can reuse that id without changing the underlying
-repository or run model.
-
-Every effectful call is constrained by the checked-in action contract. Plans
-include closed runner arguments and declared effects, and execution verifies
-the plan's contract digest, source identity, and explicit worktree/external
-effect approvals before starting. Jig never exposes a general agent-supplied
-shell command.
+Every effectful invocation is constrained by the checked-in action contract. Arguments are closed and effects are declared; execution verifies current contract and source authority. Jig never exposes a general agent-supplied shell command.
 
 ## Authored configuration and resolved contract
 
@@ -393,8 +354,7 @@ committed slices:
    and remove the singular backend assumption from version 6 runtime identity.
 6. Migrate work gates to evidence requirements over targets or profiles while
    retaining legacy tool gates.
-7. Replace per-action MCP exposure for version 6 with inspect, plan, execute,
-   and cancel tools plus output schemas and durable run lookup.
+7. Expose catalog inspection, plan previews, execution, and durable run lookup through CLI JSON output.
 8. Add explainable affected selection after component inputs and both graphs
    are available. Do not add a Jig artifact cache in this migration.
 
@@ -414,8 +374,7 @@ a Go API and TypeScript web component can do all of the following:
 - execute a plan and query a durable run with separate status and conclusion;
 - record target-aware receipts without changing old receipt deserialization;
 - satisfy a target-aware work gate only with current matching evidence;
-- expose bounded MCP inspect/plan/execute/cancel tools with validated structured
-  results; and
+- expose structured inspection and execution through CLI JSON output; and
 - continue to execute a version 5 `jig.test` tool and legacy work gate without
   changing their stable response fields.
 
@@ -436,7 +395,5 @@ project/task distinction used by monorepo systems such as Nx. Scoped target
 addresses, affected selection, and dry-run plans follow the useful common core
 of Nx, Turborepo, and moon. Semantic `check`, `generate`, and service verbs plus
 typed effects follow Dagger's agent-oriented API direction. Structured status,
-conclusion, and findings follow the GitHub Checks model. The MCP split between
-resources, typed tools, structured results, and durable tasks informs the agent
-surface. These influences shape the interface; they do not make Jig depend on
+conclusion, and findings follow the GitHub Checks model. These influences shape the interface; they do not make Jig depend on
 any of those products.

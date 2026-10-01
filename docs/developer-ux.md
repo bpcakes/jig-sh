@@ -4,7 +4,7 @@ Jig is designed to make a repository feel immediately operable to a developer, a
 
 This workflow is supported on Linux and macOS hosts. See [Platform Support](platform-support.md) for the CI guarantee, unsupported-host policy, and feature-specific limits.
 
-That front door is intentionally repo-local. Developers do not need to remember whether a project uses a root Cargo workspace, SQLx metadata, a Vite frontend, a custom schema dump, or a particular MCP command. The repo records those decisions in `.jig.toml` and `.agent/jig-contract.json`, and the generated launcher accepts a runtime only after it validates the repository contract and requested build profile.
+That front door is intentionally repo-local. Developers do not need to remember whether a project uses a root Cargo workspace, SQLx metadata, a Vite frontend, a custom schema dump, or a particular check command. The repo records those decisions in `.jig.toml` and `.agent/jig-contract.json`, and the generated launcher accepts a runtime only after it validates the repository contract and requested build profile.
 
 ## First Contact
 
@@ -13,7 +13,7 @@ Jig splits the first-run experience into two cases:
 - `jig init` creates a new repository with the harness already present, optionally with generated starter application code from a preset.
 - `jig adopt` adds the harness to an existing repository while preserving project-owned files and guidance.
 
-Both flows generate the same core assets: `.jig.toml`, `scripts/jig`, `.mcp.json`, root agent guidance, `agent-map.md`, `.agent/jig-contract.json`, scripts, and CI workflows. Existing root `AGENTS.md` content is preserved; Jig only manages the marked block between the Jig comments. Existing root `Makefile` content also remains project-owned, because generated commands are routed through `scripts/jig`. For loop-only onboarding on an existing repo, `jig adopt . --minimal` renders `.jig.toml` plus `.agent/` scaffolding (contract, state, cache ignore rules, and block-managed gitignore/gitattributes) without scripts, workflows, or agent context files.
+Both flows generate the same core assets: `.jig.toml`, `scripts/jig`, root agent guidance, `agent-map.md`, `.agent/jig-contract.json`, scripts, and CI workflows. Existing root `AGENTS.md` content is preserved; Jig only manages the marked block between the Jig comments. Existing root `Makefile` content also remains project-owned, because generated commands are routed through `scripts/jig`. For loop-only onboarding on an existing repo, `jig adopt . --minimal` renders `.jig.toml` plus `.agent/` scaffolding (contract, state, cache ignore rules, and block-managed gitignore/gitattributes) without scripts, workflows, or agent context files.
 
 The entry commands are intentionally separate. Start a new repo with `jig init`; add Jig to a repo that already exists with `jig adopt .`, which previews by default and applies only when re-run with `--write`. A bare terminal `jig init /path/to/new-repo` guides the project shape using the same five descriptions as `jig presets`; only the Rust React and Go React application choices continue to database and frontend questions. `--defaults` skips only the project-shape wizard and fills omitted shape choices with Rust React, no database, and `web`; initial vault setup can still request a passphrase unless `JIG_VAULT_PASSPHRASE` or `--no-vault` is used. `--no-input` skips the wizard but requires a complete explicit shape and never prompts for a vault passphrase. Non-terminal init follows the strict behavior unless `--defaults` is supplied. `harness-only`, `rust-library`, and `rust-cli` are complete when named explicitly and reject application-shape flags. Use `--preset harness-only --no-input --no-vault` for an unattended full harness without starter project code. An answers file with `harness_footprint = "minimal"` is itself a complete harness-only shape in every interaction mode and rejects Rust/database/frontend scaffold choices. Global `--json` only selects output format and never changes these interaction rules.
 
@@ -163,7 +163,6 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig state summary` summarizes run history: runs, target results, failures, and the most recent target results. `scripts/jig work` was removed and is an unknown command.
 - `scripts/jig status` collects local repository, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
-- `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 - `scripts/jig claude homes` lists Claude Code configuration directories; `scripts/jig claude launch` opens the shared searchable picker or an explicit home. Add `--usage` for subscription limits.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
@@ -209,7 +208,7 @@ scripts/jig run --profile verify --affected origin/main --json
 With no selectors or `--profile`, `jig run` executes the repository’s default check
 profile. Use `jig run --explain` to inspect that selection first.
 
-The foreground command shares MCP planning, execution, run history and cancellation.
+The foreground command shares repository planning, execution, run history and cancellation.
 Approve every planned `worktree` and `external` effect explicitly with repeated
 `--approve-effect` flags. `--explain` prints the plan without execution or run
 state. `--fail-fast` and `--comparison-*` have the same repository execution
@@ -397,9 +396,9 @@ The friendliness here is in the workflow shape: developers get an auditable secr
 - Non-interactive unlocks use `JIG_VAULT_PASSPHRASE`; command-line passphrases are intentionally unsupported.
 - Audit metadata, including field names and run IDs, is plaintext local operational metadata. The local HMAC chain detects edits and broken links, but deletion, rollback, or compromise by someone with the vault and passphrase requires an external checkpoint or backup to detect.
 
-## Agent And MCP Friendliness
+## Agent Friendliness
 
-Jig treats agents as first-class repo operators. The generated root `AGENTS.md`, `agent-map.md`, optional crate-level guide conventions, MCP server, and run history all serve the same goal: reduce guessing.
+Jig treats agents as first-class repo operators. The generated root `AGENTS.md`, `agent-map.md`, optional crate-level guide conventions, and run history all serve the same goal: reduce guessing.
 
 An agent can discover:
 
@@ -409,7 +408,7 @@ An agent can discover:
 - which commands are runtime-owned local conveniences
 - whether local Codex-side Jig skills are available
 
-The contract v6 MCP surface is deliberately independent of repository size. Agents inspect components, targets, profiles, and durable runs with `jig.inspect`; resolve an exact immutable plan with `jig.plan_run`; submit that plan with `jig.execute_run`; and poll or cancel by run id. Effectful targets require explicit selection, closed plan-bound arguments, and exact worktree/external effect approval at execution. Adding another component or action changes catalog data rather than adding another MCP tool. Contracts v2 through v5 keep their direct manifest tools for compatibility.
+Agents inspect components, targets, and profiles with `jig info`, preview plans with `jig run --explain`, and execute declared targets with `jig run`. Pass `--json` for structured results and inspect durable run history with `jig status run ID`. Effectful targets require explicit selection, closed arguments, and exact worktree/external effect approval. Adding another component or action changes catalog data rather than adding a command. Contracts v2 through v5 keep their manifest-tool CLI compatibility aliases.
 
 ## Update And Maintenance UX
 
@@ -439,7 +438,7 @@ Jig's developer friendliness comes from a few consistent product choices:
 - It records repo conventions in committed configuration instead of tribal memory.
 - It preserves existing repo ownership during adoption.
 - It makes local checks and their results inspectable.
-- It makes MCP and CLI use converge on the same runtime contract.
+- It gives humans, CI, and agents the same CLI runtime contract.
 - It keeps machine-local proxy and vault state out of repo history.
 - It makes broad trust changes explicit at the command line.
 - It supports dogfooding through `scripts/jig-dev` while routine source-repository work uses a selected release.

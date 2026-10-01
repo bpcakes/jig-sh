@@ -88,7 +88,7 @@ marketplaces = []
         serde_json::to_string_pretty(&contract).unwrap(),
     )
     .unwrap();
-    fs::write(root.join(".mcp.json"), "{}").unwrap();
+
     fs::write(
         root.join("scripts/install-jig.sh"),
         CURRENT_GENERATED_INSTALLER,

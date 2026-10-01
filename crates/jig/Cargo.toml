@@ -4,12 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Agent-oriented repository harness, command contract, and MCP runtime."
+description = "Agent-oriented repository harness and command-line runtime."
 repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
 readme = "../../README.md"
-keywords = ["agents", "cli", "mcp", "workflow"]
+keywords = ["agents", "cli", "workflow"]
 categories = ["command-line-utilities", "development-tools"]
 
 [lib]
@@ -93,7 +93,6 @@ security-framework.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
-jsonschema.workspace = true
 jig-vault = { workspace = true, features = ["test-utils"] }
 
 [build-dependencies]

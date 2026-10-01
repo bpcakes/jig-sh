@@ -5,7 +5,7 @@ set -eu
 # jig-release-runtime-pin:v1
 # jig-check-subcommands:fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test
 # jig-capability-only-subcommands:adopt,claude,codex,doctor,init,presets,update
-# jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault
+# jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault
 # jig-global-flags:--json
 
 # Keep launcher behavior synchronized with scripts/jig in the jig-sh source
@@ -208,7 +208,7 @@ jig_capability_only_requested() {
           check)
             ;;
           # jig-repository-scope-subcommands-begin
-          agent | agent-map | bootstrap | dev | file-budget | generate-sqlx-unchecked-queries-todo | info | loop | mcp | migration | migration-add | proxy | run | schema-dump | setup | sqlx | state | status | ui | vault)
+          agent | agent-map | bootstrap | dev | file-budget | generate-sqlx-unchecked-queries-todo | info | loop | migration | migration-add | proxy | run | schema-dump | setup | sqlx | state | status | ui | vault)
             # jig-repository-scope-subcommands-end
             return 1
             ;;
@@ -300,36 +300,7 @@ resolve_or_install_doctor_binary() {
   bin_path="$(run_installer --profile runtime)"
 }
 
-resolve_mcp_binary() {
-  if [ -n "${JIG_DEV_BIN:-}" ]; then
-    run_installer --profile mcp
-    return
-  fi
-
-  if resolve_cached_binary mcp; then
-    return
-  fi
-
-  printf '%s\n' \
-    "No prebuilt Jig binary compatible with contract $CONTRACT_VERSION is available for MCP startup." \
-    "Refusing to run cargo install during MCP initialization because it can block the client startup path." \
-    "" \
-    "Run a normal Jig command once to populate the cache:" \
-    "  scripts/jig check contract" \
-    "" >&2
-  printf '%s\n' \
-    "For the jig-sh source checkout, prepare the pinned release cache with:" \
-    "  scripts/jig --version" \
-    "To run the current source instead:" \
-    "  scripts/jig-dev mcp" \
-    "For historical source checkouts, build and select a development binary explicitly:" \
-    "  cargo build -p jig-sh --bin jig" \
-    "  JIG_DEV_BIN=target/debug/jig scripts/jig mcp" >&2
-  exit 1
-}
-
-# Keep repo-contract, work, and agent commands on stripped builds. MCP startup
-# resolves a prebuilt binary without invoking the installer.
+# Keep repository and agent commands on stripped builds.
 subcommand="$(jig_subcommand "$@" || true)"
 installer_scope=repository
 info_requested=0
@@ -341,10 +312,6 @@ if [ "$info_requested" -eq 1 ] || jig_capability_only_requested "$@"; then
 fi
 selected_profile=runtime
 case "$subcommand" in
-  mcp)
-    selected_profile=mcp
-    bin_path="$(resolve_mcp_binary)" || exit $?
-    ;;
   doctor)
     selected_profile=runtime
     resolve_or_install_doctor_binary

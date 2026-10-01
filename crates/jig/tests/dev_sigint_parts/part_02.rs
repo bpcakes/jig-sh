@@ -326,7 +326,7 @@ marketplaces = []
         .expect("serialize Jig contract"),
     )
     .expect("write Jig contract");
-    fs::write(root.join(".mcp.json"), "{}\n").expect("write MCP config");
+
 }
 
 fn wait_for_file(path: &Path, child: &mut Child, timeout: Duration) {

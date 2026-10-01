@@ -141,9 +141,6 @@ pub(crate) const STATE: RootCommand = command(
     RootCommandCategory::AgentAutomation,
     530,
 );
-pub(crate) const MCP: RootCommand =
-    command(cli_command::MCP, RootCommandCategory::AgentAutomation, 540);
-
 pub(crate) const ALL: &[RootCommand] = &[
     INIT,
     PRESETS,
@@ -169,7 +166,6 @@ pub(crate) const ALL: &[RootCommand] = &[
     CLAUDE,
     AGENT_MAP,
     STATE,
-    MCP,
 ];
 
 pub(crate) fn categorized_help() -> String {

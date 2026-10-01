@@ -180,7 +180,7 @@ marketplaces = []
         }))
         .write();
     write_full_launcher(temp.path());
-    fs::write(temp.path().join(".mcp.json"), "{not json").unwrap();
+
     let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
     let launcher = temp.path().join("scripts/jig").display().to_string();
     let agent = json!({
@@ -234,8 +234,13 @@ marketplaces = []
         "needs_setup",
         "codex_marketplace_unregistered",
     );
-    assert_eq!(command_by_name(&output, "mcp")["status"], "ready");
-    assert_eq!(command_by_name(&output, "mcp")["reason_code"], Value::Null);
+    assert!(
+        output["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|command| command["name"] != "mcp")
+    );
     assert_eq!(
         command_by_name(&output, "agent")["next_step"],
         format!("Run `{launcher} agent bootstrap`.")
@@ -313,15 +318,7 @@ fn command_inventory_without_repo_context_keeps_onboarding_commands_available() 
     for name in ["init", "presets", "adopt", "doctor", "codex", "claude"] {
         assert_eq!(command_by_name(&output, name)["status"], "ready", "{name}");
     }
-    for name in [
-        "update",
-        "bootstrap",
-        "setup",
-        "info",
-        "check",
-        "loop",
-        "mcp",
-    ] {
+    for name in ["update", "bootstrap", "setup", "info", "check", "loop"] {
         assert_command_status(&output, name, "needs_setup", "repo_context_unavailable");
     }
     assert!(

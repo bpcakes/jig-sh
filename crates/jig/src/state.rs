@@ -5,9 +5,10 @@ use crate::context::RepoContext;
 
 #[cfg(test)]
 pub(crate) use execution_leases::acquire_repository_execution_lease;
+#[cfg(test)]
+pub(crate) use execution_leases::acquire_repository_execution_lease_without_wait;
 pub(crate) use execution_leases::{
-    RepositoryExecutionLease, acquire_repository_execution_lease_without_wait,
-    try_acquire_repository_execution_lease,
+    RepositoryExecutionLease, try_acquire_repository_execution_lease,
 };
 #[cfg(test)]
 use jsonl::append_jsonl;
@@ -18,13 +19,13 @@ pub(crate) use jsonl::{JsonlRecordTooLarge, RawJsonlRecord, scan_dashboard_jsonl
 pub(crate) use jsonl::{dashboard_scan_count, reset_dashboard_scan_counts};
 pub(crate) use runs::{CompletedTargetEvent, RunHistoryEvent, run_history_event};
 pub(crate) use runs::{
-    DurableRun, RunEventCursor, RunLease, block_nonterminal_run, complete_run, mark_run_running,
-    mark_target_started, reconcile_run_for_inspection, record_target_result, request_run_cancel,
-    run_by_id, run_cancel_requested_since, start_run_with_event_cursor_and_execution_lease,
+    DurableRun, RunEventCursor, block_nonterminal_run, complete_run, mark_run_running,
+    mark_target_started, reconcile_run_for_inspection, record_target_result, run_by_id,
+    run_cancel_requested_since, start_run_with_event_cursor_and_execution_lease,
     start_run_with_execution_lease,
 };
 #[cfg(test)]
-pub(crate) use runs::{start_run, start_run_with_event_cursor};
+pub(crate) use runs::{RunLease, request_run_cancel, start_run};
 #[cfg(test)]
 pub(crate) use summary::state_summary;
 pub(crate) use summary::state_summary_with_cancellation;

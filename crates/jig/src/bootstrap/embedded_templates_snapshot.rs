@@ -52,10 +52,6 @@ pub(super) static EMBEDDED_TEMPLATE_FILES: &[EmbeddedTemplateFile] = &[
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.jig/file-budget.toml.jinja")),
     },
     EmbeddedTemplateFile {
-        relative_path: ".mcp.json.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.mcp.json.jinja")),
-    },
-    EmbeddedTemplateFile {
         relative_path: "AGENTS.md.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/AGENTS.md.jinja")),
     },

@@ -62,7 +62,11 @@ fn launcher_only_update_repairs_only_owned_runtime_scripts() {
         "#!/usr/bin/env bash\nJIG_VERSION=\"0.2.0-beta.1\"\n",
     )
     .unwrap();
-    fs::write(repo.join(".mcp.json"), "{\"locally_modified\":true}\n").unwrap();
+    fs::write(
+        repo.join(".agent/.cache/.gitignore"),
+        "# locally modified\n",
+    )
+    .unwrap();
     fs::write(
         repo.join("AGENTS.md"),
         "project guidance\n<!-- BEGIN JIG MANAGED BLOCK -->\nmalformed\n",
@@ -521,7 +525,6 @@ jig_subcommand() { :; }
 binary_version() { :; }
 use_matching_binary() { :; }
 resolve_cached_binary() { :; }
-resolve_mcp_binary() { :; }
 actual_version="$(binary_version "$bin_path" || true)"
 exec "$bin_path" "$@"
 "#,

@@ -343,6 +343,7 @@ const fn run_conclusion_priority(conclusion: RunConclusion) -> u8 {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn request_run_cancel(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
     let run = run_by_id(ctx, run_id)?;
     if run.result.status == RunStatus::Completed || run.cancel_requested {
@@ -708,7 +709,7 @@ fn fold_events(run_id: &str, events: Vec<RunEventRecord>) -> Result<DurableRun> 
             }
             EVENT_CANCEL_REQUESTED => {
                 let current = require_run(&mut run, run_id, EVENT_CANCEL_REQUESTED)?;
-                // Cancellation and terminal completion may race across MCP
+                // Cancellation and terminal completion may race across processes
                 // request and worker threads. A physically later cancellation
                 // event is an idempotent observation, not stream corruption.
                 if current.result.status == RunStatus::Completed {

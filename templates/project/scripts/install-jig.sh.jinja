@@ -366,7 +366,7 @@ is_embedded_source() {
 }
 
 case "$INSTALL_PROFILE" in
-  default | runtime | mcp)
+  default | runtime)
     ;;
   *)
     echo "Unsupported jig install profile: $INSTALL_PROFILE" >&2
@@ -406,7 +406,7 @@ case "$INSTALL_PROFILE" in
     DEFAULT_INSTALL_ROOT="$DEFAULT_INSTALL_BASE/$CONTRACT_CACHE_KEY"
     CARGO_INSTALL_FEATURE_ARG=""
     ;;
-  runtime | mcp)
+  runtime)
     DEFAULT_INSTALL_ROOT="$DEFAULT_INSTALL_BASE/$CONTRACT_CACHE_KEY-runtime"
     CARGO_INSTALL_FEATURE_ARG="--no-default-features"
     ;;
@@ -1556,8 +1556,8 @@ resolve_released_runtime() {
       return 0
     fi
     # An exact release pin authorizes reuse of that installed native version.
-    # MCP remains cache-only, and an explicit install root must be populated.
-    if [[ "$RESOLVE_ONLY" == "0" && "$INSTALL_PROFILE" != "mcp" && -z "$INSTALL_ROOT_ARG" ]] \
+    # An explicit install root must be populated.
+    if [[ "$RESOLVE_ONLY" == "0" && -z "$INSTALL_ROOT_ARG" ]] \
       && path_bin="$(resolve_compatible_path_jig)" \
       && [[ "$(binary_version "$path_bin")" == "$RUNTIME_VERSION" ]]; then
       mkdir -p "$INSTALL_ROOT/bin"
@@ -1574,10 +1574,6 @@ resolve_released_runtime() {
     fi
   fi
   if [[ "$RESOLVE_ONLY" == "1" ]]; then
-    return 1
-  fi
-  if [[ "$INSTALL_PROFILE" == "mcp" ]]; then
-    echo "Jig $RUNTIME_VERSION is not cached for MCP; run scripts/jig --version first to prepare the pinned release." >&2
     return 1
   fi
   local cargo_args=(install jig-sh --registry crates-io --version "=$RUNTIME_VERSION" --locked --root "$INSTALL_ROOT" --force)
@@ -1652,7 +1648,6 @@ resolve_compatible_path_jig() {
 ambient_path_binary_reuse_allowed() {
   [[ "$REFRESH_CACHE" == "0" \
     && -z "$INSTALL_ROOT_ARG" \
-    && "$INSTALL_PROFILE" != "mcp" \
     && "${JIG_INSTALL_ALLOW_PATH_BINARY:-}" == "1" ]]
 }
 
@@ -1800,19 +1795,13 @@ if [[ -z "$INSTALL_ROOT_ARG" ]] && is_jig_source_checkout "$ROOT_DIR"; then
     exit 1
   fi
 
-  if [[ "$INSTALL_PROFILE" == "mcp" ]]; then
-    echo "No compatible prebuilt Jig binary is available for MCP profile startup." >&2
-    echo "Refusing to run cargo install for MCP; run a normal Jig command first, or build and select a development binary with JIG_DEV_BIN=target/debug/jig." >&2
-    exit 1
-  fi
-
   install_from_local_source "$ROOT_DIR"
   printf '%s\n' "$BIN_PATH"
   exit 0
 fi
 
 if [[ "$INSTALL_PROFILE" != "default" && -z "$INSTALL_ROOT_ARG" ]]; then
-  # Runtime and MCP profiles are subsets of the default binary. Reuse a
+  # The runtime profile is a subset of the default binary. Reuse a
   # compatible full build instead of compiling a stripped binary.
   FULL_INSTALL_ROOT="$DEFAULT_INSTALL_BASE/$CONTRACT_CACHE_KEY"
   FULL_BIN_PATH="$FULL_INSTALL_ROOT/bin/jig"
@@ -1843,12 +1832,6 @@ if ambient_path_binary_reuse_allowed; then
 fi
 
 if [[ "$RESOLVE_ONLY" == "1" ]]; then
-  exit 1
-fi
-
-if [[ "$INSTALL_PROFILE" == "mcp" ]]; then
-  echo "No compatible prebuilt Jig binary is available for MCP profile startup." >&2
-  echo "Refusing to run cargo install during MCP initialization." >&2
   exit 1
 fi
 

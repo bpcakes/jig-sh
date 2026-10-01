@@ -2,7 +2,7 @@
 //!
 //! CLI parsing stays in `cli`, and runtime execution stays in `runtime`.
 //! This module owns the neutral request shapes passed between them. Types that
-//! also back MCP tool arguments derive `Deserialize` here so both CLI and MCP
+//! also back structured runtime requests derive `Deserialize` here so both
 //! paths reach runtime through the same request vocabulary. Command families
 //! live in sibling modules; this file is the public hub for runtime DTO imports.
 

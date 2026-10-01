@@ -30,7 +30,7 @@
       <div>
         <span class="pno">03</span>
         <h3>Typed <em>jig</em> runtime</h3>
-        <p>Each subcommand declares its arguments and return shape in <span class="hot">.agent/jig-contract.json</span> — the agent sends validated input and gets <span class="acid">structured JSON</span> back, not parsed stdout. An <span class="hot">MCP</span> server (Model Context Protocol) lets models discover and call those tools directly. No shell flags to memorize, no targets to guess.</p>
+        <p>Each subcommand declares its arguments and return shape in <span class="hot">.agent/jig-contract.json</span> — the agent sends validated input and gets <span class="acid">structured JSON</span> back, not parsed stdout. Agents inspect available targets with <span class="hot">jig info</span>, preview plans with <span class="hot">jig run --explain</span>, and execute checks through the same CLI. Pass <span class="acid">--json</span> for structured results.</p>
       </div>
       <div>
         <span class="pno">04</span>
