@@ -10,6 +10,8 @@ use super::*;
 
 #[path = "renderer_tests/freshness.rs"]
 mod freshness;
+#[path = "renderer_tests/guidance.rs"]
+mod guidance;
 
 fn rust_render_answers(projection: RepositoryProjectionHint) -> RenderAnswers {
     let destination = tempfile::tempdir().unwrap();
