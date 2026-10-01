@@ -65,4 +65,7 @@ build/
 tmp/
 temp/
 # END JIG MANAGED BLOCK
+# The pinned release runtime still appends receipts, which current Jig
+# neither writes nor reads.
+.agent/state/receipts.jsonl
 /scripts/tests/__pycache__/
