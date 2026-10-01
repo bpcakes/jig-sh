@@ -59,7 +59,7 @@ operational limits, dependency upgrades, and existing-application migration guid
 
 ## Project status
 
-Jig is pre-1.0. The current source renders contract v8; contracts v2 through v7 remain readable through documented compatibility paths. Contract epochs protect repository compatibility independently of the installed Jig product version. Review the [Public Contract](docs/public-contract.md) before wiring long-lived automation to Jig.
+Jig is pre-1.0. The current source renders contract v9; contracts v2 through v8 remain readable through documented compatibility paths. Contract epochs protect repository compatibility independently of the installed Jig product version. Review the [Public Contract](docs/public-contract.md) before wiring long-lived automation to Jig.
 
 This README describes the 0.5.0 line on current `master`. Upgrading from 0.3.0 replaces the browser dashboard and external status providers with the unified terminal dashboard below. See [CHANGELOG.md](CHANGELOG.md).
 
@@ -147,7 +147,7 @@ Inspect recorded state with `scripts/jig state summary`.
 
 ## Command contract
 
-`.agent/jig-contract.json` is the stable repository authority. Current contract v8 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, target-local affected selection, declared bounded string arguments, literal argv runners, and explicit shell execution.
+`.agent/jig-contract.json` is the stable repository authority. Current contract v9 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, target-local affected selection, declared bounded string arguments, literal argv runners, and explicit shell execution.
 
 Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, scheduled task prompts, local status, or secrets outside the generated command catalog.
 

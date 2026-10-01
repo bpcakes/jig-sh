@@ -111,7 +111,7 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    json!({
+    let mut value = json!({
         "ok": true,
         "command": COMMAND,
         "repo": {
@@ -138,7 +138,6 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             "vault_scope_id": vault.scope_id,
             "vault_error": vault.error,
         },
-        "check_tools": ctx.work_check_tools(),
         "contract_tools": ctx.tool_specs().iter().map(|tool| {
             json!({
                 "name": &tool.name,
@@ -147,7 +146,6 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
                 "description": &tool.description,
             })
         }).collect::<Vec<_>>(),
-        "work_gates": ctx.work_gates().iter().map(work_gate_value).collect::<Vec<_>>(),
         "frontend_apps": frontend_apps,
         "dev": {
             "proxy_port": ctx.dev_config().proxy_port,
@@ -162,7 +160,18 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
         "mcp_command": mcp_command.command,
         "mcp_command_source": mcp_command.source,
         "mcp_command_error": mcp_command.error,
-    })
+    });
+    // `[work]` settings exist only through contract 8.
+    if ctx.contract_version() <= crate::context::LAST_WORK_CONFIG_CONTRACT_VERSION {
+        value["check_tools"] = json!(ctx.work_check_tools());
+        value["work_gates"] = json!(
+            ctx.work_gates()
+                .iter()
+                .map(work_gate_value)
+                .collect::<Vec<_>>()
+        );
+    }
+    value
 }
 
 struct VaultCapability {

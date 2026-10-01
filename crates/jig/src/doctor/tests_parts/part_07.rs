@@ -336,14 +336,14 @@ fn doctor_reuses_one_signal_generation_per_batch_and_allows_later_batches() {
 
 #[cfg(unix)]
 #[test]
-fn signal_retirement_failure_preserves_the_process_independent_tracker_check() {
+fn signal_retirement_failure_marks_process_dependent_checks_unverified() {
     let temp = tempdir().unwrap();
     write_sqlx_doctor_fixture_with_command(temp.path(), "sqlx prepare -D sqlite:retirement.db");
     let config_path = temp.path().join(".jig.toml");
     fs::write(
             &config_path,
             format!(
-                "{}\n[[frontend_apps]]\nname = \"web\"\ndir = \"web\"\ncoverage_threshold = 80\n\n[work.tracker]\nkind = \"beads\"\nworkspace_id = \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n",
+                "{}\n[[frontend_apps]]\nname = \"web\"\ndir = \"web\"\ncoverage_threshold = 80\n",
                 fs::read_to_string(&config_path).unwrap().replace(
                     "[agent_tooling.codex]\nmarketplaces = []",
                     "[[agent_tooling.codex.marketplaces]]\nid = \"test-skills\"\nsource = \"example/test-skills\"",

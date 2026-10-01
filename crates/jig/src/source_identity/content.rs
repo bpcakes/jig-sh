@@ -4,14 +4,14 @@ use super::*;
 /// used by repository evidence. The caller supplies a validated
 /// repository-relative path and receives complete bytes, absence, or an error.
 pub(crate) fn read_index_blob_v1(root: &Path, path: &str, limit: usize) -> Result<Option<Vec<u8>>> {
-    read_index_blob_inner(root, path, limit, GitReceiptCollection::Blocking)
+    read_index_blob_inner(root, path, limit, GitCollection::Blocking)
 }
 
 fn read_index_blob_inner(
     root: &Path,
     path: &str,
     limit: usize,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Option<Vec<u8>>> {
     let listing = git_bounded_proof_stdout(
         root,
@@ -56,7 +56,7 @@ pub(crate) fn read_git_blob_v1_with_cancellation(
         "git cat-file authenticated blob",
         limit,
         "file-budget-blob",
-        GitReceiptCollection::Cancellable(cancelled),
+        GitCollection::Cancellable(cancelled),
     )
 }
 
@@ -99,7 +99,7 @@ pub(crate) fn resolve_tree_path_blob_oid_v1_with_cancellation(
         "git list optional exact-tree blob",
         listing_limit,
         "file-budget-tree-path",
-        GitReceiptCollection::Cancellable(cancelled),
+        GitCollection::Cancellable(cancelled),
     )?;
     if listing.is_empty() {
         return Ok(None);
@@ -148,7 +148,7 @@ pub(crate) fn resolve_index_blob_oid_v1_with_cancellation(
         "git resolve optional index blob",
         limit,
         "file-budget-index-path",
-        GitReceiptCollection::Cancellable(cancelled),
+        GitCollection::Cancellable(cancelled),
     )?;
     if output.is_empty() {
         return Ok(None);

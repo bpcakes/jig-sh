@@ -337,52 +337,6 @@ impl WorkConfig {
     }
 }
 
-impl WorkGate {
-    pub(crate) fn id(&self) -> &str {
-        match self {
-            Self::Check(gate) => &gate.id,
-            Self::Evidence(gate) => &gate.id,
-            Self::CodexReview(gate) => &gate.id,
-            Self::Unsupported(gate) => &gate.id,
-        }
-    }
-
-    pub(crate) fn same_definition(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Check(left), Self::Check(right)) => {
-                left.tool == right.tool
-                    && left.paths == right.paths
-                    && left.paths_ignore == right.paths_ignore
-                    && left.reuse == right.reuse
-            }
-            (Self::Evidence(left), Self::Evidence(right)) => {
-                left.selector == right.selector && left.conclusion == right.conclusion
-            }
-            (Self::CodexReview(left), Self::CodexReview(right)) => {
-                left.skill == right.skill
-                    && left.threshold == right.threshold
-                    && left.scope == right.scope
-                    && left.model == right.model
-            }
-            (Self::Unsupported(left), Self::Unsupported(right)) => left.kind == right.kind,
-            _ => false,
-        }
-    }
-}
-
-pub(crate) fn parse_work_gate(value: &toml::Value) -> Result<WorkGate> {
-    let gate = value.clone().try_into::<WorkGateConfig>()?;
-    let config = WorkConfig {
-        receipt_metadata: Vec::new(),
-        tracker: None,
-        checks: Vec::new(),
-        gates: vec![gate.clone()],
-        ..WorkConfig::default()
-    };
-    config.validate()?;
-    Ok(resolve_work_gate(gate))
-}
-
 fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
     let WorkGateConfig {
         id,

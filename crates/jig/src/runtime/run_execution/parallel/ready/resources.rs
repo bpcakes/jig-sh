@@ -20,7 +20,7 @@ pub(super) fn validate_resource_source(
     // unrelated targets. Verify independently before cancelling shared work.
     let fingerprint = fingerprint.or_else(|_| {
         epoch.observe_read_only_layer_postcondition_with(|| {
-            crate::git_receipts::repository_source_snapshot_with_cancellation(
+            crate::source_identity::repository_source_snapshot_with_cancellation(
                 ctx.root(),
                 &cancelled,
             )

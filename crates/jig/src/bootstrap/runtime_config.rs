@@ -8,7 +8,6 @@ use super::ANSWERS_FILE;
 use super::clippy_policy::is_generated_rust_clippy_command;
 use super::repository_model::{RUST_FILE_LOC_COMMAND_KEY, is_generated_rust_file_loc_command};
 use crate::context::RepoContext;
-use crate::tool_defs;
 
 const GENERATED_FRONTEND_COMMAND_DEFAULTS: &[(&str, &str)] = &[
     ("typescript_lint_command", "scripts/check-webapps.sh lint"),
@@ -31,59 +30,29 @@ const GENERATED_FRONTEND_COMMAND_DEFAULTS: &[(&str, &str)] = &[
     ),
 ];
 
-const OPTIONAL_WORK_AUTHORITY_FIELDS: [&str; 2] = ["receipt_metadata", "tracker"];
+mod retired_work;
+pub(super) use retired_work::retired_work_notes;
 
-#[derive(Default)]
-struct OptionalWorkAuthority(BTreeMap<String, toml::Value>);
-
-impl OptionalWorkAuthority {
-    fn capture(config: &toml::Table) -> Result<Self> {
-        let Some(work) = config.get("work") else {
-            return Ok(Self::default());
-        };
-        let work = work
-            .as_table()
-            .ok_or_else(|| anyhow::anyhow!("Existing [work] is not a TOML table"))?;
-        let mut authority = BTreeMap::new();
-        for field in OPTIONAL_WORK_AUTHORITY_FIELDS {
-            let Some(value) = work.get(field) else {
-                continue;
-            };
-            if !schema_valid_work_field(field, value.clone()) {
-                bail!(
-                    "existing [work].{field} is invalid; repair it before refreshing the Jig harness"
-                );
-            }
-            authority.insert(field.into(), value.clone());
-        }
-        Ok(Self(authority))
-    }
-
-    fn apply(self, config: &mut toml::Table) -> Result<()> {
-        if self.0.is_empty() {
-            return Ok(());
-        }
-        let work = config
-            .entry("work")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .ok_or_else(|| anyhow::anyhow!("Rendered [work] is not a TOML table"))?;
-        work.extend(self.0);
-        Ok(())
-    }
-}
-
-pub(super) fn reconcile_optional_work_authority(
+/// Carries tracker ownership into the refreshed configuration. Refreshes
+/// render contract 9 or later, which declare it as `[repository] tracker`.
+pub(super) fn reconcile_tracker_ownership(
     seed_repo_path: Option<&Path>,
     destination: &Path,
 ) -> Result<()> {
-    let Some(seed_repo_path) = seed_repo_path else {
+    let Some(existing) = read_existing_config(seed_repo_path)? else {
         return Ok(());
+    };
+    retired_work::apply_retained_tracker(&existing, destination)
+}
+
+fn read_existing_config(seed_repo_path: Option<&Path>) -> Result<Option<toml::Table>> {
+    let Some(seed_repo_path) = seed_repo_path else {
+        return Ok(None);
     };
     let existing_path = seed_repo_path.join(ANSWERS_FILE);
     let existing_text = match fs::read_to_string(&existing_path) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("Failed to read {}", existing_path.display()));
@@ -91,14 +60,16 @@ pub(super) fn reconcile_optional_work_authority(
     };
     let existing = toml::from_str::<toml::Value>(&existing_text)
         .with_context(|| format!("Failed to parse {}", existing_path.display()))?;
-    let existing = existing
-        .as_table()
-        .ok_or_else(|| anyhow::anyhow!("{} is not a TOML table", existing_path.display()))?;
-    let authority = OptionalWorkAuthority::capture(existing)?;
-    if authority.0.is_empty() {
-        return Ok(());
+    match existing {
+        toml::Value::Table(table) => Ok(Some(table)),
+        _ => bail!("{} is not a TOML table", existing_path.display()),
     }
+}
 
+fn rewrite_rendered_config(
+    destination: &Path,
+    edit: impl FnOnce(&mut toml::Table) -> Result<()>,
+) -> Result<()> {
     let rendered_path = destination.join(ANSWERS_FILE);
     let rendered_text = fs::read_to_string(&rendered_path)
         .with_context(|| format!("Failed to read {}", rendered_path.display()))?;
@@ -107,7 +78,7 @@ pub(super) fn reconcile_optional_work_authority(
     let rendered = rendered
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("{} is not a TOML table", rendered_path.display()))?;
-    authority.apply(rendered)?;
+    edit(rendered)?;
     let serialized = toml::to_string_pretty(rendered)
         .with_context(|| format!("Failed to serialize {}", rendered_path.display()))?;
     fs::write(&rendered_path, serialized)
@@ -154,7 +125,6 @@ pub(super) fn reconcile_runtime_config(
         &existing_path,
         preferred_rendered_commands,
     )?;
-    reconcile_work(existing_table, rendered_table, &staged_context)?;
     if let Some(existing_loop) = existing_table.get("loop") {
         rendered_table.insert("loop".into(), existing_loop.clone());
     }
@@ -380,200 +350,6 @@ fn is_generated_frontend_default(key: &str, value: &toml::Value) -> bool {
         })
 }
 
-fn reconcile_work(
-    existing: &toml::Table,
-    rendered: &mut toml::Table,
-    staged_context: &RepoContext,
-) -> Result<()> {
-    let Some(existing_work) = existing.get("work") else {
-        return Ok(());
-    };
-    let existing_work = existing_work
-        .as_table()
-        .ok_or_else(|| anyhow::anyhow!("Existing [work] is not a TOML table"))?;
-    let rendered_work = rendered
-        .entry("work")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| anyhow::anyhow!("Rendered [work] is not a TOML table"))?;
-    reconcile_work_checks(existing_work, rendered_work, staged_context);
-    reconcile_work_gates(existing_work, rendered_work, staged_context)?;
-    Ok(())
-}
-
-fn reconcile_work_checks(
-    existing: &toml::Table,
-    rendered: &mut toml::Table,
-    staged_context: &RepoContext,
-) {
-    let Some(existing_checks) = existing.get("checks").and_then(toml::Value::as_array) else {
-        return;
-    };
-    let mut seen = BTreeSet::new();
-    let checks = existing_checks
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .filter(|tool| {
-            staged_context
-                .tool_spec(tool)
-                .is_some_and(tool_defs::is_no_arg_execution_tool)
-                && seen.insert((*tool).to_string())
-        })
-        .map(|tool| toml::Value::String(tool.to_string()))
-        .collect();
-    rendered.insert("checks".into(), toml::Value::Array(checks));
-}
-
-fn reconcile_work_gates(
-    existing: &toml::Table,
-    rendered: &mut toml::Table,
-    staged_context: &RepoContext,
-) -> Result<()> {
-    let existing_gates = existing
-        .get("gates")
-        .and_then(toml::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let rendered_gates = rendered
-        .get("gates")
-        .and_then(toml::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut reconciled = Vec::new();
-    let mut seen_ids = BTreeSet::new();
-    let mut consumed_existing_ids = BTreeSet::new();
-
-    for mut generated in rendered_gates {
-        let generated_gate =
-            crate::context::parse_work_gate(&generated).context("Rendered work gate is invalid")?;
-        let generated_table = generated
-            .as_table_mut()
-            .ok_or_else(|| anyhow::anyhow!("Rendered work gate is not a TOML table"))?;
-        let generated_id = generated_gate.id().to_string();
-
-        if let crate::context::WorkGate::Check(check) = &generated_gate {
-            if let Some(collision) = existing_gates
-                .iter()
-                .filter_map(toml::Value::as_table)
-                .find(|gate| {
-                    gate.get("id").and_then(toml::Value::as_str) == Some(generated_id.as_str())
-                })
-            {
-                let existing_kind = collision
-                    .get("kind")
-                    .and_then(toml::Value::as_str)
-                    .unwrap_or("<missing>");
-                let existing_tool = collision
-                    .get("tool")
-                    .and_then(toml::Value::as_str)
-                    .unwrap_or("<missing>");
-                if existing_kind != "check" || existing_tool != check.tool {
-                    bail!(
-                        "Cannot reconcile generated work gate '{generated_id}' ({}): the existing gate with that id is kind '{existing_kind}' and tool '{existing_tool}'. Rename the project-owned gate or restore the generated identity before readoption.",
-                        check.tool
-                    );
-                }
-            }
-            let exact_match = existing_gates
-                .iter()
-                .filter_map(toml::Value::as_table)
-                .find(|gate| generated_gate_is_exact(&generated_id, &check.tool, gate));
-            let existing_match = exact_match.or_else(|| {
-                existing_gates
-                    .iter()
-                    .filter_map(toml::Value::as_table)
-                    .find(|gate| generated_gate_is_legacy_alias(&generated_id, &check.tool, gate))
-            });
-            if let Some(existing) = existing_match {
-                if let Some(existing_id) = existing.get("id").and_then(toml::Value::as_str) {
-                    consumed_existing_ids.insert(existing_id.to_string());
-                }
-                for field in ["required", "reuse"] {
-                    if let Some(value) = existing.get(field) {
-                        generated_table.insert(field.into(), value.clone());
-                    }
-                }
-            }
-        } else if let Some(existing) = existing_gates.iter().find(|value| {
-            crate::context::parse_work_gate(value).is_ok_and(|gate| {
-                gate.id() == generated_id && gate.same_definition(&generated_gate)
-            })
-        }) && let Some(required) = existing
-            .as_table()
-            .and_then(|table| table.get("required"))
-            .and_then(toml::Value::as_bool)
-        {
-            generated_table.insert("required".into(), toml::Value::Boolean(required));
-        }
-
-        seen_ids.insert(generated_id);
-        reconciled.push(generated);
-    }
-
-    for existing_gate in existing_gates {
-        let Ok(gate) = crate::context::parse_work_gate(&existing_gate) else {
-            continue;
-        };
-        let table = existing_gate
-            .as_table()
-            .expect("parsed work gates are TOML tables");
-        if consumed_existing_ids.contains(gate.id())
-            || seen_ids.contains(gate.id())
-            || is_retired_generated_check_gate(table)
-            || !schema_valid_work_entry("gates", &existing_gate)
-        {
-            continue;
-        }
-        let keep = match &gate {
-            crate::context::WorkGate::Check(check) => staged_context
-                .tool_spec(&check.tool)
-                .is_some_and(tool_defs::is_no_arg_execution_tool),
-            crate::context::WorkGate::Evidence(_) | crate::context::WorkGate::CodexReview(_) => {
-                true
-            }
-            crate::context::WorkGate::Unsupported(_) => false,
-        };
-        if keep {
-            seen_ids.insert(gate.id().to_string());
-            reconciled.push(existing_gate);
-        }
-    }
-
-    rendered.insert("gates".into(), toml::Value::Array(reconciled));
-    Ok(())
-}
-
-fn generated_gate_is_exact(
-    generated_id: &str,
-    generated_tool: &str,
-    existing: &toml::Table,
-) -> bool {
-    existing.get("kind").and_then(toml::Value::as_str) == Some("check")
-        && existing.get("id").and_then(toml::Value::as_str) == Some(generated_id)
-        && existing.get("tool").and_then(toml::Value::as_str) == Some(generated_tool)
-}
-
-fn generated_gate_is_legacy_alias(
-    generated_id: &str,
-    generated_tool: &str,
-    existing: &toml::Table,
-) -> bool {
-    if existing.get("kind").and_then(toml::Value::as_str) != Some("check") {
-        return false;
-    }
-    let existing_id = existing.get("id").and_then(toml::Value::as_str);
-    let existing_tool = existing.get("tool").and_then(toml::Value::as_str);
-    matches!(
-        (generated_id, generated_tool, existing_id, existing_tool),
-        (
-            "jig-contract",
-            "jig.contract_check",
-            Some("contract"),
-            Some("jig.contract_check")
-        ) | ("rust-tests", "jig.test", Some("tests"), Some("jig.test"))
-    )
-}
-
 fn is_retired_generated_check_gate(table: &toml::Table) -> bool {
     let id = table.get("id").and_then(toml::Value::as_str);
     let tool = table.get("tool").and_then(toml::Value::as_str);
@@ -595,10 +371,6 @@ fn is_retired_generated_check_gate(table: &toml::Table) -> bool {
             | (Some("typescript-coverage"), Some("jig.typescript_coverage"))
             | (Some("schema-dump"), Some("jig.schema_dump"))
     )
-}
-
-fn schema_valid_work_entry(field: &str, entry: &toml::Value) -> bool {
-    schema_valid_work_field(field, toml::Value::Array(vec![entry.clone()]))
 }
 
 fn schema_valid_work_field(field: &str, value: toml::Value) -> bool {

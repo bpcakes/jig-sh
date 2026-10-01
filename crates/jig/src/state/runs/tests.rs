@@ -52,7 +52,6 @@ fn lifecycle_round_trips_from_append_only_events() {
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
 
     let reloaded = run_by_id(&ctx, &run_id).unwrap();
-    assert!(reloaded.work_plan_id.is_none());
     assert_eq!(reloaded.result.status, RunStatus::Completed);
     assert_eq!(reloaded.result.conclusion, Some(RunConclusion::Success));
     assert_eq!(
@@ -168,7 +167,6 @@ fn archive_and_restore_reject_queued_plans_with_invalid_structure() {
             run_id: "run_invalid_plan".into(),
             event: EVENT_QUEUED.into(),
             timestamp_ms: 1,
-            work_plan_id: None,
             plan: Some(invalid),
             target: None,
             result: None,
@@ -488,7 +486,6 @@ fn archive_rejects_run_ids_that_could_escape_the_lease_directory() {
             run_id: unsafe_run_id.into(),
             event: EVENT_QUEUED.into(),
             timestamp_ms: 1,
-            work_plan_id: None,
             plan: Some(RunPlan::new(
                 "run-plan_unsafe-id",
                 "sha256:config",
@@ -509,7 +506,6 @@ fn archive_rejects_run_ids_that_could_escape_the_lease_directory() {
             run_id: unsafe_run_id.into(),
             event: EVENT_COMPLETED.into(),
             timestamp_ms: 2,
-            work_plan_id: None,
             plan: None,
             target: None,
             result: None,
@@ -593,7 +589,6 @@ fn reverse_run_lookup_rejects_an_escape_rewritten_key_and_value() {
             run_id: started.result.run_id.clone(),
             event: EVENT_QUEUED.into(),
             timestamp_ms: now_ms(),
-            work_plan_id: None,
             plan: Some(plan()),
             target: None,
             result: None,

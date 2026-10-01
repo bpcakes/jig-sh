@@ -600,9 +600,6 @@ command_timeout_seconds = 1
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
             crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
-                tool: crate::cli::ToolOpts {
-                    plan_id: None,
-                },
                 selectors: Vec::new(),
             }),
         )),
@@ -650,9 +647,6 @@ rust_test_locked_command = "printf 'test locked\n'"
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
             crate::cli::CheckCommand::Contract(crate::cli::CheckTargetOpts {
-                tool: crate::cli::ToolOpts {
-                    plan_id: None,
-                },
                 selectors: Vec::new(),
             }),
         )),
@@ -695,9 +689,6 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
             crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
-                tool: crate::cli::ToolOpts {
-                    plan_id: None,
-                },
                 selectors: Vec::new(),
             }),
         )),

@@ -465,10 +465,7 @@ fn assert_go_repository_contract(destination: &Path) {
         ],
     );
     let config_value = toml::from_str::<toml::Value>(&config).unwrap();
-    assert_eq!(
-        config_value["work"]["gates"][0]["profile"].as_str(),
-        Some("verify")
-    );
+    assert!(config_value.get("work").is_none());
 
     let contract = fs::read_to_string(destination.join(".agent/jig-contract.json")).unwrap();
     assert_contains_all(&contract, &[r#""name": "jig.migration_add""#]);

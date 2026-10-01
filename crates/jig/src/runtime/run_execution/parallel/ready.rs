@@ -261,7 +261,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                         cancellation.current().unwrap_or(true)
                     };
                     let observed = source_epoch.observe_ready_read_only_postcondition_with(|| {
-                        crate::git_receipts::repository_source_snapshot_with_cancellation(
+                        crate::source_identity::repository_source_snapshot_with_cancellation(
                             finisher.ctx.root(),
                             &cancelled,
                         )

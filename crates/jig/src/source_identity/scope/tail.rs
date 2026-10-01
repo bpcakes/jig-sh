@@ -43,7 +43,7 @@ pub(super) fn literal_path_chunks<T>(
 pub(super) fn ensure_worktree_gitlinks_are_stable(
     root: &Path,
     changed_tracked_paths: &[PathBuf],
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<()> {
     if changed_tracked_paths.is_empty() {
         return Ok(());
@@ -124,7 +124,7 @@ pub(super) fn parse_gitlinks(stdout: &[u8]) -> Result<Vec<GitlinkIndexEntry>> {
 pub(super) fn ensure_gitlink_checkout_is_stable(
     root: &Path,
     gitlink: &GitlinkIndexEntry,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<()> {
     if gitlink.stage != "0" {
         bail!(
@@ -194,7 +194,7 @@ pub(super) fn git_status_is_dirty(
     root: &Path,
     args: &[&str],
     label: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<bool> {
     collection.ensure_active()?;
     let mut command = Command::new("git");
@@ -205,7 +205,7 @@ pub(super) fn git_status_is_dirty(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_read_only_git_environment(&mut command);
-    let mut observer = GitReceiptProcessObserver { collection };
+    let mut observer = GitProcessObserver { collection };
     let output = match run_owned_process_tree_with_output_policy_and_observer(
         &mut command,
         Duration::MAX,
@@ -218,7 +218,7 @@ pub(super) fn git_status_is_dirty(
     ) {
         Ok(output) => output,
         Err(error) if error.is_cancellation() => {
-            return Err(GitReceiptCollectionCancelled.into());
+            return Err(GitCollectionCancelled.into());
         }
         Err(OwnedProcessTreeError::OutputLimitExceeded(OwnedProcessOutputStream::Stdout)) => {
             return Ok(true);

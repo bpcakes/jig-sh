@@ -92,7 +92,7 @@ const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
 #[cfg(test)]
 const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,claude,codex,doctor,init,presets,update";
 #[cfg(test)]
-const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault,work";
+const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault";
 #[cfg(test)]
 const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test";
 
@@ -163,8 +163,8 @@ Examples:
   jig explain --json";
 
 const STATUS_AFTER_HELP: &str = "\
-Collects local Git, structured work and gate state, and loop leases and attempts.
-The command is read-only, does not fetch remotes, and records no receipt.
+Collects local Git state and loop leases and attempts.
+The command is read-only and does not fetch remotes.
 
 Collection failures are included as partial status so an operator can inspect
 the remaining snapshot. Human-readable output is the default. Pass --json for
@@ -190,8 +190,8 @@ Examples:
 
 const UI_AFTER_HELP: &str = "\
 Opens a read-only terminal dashboard over repository status and .agent/state:
-receipts, loops, repository state, and activity.
-Interactive mode requires terminal stdin and stdout and records no receipts.
+run history, loops, repository state, and activity.
+Interactive mode requires terminal stdin and stdout.
 
 Pass --json for one local recorder snapshot.
 
@@ -260,7 +260,7 @@ pub(crate) enum CommandKind {
         name = root_commands::BOOTSTRAP.name,
         display_order = root_commands::BOOTSTRAP.display_order
     )]
-    Bootstrap(ToolOpts),
+    Bootstrap,
     /// Prepare a generated repo for first use and verify its minimum contract.
     #[command(
         name = root_commands::SETUP.name,
@@ -298,14 +298,14 @@ pub(crate) enum CommandKind {
     /// Run declared repository actions in the foreground
     #[command(name = root_commands::RUN.name, display_order = root_commands::RUN.display_order)]
     Run(repository_run::RepositoryRunOpts),
-    /// Run built-in file-budget diagnostics without creating a run or receipt.
+    /// Run built-in file-budget diagnostics without creating a run.
     #[command(
         name = root_commands::FILE_BUDGET.name,
         display_order = root_commands::FILE_BUDGET.display_order,
         subcommand
     )]
     FileBudget(FileBudgetCommand),
-    /// Aggregate local repository, work, and loop observations.
+    /// Aggregate local repository and loop observations.
     #[command(
         name = root_commands::STATUS.name,
         display_order = root_commands::STATUS.display_order,
@@ -319,9 +319,6 @@ pub(crate) enum CommandKind {
         after_help = UI_AFTER_HELP
     )]
     Ui(UiOpts),
-    /// Removed structured-work commands; parsing only reports the replacement.
-    #[command(name = tool_defs::cli_command::WORK, hide = true, disable_help_flag = true)]
-    Work(RetiredWorkOpts),
     /// Run and inspect automated orchestration workflows.
     #[command(
         name = root_commands::LOOP.name,
@@ -351,7 +348,7 @@ pub(crate) enum CommandKind {
     MigrationAdd(MigrationAddOpts),
     /// Regenerate schema documentation when schema dumps are enabled.
     #[command(name = tool_defs::cli_command::SCHEMA_DUMP, hide = true)]
-    SchemaDump(ToolOpts),
+    SchemaDump,
     /// Manage the local encrypted Jig vault.
     #[command(
         name = root_commands::VAULT.name,
@@ -462,13 +459,6 @@ pub(crate) struct AgentMapOpts {
         help = "Agent map file to generate or check"
     )]
     pub(crate) map_path: PathBuf,
-}
-
-#[derive(Args, Clone, Debug, Default)]
-pub(crate) struct ToolOpts {
-    /// Retired with work plans; accepted and ignored.
-    #[arg(long, hide = true)]
-    pub(crate) plan_id: Option<String>,
 }
 
 #[derive(Args, Debug, Default)]
@@ -588,14 +578,6 @@ pub(crate) struct UiOpts {
     pub(crate) timeline_limit: Option<u64>,
     #[arg(long = "port", hide = true)]
     pub(crate) retired_port: Option<u16>,
-}
-
-/// Arguments of the removed `jig work` namespace, accepted only so every former
-/// invocation reports the same replacement guidance as a usage error.
-#[derive(Args, Debug)]
-pub(crate) struct RetiredWorkOpts {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-    pub(crate) args: Vec<std::ffi::OsString>,
 }
 
 impl UiOpts {

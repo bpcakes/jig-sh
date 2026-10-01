@@ -11,7 +11,7 @@ pub(crate) fn resolve_comparison_v1(
     root: &Path,
     request: ComparisonRequestV1,
 ) -> Result<ResolvedComparisonV1> {
-    resolve_comparison_inner(root, request, GitReceiptCollection::Blocking)
+    resolve_comparison_inner(root, request, GitCollection::Blocking)
 }
 
 pub(crate) fn resolve_comparison_v1_with_cancellation(
@@ -19,13 +19,13 @@ pub(crate) fn resolve_comparison_v1_with_cancellation(
     request: ComparisonRequestV1,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<ResolvedComparisonV1> {
-    resolve_comparison_inner(root, request, GitReceiptCollection::Cancellable(cancelled))
+    resolve_comparison_inner(root, request, GitCollection::Cancellable(cancelled))
 }
 
 fn resolve_comparison_inner(
     root: &Path,
     request: ComparisonRequestV1,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<ResolvedComparisonV1> {
     collection.ensure_active()?;
     match request {
@@ -97,7 +97,7 @@ fn resolve_exact_tree(
     root: &Path,
     requested_oid: String,
     provenance: ExactTreeProvenanceV1,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<ResolvedComparisonV1> {
     let oid_bytes = object_format_oid_bytes(root, collection)?;
     let requested_oid = validate_exact_oid(&requested_oid, oid_bytes)?;
@@ -165,11 +165,7 @@ fn resolve_exact_tree(
     }
 }
 
-fn resolve_commit(
-    root: &Path,
-    reference: &str,
-    collection: GitReceiptCollection<'_>,
-) -> Result<String> {
+fn resolve_commit(root: &Path, reference: &str, collection: GitCollection<'_>) -> Result<String> {
     let commit_expression = format!("{reference}^{{commit}}");
     let output = comparison_git_output(
         root,
@@ -186,7 +182,7 @@ fn resolve_commit(
     parse_git_object_oid(&output.stdout, "comparison commit")
 }
 
-fn object_format_oid_bytes(root: &Path, collection: GitReceiptCollection<'_>) -> Result<usize> {
+fn object_format_oid_bytes(root: &Path, collection: GitCollection<'_>) -> Result<usize> {
     let output = comparison_git_output(
         root,
         &["--no-replace-objects", "rev-parse", "--show-object-format"],
@@ -200,10 +196,7 @@ fn object_format_oid_bytes(root: &Path, collection: GitReceiptCollection<'_>) ->
     }
 }
 
-pub(super) fn has_unborn_symbolic_head(
-    root: &Path,
-    collection: GitReceiptCollection<'_>,
-) -> Result<bool> {
+pub(super) fn has_unborn_symbolic_head(root: &Path, collection: GitCollection<'_>) -> Result<bool> {
     let symbolic = comparison_git_output(
         root,
         &["--no-replace-objects", "symbolic-ref", "-q", "HEAD"],
@@ -212,7 +205,7 @@ pub(super) fn has_unborn_symbolic_head(
     );
     let symbolic = match symbolic {
         Ok(output) => output,
-        Err(error) if is_git_receipt_collection_cancellation(&error) => return Err(error),
+        Err(error) if is_git_collection_cancellation(&error) => return Err(error),
         Err(_) => return Ok(false),
     };
     let target = parse_single_line(&symbolic.stdout, "symbolic HEAD target")?.to_owned();
@@ -232,10 +225,7 @@ pub(super) fn has_unborn_symbolic_head(
     Ok(!refs.lines().any(|reference| reference == target))
 }
 
-fn resolve_empty_tree_for_comparison(
-    root: &Path,
-    collection: GitReceiptCollection<'_>,
-) -> Result<String> {
+fn resolve_empty_tree_for_comparison(root: &Path, collection: GitCollection<'_>) -> Result<String> {
     resolve_empty_tree_oid_inner(root, collection)
 }
 
@@ -302,7 +292,7 @@ fn comparison_git_output(
     root: &Path,
     args: &[&str],
     label: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Output> {
     collection.git_bounded_output(
         root,

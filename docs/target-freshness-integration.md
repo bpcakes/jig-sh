@@ -119,6 +119,5 @@ defaulted, even if their stored provenance is inconsistent. The standard
 projection remains unchanged for compatibility. A `freshness_policy` record
 describes configuration only and never says that a target is currently fresh.
 
-`jig status --freshness-timeout-ms` is still accepted for compatibility but
-hidden and ignored; it bounded the gate and evidence inspections removed with
-`jig work`.
+`jig status --freshness-timeout-ms`, which bounded the gate and evidence
+inspections removed with `jig work`, was removed as well.

@@ -221,7 +221,7 @@ fn json_mode_wraps_usage_and_pre_output_command_errors() {
         usage["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("`jig work` was removed"),
+            .contains("unrecognized subcommand 'work'"),
         "{usage:#}"
     );
 

@@ -4,9 +4,14 @@ pub(super) fn validate_repository_source(
     config: &RepoConfig,
     manifest: &ContractManifest,
 ) -> Result<()> {
-    config
-        .work
-        .validate_contract_version(manifest.contract_version)?;
+    match &config.work {
+        Some(_) if manifest.contract_version >= WORK_CONFIG_RETIRED_CONTRACT_VERSION => bail!(
+            "[work] is not supported by jig contract version {}; remove it from .jig.toml, and declare `[repository] tracker = \"beads\"` in place of `receipt_metadata = [\"beads\"]`",
+            manifest.contract_version
+        ),
+        Some(work) => work.validate_contract_version(manifest.contract_version)?,
+        None => {}
+    }
     for action in config
         .repository
         .iter()
@@ -24,6 +29,13 @@ pub(super) fn validate_repository_source(
     let source = config.repository.as_ref().ok_or_else(|| {
         anyhow::anyhow!("jig contract version 6 requires [repository] in .jig.toml")
     })?;
+    if source.tracker.is_some() && manifest.contract_version < WORK_CONFIG_RETIRED_CONTRACT_VERSION
+    {
+        bail!(
+            "[repository] tracker requires jig contract version {WORK_CONFIG_RETIRED_CONTRACT_VERSION} or later; repository contract is {}",
+            manifest.contract_version
+        );
+    }
     if source.components != manifest.components {
         bail!(
             "repository components differ between .jig.toml and .agent/jig-contract.json at {}; run `jig update --recopy` to regenerate the resolved contract after reviewing the authored source",
@@ -263,7 +275,9 @@ pub(super) fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_schema_docs_dir(&config.schema_docs_dir)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
-    config.work.validate()?;
+    if let Some(work) = &config.work {
+        work.validate()?;
+    }
     config.loop_config.validate()
 }
 

@@ -2,7 +2,7 @@ use clap::Subcommand;
 
 use crate::tool_defs;
 
-use super::{MigrationAddOpts, ToolOpts};
+use super::MigrationAddOpts;
 
 pub(super) const SQLX_AFTER_HELP: &str = "\
 SQLx checks remain grouped with the other project checks under `jig check`.
@@ -34,5 +34,5 @@ pub(crate) enum SqlxMigrationCommand {
 pub(crate) enum SqlxSchemaCommand {
     /// Regenerate schema documentation when schema dumps are enabled.
     #[command(name = tool_defs::cli_command::SQLX_SCHEMA_DUMP)]
-    Dump(ToolOpts),
+    Dump,
 }

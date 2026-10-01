@@ -181,7 +181,7 @@ fn cancellation_before_fingerprint_git_spawn_remains_typed() {
     })
     .unwrap_err();
 
-    assert!(is_git_receipt_collection_cancellation(&error), "{error:#}");
+    assert!(is_git_collection_cancellation(&error), "{error:#}");
     assert_eq!(calls.get(), 2);
 }
 

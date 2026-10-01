@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     context::RepoContext,
-    git_receipts::{
+    source_identity::{
         repo_changed_paths_since, repo_observed_ignored_dotenv_paths, repository_source_snapshot,
     },
 };

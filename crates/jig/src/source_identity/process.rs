@@ -45,7 +45,7 @@ pub(super) fn git_worktree_proof_stdout(
     args: &[&str],
     label: &str,
     limit: usize,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Vec<u8>> {
     git_bounded_proof_stdout(root, args, label, limit, "worktree proof", collection)
 }
@@ -55,7 +55,7 @@ pub(super) fn git_worktree_proof_stdout_os(
     args: &[OsString],
     label: &str,
     limit: usize,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Vec<u8>> {
     git_bounded_proof_stdout_os(root, args, label, limit, "worktree proof", collection)
 }
@@ -66,7 +66,7 @@ pub(super) fn git_bounded_proof_stdout_os(
     label: &str,
     limit: usize,
     proof_kind: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Vec<u8>> {
     collection.ensure_active()?;
     let mut command = Command::new("git");
@@ -80,7 +80,7 @@ pub(super) fn git_bounded_proof_stdout(
     label: &str,
     limit: usize,
     proof_kind: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Vec<u8>> {
     Ok(git_bounded_proof_output(root, args, label, limit, proof_kind, collection)?.stdout)
 }
@@ -91,7 +91,7 @@ pub(super) fn git_bounded_proof_output(
     label: &str,
     limit: usize,
     proof_kind: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Output> {
     git_bounded_proof_output_with_timeout(
         root,
@@ -110,7 +110,7 @@ pub(super) fn git_bounded_proof_output_with_timeout(
     label: &str,
     limit: usize,
     proof_kind: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
     timeout: Duration,
 ) -> Result<Output> {
     collection.ensure_active()?;
@@ -133,7 +133,7 @@ pub(super) fn git_bounded_proof_command_stdout(
     label: &str,
     limit: usize,
     proof_kind: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Vec<u8>> {
     Ok(
         git_bounded_proof_command_output(root, command, label, limit, proof_kind, collection)?
@@ -147,7 +147,7 @@ pub(super) fn git_bounded_proof_command_output(
     label: &str,
     limit: usize,
     proof_kind: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Output> {
     git_bounded_proof_command_output_with_timeout(
         root,
@@ -166,7 +166,7 @@ pub(super) fn git_bounded_proof_command_output_with_timeout(
     label: &str,
     limit: usize,
     proof_kind: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
     timeout: Duration,
 ) -> Result<Output> {
     let output = git_bounded_proof_command_capture_with_timeout(
@@ -190,7 +190,7 @@ fn git_bounded_proof_command_capture_with_timeout(
     label: &str,
     limit: usize,
     proof_kind: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
     timeout: Duration,
 ) -> Result<Output> {
     command
@@ -198,7 +198,7 @@ fn git_bounded_proof_command_capture_with_timeout(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_read_only_git_environment(command);
-    let mut observer = GitReceiptProcessObserver { collection };
+    let mut observer = GitProcessObserver { collection };
     let output = match run_owned_process_tree_with_output_policy_and_observer(
         command,
         timeout,
@@ -211,7 +211,7 @@ fn git_bounded_proof_command_capture_with_timeout(
     ) {
         Ok(output) => output,
         Err(error) if error.is_cancellation() => {
-            return Err(GitReceiptCollectionCancelled.into());
+            return Err(GitCollectionCancelled.into());
         }
         Err(
             error @ OwnedProcessTreeError::OutputLimitExceeded(OwnedProcessOutputStream::Stdout),
@@ -253,15 +253,15 @@ fn git_bounded_proof_command_capture_with_timeout(
     Ok(output)
 }
 
-pub(super) struct GitReceiptProcessObserver<'a> {
-    pub(super) collection: GitReceiptCollection<'a>,
+pub(super) struct GitProcessObserver<'a> {
+    pub(super) collection: GitCollection<'a>,
 }
 
-impl OwnedProcessObserver for GitReceiptProcessObserver<'_> {
+impl OwnedProcessObserver for GitProcessObserver<'_> {
     fn cancelled(&mut self) -> bool {
         matches!(
             self.collection,
-            GitReceiptCollection::Cancellable(cancelled) if cancelled()
+            GitCollection::Cancellable(cancelled) if cancelled()
         )
     }
 
@@ -272,7 +272,7 @@ pub(super) fn git_changed_path_stdout(
     root: &Path,
     args: &[&str],
     label: &str,
-    collection: GitReceiptCollection<'_>,
+    collection: GitCollection<'_>,
 ) -> Result<Vec<u8>> {
     git_bounded_proof_stdout(
         root,
@@ -336,9 +336,9 @@ pub(super) fn git_output_with_cancellation(
     label: &str,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Output> {
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
+    GitCollection::Cancellable(cancelled).ensure_active()?;
     let output = git_output(root, args, label)?;
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
+    GitCollection::Cancellable(cancelled).ensure_active()?;
     Ok(output)
 }
 
@@ -361,7 +361,7 @@ pub(super) fn run_git_command_with_cancellation(
     ) {
         Ok(output) => output,
         Err(error) if error.is_cancellation() => {
-            return Err(GitReceiptCollectionCancelled.into());
+            return Err(GitCollectionCancelled.into());
         }
         Err(error) => {
             return Err(anyhow::Error::new(error)
@@ -466,14 +466,14 @@ pub(super) fn git_hash_file_with_cancellation(
     full_path: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
+    GitCollection::Cancellable(cancelled).ensure_active()?;
     let hash = git_hash_file(root, full_path)?;
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
+    GitCollection::Cancellable(cancelled).ensure_active()?;
     Ok(hash)
 }
 
 pub(super) fn configure_read_only_git_environment(command: &mut Command) {
-    // Receipt and gate fingerprint probes are observational. In particular,
+    // Source identity probes are observational. In particular,
     // `git status` must not refresh stat data by taking an optional index lock.
     scrub_known_repository_git_environment(command);
     command.env("GIT_OPTIONAL_LOCKS", "0");

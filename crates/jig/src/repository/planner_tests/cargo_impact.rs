@@ -3,8 +3,8 @@ use std::fs;
 use jig_contract::{CargoImpactReasonV1, CargoImpactV1, ComponentId, SourceIdentity};
 
 use super::{reidentify, v7_file_budget_repository};
-use crate::git_receipts::repository_source_snapshot;
 use crate::repository::planner::{PlanRunRequest, plan_run, validate_run_plan};
+use crate::source_identity::repository_source_snapshot;
 
 #[test]
 fn plan_validation_rejects_tampered_cargo_impact_facts() {

@@ -319,7 +319,7 @@ fn wave_fingerprint(
                     .is_some_and(|budget| budget.remaining_time().is_zero())
             })
     };
-    crate::git_receipts::repository_source_snapshot_with_cancellation(ctx.root(), &cancelled)
+    crate::source_identity::repository_source_snapshot_with_cancellation(ctx.root(), &cancelled)
         .map(|snapshot| snapshot.worktree_fingerprint)
         .map_err(|_| {
             "resource wave source authority could not be established within its remaining budget"

@@ -517,7 +517,7 @@ pub(super) fn contract_migration_check(root: &Path, contract_version: u32) -> Do
         false,
         "migration available",
         format!(
-            "contract {contract_version} remains supported, but its recorded source may predate compatibility-aware runtime installation; current generated repositories use contract {}",
+            "contract {contract_version} remains supported; current generated repositories use contract {}, and migrating refreshes the harness to it",
             crate::context::CURRENT_CONTRACT_VERSION
         ),
     )

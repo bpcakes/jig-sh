@@ -22,11 +22,11 @@ use sha2::{Digest, Sha256};
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 
 use crate::context::RepoContext;
-use crate::git_receipts::{
+use crate::source_identity::{
     BaselineFileV1, CurrentSourceV1, ExactCurrentPathStateV1 as GitExactCurrentPathStateV1,
     FileChangeKindV1, ScopeEntryV1, ScopeIssueKindV1, ScopeSnapshotV1,
     capture_all_current_scope_v1_with_cancellation, capture_scope_v1_with_cancellation,
-    is_git_receipt_collection_cancellation, observe_exact_paths_v1_with_cancellation,
+    is_git_collection_cancellation, observe_exact_paths_v1_with_cancellation,
     read_git_blob_v1_with_cancellation, read_tree_path_blob_v1_with_cancellation,
     resolve_index_blob_oid_v1_with_cancellation, resolve_tree_path_blob_oid_v1_with_cancellation,
 };

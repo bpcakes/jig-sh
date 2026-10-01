@@ -92,8 +92,8 @@ logs remain available, but consumers must not need to parse human text to learn
 the target, result, affected files, or normalized findings.
 
 A **gate** was a policy over evidence evaluated by the removed `jig work`
-commands. `[work]` gate configuration is still accepted, but no command
-evaluates it.
+commands. Contracts through v8 still accept `[work]` gate configuration, but no
+command evaluates it; contract v9 removes `[work]`.
 
 An **adapter** discovers or contributes component and action defaults for a
 stack or delegated runner. Rust, Go, TypeScript, SQLx, Nx, Turborepo, and
@@ -338,8 +338,9 @@ Contract versions 2 through 5 remain readable. For those contracts, the
 runtime synthesizes a `repo` component and maps each legacy manifest tool onto
 a compatible repo-scoped action. Existing command names and tool calls keep
 working. Contract version 6 templates emit native component and
-action records and still render target-aware `[[work.gates]]` entries, which are
-accepted but no longer evaluated.
+action records. Templates through contract version 8 also render target-aware
+`[[work.gates]]` entries, which are accepted but no longer evaluated; contract
+version 9 templates render no `[work]` section.
 
 The singular `backend_language` and legacy language command keys remain
 accepted for version 5 and earlier migrations. Version 6 does not use them as
@@ -356,7 +357,7 @@ place as history. Loop occurrences record their own evidence under Git
 metadata, reported by `jig loop show`.
 
 Gate evaluation, agent-review gates, and structured work plans were removed
-with `jig work`. `--plan-id` is accepted and ignored.
+with `jig work`, and `--plan-id` was removed with them.
 
 ## Caching policy
 

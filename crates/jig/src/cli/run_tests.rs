@@ -271,9 +271,6 @@ fn generated_launcher_keeps_bare_check_and_target_selectors_repository_scoped() 
         &["check", "contract"][..],
         &["check", "--help"][..],
         &["check", "--version"][..],
-        &["check", "--plan-id", "plan_example", "contract"][..],
-        &["check", "--plan-id=plan_example", "contract"][..],
-        &["check", "contract", "--plan-id=plan_example"][..],
     ] {
         assert!(generated_launcher_classifies_as_capability_only(args));
     }
@@ -511,15 +508,17 @@ fn capability_probe_can_use_launcher_contract_when_manifest_is_malformed() {
     std::fs::create_dir_all(temp.path().join(".agent")).unwrap();
     std::fs::write(temp.path().join(".agent/jig-contract.json"), "{").unwrap();
 
-    run_runtime_compatible(RuntimeCompatibleOpts {
-        profile: RuntimeCompatibilityProfile::Runtime,
-        capability_only: true,
-        contract_version: Some(4),
-        repo_root: temp.path().to_path_buf(),
-    })
-    .unwrap();
+    for supported in [4, 8, 9] {
+        run_runtime_compatible(RuntimeCompatibleOpts {
+            profile: RuntimeCompatibilityProfile::Runtime,
+            capability_only: true,
+            contract_version: Some(supported),
+            repo_root: temp.path().to_path_buf(),
+        })
+        .unwrap();
+    }
 
-    for unsupported in [9, 10, 11, 999] {
+    for unsupported in [10, 11, 12, 999] {
         let error = run_runtime_compatible(RuntimeCompatibleOpts {
             profile: RuntimeCompatibilityProfile::Runtime,
             capability_only: true,
@@ -533,7 +532,7 @@ fn capability_probe_can_use_launcher_contract_when_manifest_is_malformed() {
             "{error}"
         );
         assert!(
-            error.contains("supports active versions 2 through 8"),
+            error.contains("supports active versions 2 through 9"),
             "{error}"
         );
     }

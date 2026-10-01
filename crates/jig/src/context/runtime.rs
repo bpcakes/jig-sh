@@ -34,8 +34,12 @@ static PREVALIDATED_LAUNCHER_CONTEXT: Mutex<Option<RepoContext>> = Mutex::new(No
 
 pub(crate) const JIG_REPO_ROOT_ENV: &str = "JIG_REPO_ROOT";
 pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = 2;
-// Epochs 9 and 10 remain reserved for historical, unreleased receipt formats,
-// and 11 for the retired work-link journal. The next epoch is 12.
+/// The last epoch whose `.jig.toml` may declare the retired `[work]` section.
+pub(crate) const LAST_WORK_CONFIG_CONTRACT_VERSION: u32 = 8;
+/// The first epoch without `[work]`; it moves tracker ownership to
+/// `[repository] tracker`. Unreleased epochs are consolidated into this v9
+/// successor to the last released generated contract, v8.
+pub(crate) const WORK_CONFIG_RETIRED_CONTRACT_VERSION: u32 = 9;
 pub(crate) const GIT_RUNTIME_CACHE_BASE: &str = ".git/jig-tools";
 pub(crate) const FALLBACK_RUNTIME_CACHE_BASE: &str = ".agent/.cache/jig";
 pub(crate) const RUNTIME_CACHE_PROFILE_SUFFIX: &str = "-runtime";

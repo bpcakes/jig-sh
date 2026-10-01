@@ -284,7 +284,7 @@ fn dispatch(ctx: &RepoContext, command: CommandKind) -> Result<Value> {
 
 fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
     match command {
-        CommandKind::Bootstrap(_) => RuntimeCommand::Bootstrap,
+        CommandKind::Bootstrap => RuntimeCommand::Bootstrap,
         CommandKind::Run(opts) => RuntimeCommand::Run(opts.try_into().unwrap()),
         CommandKind::Check(command) => RuntimeCommand::Check(command.try_into().unwrap()),
         CommandKind::Migration(MigrationCommand::Add(opts)) => {
@@ -293,10 +293,8 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Sqlx(SqlxCommand::Migration(SqlxMigrationCommand::Add(opts))) => {
             RuntimeCommand::MigrationAdd(opts.into())
         }
-        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(_)))
-        | CommandKind::SchemaDump(_) => {
-            RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump)
-        }
+        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump))
+        | CommandKind::SchemaDump => RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump),
         CommandKind::MigrationAdd(opts) => RuntimeCommand::MigrationAdd(opts.into()),
         CommandKind::AgentMap(command) => RuntimeCommand::AgentMap(command.into()),
         CommandKind::GenerateSqlxUncheckedQueriesTodo(opts) => {
@@ -321,7 +319,6 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         | CommandKind::Codex(_)
         | CommandKind::Vault(_)
         | CommandKind::Ui(_)
-        | CommandKind::Work(_)
         | CommandKind::Mcp(_) => {
             panic!("runtime test helper only accepts runtime commands")
         }
@@ -426,7 +423,6 @@ rust_test_command = "printf 'command tool ran\n'"
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
             crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
-                tool: crate::cli::ToolOpts { plan_id: None },
                 selectors: Vec::new(),
             }),
         )),
@@ -557,7 +553,6 @@ checks = ["jig.fmt_check", "jig.test"]
     let run_id = output["run"]["run_id"].as_str().unwrap();
 
     let durable = crate::state::run_by_id(&ctx, run_id).unwrap();
-    assert!(durable.work_plan_id.is_none());
     assert_eq!(durable.result.status, jig_contract::RunStatus::Completed);
     assert_eq!(
         durable.result.conclusion,

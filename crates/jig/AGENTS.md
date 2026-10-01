@@ -42,7 +42,7 @@
 - Change bounded owned-process execution or process-tree cleanup: `src/process.rs` and
   `src/process/tests.rs`.
 - Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`; the legacy file-budget checker retirement evaluates `repo:file-budget` inline in `src/bootstrap/file_budget_lifecycle.rs`.
-- Change repository source identity: `src/git_receipts.rs`.
+- Change repository source identity: `src/source_identity.rs`.
 
 ## Invariants
 

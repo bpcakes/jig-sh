@@ -252,8 +252,8 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
                 cancellation.is_cancelled()
             });
             // wait_for_live_runs is also used as a lifecycle barrier before
-            // callers inspect or close linked work. Keep the run registered
-            // until its execution lease is observably released.
+            // callers inspect a run. Keep the run registered until its
+            // execution lease is observably released.
             drop(execution_lease);
         })
         .context("Failed to start the repository run worker")?;

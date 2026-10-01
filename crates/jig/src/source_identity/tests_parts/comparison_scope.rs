@@ -735,12 +735,12 @@ fn exact_observation_validates_inputs_and_all_primitives_are_cancellable_and_bou
         &cancelled,
     )
     .unwrap_err();
-    assert!(is_git_receipt_collection_cancellation(&error));
+    assert!(is_git_collection_cancellation(&error));
     let comparison = exact_head(root);
     let error =
         capture_scope_v1_with_cancellation(root, &comparison, CurrentViewV1::Worktree, &cancelled)
             .unwrap_err();
-    assert!(is_git_receipt_collection_cancellation(&error));
+    assert!(is_git_collection_cancellation(&error));
     let error = observe_exact_paths_v1_with_cancellation(
         root,
         CurrentViewV1::Worktree,
@@ -748,7 +748,7 @@ fn exact_observation_validates_inputs_and_all_primitives_are_cancellable_and_bou
         &cancelled,
     )
     .unwrap_err();
-    assert!(is_git_receipt_collection_cancellation(&error));
+    assert!(is_git_collection_cancellation(&error));
 
     std::fs::write(root.join("tracked.txt"), "changed\n").unwrap();
     let bounded = GATE_SCOPE_DIFF_OUTPUT_LIMIT_OVERRIDE.with(|limit| {

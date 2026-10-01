@@ -160,7 +160,7 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records each run in run history.
 - `scripts/jig file-budget audit` provides standalone source-size diagnostics without creating runs or receipts.
-- `scripts/jig state summary` summarizes run history: runs, target results, failures, and the most recent target results. Former `scripts/jig work ...` invocations fail with a usage error that points to `check` and `state summary`.
+- `scripts/jig state summary` summarizes run history: runs, target results, failures, and the most recent target results. `scripts/jig work` was removed and is an unknown command.
 - `scripts/jig status` collects local repository, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
 - `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
@@ -213,8 +213,8 @@ The foreground command shares MCP planning, execution, run history and cancellat
 Approve every planned `worktree` and `external` effect explicitly with repeated
 `--approve-effect` flags. `--explain` prints the plan without execution or run
 state. `--fail-fast` and `--comparison-*` have the same repository execution
-meaning as on `check`; the retired `--plan-id` is accepted and ignored, and the
-removed `--no-receipt` is rejected. This requires contract v6 or
+meaning as on `check`; the removed `--plan-id` and `--no-receipt` options are
+rejected. This requires contract v6 or
 later; general declared action arguments remain follow-up work.
 
 Bare `scripts/jig check` resolves the default verification profile. For a
@@ -278,7 +278,7 @@ may appear before or after target selectors, for example
 
 ## State Health And Retention
 
-Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state and recommends run archiving once `runs.jsonl` reaches 8 MiB. Legacy `receipts.jsonl`, `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl` streams are still sized and checked, but Jig no longer reads them; keep them as history or remove them. `state compact sessions` was removed; `state restore --backup <path>` still restores a sessions backup it created.
+Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state and recommends run archiving once `runs.jsonl` reaches 8 MiB. Legacy `receipts.jsonl`, `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl` streams are still sized and checked, but Jig no longer reads them; keep them as history or remove them. `state compact sessions` was removed, and `state restore --backup <path>` no longer restores the sessions backups it created.
 
 Run retention is also local. Checks record run history, and each loop occurrence records its own evidence under Git metadata, kept while the occurrence stays in loop history. `state archive --before <date>` compresses completed runs that ended before the cutoff into ignored `.agent/.cache/state-archives/`, writes an exact manifested pre-archive backup under `.agent/.cache/state-backups/`, and shrinks `runs.jsonl`. `state restore --backup <path>` can restore that exact preimage. Cache artifacts are ignored local recovery aids rather than durable backups, and neither operation rewrites Git history, so durable retention and committed historical blobs require separate, coordinated handling.
 

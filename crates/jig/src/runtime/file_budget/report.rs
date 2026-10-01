@@ -476,7 +476,7 @@ pub(super) fn classify_stop(
     if error
         .downcast_ref::<jig_file_budget::MeasurementErrorV1>()
         .is_some_and(|error| error.kind == MeasurementErrorKindV1::Cancelled)
-        || is_git_receipt_collection_cancellation(error)
+        || is_git_collection_cancellation(error)
     {
         return Some(if Instant::now() >= context.deadline {
             EngineStopV1::TimedOut
@@ -534,7 +534,7 @@ pub(super) const fn comparison_kind(comparison: &ResolvedComparisonV1) -> &'stat
     }
 }
 
-pub(super) fn scope_issue_json(issue: &crate::git_receipts::ScopeIssueV1) -> Value {
+pub(super) fn scope_issue_json(issue: &crate::source_identity::ScopeIssueV1) -> Value {
     json!({
         "kind": format!("{:?}", issue.kind).to_ascii_lowercase(),
         "path": issue.path,

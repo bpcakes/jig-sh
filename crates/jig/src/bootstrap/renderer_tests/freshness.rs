@@ -24,7 +24,10 @@ fn freshness_epoch_keeps_git_defaults_and_preserves_authored_assertions() {
                 && action["source_state"] == "git")
     );
     let current = render_context(&template, &answers, None).unwrap();
-    assert_eq!(current["_jig"]["contract_version"], 8);
+    assert_eq!(
+        current["_jig"]["contract_version"],
+        crate::context::CURRENT_CONTRACT_VERSION
+    );
     let actions = current["repository"]["actions"].as_array().unwrap();
     assert!(!actions.is_empty());
     assert!(

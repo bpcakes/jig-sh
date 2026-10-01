@@ -8,20 +8,11 @@ fn parses_canonical_and_legacy_sqlx_commands() {
         CommandKind::Migration(MigrationCommand::Add(_))
     ));
 
-    let migration = Cli::try_parse_from([
-        "jig",
-        "sqlx",
-        "migration",
-        "add",
-        "create_users",
-        "--plan-id",
-        "plan_1",
-    ])
-    .unwrap();
+    let migration =
+        Cli::try_parse_from(["jig", "sqlx", "migration", "add", "create_users"]).unwrap();
     match migration.command {
         CommandKind::Sqlx(SqlxCommand::Migration(SqlxMigrationCommand::Add(opts))) => {
             assert_eq!(opts.name, "create_users");
-            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_1"));
         }
         other => panic!("expected sqlx migration add command, got {other:?}"),
     }
@@ -29,7 +20,7 @@ fn parses_canonical_and_legacy_sqlx_commands() {
     let schema = Cli::try_parse_from(["jig", "sqlx", "schema", "dump"]).unwrap();
     assert!(matches!(
         schema.command,
-        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(_)))
+        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump))
     ));
     assert!(Cli::try_parse_from(["jig", "sqlx", "schema", "dump", "--no-receipt"]).is_err());
 
@@ -41,40 +32,29 @@ fn parses_canonical_and_legacy_sqlx_commands() {
     ));
     assert!(matches!(
         Cli::try_parse_from(["jig", "schema-dump"]).unwrap().command,
-        CommandKind::SchemaDump(_)
+        CommandKind::SchemaDump
     ));
 }
 
 #[test]
 fn parses_check_namespace_commands() {
-    let fmt = Cli::try_parse_from(["jig", "check", "fmt", "--plan-id", "plan_1"]).unwrap();
-    match fmt.command {
+    let fmt = Cli::try_parse_from(["jig", "check", "fmt"]).unwrap();
+    assert!(matches!(
+        fmt.command,
         CommandKind::Check(CheckOpts {
-            command: Some(CheckCommand::Fmt(opts)),
+            command: Some(CheckCommand::Fmt(_)),
             ..
-        }) => {
-            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_1"));
-        }
-        other => panic!("expected check fmt command, got {other:?}"),
-    }
+        })
+    ));
 
-    let ts_typecheck = Cli::try_parse_from([
-        "jig",
-        "check",
-        "typescript-typecheck",
-        "--plan-id",
-        "plan_2",
-    ])
-    .unwrap();
-    match ts_typecheck.command {
+    let ts_typecheck = Cli::try_parse_from(["jig", "check", "typescript-typecheck"]).unwrap();
+    assert!(matches!(
+        ts_typecheck.command,
         CommandKind::Check(CheckOpts {
-            command: Some(CheckCommand::TypeScriptTypecheck(opts)),
+            command: Some(CheckCommand::TypeScriptTypecheck(_)),
             ..
-        }) => {
-            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_2"));
-        }
-        other => panic!("expected check typescript-typecheck command, got {other:?}"),
-    }
+        })
+    ));
 
     for (command, expected) in [
         ("typescript-lint", "lint"),
@@ -550,37 +530,18 @@ fn rejects_working_tree_template_mode() {
 }
 
 #[test]
-fn retired_work_commands_parse_only_to_report_the_replacement() {
+fn the_removed_work_namespace_is_an_unknown_command() {
     for args in [
         vec!["jig", "work", "status"],
-        vec![
-            "jig",
-            "work",
-            "receipts",
-            "--plan-id",
-            "plan_1",
-            "--failed-only",
-        ],
-        vec![
-            "jig",
-            "--json",
-            "work",
-            "start",
-            "--title",
-            "Example",
-            "--print-plan-id",
-        ],
-        vec!["jig", "work", "--help"],
+        vec!["jig", "--json", "work", "start", "--title", "Example"],
         vec!["jig", "work"],
     ] {
-        let cli = Cli::try_parse_from(&args).unwrap();
-        assert!(matches!(cli.command, CommandKind::Work(_)), "{args:?}");
-        let error = super::run::post_parse_usage_error(&cli)
-            .expect("retired work commands must be rejected")
-            .to_string();
-        assert!(error.contains("`jig work` was removed"), "{error}");
-        assert!(error.contains("jig check COMPONENT:ACTION"), "{error}");
-        assert!(error.contains("jig state summary"), "{error}");
+        let error = Cli::try_parse_from(&args).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::InvalidSubcommand,
+            "{args:?}"
+        );
     }
 }
 
@@ -661,20 +622,25 @@ fn parses_state_summary_command() {
 }
 
 #[test]
-fn rejects_the_retired_receipt_flag_and_accepts_a_plan_id() {
-    assert!(Cli::try_parse_from(["jig", "check", "contract", "--no-receipt"]).is_err());
-    assert!(Cli::try_parse_from(["jig", "migration-add", "create_users", "--no-receipt"]).is_err());
-
-    // The retired `--plan-id` is accepted and ignored until contract epoch 12.
-    let cli = Cli::try_parse_from(["jig", "check", "contract", "--plan-id", "plan_1"]).unwrap();
-    let CommandKind::Check(CheckOpts {
-        command: Some(CheckCommand::Contract(opts)),
-        ..
-    }) = cli.command
-    else {
-        panic!("expected check contract command");
-    };
-    assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_1"));
+fn rejects_the_removed_receipt_and_plan_flags() {
+    for args in [
+        &["jig", "check", "contract", "--no-receipt"][..],
+        &["jig", "migration-add", "create_users", "--no-receipt"][..],
+        &["jig", "check", "contract", "--plan-id", "plan_1"][..],
+        &["jig", "check", "--plan-id=plan_1"][..],
+        &["jig", "run", "repo:contract", "--plan-id", "plan_1"][..],
+        &["jig", "bootstrap", "--plan-id", "plan_1"][..],
+        &[
+            "jig",
+            "migration",
+            "add",
+            "create_users",
+            "--plan-id",
+            "plan_1",
+        ][..],
+    ] {
+        assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+    }
 }
 
 #[test]

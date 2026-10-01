@@ -16,8 +16,6 @@ pub(super) struct RunEventRecord {
     pub(super) run_id: String,
     pub(super) event: String,
     pub(super) timestamp_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) work_plan_id: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

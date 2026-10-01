@@ -13,7 +13,7 @@ use super::{
     ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts,
     ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
     ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand,
-    StateRestoreOpts, ToolOpts,
+    StateRestoreOpts,
 };
 
 impl From<AgentMapCommand> for command::AgentMapCommand {
@@ -37,7 +37,6 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
 
     fn try_from(opts: CheckOpts) -> Result<Self> {
         let CheckOpts {
-            mut tool,
             mut profile,
             mut affected,
             mut explain,
@@ -50,7 +49,6 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
             Some(CheckCommand::Selectors(selectors)) => {
                 Some(CheckCommand::Selectors(normalize_external_check_args(
                     selectors,
-                    &mut tool,
                     &mut profile,
                     &mut affected,
                     &mut explain,

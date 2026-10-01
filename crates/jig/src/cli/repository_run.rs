@@ -1,11 +1,9 @@
-use super::{CheckComparisonOpts, ToolOpts};
+use super::CheckComparisonOpts;
 use clap::{Args, ValueEnum};
 use jig_contract::ActionEffect;
 
 #[derive(Args, Debug)]
 pub(crate) struct RepositoryRunOpts {
-    #[command(flatten)]
-    tool: ToolOpts,
     #[arg(value_name = "SELECTOR", help = "Component action or target selectors")]
     selectors: Vec<String>,
     #[arg(
@@ -128,8 +126,6 @@ mod tests {
             "api:generate",
             "--approve-effect",
             "worktree",
-            "--plan-id",
-            "plan_fixture",
             "--fail-fast",
             "--comparison-strict-inventory",
         ])

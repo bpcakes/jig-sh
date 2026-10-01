@@ -1,42 +1,7 @@
 use super::*;
 
 #[test]
-fn full_readoption_preserves_required_on_an_unchanged_generated_evidence_gate() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-
-    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-    let config_path = repo.join(".jig.toml");
-    let mut config =
-        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
-    let verify = config["work"]["gates"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|gate| gate["id"].as_str() == Some("verify"))
-        .unwrap()
-        .as_table_mut()
-        .unwrap();
-    verify.insert("required".into(), toml::Value::Boolean(false));
-    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
-
-    run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap();
-
-    let updated = toml::from_str::<toml::Value>(&fs::read_to_string(config_path).unwrap()).unwrap();
-    let verify = updated["work"]["gates"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|gate| gate["id"].as_str() == Some("verify"))
-        .unwrap();
-    assert_eq!(verify["required"].as_bool(), Some(false));
-}
-
-#[test]
-fn full_readoption_reconciles_work_config_against_the_new_contract() {
+fn full_readoption_from_contract_eight_moves_tracker_ownership_and_reports_dropped_work() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
@@ -51,11 +16,16 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
     initial.answers.web_package_manager = Some("npm".into());
     initial.answers.frontend_apps = vec![frontend_app()];
     run_adopt(initial).unwrap();
+    downgrade_to_contract_eight(&repo);
 
     let config_path = repo.join(".jig.toml");
     let mut config =
         toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
     let work = config["work"].as_table_mut().unwrap();
+    work.insert(
+        "receipt_metadata".into(),
+        toml::Value::Array(vec![toml::Value::from("beads")]),
+    );
     work.insert(
         "checks".into(),
         toml::Value::Array(
@@ -154,180 +124,41 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
     fs::remove_file(repo.join("package.json")).unwrap();
     fs::remove_file(repo.join("package-lock.json")).unwrap();
 
-    run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap();
+    let output = run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap();
 
     let config =
         toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
             .unwrap();
-    let checks = config["work"]["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|tool| tool.as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(checks, vec!["jig.fmt_check"]);
-
-    let gates = config["work"]["gates"].as_array().unwrap();
-    let gate = |id: &str| {
-        gates
-            .iter()
-            .find(|gate| gate["id"].as_str() == Some(id))
+    assert_tracker_ownership(&config);
+    assert_contains_note(
+        &output["notes"],
+        &["`[work] receipt_metadata = [\"beads\"]` moves to `[repository] tracker = \"beads\"`"],
+    );
+    assert_contains_note(
+        &output["notes"],
+        &[
+            "Retired [work] settings are dropped from .jig.toml: ",
+            "`checks`",
+            "gates `project-fmt`, `project-review`, `project-evidence`",
+            "`refinements`",
+        ],
+    );
+    assert!(
+        output["notes"]
+            .as_array()
             .unwrap()
-    };
-    assert_eq!(gate("verify")["kind"].as_str(), Some("evidence"));
-    assert_eq!(gate("verify")["profile"].as_str(), Some("verify"));
+            .iter()
+            .all(|note| !note.as_str().unwrap().contains("`verify`")),
+        "{:#}",
+        output["notes"]
+    );
+
+    let ctx = crate::context::RepoContext::load_from_root(repo).unwrap();
     assert_eq!(
-        gate("verify")
-            .as_table()
-            .unwrap()
-            .get("required")
-            .and_then(toml::Value::as_bool),
-        None
+        ctx.contract_version(),
+        crate::context::CURRENT_CONTRACT_VERSION
     );
-    assert_eq!(gate("project-fmt")["tool"].as_str(), Some("jig.fmt_check"));
-    assert_eq!(gate("project-fmt")["required"].as_bool(), Some(false));
-    assert_eq!(
-        gate("project-review")["kind"].as_str(),
-        Some("codex_review")
-    );
-    assert_eq!(gate("project-evidence")["kind"].as_str(), Some("evidence"));
-    assert_eq!(gate("project-evidence")["required"].as_bool(), Some(false));
-    // Retired `jig work` refinements are not carried forward.
-    assert!(config["work"].get("refinements").is_none());
-    for stale_id in [
-        "sqlx",
-        "schema",
-        "schema-dump",
-        "typescript-lint",
-        "typescript-typecheck",
-        "typescript-build",
-        "typescript-coverage",
-    ] {
-        assert!(
-            gates
-                .iter()
-                .all(|gate| gate["id"].as_str() != Some(stale_id))
-        );
-    }
-    let ids = gates
-        .iter()
-        .map(|gate| gate["id"].as_str().unwrap())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(ids.len(), gates.len());
-
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
     assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
-}
-
-#[test]
-fn full_readoption_drops_argument_taking_tools_from_preserved_work_config() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-
-    let mut initial = footprint_adopt_opts(&repo, template.path(), false, false);
-    initial.answers.sqlx_enabled = Some(true);
-    initial.answers.rust_migration_dir = Some("migrations".into());
-    run_adopt(initial).unwrap();
-
-    let config_path = repo.join(".jig.toml");
-    let mut config =
-        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
-    let work = config["work"].as_table_mut().unwrap();
-    work.insert(
-        "checks".into(),
-        toml::Value::Array(
-            ["jig.migration_add", "jig.fmt_check"]
-                .into_iter()
-                .map(|tool| toml::Value::String(tool.into()))
-                .collect(),
-        ),
-    );
-    let gates = work["gates"].as_array_mut().unwrap();
-    gates.push(toml::Value::Table(toml::Table::from_iter([
-        ("id".into(), toml::Value::String("project-migration".into())),
-        ("kind".into(), toml::Value::String("check".into())),
-        (
-            "tool".into(),
-            toml::Value::String("jig.migration_add".into()),
-        ),
-    ])));
-    gates.push(toml::Value::Table(toml::Table::from_iter([
-        ("id".into(), toml::Value::String("project-fmt".into())),
-        ("kind".into(), toml::Value::String("check".into())),
-        ("tool".into(), toml::Value::String("jig.fmt_check".into())),
-    ])));
-    gates.push(toml::Value::Table(toml::Table::from_iter([
-        ("id".into(), toml::Value::String("project-review".into())),
-        ("kind".into(), toml::Value::String("codex_review".into())),
-        ("skill".into(), toml::Value::String("cc:review".into())),
-    ])));
-    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
-
-    let mut readopt = footprint_adopt_opts(&repo, template.path(), false, true);
-    readopt.answers.sqlx_enabled = Some(true);
-    readopt.answers.rust_migration_dir = Some("migrations".into());
-    run_adopt(readopt).unwrap();
-
-    let config = toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
-    let checks = config["work"]["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|tool| tool.as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(checks, vec!["jig.fmt_check"]);
-    let gates = config["work"]["gates"].as_array().unwrap();
-    assert!(
-        gates
-            .iter()
-            .all(|gate| gate["id"].as_str() != Some("project-migration"))
-    );
-    assert!(
-        gates
-            .iter()
-            .any(|gate| gate["id"].as_str() == Some("project-fmt"))
-    );
-    assert!(
-        gates
-            .iter()
-            .any(|gate| gate["id"].as_str() == Some("project-review"))
-    );
-    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains(r#""name": "jig.migration_add""#));
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
-    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
-}
-
-#[test]
-fn staging_rejects_generated_evidence_gate_with_conflicting_selectors() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let config_template = template.path().join("templates/project/.jig.toml.jinja");
-    let original_config = fs::read_to_string(&config_template).unwrap();
-    assert!(original_config.contains("kind = \"evidence\""));
-    let config = original_config.replacen(
-        "kind = \"evidence\"",
-        "kind = \"evidence\"\ntarget = \"api:test\"",
-        1,
-    );
-    fs::write(&config_template, config).unwrap();
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-    let mut opts = footprint_adopt_opts(&repo, template.path(), false, false);
-    opts.answers.sqlx_enabled = Some(true);
-    opts.answers.rust_migration_dir = Some("migrations".into());
-
-    let error = format!("{:#}", run_adopt(opts).unwrap_err());
-
-    assert!(
-        error.contains("requires exactly one of target or profile"),
-        "{error}"
-    );
-    assert!(!repo.join(".jig.toml").exists());
 }
 
 #[test]

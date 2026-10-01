@@ -253,21 +253,21 @@ fn automatic_paths(
     };
     let comparison = match request {
         ComparisonRequestV1::ExactTree { requested_oid, .. } => {
-            crate::git_receipts::plan_change_snapshot_from_empty_tree_with_cancellation(
+            crate::source_identity::plan_change_snapshot_from_empty_tree_with_cancellation(
                 ctx.root(),
                 &requested_oid,
                 cancelled,
             )
             .map(|snapshot| (requested_oid, snapshot.all_changed_paths()))
         }
-        request => crate::git_receipts::resolve_comparison_v1_with_cancellation(
+        request => crate::source_identity::resolve_comparison_v1_with_cancellation(
             ctx.root(),
             request,
             cancelled,
         )
         .and_then(|resolved| match resolved {
             ResolvedComparisonV1::MergeBase { merge_base_oid, .. } => {
-                crate::git_receipts::plan_change_snapshot_with_cancellation(
+                crate::source_identity::plan_change_snapshot_with_cancellation(
                     ctx.root(),
                     &merge_base_oid,
                     cancelled,
