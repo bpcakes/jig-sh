@@ -85,19 +85,19 @@ function runTerminalDemo(termBody: HTMLElement) {
   const lines = [
     {
       t: 80,
-      s: '<span class="p">~/repos/target-repo</span> <span class="d">$</span> <span class="c">scripts/jig doctor --summary</span>',
+      s: '<span class="p">~/repos/target-repo</span> <span class="d">$</span> <span class="c">scripts/jig doctor</span>',
     },
     {
       t: 380,
-      s: '<span class="d">jig doctor · checking environment ............ rev 0.1.x</span>',
+      s: '<span class="d">jig doctor · checking environment</span>',
     },
     {
       t: 240,
-      s: '  <span class="ok">[ok]</span>  <span class="c">cargo</span>     <span class="d">1.85.0</span>',
+      s: '  <span class="ok">[ok]</span>  <span class="c">cargo</span>     <span class="d">1.94.0</span>',
     },
     {
       t: 200,
-      s: '  <span class="ok">[ok]</span>  <span class="c">sqlx-cli</span>  <span class="d">0.7.4</span>',
+      s: '  <span class="ok">[ok]</span>  <span class="c">sqlx-cli</span>  <span class="d">0.9.0</span>',
     },
     {
       t: 200,
@@ -105,11 +105,11 @@ function runTerminalDemo(termBody: HTMLElement) {
     },
     {
       t: 240,
-      s: '  <span class="ok">[ok]</span>  <span class="c">.jig.toml</span> <span class="d">found · template_source pinned · github.com/bpcakes/jig-sh @ v0.1.x</span>',
+      s: '  <span class="ok">[ok]</span>  <span class="c">.jig.toml</span> <span class="d">found · committed repository configuration</span>',
     },
     {
       t: 240,
-      s: '  <span class="er">[··]</span>  <span class="c">codex skills</span>  <span class="d">missing 2 (jig.gate / jig.receipts)</span>',
+      s: '  <span class="er">[··]</span>  <span class="c">codex plugins</span>  <span class="d">missing 2 (jig-rust / jig-typescript)</span>',
     },
     {
       t: 320,
@@ -126,15 +126,15 @@ function runTerminalDemo(termBody: HTMLElement) {
     },
     {
       t: 260,
-      s: '  <span class="ok">+</span> install <span class="c">jig.gate</span>      <span class="d">v0.3.2</span>',
+      s: '  <span class="ok">+</span> install <span class="c">jig-rust@jig-skills</span>',
     },
     {
       t: 260,
-      s: '  <span class="ok">+</span> install <span class="c">jig.receipts</span>  <span class="d">v0.2.1</span>',
+      s: '  <span class="ok">+</span> install <span class="c">jig-typescript@jig-skills</span>',
     },
     {
       t: 380,
-      s: '<span class="ok">✓</span> bootstrap complete. <span class="d">2 skills installed · 0 errors</span>',
+      s: '<span class="ok">✓</span> bootstrap complete. <span class="d">2 plugins installed · 0 errors</span>',
     },
     { t: 600, s: "" },
     {
@@ -163,7 +163,7 @@ function runTerminalDemo(termBody: HTMLElement) {
     },
     {
       t: 480,
-      s: '<span class="ok">●</span> ci green · <span class="d">receipts written to .agent/state/receipts.jsonl</span>',
+      s: '<span class="ok">●</span> checks passed · <span class="d">run history recorded in .agent/state/runs.jsonl</span>',
     },
   ];
 

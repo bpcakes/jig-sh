@@ -656,7 +656,7 @@ status 2, and generated launchers no longer list it. Validate changes with
 `jig check COMPONENT:ACTION`; `jig state summary` summarizes run history. The `partial_completion` error data that
 `work finish` and `work retire` reported no longer occurs in CLI JSON errors.
 
-Work-gate evaluation is removed everywhere. `jig status --json` schema 3 and the
+Work-gate evaluation is removed everywhere. `jig status --json` schema 4 and the
 `jig ui` recorder carry no work or gate fields (see
 [Dashboard And Status Output](#dashboard-and-status-output)).
 The hidden `jig status --freshness-timeout-ms` option, which only bounded gate
