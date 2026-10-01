@@ -18,7 +18,7 @@
 ├── <i>agent-map.md</i>         <span class="tic">— surface area, in plain text</span>
 ├── <s>.agent/</s>
 │   ├── <i>jig-contract.json</i><span class="tic">— machine-readable surface</span>
-│   └── <s>state/</s>            <span class="tic">— append-only receipts (JSONL)</span>
+│   └── <s>state/</s>            <span class="tic">— append-only run history (JSONL)</span>
 ├── <s>scripts/</s>
 │   ├── <u>jig</u>              <span class="tic">— launcher; checks contract + profile</span>
 │   ├── <u>install-jig.sh</u>
@@ -33,44 +33,44 @@
 
       <div class="right" id="receipts">
         <h3>What an agent leaves behind</h3>
-        <p>A streaming tail of <span class="hot">.agent/state/receipts.jsonl</span>. Reviewable. Diffable. Auditable.</p>
+        <p>Run events and target results in <span class="hot">.agent/state/runs.jsonl</span>. Reviewable. Diffable. Auditable. Loop occurrence evidence lives outside the checkout under Git metadata.</p>
 
         <div class="receipts">
           <div class="receipt ok">
             <span class="ts">10:42:11</span>
-            <span class="ev"><span class="k">gate</span> · <span class="y">fmt</span> · ok · <span class="d">cargo fmt --check</span></span>
+            <span class="ev"><span class="k">target</span> · <span class="y">api:fmt</span> · ok · <span class="d">cargo fmt --check</span></span>
           </div>
           <div class="receipt ok">
             <span class="ts">10:42:14</span>
-            <span class="ev"><span class="k">gate</span> · <span class="y">clippy</span> · ok · <span class="d">0 warnings, 0 errors</span></span>
+            <span class="ev"><span class="k">target</span> · <span class="y">api:clippy</span> · ok · <span class="d">0 warnings, 0 errors</span></span>
           </div>
           <div class="receipt pend">
             <span class="ts">10:42:18</span>
-            <span class="ev"><span class="k">work</span> · <span class="v">edit</span> · crates/api/src/routes.rs (+38 −12)</span>
+            <span class="ev"><span class="k">target</span> · <span class="v">api:test</span> · started</span>
           </div>
           <div class="receipt ok">
             <span class="ts">10:42:42</span>
-            <span class="ev"><span class="k">gate</span> · <span class="y">test</span> · ok · 184 passed · 12.4s</span>
+            <span class="ev"><span class="k">target</span> · <span class="y">api:test</span> · ok · 184 passed · 12.4s</span>
           </div>
           <div class="receipt fail">
             <span class="ts">10:43:01</span>
-            <span class="ev"><span class="k">gate</span> · <span class="x">coverage</span> · fail · 71.8% (&lt; 80% threshold)</span>
+            <span class="ev"><span class="k">target</span> · <span class="x">web:test</span> · fail · coverage 71.8% (&lt; 80% threshold)</span>
           </div>
           <div class="receipt pend">
             <span class="ts">10:43:09</span>
-            <span class="ev"><span class="k">plan</span> · update · <span class="d">"add table-level coverage for routes::auth"</span></span>
+            <span class="ev"><span class="k">run</span> · queued · <span class="d">web:test, repo:contract</span></span>
           </div>
           <div class="receipt ok">
             <span class="ts">10:44:02</span>
-            <span class="ev"><span class="k">gate</span> · <span class="y">coverage</span> · ok · 83.2%</span>
+            <span class="ev"><span class="k">target</span> · <span class="y">web:test</span> · ok · coverage 83.2%</span>
           </div>
           <div class="receipt ok">
             <span class="ts">10:44:11</span>
-            <span class="ev"><span class="k">gate</span> · <span class="y">schema-check</span> · ok · <span class="d">.sqlx/ matches HEAD</span></span>
+            <span class="ev"><span class="k">target</span> · <span class="y">repo:contract</span> · ok</span>
           </div>
           <div class="receipt ok" style="margin-bottom:0;">
             <span class="ts">10:44:14</span>
-            <span class="ev"><span class="k">commit</span> · <span class="v">staged</span> · 1 file · sig <span class="d">9f3c81…</span></span>
+            <span class="ev"><span class="k">run</span> · <span class="v">finished</span> · 2 targets · success</span>
           </div>
         </div>
       </div>
