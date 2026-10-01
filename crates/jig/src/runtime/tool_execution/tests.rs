@@ -20,7 +20,6 @@ fn prepared_native_input(
         policy_source: jig_contract::PolicySourceV1 {
             path: ".jig/file-budget.toml".into(),
         },
-        work_plan_id: None,
         policy,
         comparison,
     }

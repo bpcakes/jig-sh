@@ -673,7 +673,7 @@ validated portable selectors enter plans and run history.
 
 Automatic focus compares all current changes against the merge base with the
 default branch (the empty tree before the first commit), the same base native
-checks use. Its retired `plan_id` field is accepted and ignored. It uses
+checks use. It rejects the removed `plan_id` field. It uses
 conservative Cargo package and reverse-consumer ownership, never inferred test
 names. Missing comparison,
 metadata, or ownership broadens to the declared workspace invocation with a

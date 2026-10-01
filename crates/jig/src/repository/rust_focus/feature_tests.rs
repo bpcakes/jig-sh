@@ -29,7 +29,7 @@ fn automatic_focus_preserves_workspace_feature_owners() {
         root,
         &["commit", "--quiet", "-m", "Example feature baseline"],
     );
-    let focus = RustFocusV1::Automatic { plan_id: None };
+    let focus = RustFocusV1::Automatic {};
     write(
         root,
         "selected/src/lib.rs",

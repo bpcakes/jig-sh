@@ -379,8 +379,8 @@ target with finding source `empty_selection`, never a passing test requirement.
 Explicit target existence is independent of Cargo's default test-participation
 flag. Automatic focus compares against the merge base with the default branch
 (the empty tree before the first commit), the same base native checks use, and
-falls back to workspace scope when that comparison cannot be resolved. Its
-retired `plan_id` field is accepted and ignored. Automatic package narrowing
+falls back to workspace scope when that comparison cannot be resolved. It
+rejects the removed `plan_id` field. Automatic package narrowing
 preserves the configured feature policy, falling back to workspace scope when
 its meaning for the subset is unproved.
 Metadata discovery always enforces `--locked`, independently of execution's
@@ -409,8 +409,9 @@ For a selected contract-v7 action that still uses the built-in
 `jig.file_budget` runner, the target also carries one bounded
 `prepared_native_input`. It independently records authenticated policy and
 comparison preparation, current view, the original typed comparison request,
-fully defaulted checked-in resource ceilings and fallback policy, and optional
-work-plan identity. Planning resolves this authority only after selection;
+and fully defaulted checked-in resource ceilings and fallback policy. Run
+history recorded with the removed `work_plan_id` field still loads; the field
+is dropped on read. Planning resolves this authority only after selection;
 unrelated targets and command replacements do not require it. Submitted plans
 are replay-authenticated before durable acceptance, while an accepted worker
 uses the persisted object IDs rather than resolving symbolic refs again.

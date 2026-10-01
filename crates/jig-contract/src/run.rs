@@ -289,8 +289,6 @@ pub struct PreparedNativeInputV1 {
     pub request: ComparisonRequestV1,
     pub configuration: NativeFileBudgetConfigV1,
     pub policy_source: PolicySourceV1,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub work_plan_id: Option<String>,
     pub policy: PolicyPreparationV1,
     pub comparison: ComparisonPreparationV1,
 }

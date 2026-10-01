@@ -56,7 +56,6 @@ fn prepare_file_budget_input_at_v1(
         policy_source: PolicySourceV1 {
             path: POLICY_PATH_V1.to_owned(),
         },
-        work_plan_id: None,
         policy,
         comparison,
     })
