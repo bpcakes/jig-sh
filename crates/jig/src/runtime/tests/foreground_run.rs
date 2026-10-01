@@ -408,7 +408,7 @@ fn foreground_run_and_check_record_run_history_without_receipts() {
     }
 }
 
-fn add_v6_generate_action(root: &std::path::Path) {
+pub(super) fn add_v6_generate_action(root: &std::path::Path) {
     let config_path = root.join(".jig.toml");
     let config = fs::read_to_string(&config_path).unwrap();
     let config = config

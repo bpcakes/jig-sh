@@ -622,6 +622,7 @@ checks = ["jig.test"]
 
 mod affected_check;
 mod agent;
+mod argv_runners;
 mod common;
 mod foreground_run;
 mod legacy_loc;
