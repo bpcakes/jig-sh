@@ -41,17 +41,12 @@ pub mod kind {
 
 pub mod tool {
     pub const BOOTSTRAP: &str = "jig.bootstrap";
-    pub const AGENT_DOCTOR: &str = "jig.agent_doctor";
     pub const CLIPPY: &str = "jig.clippy";
     pub const CONTRACT_CHECK: &str = "jig.contract_check";
     pub const FMT_CHECK: &str = "jig.fmt_check";
     pub const FILE_BUDGET: &str = "jig.file_budget";
     pub const LINT: &str = "jig.lint";
     pub const MIGRATION_ADD: &str = "jig.migration_add";
-    pub const INSPECT: &str = "jig.inspect";
-    pub const PLAN_RUN: &str = "jig.plan_run";
-    pub const EXECUTE_RUN: &str = "jig.execute_run";
-    pub const CANCEL_RUN: &str = "jig.cancel_run";
     pub const SCHEMA_CHECK: &str = "jig.schema_check";
     pub const SCHEMA_DUMP: &str = "jig.schema_dump";
     pub const SQLX_CHECK: &str = "jig.sqlx_check";

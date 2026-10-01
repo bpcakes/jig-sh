@@ -23,7 +23,7 @@
 - Establish a verifiable process-tree identity before starting child work and retain the direct-child identity until descendant cleanup is confirmed.
 - Keep one absolute cleanup deadline across normal, error, and drop paths; fail closed when cleanup or bounded output completion cannot be proved.
 - Never signal a recycled numeric PID or process group after identity loss or reap.
-- Keep this crate independent from repository context, state, CLI, MCP, templates, proxy routing, and vault secret handling.
+- Keep this crate independent from repository context, state, CLI, templates, proxy routing, and vault secret handling.
 - Do not replace the specialized process ownership in `jig-dev-proxy` or `jig-vault`; those crates have additional route and secret invariants.
 
 ## Common commands

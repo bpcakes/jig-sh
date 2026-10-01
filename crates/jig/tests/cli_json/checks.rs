@@ -303,15 +303,6 @@ fn json_mode_classifies_output_mode_conflicts_as_usage_errors() {
 }
 
 #[test]
-fn mcp_parse_errors_keep_stdout_reserved_for_protocol_frames() {
-    let output = jig().args(["mcp", "--json", "--bogus"]).output().unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--bogus'"));
-}
-
-#[test]
 fn foreground_run_json_failure_and_human_explain_use_run_output() {
     let repo = tempdir().unwrap();
     write_v6_failing_test_repo(repo.path());
@@ -381,4 +372,20 @@ fn foreground_run_inventory_is_ready_on_v6_and_v7() {
         assert_eq!(run["status"], "ready");
         assert!(run["reason_code"].is_null());
     }
+}
+
+#[test]
+fn removed_mcp_command_reports_a_structured_usage_error() {
+    let output = jig().args(["--json", "mcp"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["kind"], "usage");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unrecognized subcommand 'mcp'")
+    );
 }

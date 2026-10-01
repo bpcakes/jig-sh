@@ -614,7 +614,7 @@ command_timeout_seconds = 1
 fn native_contract_check_writes_no_receipt() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
+
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
     TestRepoBuilder::new(temp.path())

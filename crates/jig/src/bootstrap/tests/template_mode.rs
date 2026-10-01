@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 
 mod clippy_migration;
 mod guide_roots;
+mod mcp_retirement;
 mod migration_arguments;
 
 #[test]
@@ -654,15 +655,17 @@ fn update_refuses_managed_file_changes_without_force() {
     write_test_crate_guide(&repo);
 
     adopt_repo_for_test(&repo, template.path(), TemplateMode::Committed);
-    let original_mcp = fs::read_to_string(repo.join(".mcp.json")).unwrap();
+    let original_policy = fs::read_to_string(repo.join(".agent/.cache/.gitignore")).unwrap();
     fs::write(
-        template.path().join("templates/project/.mcp.json.jinja"),
-        "{\n  \"changed\": true\n}\n",
+        template
+            .path()
+            .join("templates/project/.agent/.cache/.gitignore.jinja"),
+        "*\n!.gitignore\n# updated cache policy\n",
     )
     .unwrap();
     git(
         template.path(),
-        ["add", "templates/project/.mcp.json.jinja"],
+        ["add", "templates/project/.agent/.cache/.gitignore.jinja"],
     )
     .unwrap();
     git(template.path(), ["commit", "-m", "template update"]).unwrap();
@@ -682,10 +685,10 @@ fn update_refuses_managed_file_changes_without_force() {
     .to_string();
 
     assert!(error.contains("Update would overwrite or remove template-managed paths"));
-    assert!(error.contains(".mcp.json"));
+    assert!(error.contains(".agent/.cache/.gitignore"));
     assert_eq!(
-        fs::read_to_string(repo.join(".mcp.json")).unwrap(),
-        original_mcp
+        fs::read_to_string(repo.join(".agent/.cache/.gitignore")).unwrap(),
+        original_policy
     );
 
     run_update(UpdateOpts {
@@ -701,8 +704,8 @@ fn update_refuses_managed_file_changes_without_force() {
     })
     .unwrap();
 
-    let mcp = fs::read_to_string(repo.join(".mcp.json")).unwrap();
-    assert!(mcp.contains("\"changed\": true"));
+    let policy = fs::read_to_string(repo.join(".agent/.cache/.gitignore")).unwrap();
+    assert!(policy.contains("# updated cache policy"));
 }
 
 #[test]

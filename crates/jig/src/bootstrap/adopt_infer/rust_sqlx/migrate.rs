@@ -17,7 +17,7 @@ pub(super) fn has_migrate_macro(text: &str) -> Result<bool> {
     if !text.contains("migrate") {
         return Ok(false);
     }
-    // Use a fixed stack independent of the caller (including small test/MCP
+    // Use a fixed stack independent of the caller (including small test
     // threads). Tokenization, AST visitation, and all drops stay in this worker.
     // The token guard, not panic catching, prevents recursive stack exhaustion.
     std::thread::scope(|scope| {

@@ -1,5 +1,3 @@
-const DEFAULT_MCP_COMMAND: &str = "scripts/jig mcp";
-
 pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
     if value["command"].as_str() == Some("info commands") {
         return crate::info::format_commands_summary(value);
@@ -43,15 +41,6 @@ pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
         "Dev apps: {}",
         value["dev_apps"].as_array().map(Vec::len).unwrap_or(0)
     ));
-    let mcp_source = value["mcp_command_source"].as_str().unwrap_or("default");
-    lines.push(format!(
-        "MCP command ({}): {}",
-        mcp_source,
-        value["mcp_command"].as_str().unwrap_or(DEFAULT_MCP_COMMAND)
-    ));
-    if let Some(error) = value["mcp_command_error"].as_str() {
-        lines.push(format!("MCP command fallback: {error}"));
-    }
     lines.join("\n")
 }
 

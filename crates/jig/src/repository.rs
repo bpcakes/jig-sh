@@ -16,17 +16,13 @@ use crate::context::{
     CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext, WorkEvidenceSelector,
 };
 
-pub(crate) use inspect::{
-    AgentCatalogInspection, CatalogInspection, InspectRequest, inspect_repository,
-    inspect_repository_data, inspect_repository_data_agent_v1,
-};
+pub(crate) use inspect::{InspectRequest, inspect_repository};
 pub(crate) use planner::{
     PlanRunRequest, plan_action_run_with_cancellation, plan_run_with_cancellation,
-    target_input_digest, validate_current_repository_authority, validate_run_plan,
-    validate_run_plan_source,
+    target_input_digest, validate_current_repository_authority, validate_run_plan_source,
 };
 #[cfg(test)]
-pub(crate) use planner::{plan_action_run, plan_run};
+pub(crate) use planner::{plan_action_run, plan_run, validate_run_plan};
 
 pub(crate) mod cargo_discovery;
 mod cargo_impact;
@@ -139,7 +135,7 @@ pub(crate) fn validate_read_only_check_closure<'a, 'b>(
             || action.effects.contains(&ActionEffect::External)
         {
             bail!(
-                "target '{target}' is not a read-only check; use the action-specific command or plan and execute it through the MCP repository tools for {:?} actions with {:?} effects",
+                "target '{target}' is not a read-only check; use the action-specific command or `jig run` with `--approve-effect` for {:?} actions with {:?} effects",
                 action.intent,
                 action.effects
             );

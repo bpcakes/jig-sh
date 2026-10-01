@@ -357,11 +357,7 @@ fn contract_check_still_requires_launcher_files_for_full_footprint() {
     let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 1);
-    assert!(
-        output.stderr.contains("Missing .mcp.json."),
-        "{}",
-        output.stderr
-    );
+    assert!(!output.stderr.contains(".mcp.json"), "{}", output.stderr);
     assert!(
         output.stderr.contains("Missing scripts/jig launcher."),
         "{}",
@@ -381,7 +377,7 @@ fn contract_check_rejects_make_tool_kind() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
+
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
     write_policy_config(
@@ -414,7 +410,7 @@ fn contract_check_accepts_dynamic_command_map_tools() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
+
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
     write_policy_config(
@@ -451,7 +447,7 @@ fn contract_check_does_not_require_undeclared_rust_gate_tools() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
+
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
     write_policy_config(
@@ -480,7 +476,7 @@ fn contract_check_requires_declared_rust_gate_tools() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
+
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
     write_policy_config(
@@ -513,7 +509,7 @@ fn contract_check_requires_generated_typescript_gate_tools() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
+
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
     write_policy_config(
@@ -563,7 +559,7 @@ fn contract_check_does_not_require_generated_typescript_gates_for_legacy_contrac
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
+
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
     write_policy_config(
@@ -594,7 +590,7 @@ fn contract_check_reports_missing_feature_declared_command_map_entry() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
+
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
     write_policy_config(

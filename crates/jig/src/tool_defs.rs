@@ -1,15 +1,5 @@
-use anyhow::{Result, anyhow};
 use jig_contract::ManifestTool;
 pub(crate) use jig_contract::{kind, tool};
-use serde_json::{Map, Value, json};
-
-mod repository;
-
-pub(crate) use repository::{
-    AgentRepositoryInspectOutput, AgentRepositoryInspectResult, CancelRunArgs, CancelRunOutput,
-    ExecuteRunArgs, ExecuteRunOutput, PlanRunArgs, PlanRunOutput, RepositoryInspectArgs,
-    RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool, RunInspection,
-};
 
 pub(crate) mod args {
     pub(crate) const NAME: &str = "name";
@@ -67,7 +57,6 @@ pub(crate) mod cli_command {
     pub(crate) const LOOP_SHOW: &str = "show";
     pub(crate) const LOOP_STATUS: &str = "status";
     pub(crate) const LOOP_TICK: &str = "tick";
-    pub(crate) const MCP: &str = "mcp";
     pub(crate) const MIGRATION: &str = "migration";
     pub(crate) const MIGRATION_ADD_NESTED: &str = "add";
     pub(crate) const MIGRATION_ADD: &str = "migration-add";
@@ -131,94 +120,6 @@ pub(crate) mod cli_command {
     pub(crate) const VAULT_TUI: &str = "tui";
 }
 
-pub(crate) type JsonObject = Map<String, Value>;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MemoryTool {
-    AgentDoctor,
-}
-
-impl MemoryTool {
-    const ALL: &'static [Self] = &[Self::AgentDoctor];
-
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
-        match name {
-            tool::AGENT_DOCTOR => Some(Self::AgentDoctor),
-            _ => None,
-        }
-    }
-
-    const fn name(self) -> &'static str {
-        match self {
-            Self::AgentDoctor => tool::AGENT_DOCTOR,
-        }
-    }
-
-    const fn description(self) -> &'static str {
-        match self {
-            Self::AgentDoctor => "Report local Codex agent tooling status for this repo.",
-        }
-    }
-
-    fn input_schema(self) -> Value {
-        match self {
-            Self::AgentDoctor => empty_input_schema(),
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn tool_descriptors(
-    contract_version: u32,
-    manifest_tools: &[ManifestTool],
-) -> Vec<Value> {
-    tool_descriptors_for_surface(
-        contract_version,
-        manifest_tools,
-        crate::surface::ResponseSurface::Standard,
-    )
-}
-
-pub(crate) fn tool_descriptors_for_surface(
-    contract_version: u32,
-    manifest_tools: &[ManifestTool],
-    surface: crate::surface::ResponseSurface,
-) -> Vec<Value> {
-    let execution = if contract_version >= 6 {
-        RepositoryTool::ALL
-            .iter()
-            .copied()
-            .map(|tool| tool.descriptor_for_surface(surface))
-            .collect::<Vec<_>>()
-    } else {
-        manifest_tools
-            .iter()
-            .filter(|tool| is_execution_tool(tool))
-            .map(manifest_tool_descriptor)
-            .collect()
-    };
-    execution
-        .into_iter()
-        .chain(MemoryTool::ALL.iter().copied().map(memory_tool_descriptor))
-        .collect()
-}
-
-fn manifest_tool_descriptor(tool: &ManifestTool) -> Value {
-    json!({
-        "name": tool.name,
-        "description": tool.description,
-        "inputSchema": execution_input_schema(tool)
-    })
-}
-
-fn memory_tool_descriptor(tool: MemoryTool) -> Value {
-    json!({
-        "name": tool.name(),
-        "description": tool.description(),
-        "inputSchema": tool.input_schema()
-    })
-}
-
 pub(crate) fn is_command_tool(tool: &ManifestTool) -> bool {
     tool.kind == kind::COMMAND
 }
@@ -229,22 +130,6 @@ pub(crate) fn is_native_tool(tool: &ManifestTool) -> bool {
 
 pub(crate) fn is_execution_tool(tool: &ManifestTool) -> bool {
     is_command_tool(tool) || is_native_tool(tool)
-}
-
-pub(crate) fn execution_tool_args(tool: &ManifestTool, args_obj: &JsonObject) -> Result<Value> {
-    let requires_name = execution_tool_requires_name(tool);
-    if let Some(unknown) = args_obj
-        .keys()
-        .find(|key| !(requires_name && key.as_str() == args::NAME))
-    {
-        return Err(anyhow!("Unknown argument: {unknown}"));
-    }
-    if requires_name {
-        let name = required_string_arg(args_obj, args::NAME)?;
-        return Ok(object_value([(args::NAME, Value::String(name))]));
-    }
-
-    Ok(json!({}))
 }
 
 pub(crate) fn execution_tool_requires_name(tool: &ManifestTool) -> bool {
@@ -259,118 +144,4 @@ pub(crate) fn execution_tool_requires_name_for_native_operation(
         || execution_tool_requires_name(tool),
         jig_features::native_tool_requires_name,
     )
-}
-
-fn execution_input_schema(tool: &ManifestTool) -> Value {
-    if execution_tool_requires_name(tool) {
-        return object_schema(&[(args::NAME, string_schema())], &[args::NAME]);
-    }
-
-    empty_input_schema()
-}
-
-fn empty_input_schema() -> Value {
-    object_schema(&[], &[])
-}
-
-fn object_schema(properties: &[(&str, Value)], required: &[&str]) -> Value {
-    let mut schema = JsonObject::new();
-    schema.insert("type".into(), Value::String("object".into()));
-    schema.insert(
-        "properties".into(),
-        object_value(properties.iter().cloned()),
-    );
-    if !required.is_empty() {
-        schema.insert(
-            "required".into(),
-            Value::Array(
-                required
-                    .iter()
-                    .map(|required| Value::String((*required).into()))
-                    .collect(),
-            ),
-        );
-    }
-    schema.insert("additionalProperties".into(), Value::Bool(false));
-    Value::Object(schema)
-}
-
-fn object_value<'a>(entries: impl IntoIterator<Item = (&'a str, Value)>) -> Value {
-    Value::Object(
-        entries
-            .into_iter()
-            .map(|(key, value)| (key.to_string(), value))
-            .collect(),
-    )
-}
-
-fn string_schema() -> Value {
-    json!({ "type": "string" })
-}
-
-pub(crate) fn required_string_arg(map: &JsonObject, key: &str) -> Result<String> {
-    string_arg(map, key).ok_or_else(|| anyhow!("Missing required argument: {key}"))
-}
-
-pub(crate) fn string_arg(map: &JsonObject, key: &str) -> Option<String> {
-    map.get(key).and_then(Value::as_str).map(str::to_string)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-
-    use jig_contract::ManifestTool;
-
-    use super::*;
-
-    #[test]
-    fn memory_tool_names_are_unique_and_complete() {
-        let names = MemoryTool::ALL
-            .iter()
-            .map(|tool| tool.name())
-            .collect::<Vec<_>>();
-        let unique = names.iter().copied().collect::<BTreeSet<_>>();
-
-        assert_eq!(names.len(), MemoryTool::ALL.len());
-        assert_eq!(unique.len(), names.len());
-        assert_eq!(names, [tool::AGENT_DOCTOR]);
-    }
-
-    #[test]
-    fn legacy_execution_tools_reject_undeclared_arguments() {
-        let contract = ManifestTool::new(tool::CONTRACT_CHECK, kind::NATIVE, "Contract.");
-        let migration = ManifestTool::new(tool::MIGRATION_ADD, kind::NATIVE, "Migration.");
-        let args = |value: Value| value.as_object().unwrap().clone();
-
-        assert_eq!(
-            execution_tool_args(&contract, &args(json!({}))).unwrap(),
-            json!({})
-        );
-        assert_eq!(
-            execution_tool_args(&migration, &args(json!({"name": "create_examples"}))).unwrap(),
-            json!({"name": "create_examples"})
-        );
-        for (tool, value, unknown) in [
-            (&contract, json!({"plan_id": "plan_example"}), "plan_id"),
-            (&contract, json!({"name": "create_examples"}), "name"),
-            (
-                &migration,
-                json!({"name": "create_examples", "plan_id": "plan_example"}),
-                "plan_id",
-            ),
-        ] {
-            assert_eq!(
-                execution_tool_args(tool, &args(value))
-                    .unwrap_err()
-                    .to_string(),
-                format!("Unknown argument: {unknown}")
-            );
-        }
-        assert_eq!(execution_input_schema(&contract)["properties"], json!({}));
-        assert_eq!(
-            execution_input_schema(&migration)["required"],
-            json!(["name"])
-        );
-    }
 }

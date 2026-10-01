@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`crates/jig` contains the repo-local `jig` CLI and MCP runtime used by generated repositories. It executes the generated command contract, manages append-only `.agent/state` memory, and handles template init/adopt/update flows.
+`crates/jig` contains the repo-local `jig` CLI runtime used by generated repositories. It executes the generated command contract, manages append-only `.agent/state` memory, and handles template init/adopt/update flows.
 
 ## Key entrypoints
 
@@ -10,8 +10,7 @@
 - `src/lib.rs`: library entrypoint and module wiring.
 - `src/cli.rs`: clap command definitions and top-level command dispatch.
 - `src/cli/run/dev_launch.rs`: private dev-worker CLI handoff; its worker owns the existing dev lifecycle and output.
-- `src/runtime.rs`: command-backed tool execution plus MCP tool call dispatch.
-- `src/mcp.rs`: JSON-RPC/MCP stdio server.
+- `src/runtime.rs`: command-backed tool execution.
 - `src/state.rs`: run history under `.agent/state`, with its diagnosis, archive, and restore maintenance.
 - `src/runtime/loops/evidence.rs`: per-occurrence loop evidence recorded under Git metadata; `src/runtime/loops/show.rs` reports it for `jig loop show`.
 - `src/ui.rs`: `jig ui` and `jig status --tui` CLI adapter for the separately owned `jig-ui` terminal crate.
@@ -31,7 +30,6 @@
 - Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
 - Change manifest-tool behavior around command execution: `src/runtime.rs`.
-- Change MCP descriptors, schemas, or protocol handling: `src/mcp.rs`.
 - Change run history, state maintenance, or `jig state summary`: `src/state.rs` and `src/state/`.
 - Change loop occurrence evidence, its retention, or `jig loop show`: `src/runtime/loops/evidence.rs` and `src/runtime/loops/show.rs`.
 - Change the data exposed by the unified dashboard, including its run-history timeline and health aggregates: `src/ui/source/`.
@@ -52,7 +50,7 @@
 - Keep execution tools aligned with the generated contract manifest and template outputs.
 - Do not make template update flows switch source identity implicitly.
 - Vault references stay project-relative as `jig://ITEM/FIELD`; repository scope, `--global`, or `--home` selects the vault and a reference must never override that selection.
-- Validate vault raw input, import sources/destinations, and lifecycle paths before passphrase capture. Revealed values and transparent child output must bypass structured emitters, JSON, MCP, and run or loop records; errors and recovery commands must remain value-free.
+- Validate vault raw input, import sources/destinations, and lifecycle paths before passphrase capture. Revealed values and transparent child output must bypass structured emitters, JSON and run or loop records; errors and recovery commands must remain value-free.
 - Keep `vault exec` as transparent inherited-stdin/environment streaming with exact child status, and keep the compatible `vault run` broker constrained, buffered, capped, timed, and process-tree-owned. Successful vault capture and every spawned resolver/child must strip both reserved passphrase variables.
 - Backup restore must use the static absent-target path; it may prepare missing private parent directories, but must never resolve or create the selected vault home before restore preflight and installation.
 - The Vault TUI fixes one resolved scope for its lifetime, retains only a process-local credential in the CLI-owned backend, and must join its sole action worker before lock or terminal restoration. TUI action results and ordinary Ratatui frames remain metadata-only; private export and transient Peek consume plaintext only in their immediate hardened/terminal-safe sinks and never return it to the model.

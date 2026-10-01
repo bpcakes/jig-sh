@@ -1,7 +1,3 @@
-use std::fs;
-use std::io::ErrorKind;
-use std::path::Path;
-
 use anyhow::Result;
 use serde_json::{Value, json};
 
@@ -11,7 +7,6 @@ use crate::command::{VaultCommand, VaultStatusRequest};
 use crate::context::{DevAppConfig, REPO_CONTEXT_NOT_FOUND, RepoContext, WorkGate};
 
 const COMMAND: &str = "info";
-const DEFAULT_MCP_COMMAND: &str = "scripts/jig mcp";
 
 mod commands;
 
@@ -91,7 +86,6 @@ fn repo_info(ctx: &RepoContext) -> Value {
 }
 
 fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
-    let mcp_command = mcp_command(ctx.root());
     let dev_apps = ctx
         .dev_config()
         .apps
@@ -157,9 +151,6 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             "workspace_discovery": ctx.dev_config().workspace_discovery,
         },
         "dev_apps": dev_apps,
-        "mcp_command": mcp_command.command,
-        "mcp_command_source": mcp_command.source,
-        "mcp_command_error": mcp_command.error,
     });
     // `[work]` settings exist only through contract 8.
     if ctx.contract_version() <= crate::context::LAST_WORK_CONFIG_CONTRACT_VERSION {
@@ -205,103 +196,6 @@ fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
             error: Some(format!("{error:#}")),
         },
     }
-}
-
-struct McpCommandInfo {
-    command: String,
-    source: &'static str,
-    error: Option<String>,
-}
-
-fn mcp_command(root: &Path) -> McpCommandInfo {
-    let path = root.join(".mcp.json");
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == ErrorKind::NotFound => return default_mcp_command(None),
-        Err(error) => {
-            return default_mcp_command(Some(format!(
-                "Failed to read {}: {error}",
-                path.display()
-            )));
-        }
-    };
-    let value = match serde_json::from_str::<Value>(&text) {
-        Ok(value) => value,
-        Err(error) => {
-            return default_mcp_command(Some(format!(
-                "Failed to parse {}: {error}",
-                path.display()
-            )));
-        }
-    };
-    let command = match mcp_command_parts(&value, &path) {
-        Ok(command) => command,
-        Err(error) => return default_mcp_command(Some(error)),
-    };
-
-    // MCP `command` is a single program path and `args` are already structured.
-    // Render a shell-friendly display line for humans; Jig does not parse this
-    // string back into an MCP command.
-    McpCommandInfo {
-        command: shell_display_command(&command),
-        source: ".mcp.json",
-        error: None,
-    }
-}
-
-fn mcp_command_parts(value: &Value, path: &Path) -> Result<Vec<String>, String> {
-    let server = &value["mcpServers"]["jig"];
-    let command = server["command"].as_str().ok_or_else(|| {
-        format!(
-            "{} does not define a non-empty mcpServers.jig.command",
-            path.display()
-        )
-    })?;
-    if command.is_empty() {
-        return Err(format!(
-            "{} does not define a non-empty mcpServers.jig.command",
-            path.display()
-        ));
-    }
-    let mut parts = vec![normalize_repo_relative_command(command)];
-    if let Some(args_value) = server.get("args") {
-        let Some(args) = args_value.as_array() else {
-            return Err(format!(
-                "{} mcpServers.jig.args must be an array of strings",
-                path.display()
-            ));
-        };
-        for (index, arg) in args.iter().enumerate() {
-            let arg = arg.as_str().ok_or_else(|| {
-                format!(
-                    "{} mcpServers.jig.args[{index}] must be a string",
-                    path.display()
-                )
-            })?;
-            parts.push(arg.to_string());
-        }
-    }
-    Ok(parts)
-}
-
-fn shell_display_command(command: &[String]) -> String {
-    command
-        .iter()
-        .map(|part| crate::shell::quote(part))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn default_mcp_command(error: Option<String>) -> McpCommandInfo {
-    McpCommandInfo {
-        command: DEFAULT_MCP_COMMAND.into(),
-        source: "default",
-        error,
-    }
-}
-
-fn normalize_repo_relative_command(command: &str) -> String {
-    command.strip_prefix("./").unwrap_or(command).to_string()
 }
 
 fn dev_app_value(app: &DevAppConfig) -> Value {
@@ -366,7 +260,6 @@ mod tests {
     use crate::test_env::TestRepoBuilder;
     use crate::tool_defs::tool;
     use serde_json::json;
-    use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
 
@@ -400,9 +293,9 @@ mod tests {
         assert_eq!(output["dev_apps"][0]["name"], "web");
         assert_eq!(output["frontend_apps"][0]["kind"], "vite");
         assert_eq!(output["frontend_apps"][0]["role"], "spa");
-        assert_eq!(output["mcp_command"], "scripts/jig mcp");
-        assert_eq!(output["mcp_command_source"], "default");
-        assert_eq!(output["mcp_command_error"], Value::Null);
+        assert!(output.get("mcp_command").is_none());
+        assert!(output.get("mcp_command_source").is_none());
+        assert!(output.get("mcp_command_error").is_none());
     }
 
     fn assert_repo_summary(output: &Value) {
@@ -490,137 +383,6 @@ mod tests {
         assert_eq!(output["capabilities"]["vault_available"], false);
         assert_eq!(output["capabilities"]["vault_initialized"], false);
         assert_eq!(output["capabilities"]["vault_error"], "vault status failed");
-    }
-
-    #[test]
-    fn reports_mcp_command_from_mcp_json() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::write(
-            temp.path().join(".mcp.json"),
-            serde_json::to_string_pretty(&json!({
-                "mcpServers": {
-                    "jig": {
-                        "command": "./tools/local jig",
-                        "args": ["mcp", "--mode", "agent one"]
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(
-            output["mcp_command"],
-            "'tools/local jig' mcp --mode 'agent one'"
-        );
-        assert_eq!(output["mcp_command_source"], ".mcp.json");
-        assert_eq!(output["mcp_command_error"], Value::Null);
-    }
-
-    #[test]
-    fn reports_default_mcp_command_for_malformed_mcp_json() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::write(temp.path().join(".mcp.json"), "{not json").unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(output["mcp_command"], DEFAULT_MCP_COMMAND);
-        assert_eq!(output["mcp_command_source"], "default");
-        assert!(
-            output["mcp_command_error"]
-                .as_str()
-                .unwrap()
-                .contains("Failed to parse")
-        );
-
-        let summary = format_summary(&output);
-        assert!(summary.contains("MCP command fallback: Failed to parse"));
-    }
-
-    #[test]
-    fn reports_default_mcp_command_for_unreadable_mcp_json() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::create_dir(temp.path().join(".mcp.json")).unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(output["mcp_command"], DEFAULT_MCP_COMMAND);
-        assert_eq!(output["mcp_command_source"], "default");
-        assert!(
-            output["mcp_command_error"]
-                .as_str()
-                .unwrap()
-                .contains("Failed to read")
-        );
-    }
-
-    #[test]
-    fn reports_default_mcp_command_for_empty_mcp_command() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::write(
-            temp.path().join(".mcp.json"),
-            serde_json::to_string_pretty(&json!({
-                "mcpServers": {
-                    "jig": {
-                        "command": "",
-                        "args": ["mcp"]
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(output["mcp_command"], DEFAULT_MCP_COMMAND);
-        assert_eq!(output["mcp_command_source"], "default");
-        assert!(
-            output["mcp_command_error"]
-                .as_str()
-                .unwrap()
-                .contains("non-empty mcpServers.jig.command")
-        );
-    }
-
-    #[test]
-    fn reports_default_mcp_command_for_non_string_mcp_arg() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::write(
-            temp.path().join(".mcp.json"),
-            serde_json::to_string_pretty(&json!({
-                "mcpServers": {
-                    "jig": {
-                        "command": "scripts/jig",
-                        "args": [123, "mcp"]
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(output["mcp_command"], DEFAULT_MCP_COMMAND);
-        assert!(
-            output["mcp_command_error"]
-                .as_str()
-                .unwrap()
-                .contains("args[0] must be a string")
-        );
     }
 
     pub(super) fn write_info_fixture(root: &Path) {

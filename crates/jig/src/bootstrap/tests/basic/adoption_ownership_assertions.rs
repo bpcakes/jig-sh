@@ -47,7 +47,6 @@ pub(super) fn assert_minimal_files(repo: &Path) {
     for path in [
         "scripts/jig",
         "scripts/install-jig.sh",
-        ".mcp.json",
         "AGENTS.md",
         "agent-map.md",
         ".github/workflows/rust-tests.yml",

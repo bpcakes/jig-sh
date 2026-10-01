@@ -15,19 +15,17 @@ fn request(selectors: &[&str]) -> RepositoryRunRequest {
 }
 
 #[test]
-fn foreground_run_explain_matches_mcp_and_creates_no_execution_state() {
+fn foreground_run_explain_creates_no_execution_state() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
     add_v6_generate_action(temp.path());
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let before = fs::read_dir(temp.path().join(".agent")).unwrap().count();
-    let mcp = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:generate"]})).unwrap();
     let mut args = request(&["api:generate"]);
     args.explain = true;
     let output = crate::runtime::dispatch(&ctx, RuntimeCommand::Run(args)).unwrap();
     assert_eq!(output["executed"], false);
-    assert_eq!(output["plan"], mcp["plan"]);
     assert!(!ctx.state_file("runs.jsonl").exists());
     assert!(!ctx.state_file("receipts.jsonl").exists());
     assert_eq!(
@@ -75,37 +73,22 @@ fn foreground_run_requires_exact_approval_and_executes_non_check_actions() {
 }
 
 #[test]
-fn foreground_run_default_profile_matches_mcp_terminal_outcomes() {
+fn foreground_run_default_profile_records_successful_target_outcomes() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"profile": "verify"})).unwrap();
-    let args = request(&[]);
-    let output = crate::runtime::dispatch(&ctx, RuntimeCommand::Run(args)).unwrap();
+    let output = crate::runtime::dispatch(&ctx, RuntimeCommand::Run(request(&[]))).unwrap();
     assert_eq!(output["ok"], true, "{output:#}");
-    assert_eq!(output["plan"], planned["plan"]);
-    let accepted = call_tool(&ctx, tool::EXECUTE_RUN, json!({"plan": planned["plan"]})).unwrap();
-    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
-    let outcomes = |value: &Value| {
-        value
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| {
-                (
-                    t["target"].clone(),
-                    t["conclusion"].clone(),
-                    t["exit_code"].clone(),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        outcomes(&output["run"]["targets"]),
-        outcomes(&terminal["result"]["run"]["result"]["targets"])
-    );
-    crate::runtime::mcp_repository::wait_for_live_runs(&ctx);
+    assert_eq!(output["plan"]["profile"], "verify");
+    let targets = output["run"]["targets"].as_array().unwrap();
+    assert_eq!(targets.len(), 2);
+    for target in targets {
+        assert_eq!(target["conclusion"], "success");
+        assert_eq!(target["exit_code"], 0);
+    }
+    let run = crate::state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(run.result).unwrap(), output["run"]);
 }
 
 #[test]
@@ -195,10 +178,8 @@ fn foreground_run_cancellation_stops_running_and_unstarted_targets() {
                     .find(|event| event["event"] == "target_started")
                     .unwrap();
                 let run_id = started["run_id"].as_str().unwrap().to_owned();
-                let response =
-                    call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
-                assert_eq!(response["cancellation_requested"], true);
-                assert_eq!(response["worker_signalled"], false);
+                let run = crate::state::request_run_cancel(&ctx, &run_id).unwrap();
+                assert!(run.cancel_requested);
                 run_id
             })
         });
@@ -232,24 +213,17 @@ fn foreground_run_cancellation_stops_running_and_unstarted_targets() {
 }
 
 #[test]
-fn foreground_run_affected_explain_and_execution_match_mcp() {
+fn foreground_run_affected_explain_and_execution_select_changed_targets() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
     init_git_repo(temp.path());
     fs::write(temp.path().join("api/example.go"), "package changed\n").unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let mcp = call_tool(
-        &ctx,
-        tool::PLAN_RUN,
-        json!({"profile": "verify", "affected_base": "HEAD"}),
-    )
-    .unwrap();
     let mut args = request(&[]);
     args.profile = Some("verify".into());
     args.affected_base = Some("HEAD".into());
     args.explain = true;
     let output = crate::runtime::dispatch(&ctx, RuntimeCommand::Run(args.clone())).unwrap();
-    assert_eq!(output["plan"], mcp["plan"]);
     assert_eq!(output["plan"]["targets"].as_array().unwrap().len(), 1);
     assert_eq!(output["plan"]["targets"][0]["target"]["component"], "api");
     args.explain = false;
@@ -432,4 +406,46 @@ fn foreground_run_and_check_record_run_history_without_receipts() {
         assert!(output["run"]["targets"][0].get("receipt_id").is_none());
         assert!(!ctx.state_file("receipts.jsonl").exists());
     }
+}
+
+fn add_v6_generate_action(root: &std::path::Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    let config = config
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            "api_test_command = \"printf 'api tests passed\\n'\"\ngenerate_command = \"printf generated > generated.txt\"",
+        )
+        .replace(
+            "[[repository.profiles]]",
+            r#"[[repository.actions]]
+target = { component = "api", action = "generate" }
+intent = "generate"
+effects = ["worktree", "process"]
+runner = { kind = "command", command = "generate_command" }
+inputs = ["api/**"]
+
+[[repository.profiles]]"#,
+        );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["required_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("generate_command"));
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "generate"},
+        "intent": "generate",
+        "effects": ["worktree", "process"],
+        "runner": {"kind": "command", "command": "generate_command"},
+        "inputs": ["api/**"]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
 }

@@ -3,7 +3,7 @@ use super::*;
 pub(in crate::cli) fn parse_cli() -> Cli {
     let args = normalize_external_check_global_flags(std::env::args_os().collect());
     let command_args = || args.iter().skip(1).cloned();
-    let report_json_errors = args_request_json(command_args()) && !args_target_mcp(command_args());
+    let report_json_errors = args_request_json(command_args());
 
     match Cli::try_parse_from(&args) {
         Ok(cli) => {
@@ -195,17 +195,6 @@ pub(in crate::cli) fn args_request_json(args: impl IntoIterator<Item = OsString>
     args.into_iter()
         .take_while(|arg| arg != "--")
         .any(|arg| arg == "--json")
-}
-
-pub(in crate::cli) fn args_target_mcp(args: impl IntoIterator<Item = OsString>) -> bool {
-    // Callers pass command arguments without argv[0]. Prefix a synthetic
-    // executable so the same root-option parser used by normalization can
-    // skip generated-launcher option values without mistaking one for `mcp`.
-    let argv = std::iter::once(OsString::from("jig"))
-        .chain(args)
-        .take_while(|arg| arg != "--")
-        .collect::<Vec<_>>();
-    root_subcommand_index(&argv).is_some_and(|index| argv[index] == tool_defs::cli_command::MCP)
 }
 
 pub(in crate::cli) fn augmented_cli_error_message(error: &clap::Error) -> String {

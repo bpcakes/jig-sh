@@ -32,7 +32,7 @@
 
 ## Invariants
 
-- Keep this crate independent from Jig repository state, receipts, MCP, and templates.
+- Keep this crate independent from Jig repository state, receipts, and templates.
 - CLI dev launches run their owning supervisor in a separate Unix session behind a private lifetime socket. Only the invoking CLI holds its endpoint; restore close-on-exec on the worker endpoint before preflight and app spawn. Launcher loss requests ordinary bounded cleanup in the owning worker. Do not claim protection against SIGKILL of that worker, or signal registry PIDs to compensate for its loss.
 - Store mutable proxy state outside `.agent/state`; that directory is append-only work memory.
 - Route mutations must be lock-protected and safe to repeat.

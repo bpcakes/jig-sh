@@ -174,7 +174,6 @@ impl CommandKind {
             Self::Codex(_) => (tool_defs::cli_command::CODEX, CapabilityOnly),
             Self::AgentMap(_) => (tool_defs::cli_command::AGENT_MAP, Repository),
             Self::State(_) => (tool_defs::cli_command::STATE, Repository),
-            Self::Mcp(_) => (tool_defs::cli_command::MCP, Repository),
             Self::RuntimeCompatible(_) => ("__runtime-compatible", CapabilityOnly),
         };
 
@@ -195,14 +194,8 @@ fn launcher_capability_only_top_level_name(name: &str) -> bool {
 }
 
 const fn should_report_json_command_errors(json_output: bool, command: &CommandKind) -> bool {
-    // MCP owns stdout as a framed protocol stream, while the hidden runtime
-    // probe is itself a machine protocol. CLI JSON envelopes are invalid for
-    // both, so their failures continue to use stderr.
-    json_output
-        && !matches!(
-            command,
-            CommandKind::Mcp(_) | CommandKind::RuntimeCompatible(_)
-        )
+    // The hidden runtime probe is a machine protocol, so its failures use stderr.
+    json_output && !matches!(command, CommandKind::RuntimeCompatible(_))
 }
 
 fn run_command(cli: Cli) -> Result<()> {
@@ -213,10 +206,6 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Presets => run_presets_command(json_output),
         CommandKind::Adopt(opts) => run_adopt_command(opts, json_output),
         CommandKind::Update(opts) => run_update_command(opts, json_output),
-        CommandKind::Mcp(opts) => {
-            let ctx = RepoContext::load()?;
-            mcp::serve(&ctx, opts.surface)
-        }
         CommandKind::Ui(opts) => {
             let ctx = RepoContext::load().map_err(|error| {
                 if json_output {

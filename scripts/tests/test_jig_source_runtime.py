@@ -131,7 +131,7 @@ class SourceRuntimeTests(unittest.TestCase):
         (self.root / "crates/jig/src/main.rs").write_text("this is broken Rust\n")
         (self.root / "Cargo.toml").write_text("broken TOML [\n")
         self.install("newer")
-        for command in [("--version",), ("state", "summary"), ("mcp",), ("doctor",)]:
+        for command in [("--version",), ("state", "summary"), ("doctor",)]:
             self.assert_ok(self.launcher(*command))
         self.assertEqual(cached.stat().st_mtime_ns, original)
         self.assertEqual(self.launcher("--version").stdout, "jig 0.4.0\n")
@@ -177,13 +177,18 @@ class SourceRuntimeTests(unittest.TestCase):
         self.assertIn("Expected a native Jig executable", result.stderr)
         self.assertFalse(marker.exists())
 
-    def test_mcp_and_resolve_only_never_populate_cache(self):
-        for call in [lambda: self.installer("--resolve-only", "--profile", "runtime"),
-                     lambda: self.launcher("mcp")]:
-            self.assertNotEqual(call().returncode, 0)
-            self.assertFalse((self.root / ".git/jig-tools").exists())
+    def test_resolve_only_never_populates_cache(self):
+        result = self.installer("--resolve-only", "--profile", "runtime")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / ".git/jig-tools").exists())
         self.assert_ok(self.launcher("--version"))
-        self.assert_ok(self.launcher("mcp"))
+        self.assert_ok(self.launcher("state", "summary"))
+
+    def test_removed_mcp_install_profile_is_rejected(self):
+        result = self.installer("--profile", "mcp")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("profile", result.stderr)
+        self.assertIn("mcp", result.stderr)
 
     def test_explicit_override_remains_authoritative(self):
         env = dict(self.env, JIG_DEV_BIN=str(self.binaries["newer"]))

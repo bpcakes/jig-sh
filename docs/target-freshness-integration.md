@@ -109,10 +109,7 @@ value was defaulted, and its authored-model provenance:
 scripts/jig --json info target api:test --projection agent-v1
 ```
 
-The same projection is available to MCP clients when the server is started with
-`scripts/jig mcp --surface agent-v1`; epoch-8 targets report the policy through a
-separately advertised schema, and other catalog and execution descriptors are
-unchanged. Epoch-8 targets report `mode: "target_freshness_v1"`; older contracts
+Epoch-8 targets report `mode: "target_freshness_v1"`; older contracts
 report `mode: "legacy_global"` with conservative effective defaults and no
 invented or stale policy provenance. Non-default values are never described as
 defaulted, even if their stored provenance is inconsistent. The standard

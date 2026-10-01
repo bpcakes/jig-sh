@@ -57,7 +57,7 @@ fn fixture(root: &Path) {
     // A tiny launcher implements the real private handoff without installing a
     // runtime. Its executable path is part of the behavior under test.
     fs::create_dir_all(root.join("scripts")).unwrap();
-    fs::write(root.join(".mcp.json"), "{}\n").unwrap();
+
     fs::write(root.join("scripts/install-jig.sh"), "#!/bin/bash\nexit 1\n").unwrap();
     let quoted = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
     let root_arg = quoted(root.to_str().unwrap());
@@ -252,7 +252,7 @@ fn info_summary_recovery_preserves_supported_target_subjects() {
 fn bare_contract_recovery_runs_real_validation_and_preserves_its_failure() {
     let repo = tempdir().unwrap();
     fixture(repo.path());
-    fs::remove_file(repo.path().join(".mcp.json")).unwrap();
+    fs::remove_file(repo.path().join("scripts/install-jig.sh")).unwrap();
     let before = journal(repo.path());
     let output = jig()
         .current_dir(repo.path())
@@ -263,7 +263,7 @@ fn bare_contract_recovery_runs_real_validation_and_preserves_its_failure() {
     assert!(message.contains("jig check contract --json"), "{message}");
     assert_eq!(before, journal(repo.path()));
     let retried = apply(repo.path(), &message);
-    // The fixture deliberately lost its MCP wiring. Recovery must expose that real validation
+    // The fixture deliberately lost its installer. Recovery must expose that real validation
     // failure, not stop at parse success or substitute a successful stub.
     assert_eq!(retried.status.code(), Some(1), "{message}\n{retried:?}");
     let value: Value = serde_json::from_slice(&retried.stdout).unwrap();
@@ -273,7 +273,7 @@ fn bare_contract_recovery_runs_real_validation_and_preserves_its_failure() {
         value["results"][0]["response"]["result"]["stderr"]
             .as_str()
             .unwrap()
-            .contains("Missing .mcp.json"),
+            .contains("Missing scripts/install-jig.sh installer"),
         "{value:#}"
     );
     assert_eq!(

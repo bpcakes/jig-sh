@@ -119,7 +119,6 @@ pub(super) fn known_legacy_action_id(tool_name: &str) -> Option<&'static str> {
         tool::SQLX_CHECK => Some("sqlx"),
         tool::SQLC_CHECK => Some("sqlc"),
         tool::MIGRATION_ADD => Some("migration-add"),
-        tool::AGENT_DOCTOR => Some("agent-doctor"),
         tool::BOOTSTRAP => Some("bootstrap"),
         tool::CLIPPY => Some("clippy"),
         tool::LINT => Some("lint"),

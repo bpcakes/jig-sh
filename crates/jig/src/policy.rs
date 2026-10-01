@@ -147,7 +147,6 @@ fn validate_contract_basics(ctx: &RepoContext, errors: &mut Vec<String>) {
     }
     if !ctx.is_minimal_footprint() {
         for (path, message) in [
-            (ctx.root().join(".mcp.json"), "Missing .mcp.json."),
             (
                 ctx.root().join("scripts/jig"),
                 "Missing scripts/jig launcher.",

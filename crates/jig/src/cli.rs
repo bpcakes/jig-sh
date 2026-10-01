@@ -3,8 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::{
-    bootstrap, context::RepoContext, doctor, info, mcp, root_commands, runtime, status, tool_defs,
-    ui,
+    bootstrap, context::RepoContext, doctor, info, root_commands, runtime, status, tool_defs, ui,
 };
 
 mod agent;
@@ -92,7 +91,7 @@ const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
 #[cfg(test)]
 const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,claude,codex,doctor,init,presets,update";
 #[cfg(test)]
-const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault";
+const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault";
 #[cfg(test)]
 const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test";
 
@@ -403,12 +402,6 @@ pub(crate) enum CommandKind {
         subcommand
     )]
     State(StateCommand),
-    /// Serve the Jig MCP server over stdio.
-    #[command(
-        name = root_commands::MCP.name,
-        display_order = root_commands::MCP.display_order
-    )]
-    Mcp(McpOpts),
     /// Validate this binary against a generated repository launcher contract.
     #[command(name = "__runtime-compatible", hide = true)]
     RuntimeCompatible(RuntimeCompatibleOpts),
@@ -431,7 +424,6 @@ pub(crate) struct RuntimeCompatibleOpts {
 pub(crate) enum RuntimeCompatibilityProfile {
     Default,
     Runtime,
-    Mcp,
 }
 
 impl RuntimeCompatibilityProfile {
@@ -439,7 +431,6 @@ impl RuntimeCompatibilityProfile {
         match self {
             Self::Default => "default",
             Self::Runtime => "runtime",
-            Self::Mcp => "mcp",
         }
     }
 }
@@ -499,17 +490,6 @@ impl InfoOpts {
             "--projection agent-v1 requires a target-bearing info subject: workspace, component, targets, or target"
         )
     }
-}
-
-#[derive(Args, Debug, Default)]
-pub(crate) struct McpOpts {
-    #[arg(
-        long,
-        value_enum,
-        default_value_t,
-        help = "Select the standard or opt-in agent-v1 MCP response surface"
-    )]
-    pub(crate) surface: crate::surface::ResponseSurface,
 }
 
 #[derive(Debug, Subcommand)]
