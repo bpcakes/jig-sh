@@ -44,7 +44,7 @@ test-group = 'frontend-node-local'
 # These checks intentionally enforce short transport and process-cleanup
 # deadlines. Source identity tests also supervise Git process trees and need the
 # same isolation from generated-frontend process contention.
-filter = 'package(jig-sh) & (binary(runtime_signal_policy) | test(mcp_repository_arguments_round_trip_from_wire_keys_into_native_actions) | test(source_identity::tests))'
+filter = 'package(jig-sh) & (binary(runtime_signal_policy) | test(source_identity::tests))'
 test-group = 'process-signals'
 threads-required = "num-test-threads"
 

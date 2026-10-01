@@ -320,18 +320,13 @@ fn runtime_compatibility_checks_contract_and_profile() {
     let temp = tempdir().unwrap();
     write_compatible_runtime_repo(temp.path(), 4);
 
-    for profile in [
-        RuntimeCompatibilityProfile::Runtime,
-        RuntimeCompatibilityProfile::Mcp,
-    ] {
-        run_runtime_compatible(RuntimeCompatibleOpts {
-            profile,
-            capability_only: false,
-            contract_version: None,
-            repo_root: temp.path().to_path_buf(),
-        })
-        .unwrap();
-    }
+    run_runtime_compatible(RuntimeCompatibleOpts {
+        profile: RuntimeCompatibilityProfile::Runtime,
+        capability_only: false,
+        contract_version: None,
+        repo_root: temp.path().to_path_buf(),
+    })
+    .unwrap();
 
     let default_result = run_runtime_compatible(RuntimeCompatibleOpts {
         profile: RuntimeCompatibilityProfile::Default,

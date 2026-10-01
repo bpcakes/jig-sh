@@ -26,10 +26,6 @@ fn json_error_reporting_preserves_protocol_and_post_output_boundaries() {
         true,
         &CommandKind::Info(InfoOpts::default())
     ));
-    assert!(!should_report_json_command_errors(
-        true,
-        &CommandKind::Mcp(McpOpts::default())
-    ));
     let runtime_probe = Cli::try_parse_from([
         "jig",
         "__runtime-compatible",
@@ -71,33 +67,6 @@ fn json_request_detection_ignores_child_arguments_after_separator() {
     ));
     assert!(!args_request_json(
         ["vault", "run", "--", "tool", "--json"].map(OsString::from)
-    ));
-
-    assert!(args_target_mcp(
-        ["--json", "mcp", "--bogus"].map(OsString::from)
-    ));
-    assert!(args_target_mcp(["mcp", "--json"].map(OsString::from)));
-    assert!(args_target_mcp(
-        [
-            "--__launcher-contract-version",
-            "6",
-            "--__launcher-profile",
-            "repo",
-            "--__launcher-repo-root",
-            "/tmp/ExampleProject",
-            "mcp",
-            "--json",
-        ]
-        .map(OsString::from)
-    ));
-    assert!(!args_target_mcp(
-        ["--__launcher-profile", "mcp", "vault", "status"].map(OsString::from)
-    ));
-    assert!(!args_target_mcp(
-        ["vault", "status", "mcp", "--json"].map(OsString::from)
-    ));
-    assert!(!args_target_mcp(
-        ["vault", "run", "--", "mcp", "--json"].map(OsString::from)
     ));
 }
 

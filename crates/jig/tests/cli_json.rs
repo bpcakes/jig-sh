@@ -259,7 +259,6 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
             "claude",
             "agent-map",
             "state",
-            "mcp",
         ]
     );
     let sqlx = structured["commands"]

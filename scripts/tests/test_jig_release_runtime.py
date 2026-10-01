@@ -98,7 +98,7 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         self.assertIn("--no-default-features", args)
         self.config.write_text('_src_path = "embedded:jig-sh"\n_commit = "fedcba9876543210"\n')
         self.assert_ok(self.launcher("--version"))
-        self.assert_ok(self.launcher("mcp"))
+        self.assert_ok(self.launcher("state", "summary"))
         self.assertEqual(len(self.calls()), 1)
 
     def test_pin_change_selects_new_version_and_can_reuse_previous_release(self):
@@ -111,11 +111,11 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         self.assertEqual(self.launcher("--version").stdout, "jig 0.5.0\n")
         self.assertEqual(len(self.calls()), 2)
 
-    def test_full_profile_serves_runtime_and_mcp_without_another_install(self):
+    def test_full_profile_serves_runtime_without_another_install(self):
         full = self.installer("--profile", "default")
         self.assert_ok(full)
         self.assertNotIn("--no-default-features", self.calls()[0])
-        for profile in ["runtime", "mcp"]:
+        for profile in ["runtime"]:
             result = self.installer("--profile", profile)
             self.assert_ok(result)
             self.assertEqual(result.stdout, full.stdout)
@@ -129,11 +129,11 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         self.assertNotEqual(runtime.stdout, full.stdout)
         self.assertEqual(len(self.calls()), 2)
 
-    def test_installed_native_release_is_imported_and_then_serves_mcp(self):
+    def test_installed_native_release_is_imported_and_then_serves_runtime(self):
         shutil.copy2(self.binaries / "0.5.0", self.tools / "jig")
         self.assert_ok(self.launcher("--version"))
         (self.tools / "jig").unlink()
-        self.assert_ok(self.launcher("mcp"))
+        self.assert_ok(self.launcher("state", "summary"))
         self.assertFalse(self.calls())
 
     def test_wrong_or_incompatible_path_binary_does_not_override_pin(self):
@@ -155,12 +155,18 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         self.assertFalse(marker.exists())
         self.assertEqual(len(self.calls()), 1)
 
-    def test_read_only_resolution_and_cold_mcp_never_install(self):
+    def test_read_only_resolution_never_installs(self):
         shutil.copy2(self.binaries / "0.5.0", self.tools / "jig")
-        for args in [("--resolve-only",), ("--profile", "mcp")]:
+        for args in [("--resolve-only",)]:
             self.assertNotEqual(self.installer(*args).returncode, 0)
         self.assertFalse(self.calls())
         self.assertFalse(list(self.root.glob(".git/jig-tools/**/bin/jig")))
+
+    def test_removed_mcp_install_profile_is_rejected(self):
+        result = self.installer("--profile", "mcp")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("profile", result.stderr)
+        self.assertIn("mcp", result.stderr)
 
     def test_invalid_pin_cannot_fall_back_to_cached_or_git_runtime(self):
         self.assert_ok(self.launcher("--version"))

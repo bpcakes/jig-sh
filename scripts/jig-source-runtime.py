@@ -117,7 +117,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--contract-version", type=int)
-    parser.add_argument("--profile", choices=["runtime", "default", "mcp"], default="runtime")
+    parser.add_argument("--profile", choices=["runtime", "default"], default="runtime")
     parser.add_argument("--resolve-only", choices=["0", "1"], default="0")
     parser.add_argument("--refresh", choices=["0", "1"], default="0")
     parser.add_argument("--info", action="store_true", help="Report the selected runtime as JSON")
@@ -140,7 +140,7 @@ def main():
             mode = "development_override"
         else:
             binary = select_runtime(root, contract, args.profile, version,
-                                    args.resolve_only == "1" or args.info or args.profile == "mcp",
+                                    args.resolve_only == "1" or args.info,
                                     args.refresh == "1")
             actual = version
             mode = "released"

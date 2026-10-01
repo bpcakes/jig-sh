@@ -49,7 +49,7 @@
 
     <details>
       <summary>Why does the vault exist if I already have <em>1Password / Vault / AWS Secrets Manager</em>? <span class="plus">+</span></summary>
-      <div class="a">It doesn't replace them. The jig vault is for the agent loop: a place where a coding agent can ask for a named secret to run one specific command without ever seeing the plaintext through MCP, receipts, or <code>Debug</code> output. For production secret management, keep using your existing provider — the vault is a <span class="acid">blast-radius reducer</span> for local development, not a cloud KMS.</div>
+      <div class="a">It doesn't replace them. The jig vault is for the agent loop: a place where a coding agent can ask for a named secret to run one specific command without ever seeing the plaintext through structured results, receipts, or <code>Debug</code> output. For production secret management, keep using your existing provider — the vault is a <span class="acid">blast-radius reducer</span> for local development, not a cloud KMS.</div>
     </details>
 
     <details>

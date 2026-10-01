@@ -148,7 +148,7 @@ Generated Go repositories use the root `go.mod` as their Go toolchain authority.
 
 The generated no-root-`Cargo.toml` Cargo defaults exit 0 and print a stable stdout prefix. The removed `work check` summary rendered that prefix as an intentional harness skip; no current command gives it special treatment.
 
-Configured command values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. They run in supervised process trees, use `[execution].command_timeout_seconds` (default 1,800; valid range 1–86,400), and retain at most `[execution].command_output_limit_bytes` from each stdout/stderr stream (default 67,108,864; valid range 1–1,073,741,824). Exceeding the capture limit terminates and reaps the process tree as an explicit failure; it is never reported as partial success, and the output captured before termination is still reported for diagnosis, as the `output_tail` of a run's target result. Internal Git and GitHub protocol commands keep a separate fixed 4 MiB bound. Codex workers, such as PR-repair workers, use a separately bounded last-message file as their authoritative result channel; their diagnostic transcripts may truncate at 4 MiB while the worker's evidence reports that truncation. Human-mode CLI progress is buffered within 64 KiB and delivered with a bounded best effort after supervision; JSON mode disables progress, while MCP defers progress writes until execution returns and retains at most a 4 KiB preview per stream. Contracts 6 through 7 write configured commands under `[commands]` with component-scoped keys such as `api_test_command` and `web_test_command`; action runners refer to those keys, never to agent-supplied shell text. Treat changes to these values like changes to project-owned shell scripts. An action runner's optional `environment` map is the same checked-in execution authority: it intentionally inherits the caller environment and may override sensitive names such as `PATH`, loader controls, or Git variables, just as the reviewed shell command itself can. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, flat-layout `scripts/jig migration add NAME`, `scripts/jig check schema`, and the native `repo:file-budget` action run inside the binary; other repository-defined actions use their declared process runner even when their launcher selector also begins with `scripts/jig check`.
+Configured command values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. They run in supervised process trees, use `[execution].command_timeout_seconds` (default 1,800; valid range 1–86,400), and retain at most `[execution].command_output_limit_bytes` from each stdout/stderr stream (default 67,108,864; valid range 1–1,073,741,824). Exceeding the capture limit terminates and reaps the process tree as an explicit failure; it is never reported as partial success, and the output captured before termination is still reported for diagnosis, as the `output_tail` of a run's target result. Internal Git and GitHub protocol commands keep a separate fixed 4 MiB bound. Codex workers, such as PR-repair workers, use a separately bounded last-message file as their authoritative result channel; their diagnostic transcripts may truncate at 4 MiB while the worker's evidence reports that truncation. Human-mode CLI progress is buffered within 64 KiB and delivered with a bounded best effort after supervision; JSON mode disables progress. Contracts 6 through 7 write configured commands under `[commands]` with component-scoped keys such as `api_test_command` and `web_test_command`; action runners refer to those keys, never to agent-supplied shell text. Treat changes to these values like changes to project-owned shell scripts. An action runner's optional `environment` map is the same checked-in execution authority: it intentionally inherits the caller environment and may override sensitive names such as `PATH`, loader controls, or Git variables, just as the reviewed shell command itself can. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, flat-layout `scripts/jig migration add NAME`, `scripts/jig check schema`, and the native `repo:file-budget` action run inside the binary; other repository-defined actions use their declared process runner even when their launcher selector also begins with `scripts/jig check`.
 
 Full-harness templates seed `.jig/file-budget.toml` once and declare the language-neutral native `repo:file-budget` action. The repository-owned policy defines governed paths, exact physical-line and byte budgets, exclusions, and bounded expiring waivers; Jig supplies deterministic Git comparison, evaluation, findings, and evidence. Use `scripts/jig check repo:file-budget` for the authored action or `scripts/jig file-budget check|audit|explain|validate` for direct diagnostics. A repository may replace or remove the action, its `jig.file_budget` compatibility alias, or its verification-profile membership without changing the contract schema.
 
@@ -216,8 +216,7 @@ max_bytes = 1024
 
 The resolved manifest carries the same `arguments` map on the action. Inspect a
 target with `jig info target api:generate` to see its declarations. Bind values
-with `jig run api:generate --arg api:generate:message=example --explain`, or the
-MCP target-keyed `arguments` object. Strings retain their exact bytes. V8 native
+with `jig run api:generate --arg api:generate:message=example --explain`. Strings retain their exact bytes. V8 native
 migration authoring requires exactly `name = { type = "string", required = true,
 allow_empty = false, max_bytes = 200 }`; other current native operations accept no
 general arguments. Declaration-bearing sources require contract v8 or later; v6/v7 retain their legacy native migration-name validation without a
@@ -347,7 +346,7 @@ nonzero identity gets one 60-second, depth-one exact-object fetch from `origin`
 without updating refs, tags, or `FETCH_HEAD`, then blocks unless the checked-in
 native configuration explicitly selected authenticated strict-inventory
 fallback. Pull-request callers can use `--base REF` merge-base authority. The
-same tagged comparison object is available to `jig.plan_run` MCP clients.
+same tagged comparison object is recorded in run plans.
 
 Generated frontend commands use `scripts/check-webapps.sh check-one` so `web:test` validates only the `web` component while preserving dependency setup and coverage enforcement. Fresh Rust/React and Go/React scaffolds also declare repository-wide contract-drift and public-boundary targets because the same transaction creates their `scripts/contracts.mjs` implementation. Adoption of an existing frontend does not infer those scaffold-specific targets merely from app presence; an existing authored v6 repository model remains authoritative on recopy. A declared contract target fails immediately when its runner file is missing instead of producing empty success evidence. Aggregate `jig.typescript_*` tools remain compatibility actions and are not members of the default profile.
 
@@ -645,7 +644,7 @@ scripts/jig run api:test-focused --explain \
 ```
 
 Supply the focus JSON as the action's declared `focus` argument, through
-`--arg TARGET:focus=JSON` or MCP `jig.plan_run` `arguments`. Explicit selections
+`--arg TARGET:focus=JSON`. Explicit selections
 require 1–32 exact `name@version` workspace package selectors and at most 32
 target selectors (`lib`, or named `bin`, `test`, `example`, `bench`). Empty targets means
 all targets in the selected packages. Names and flags are validated and lowered
@@ -697,7 +696,7 @@ revalidation, cancellation, deadlines, output limits, and failure recording
 still apply. Repositories must upgrade their runtime before adopting the new
 runner/argument tags: unsupported runtimes reject them rather than execute a
 silently weakened check. Existing string arguments and old run records retain
-their meaning. Probe CLI help or MCP input schemas before sending focus
+their meaning. Probe CLI help before sending focus
 arguments to an older endpoint.
 
 ### Optional Beads task snapshots
@@ -1105,7 +1104,7 @@ Useful commands:
 
 ## Generated Contract
 
-The compatibility policy for generated CLI commands, MCP tools, and `.agent/jig-contract.json` is defined in [Public Contract](./public-contract.md).
+The compatibility policy for generated CLI commands and `.agent/jig-contract.json` is defined in [Public Contract](./public-contract.md).
 
 `scripts/jig` is the stable command surface for generated repos. It exposes configured project checks as:
 
@@ -1204,10 +1203,10 @@ installation, or use the explicit `JIG_DEV_BIN` override for development.
 Release executables live under
 `.git/jig-tools/release-VERSION-contract-EPOCH[-runtime]/bin/jig`, with
 `.agent/.cache/jig/` as the base when `.git` is not a directory. Full builds can
-serve runtime and MCP requests after compatibility validation. Changing template
+serve runtime requests after compatibility validation. Changing template
 provenance does not invalidate a release cache. Changing the pin selects another
 release; `--refresh` or `JIG_INSTALL_REFRESH=1` reinstalls the same pinned version.
-MCP startup and `--resolve-only` never install or import a binary; run
+`--resolve-only` never install or import a binary; run
 `scripts/jig --version` first to prepare the cache.
 
 Generated workflows that invoke Jig cache the runtime profile executable by
@@ -1220,15 +1219,13 @@ runs; crates.io does not distribute precompiled Jig binaries.
 
 Generated repos also get these runtime-owned files:
 
-- `.mcp.json`
 - `.agent/jig-contract.json`
 - `scripts/jig`
 - `scripts/install-jig.sh`
 
-The generated `scripts/jig` launcher embeds the contract epoch it was rendered for and executes only a binary whose private compatibility probe accepts that epoch plus the requested `default`, `runtime`, or `mcp` profile. Ordinary commands then require that embedded epoch to equal `.agent/jig-contract.json` before the selected runtime strictly validates the complete repository contract; `doctor` and repair commands use the embedded epoch only for runtime selection so a malformed or missing manifest can reach its own diagnostic. Without a runtime release pin, repo-local cache directories are keyed by contract epoch and profile, while a source stamp inside each cache binds remote installs to the configured source and immutable `_commit` (or the legacy source tag for v2/v3) and binds local installs to their canonical source identity and relevant source-tree contents, including non-Git directories. Advancing `_commit`, editing local source, or switching its path within the same contract epoch invalidates the old stamp and refreshes the runtime; help and MCP resolution apply the same stamp check without installing during MCP startup. Generated launchers are never accepted as runtime binaries through the explicit `JIG_INSTALL_ALLOW_PATH_BINARY=1` escape hatch. On first use the launcher may install a compatible runtime from the recorded template source and then exposes the configured command contract as:
+The generated `scripts/jig` launcher embeds the contract epoch it was rendered for and executes only a binary whose private compatibility probe accepts that epoch plus the requested `default` or `runtime` profile. Ordinary commands then require that embedded epoch to equal `.agent/jig-contract.json` before the selected runtime strictly validates the complete repository contract; `doctor` and repair commands use the embedded epoch only for runtime selection so a malformed or missing manifest can reach its own diagnostic. Without a runtime release pin, repo-local cache directories are keyed by contract epoch and profile, while a source stamp inside each cache binds remote installs to the configured source and immutable `_commit` (or the legacy source tag for v2/v3) and binds local installs to their canonical source identity and relevant source-tree contents, including non-Git directories. Advancing `_commit`, editing local source, or switching its path within the same contract epoch invalidates the old stamp and refreshes the runtime; help and read-only resolution apply the same stamp check. Generated launchers are never accepted as runtime binaries through the explicit `JIG_INSTALL_ALLOW_PATH_BINARY=1` escape hatch. On first use the launcher may install a compatible runtime from the recorded template source and then exposes the configured command contract as:
 
 - CLI commands such as `scripts/jig check fmt`
-- bounded MCP tools such as `jig.plan_run` and `jig.execute_run` in contract v6; contracts v2 through v5 retain direct tools such as `jig.fmt_check`
 
 For help requests, the launcher first looks for an existing matching repo-local
 binary so `scripts/jig --help` and nested `--help` calls stay fast after the
@@ -1329,7 +1326,9 @@ their historical evidence is useful. `state diagnose` reports backup and archive
 bytes separately so this local cache does not become a second unbounded state
 store.
 
-The `jig-sh` source repository selects its routine harness runtime separately from the source being developed. Its committed `.jig/source-runtime-version` selects an exact released Jig version. On a cold checkout, a normal invocation copies the matching installed native `jig` executable from `PATH` after checking both that version and the required contract/profile compatibility. Generated repositories without `.jig/runtime-version` still require `JIG_INSTALL_ALLOW_PATH_BINARY=1` before reusing a binary from `PATH`. Repositories with a release pin import only the exact pinned version. The executable is cached under `.git/jig-tools/source-release-VERSION/bin/jig` (or `.agent/.cache/jig/source-release-VERSION/bin/jig` when `.git` is not a directory). Source edits do not invalidate this release cache. An unavailable or incompatible selected release reports a recovery command instead of compiling the changing checkout or downloading a runtime. MCP startup only resolves an existing cache; run `scripts/jig --version` once to prepare it. This source-repository policy does not change the source stamps used by generated repositories.
+The `jig-sh` source repository selects its routine harness runtime separately from the source being developed. Its committed `.jig/source-runtime-version` selects an exact released Jig version. On a cold checkout, a normal invocation copies the matching installed native `jig` executable from `PATH` after checking both that version and the required contract/profile compatibility. Generated repositories without `.jig/runtime-version` still require `JIG_INSTALL_ALLOW_PATH_BINARY=1` before reusing a binary from `PATH`. Repositories with a release pin import only the exact pinned version. The executable is cached under `.git/jig-tools/source-release-VERSION/bin/jig` (or `.agent/.cache/jig/source-release-VERSION/bin/jig` when `.git` is not a directory). Source edits do not invalidate this release cache. An unavailable or incompatible selected release reports a recovery command instead of compiling the changing checkout or downloading a runtime. Run `scripts/jig --version` once to prepare the cache. This source-repository policy does not change the source stamps used by generated repositories.
+
+This source checkout temporarily retains an empty, unmanaged `.mcp.json` because the selected released runtime requires the file. It registers no server and is not generated for downstream repositories. Remove it when the source runtime pin advances to a release that supports the MCP removal. Use `scripts/jig-dev` to exercise the current implementation.
 
 After preparing the cache, `python3 scripts/jig-source-runtime.py --info` reports `mode`, `release_pin`, `runtime_version`, `binary`, `profile`, and `contract_version`. Its mode identifies the selected release or an explicit development override. `JIG_INSTALL_REFRESH=1 scripts/jig <command>` reimports the exact selected release from the installed binary; it never advances the pin. Changing `.jig/source-runtime-version` is a deliberate runtime upgrade, independent of the source workspace's Cargo version.
 

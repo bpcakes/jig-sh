@@ -10,12 +10,11 @@ use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     SqlxTodoInput,
 };
-use crate::tool_defs::{self, MemoryTool, tool};
+use crate::tool_defs::tool;
 
 mod agent;
 mod file_budget;
 mod loops;
-mod mcp_repository;
 mod migration;
 mod repository_run;
 mod run_cancellation;
@@ -56,10 +55,6 @@ pub(crate) fn probe_codex_marketplace_support(
     agent::codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
         codex_bin, timeout, cancelled,
     )
-}
-
-pub(crate) fn wait_for_mcp_repository_runs(ctx: &RepoContext) {
-    mcp_repository::wait_for_live_runs(ctx);
 }
 
 pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Value> {
@@ -439,75 +434,6 @@ fn execute_repository_check_plan(
         "failed_targets": execution.failed_targets,
         "source_observations": execution.source_observations,
     }))
-}
-
-#[cfg(test)]
-pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Value> {
-    call_tool_with_observer(ctx, name, args, &mut NoopExecutionObserver)
-}
-
-#[cfg(test)]
-pub(crate) fn call_tool_on_surface(
-    ctx: &RepoContext,
-    name: &str,
-    args: Value,
-    surface: crate::surface::ResponseSurface,
-) -> Result<Value> {
-    call_tool_with_observer_on_surface(ctx, name, args, &mut NoopExecutionObserver, surface)
-}
-
-#[cfg(test)]
-pub(crate) fn call_tool_with_observer(
-    ctx: &RepoContext,
-    name: &str,
-    args: Value,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    call_tool_with_observer_on_surface(
-        ctx,
-        name,
-        args,
-        observer,
-        crate::surface::ResponseSurface::Standard,
-    )
-}
-
-pub(crate) fn call_tool_with_observer_on_surface(
-    ctx: &RepoContext,
-    name: &str,
-    args: Value,
-    observer: &mut dyn ExecutionControl,
-    surface: crate::surface::ResponseSurface,
-) -> Result<Value> {
-    let args_obj = args.as_object().cloned().unwrap_or_default();
-    let memory_tool = MemoryTool::from_name(name);
-
-    if observer.cancelled() {
-        bail!("Execution was cancelled");
-    }
-    if ctx.contract_version() >= 6 {
-        if let Some(tool) = tool_defs::RepositoryTool::from_name(name) {
-            return mcp_repository::call(ctx, tool, args, &|| observer.cancelled(), surface);
-        }
-    } else if memory_tool.is_none() {
-        let current = refreshed_repository_context(ctx)?;
-        match current.tool_spec(name) {
-            Some(tool) if tool_defs::is_execution_tool(tool) => {
-                return tool_execution::call_manifest_tool_with_observer(
-                    &current, tool, &args_obj, observer,
-                );
-            }
-            _ => {}
-        }
-    }
-
-    // MCP dispatch is intentionally allowlisted here. CLI-only dev/proxy
-    // commands can start processes, install services, or mutate trust stores
-    // and must not become agent-callable by adding names to tool_defs.
-    match memory_tool {
-        Some(MemoryTool::AgentDoctor) => Ok(agent::doctor(&refreshed_repository_context(ctx)?)),
-        None => bail!("Unsupported tool: {name}"),
-    }
 }
 
 #[cfg(test)]

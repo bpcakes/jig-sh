@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`crates/jig-vault` contains the local encrypted vault, redaction, audit, and brokered child-process primitives used by the Jig runtime. It owns machine-local secret state and must keep plaintext values out of repository state, MCP results, and command receipts.
+`crates/jig-vault` contains the local encrypted vault, redaction, audit, and brokered child-process primitives used by the Jig runtime. It owns machine-local secret state and must keep plaintext values out of repository state, structured command results, and command receipts.
 
 ## Key entrypoints
 

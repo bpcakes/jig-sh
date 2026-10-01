@@ -31,33 +31,6 @@ tool = "jig.custom_check"
     std::fs::write(root.join(".gitignore"), ".agent/.cache/\n.agent/runtime/\n").unwrap();
 }
 
-pub(super) fn write_command_fixture_repo(root: &Path) {
-    TestRepoBuilder::new(root)
-        .config(
-            r#"
-rust_migration_dir = "migrations"
-rust_sqlx_metadata_dir = ".sqlx"
-schema_dump_command = "printf 'schema dump\n'"
-rust_test_command = "printf 'command tool ran\n'"
-contract_check_command = "printf 'contract ok\n'"
-
-[[work.gates]]
-id = "custom"
-kind = "check"
-tool = "jig.custom_check"
-"#,
-        )
-        .contract_version(2)
-        .required_commands(["rust_test_command"])
-        .tool(json!({
-            "name": "jig.custom_check",
-            "kind": "command",
-            "description": "Run configured custom check.",
-            "command": "rust_test_command"
-        }))
-        .write();
-}
-
 pub(super) fn write_v6_evidence_fixture_repo(root: &Path, gates: &str) {
     fs::create_dir_all(root.join(".agent")).unwrap();
     fs::create_dir_all(root.join("api")).unwrap();

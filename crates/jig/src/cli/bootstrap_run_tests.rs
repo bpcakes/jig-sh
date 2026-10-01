@@ -609,7 +609,7 @@ fn update_human_summary_reports_managed_file_counts() {
             "files_created": ["scripts/new-helper.sh"],
             "files_modified": ["scripts/jig", "scripts/install-jig.sh"],
             "files_removed": [],
-            "files_unchanged": [".mcp.json"],
+            "files_unchanged": [".agent/.cache/.gitignore"],
             "conflicts": []
         },
         "warnings": ["Embedded launcher templates will replace source-specific customizations."],

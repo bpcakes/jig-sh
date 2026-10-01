@@ -8,7 +8,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use this file for repo-wide defaults.
 - Use [agent-map.md](./agent-map.md) to locate ownership guidance for backend work.
 - Read the nearest backend-level `AGENTS.md` before changing a package or crate when one exists.
-- Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
+- Use `scripts/jig` for the typed repo contract; pass `--json` for agent automation.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
 - Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
 - Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs or receipts.
@@ -85,7 +85,7 @@ When a backend package or crate has an `AGENTS.md`, use these sections:
 
 ## Dogfooding This Harness
 
-This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, MCP, contract, and run-history paths that generated repos use.
+This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, contract, and run-history paths that generated repos use.
 
 Follow [local validation](docs/local-validation.md) to choose between focused checks, the preflight profile, and the full `verify` profile.
 

@@ -72,6 +72,18 @@
 
 ### Removed
 
+- **Breaking:** remove the MCP stdio server, `jig mcp`, every MCP tool, and the
+  `mcp` runtime/install profile in all contract epochs. Agents use the CLI with
+  `--json` for inspection, plan previews, execution, and run status. The current
+  unreleased contract remains v9. Generated repositories no longer receive
+  `.mcp.json`, contract checks do not require it, and `jig info` omits MCP command
+  discovery fields. Update and re-adoption with `--force` retire a previously
+  managed exact Jig registration, preserving other servers and settings and
+  releasing file ownership. Unmanaged, customized, malformed, and nonregular
+  config remains untouched. MCP-only public `jig-contract` tool constants are
+  removed. CLI execution, JSON projections, and run history remain available.
+  This source checkout keeps an empty unmanaged `.mcp.json` only for the
+  released 0.5.0 harness until its runtime pin can advance.
 - Stop shipping ExecPlan and structured-work guidance. Generated repositories no
   longer receive `.agent/PLANS.md` or `.agent/plans/.gitkeep`, generated `AGENTS.md`
   no longer directs agents to ExecPlans or `jig work`, and the default Codex skills

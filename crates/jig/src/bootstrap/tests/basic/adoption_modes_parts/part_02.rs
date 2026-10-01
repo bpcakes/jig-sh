@@ -11,7 +11,7 @@ fn forced_full_to_minimal_adoption_retires_full_harness_paths() {
     let full_manifest = managed_manifest_paths(&repo)
         .into_iter()
         .collect::<BTreeSet<_>>();
-    assert!(repo.join(".mcp.json").is_file());
+    assert!(!repo.join(".mcp.json").exists());
     assert!(repo.join("scripts/jig").is_file());
     assert!(repo.join(".github/workflows/rust-tests.yml").is_file());
 
@@ -51,7 +51,7 @@ fn forced_full_to_minimal_adoption_retires_full_harness_paths() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|path| path == ".mcp.json")
+            .any(|path| path == "scripts/jig")
     );
     let config =
         toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())

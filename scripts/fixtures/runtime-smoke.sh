@@ -4,154 +4,6 @@ if ! declare -F json_get >/dev/null; then
   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib.sh"
 fi
 
-validate_jig_mcp_smoke() {
-  local repo_dir="$1"
-  local expect_schema_dump="$2"
-  local expect_sqlx="$3"
-
-  REPO_DIR="$repo_dir" EXPECT_SCHEMA_DUMP="$expect_schema_dump" EXPECT_SQLX="$expect_sqlx" python3 <<'PY'
-import json
-import os
-import pathlib
-import select
-import subprocess
-import sys
-import tempfile
-
-repo_dir = pathlib.Path(os.environ["REPO_DIR"])
-expect_schema_dump = os.environ["EXPECT_SCHEMA_DUMP"] == "1"
-expect_sqlx = os.environ["EXPECT_SQLX"] == "1"
-contract_version = json.loads(
-    (repo_dir / ".agent" / "jig-contract.json").read_text()
-)["contract_version"]
-stderr_file = tempfile.TemporaryFile()
-proc = None
-
-def send(message):
-    proc.stdin.write(json.dumps(message).encode() + b"\n")
-    proc.stdin.flush()
-
-def recv():
-    readable, _, _ = select.select([proc.stdout], [], [], 5)
-    if not readable:
-        raise RuntimeError("Timed out waiting for MCP server response")
-    line = proc.stdout.readline()
-    if not line:
-        raise RuntimeError("MCP server closed stdout unexpectedly")
-    return json.loads(line)
-
-def print_mcp_stderr():
-    stderr_file.flush()
-    stderr_file.seek(0)
-    stderr = stderr_file.read().decode(errors="replace")
-    if stderr:
-        print("MCP server stderr:", file=sys.stderr)
-        print(stderr, file=sys.stderr, end="" if stderr.endswith("\n") else "\n")
-
-try:
-    proc = subprocess.Popen(
-        [str(repo_dir / "scripts" / "jig"), "mcp"],
-        cwd=repo_dir,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=stderr_file,
-        env={key: value for key, value in os.environ.items() if key != "JIG_DEV_BIN"},
-    )
-
-    send({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": {"name": "fixture", "version": "1"},
-        },
-    })
-    response = recv()
-    assert response["result"]["serverInfo"]["name"] == "jig", response
-
-    send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-    send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-    response = recv()
-    tool_names = {tool["name"] for tool in response["result"]["tools"]}
-    if contract_version >= 6:
-        assert {"jig.plan_run", "jig.execute_run", "jig.inspect", "jig.cancel_run"} <= tool_names, tool_names
-        assert "jig.fmt_check" not in tool_names, tool_names
-        assert "jig.schema_check" not in tool_names, tool_names
-        assert "jig.schema_dump" not in tool_names, tool_names
-        assert "jig.sqlx_check" not in tool_names, tool_names
-        assert "jig.migration_add" not in tool_names, tool_names
-    else:
-        assert "jig.fmt_check" in tool_names, tool_names
-        assert ("jig.schema_check" in tool_names) == expect_schema_dump, tool_names
-        assert ("jig.schema_dump" in tool_names) == expect_schema_dump, tool_names
-        assert ("jig.sqlx_check" in tool_names) == expect_sqlx, tool_names
-        assert ("jig.migration_add" in tool_names) == expect_sqlx, tool_names
-    assert "jig.agent_doctor" in tool_names, tool_names
-    assert not any(name.startswith("jig.work_") for name in tool_names), tool_names
-    assert "jig.session_start" not in tool_names, tool_names
-
-    send({
-        "jsonrpc": "2.0",
-        "id": 3,
-        "method": "tools/call",
-        "params": {
-            "name": "jig.work_status",
-            "arguments": {},
-        },
-    })
-    response = recv()
-    assert "error" in response, response
-    assert "Unsupported tool" in response["error"]["message"], response
-except Exception:
-    print_mcp_stderr()
-    raise
-finally:
-    if proc is not None and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-    stderr_file.close()
-PY
-}
-
-assert_jig_mcp_requires_prebuilt_binary() {
-  local repo_dir="$1"
-
-  REPO_DIR="$repo_dir" python3 <<'PY'
-import os
-import pathlib
-import subprocess
-
-repo_dir = pathlib.Path(os.environ["REPO_DIR"])
-proc = subprocess.run(
-    [str(repo_dir / "scripts" / "jig"), "mcp"],
-    cwd=repo_dir,
-    input=b"",
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    env={key: value for key, value in os.environ.items() if key != "JIG_DEV_BIN"},
-    timeout=5,
-)
-
-if proc.returncode == 0:
-    raise SystemExit("scripts/jig mcp unexpectedly succeeded without a prebuilt binary")
-
-stderr = proc.stderr.decode(errors="replace")
-if "No prebuilt Jig" not in stderr:
-    raise SystemExit(f"Missing prebuilt-binary error, got stderr:\n{stderr}")
-if "cargo install" not in stderr:
-    raise SystemExit(f"Missing no-cargo-install explanation, got stderr:\n{stderr}")
-PY
-}
-
 assert_compatible_path_binary_is_reused_without_executing_wrappers() {
   local repo_dir="$1"
   local fake_dir="$repo_dir/.agent/.cache/path-version-fixture"
@@ -569,7 +421,7 @@ validate_jig_runtime() {
 
   (
     cd "$repo_dir"
-    [[ -f .mcp.json ]]
+    [[ ! -e .mcp.json ]]
     [[ -f .agent/jig-contract.json ]]
     scripts/jig check contract >/dev/null
 
@@ -628,12 +480,11 @@ PY
     }
 
     rm -rf .git/jig-tools .agent/.cache
-    assert_jig_mcp_requires_prebuilt_binary "$repo_dir"
     assert_repository_independent_commands_skip_strict_validation "$repo_dir"
     assert_doctor_prefers_cached_resolution "$repo_dir"
     assert_capability_discovery_does_not_reinstall_after_strict_failure "$repo_dir"
     assert_compatible_path_binary_is_reused_without_executing_wrappers "$repo_dir"
-    # MCP startup must use a prebuilt binary; check contract populates the runtime cache.
+    # Contract validation populates the runtime cache.
     env -u JIG_DEV_BIN scripts/jig check contract >/dev/null
     assert_malformed_answers_keep_diagnostics_reachable "$repo_dir"
     assert_incompatible_jig_dev_bin_is_authoritative "$repo_dir"
@@ -656,11 +507,9 @@ else:
     assert proxy["status"] == "not configured", proxy
     assert proxy["data"]["configured"] is False, proxy
 PY
-    validate_jig_mcp_smoke "$repo_dir" "$expect_schema_dump" "$expect_sqlx"
     [[ -x "$install_base/$contract_cache_key-runtime/bin/jig" ]]
     assert_default_binary_state
     "$install_base/$contract_cache_key-runtime/bin/jig" __runtime-compatible --profile runtime .
-    "$install_base/$contract_cache_key-runtime/bin/jig" __runtime-compatible --profile mcp .
     if "$install_base/$contract_cache_key-runtime/bin/jig" __runtime-compatible --profile default . >/dev/null 2>&1; then
       echo "runtime profile unexpectedly satisfied the default profile" >&2
       exit 1

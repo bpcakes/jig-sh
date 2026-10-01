@@ -11,7 +11,6 @@
     ".github/workflows/rust-tests.yml",
     ".gitignore",
     ".jig.toml",
-    ".mcp.json",
     "AGENTS.md",
     "agent-map.md",
     "scripts/install-jig.sh",

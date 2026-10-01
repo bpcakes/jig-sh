@@ -3,7 +3,7 @@
 mod support;
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -37,7 +37,7 @@ impl AgentDoctorFixture {
             format!(
                 r#"_src_path = "/tmp/template"
 _commit = "abc123"
-repo_name = "agent-doctor-mcp"
+repo_name = "agent-doctor-cli-fixture"
 default_branch = "main"
 jig_version = "{}"
 
@@ -282,58 +282,4 @@ fn interrupted_setup_reaps_its_owned_bootstrap_tree() {
         !delayed.exists(),
         "setup interruption left a bootstrap descendant running"
     );
-}
-
-#[test]
-fn one_mcp_process_can_run_agent_doctor_twice() {
-    let fixture = AgentDoctorFixture::new();
-
-    let mut command = fixture.command();
-    let mut child = command
-        .arg("mcp")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn production Jig MCP binary");
-    {
-        let mut stdin = child.stdin.take().unwrap();
-        for id in [1, 2] {
-            serde_json::to_writer(
-                &mut stdin,
-                &json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "jig.agent_doctor",
-                        "arguments": {},
-                    },
-                }),
-            )
-            .unwrap();
-            stdin.write_all(b"\n").unwrap();
-        }
-    }
-
-    let output = child.wait_with_output().expect("wait for Jig MCP binary");
-    assert!(
-        output.status.success(),
-        "MCP binary exited with {}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let responses = stdout
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(responses.len(), 2, "unexpected MCP stdout:\n{stdout}");
-    for (index, response) in responses.iter().enumerate() {
-        let doctor = &response["result"]["structuredContent"];
-        assert_eq!(response["id"], json!(index + 1));
-        assert_eq!(doctor["codex"]["available"], true, "{doctor:#}");
-        assert!(doctor["codex"]["probe_error"].is_null(), "{doctor:#}");
-    }
-    fixture.assert_probe_count("xx");
 }

@@ -464,7 +464,7 @@ fn minimal_adoption_expands_to_full_without_force() {
 
     assert_eq!(output["harness_footprint"], "full");
     assert!(repo.join("scripts/jig").is_file());
-    assert!(repo.join(".mcp.json").is_file());
+    assert!(!repo.join(".mcp.json").exists());
     assert!(repo.join(".github/workflows/rust-tests.yml").is_file());
     assert!(repo.join("AGENTS.md").is_file());
     let config =

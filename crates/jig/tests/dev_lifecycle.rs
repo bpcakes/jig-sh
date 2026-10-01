@@ -457,6 +457,6 @@ marketplaces = []
         .expect("serialize lifecycle Jig contract"),
     )
     .expect("write lifecycle Jig contract");
-    fs::write(root.join(".mcp.json"), "{}\n").expect("write MCP config");
+
     app_port
 }

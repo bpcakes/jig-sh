@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -17,9 +18,11 @@ pub(crate) struct RepositoryExecutionLease {
     exclusive: bool,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct RepositoryExecutionBusy;
 
+#[cfg(test)]
 impl fmt::Display for RepositoryExecutionBusy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(
@@ -28,6 +31,7 @@ impl fmt::Display for RepositoryExecutionBusy {
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for RepositoryExecutionBusy {}
 
 pub(crate) fn try_acquire_repository_execution_lease(
@@ -75,6 +79,7 @@ pub(crate) fn acquire_repository_execution_lease(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn acquire_repository_execution_lease_without_wait(
     ctx: &RepoContext,
     effects: &[ActionEffect],

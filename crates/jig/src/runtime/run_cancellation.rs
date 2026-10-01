@@ -37,10 +37,6 @@ impl RunCancellationProbe {
         self.signalled.store(true, Ordering::Release);
     }
 
-    pub(super) fn is_cancelled(&self) -> Result<bool> {
-        self.is_cancelled_with(&|| false)
-    }
-
     pub(super) fn is_cancelled_with(
         &self,
         foreground_cancelled: &dyn Fn() -> bool,

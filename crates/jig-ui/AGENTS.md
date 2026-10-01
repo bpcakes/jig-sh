@@ -23,7 +23,7 @@
 
 ## Invariants
 
-- Keep this crate independent from `RepoContext`, state storage, runtime policy, MCP, and templates.
+- Keep this crate independent from `RepoContext`, state storage, runtime policy, and templates.
 - Consume repository data only through `DashboardSource`; do not read `.agent/state` directly.
 - Keep every rendered collection and text field within its declared bound, preserving explicit omission counts.
 - Keep the dashboard read-only. It must not mutate state, append run history or other state records, fetch remotes, or execute displayed remediation commands.

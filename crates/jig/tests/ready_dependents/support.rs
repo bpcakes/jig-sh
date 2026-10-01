@@ -323,11 +323,18 @@ pub fn start(fixture: &Fixture) -> Running {
     run
 }
 
+/// Complete records only: a run still in progress may be mid-append, so a
+/// final line without its newline is not a record yet.
 pub fn records(fixture: &Fixture, name: &str) -> Vec<Value> {
-    fs::read_to_string(fixture.root.join(".agent/state").join(name))
-        .unwrap_or_default()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+    let bytes = fs::read(fixture.root.join(".agent/state").join(name)).unwrap_or_default();
+    let complete = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(&bytes[..0], |end| &bytes[..=end]);
+    complete
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).unwrap())
         .collect()
 }
 
