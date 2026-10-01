@@ -253,7 +253,8 @@ JSON output uses the same resolver as human CLI output.
 
 Affected planning is available only to component-native contract-v6
 repositories, where the required inputs and propagation policy are inspectable.
-The same request and reasons are available through CLI JSON and `jig.plan_run`.
+Use `jig --json check --affected BASE --explain` to inspect the resolved plan and
+selection reasons without executing checks.
 
 Independent safe read-only checks run concurrently within each dependency
 layer, with at most eight target workers and deterministic result recording
