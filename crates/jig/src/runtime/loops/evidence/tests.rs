@@ -91,6 +91,99 @@ fn evidence_is_dropped_once_its_occurrence_leaves_the_schedule() {
 }
 
 #[test]
+fn orphan_pruning_excludes_reclaims_until_deletion_finishes() {
+    for git in [true, false] {
+        let (_temp, ctx) = fixture(git);
+        let abandoned = claim(&ctx, 1_000);
+        record(
+            &ctx,
+            &evidence_for(&abandoned, json!({"generation": "old"})),
+        )
+        .unwrap();
+        OccurrenceStore::new(&ctx)
+            .abandon_unexecuted(&abandoned.occurrence_id, &abandoned.owner)
+            .unwrap();
+        let location = EvidenceLocation::resolve(&ctx).unwrap();
+        let directory = StateDirectory::open(&location.root, &location.dir).unwrap();
+        let names = directory.regular_file_names(&location.dir).unwrap();
+        let (paused, pause) = std::sync::mpsc::channel();
+        let (resume, resumed) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let prune_ctx = &ctx;
+            let prune_location = &location;
+            let prune_directory = &directory;
+            let prune_names = &names;
+            let pruning = scope.spawn(move || {
+                remove_orphans(
+                    prune_ctx,
+                    prune_location,
+                    prune_directory,
+                    prune_names,
+                    || {
+                        paused.send(()).unwrap();
+                        resumed.recv().unwrap();
+                    },
+                )
+            });
+            pause.recv().unwrap();
+            // Cancel only once the real claim has observed lock contention.
+            // Without the schedule lock held through unlink this claim would
+            // succeed and replace the old evidence while pruning is paused.
+            let polls = std::cell::Cell::new(0);
+            let claim_result = OccurrenceStore::new(&ctx).claim_with_cancellation_for_test(
+                "example",
+                1_000,
+                &|| {
+                    let poll = polls.get();
+                    polls.set(poll + 1);
+                    poll > 0
+                },
+            );
+            // Release before asserting so a regression cannot strand the
+            // pruning thread at the barrier.
+            resume.send(()).unwrap();
+            pruning.join().unwrap().unwrap();
+            let error = claim_result.err().expect("claim must wait for pruning");
+            assert!(format!("{error:#}").contains("cancelled while waiting for loop state lock"));
+        });
+        let reclaimed = claim(&ctx, 1_000);
+        let replacement = evidence_for(&reclaimed, json!({"generation": "new"}));
+        record(&ctx, &replacement).unwrap();
+        assert_eq!(
+            read(&ctx, &reclaimed.occurrence_id, &|| false).unwrap(),
+            Some(replacement)
+        );
+    }
+}
+
+#[test]
+fn pruning_keeps_replacement_published_after_name_listing() {
+    let (_temp, ctx) = fixture(true);
+    let abandoned = claim(&ctx, 1_000);
+    record(
+        &ctx,
+        &evidence_for(&abandoned, json!({"generation": "old"})),
+    )
+    .unwrap();
+    let location = EvidenceLocation::resolve(&ctx).unwrap();
+    let directory = StateDirectory::open(&location.root, &location.dir).unwrap();
+    let names = directory.regular_file_names(&location.dir).unwrap();
+    OccurrenceStore::new(&ctx)
+        .abandon_unexecuted(&abandoned.occurrence_id, &abandoned.owner)
+        .unwrap();
+    let reclaimed = claim(&ctx, 1_000);
+    let replacement = evidence_for(&reclaimed, json!({"generation": "new"}));
+    record(&ctx, &replacement).unwrap();
+
+    remove_orphans(&ctx, &location, &directory, &names, || {}).unwrap();
+
+    assert_eq!(
+        read(&ctx, &reclaimed.occurrence_id, &|| false).unwrap(),
+        Some(replacement)
+    );
+}
+
+#[test]
 fn oversized_evidence_drops_the_observed_snapshot_before_action_detail() {
     let (_temp, ctx) = fixture(true);
     let occurrence = claim(&ctx, 1_000);

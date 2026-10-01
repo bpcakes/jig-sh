@@ -64,6 +64,7 @@ mod root_commands;
 mod runtime;
 mod runtime_artifacts;
 mod runtime_cache_lock;
+mod rust_syntax;
 mod shell;
 mod signal_supervision;
 mod source_identity;

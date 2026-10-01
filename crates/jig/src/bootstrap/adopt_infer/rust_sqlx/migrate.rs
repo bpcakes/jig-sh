@@ -1,12 +1,6 @@
-use anyhow::{Context as _, Result, anyhow, bail};
-use proc_macro2::{TokenStream, TokenTree};
+use anyhow::{Result, anyhow};
 use syn::ext::IdentExt as _;
 use syn::visit::Visit as _;
-
-// A conservative upper bound for recursive AST work, including flat unary,
-// binary, type, and method chains that delimiter depth alone cannot bound.
-const MAX_TOKEN_PATH_COST: usize = 2_048;
-const PARSER_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 // This is a syntax signal for adoption, not name resolution or macro expansion.
 // Ignore opaque macro inputs/definitions and aliases; inspect complete files or
@@ -17,22 +11,10 @@ pub(super) fn has_migrate_macro(text: &str) -> Result<bool> {
     if !text.contains("migrate") {
         return Ok(false);
     }
-    // Use a fixed stack independent of the caller (including small test
-    // threads). Tokenization, AST visitation, and all drops stay in this worker.
-    // The token guard, not panic catching, prevents recursive stack exhaustion.
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .name("adoption-rust-parser".into())
-            .stack_size(PARSER_STACK_BYTES)
-            .spawn_scoped(scope, || parse_migrate_macro(text))
-            .context("cannot start Rust adoption parser")?
-            .join()
-            .map_err(|_| anyhow!("Rust adoption parser panicked"))?
-    })
+    crate::rust_syntax::with_bounded_syntax(text, "Rust adoption", || parse_migrate_macro(text))
 }
 
 fn parse_migrate_macro(text: &str) -> Result<bool> {
-    check_token_complexity(text)?;
     let mut visitor = MigrateVisitor::default();
     match syn::parse_file(text) {
         Ok(file) => visitor.visit_file(&file),
@@ -44,34 +26,6 @@ fn parse_migrate_macro(text: &str) -> Result<bool> {
         }
     }
     Ok(visitor.found)
-}
-
-fn check_token_complexity(text: &str) -> Result<()> {
-    // proc_macro2's fallback lexer and TokenStream destructor use explicit
-    // stacks, so even rejected deeply nested input is safe to tokenize/drop.
-    let tokens = text
-        .parse::<TokenStream>()
-        .map_err(|error| anyhow!("Rust tokenization: {error}"))?;
-    let mut pending = vec![(tokens, 0)];
-    while let Some((tokens, ancestors)) = pending.pop() {
-        let mut cost = ancestors;
-        let mut children = Vec::new();
-        for token in tokens {
-            cost += 1;
-            if cost > MAX_TOKEN_PATH_COST {
-                bail!(
-                    "Rust source exceeds adoption token complexity limit ({MAX_TOKEN_PATH_COST})"
-                );
-            }
-            if let TokenTree::Group(group) = token {
-                children.push(group.stream());
-            }
-        }
-        // Charge all siblings at each enclosing level, not just delimiter
-        // nesting. This bounds recursive syntax within and across groups.
-        pending.extend(children.into_iter().map(|child| (child, cost)));
-    }
-    Ok(())
 }
 
 #[derive(Default)]
@@ -89,5 +43,27 @@ impl<'ast> syn::visit::Visit<'ast> for MigrateVisitor {
             && segments
                 .next()
                 .is_some_and(|part| part.ident.unraw() == "migrate");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_boundary_preserves_migration_detection_and_bounds_recursive_syntax() {
+        let near_limit = format!(
+            "fn example() {{ sqlx::migrate!(); let _ = {}0{}; }}",
+            "(".repeat(2_000),
+            ")".repeat(2_000)
+        );
+        assert!(has_migrate_macro(&near_limit).unwrap());
+        let excessive = format!(
+            "fn example() {{ sqlx::migrate!(); let _ = {}0; }}",
+            "!".repeat(5_000)
+        );
+        let error = has_migrate_macro(&excessive).unwrap_err();
+        assert!(error.to_string().contains("token complexity limit"));
+        assert!(!has_migrate_macro("fn example() { sqlx::query(\"SELECT 1\"); }").unwrap());
     }
 }

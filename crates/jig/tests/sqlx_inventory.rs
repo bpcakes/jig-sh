@@ -5,6 +5,9 @@ use std::process::{Command, Output};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+#[path = "sqlx_inventory/resources.rs"]
+mod resources;
+
 fn jig(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_jig"))
         .current_dir(root)
