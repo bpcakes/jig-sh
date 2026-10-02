@@ -46,7 +46,7 @@ Runtime-owned commands such as `state`, `status`, and `agent doctor` are intenti
 
 The root `AGENTS.md` is block-managed during adoption and update. Existing repo-specific content outside the Jig managed block is preserved.
 
-Crate-level `AGENTS.md` files are project-owned. `jig.sh` validates required sections for crate guides that exist, but it does not require or generate placeholder crate guides.
+Crate-level `AGENTS.md` files are project-owned. Contracts v2–v8 validate required sections for existing backend guides. Contract v9 validates local references and explicitly declared owner guides; suggested headings are advisory. Missing optional guides do not require placeholders. See the [public guide policy contract](public-contract.md) for details.
 
 The harness template does not generate application code unless a scaffold preset is selected. Crate-level `AGENTS.md` files and schema dump implementations remain project-owned.
 
