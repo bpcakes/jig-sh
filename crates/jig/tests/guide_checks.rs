@@ -5,6 +5,8 @@ use std::process::{Command, Output, Stdio};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+#[path = "guide_checks/discovery.rs"]
+mod discovery;
 #[path = "guide_checks/ignored_guides.rs"]
 mod ignored_guides;
 #[path = "guide_checks/map_upgrade.rs"]

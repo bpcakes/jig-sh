@@ -48,9 +48,22 @@ pub(super) fn check(ctx: &RepoContext) -> Result<Value> {
         return legacy::check(ctx);
     }
     let files = GuideFiles::new(ctx.root())?;
-    let mut guides: BTreeSet<String> = files.discover()?;
+    let discovery = files.discover();
+    let mut guides: BTreeSet<String> = discovery.guides;
     let mut owners = BTreeMap::<String, Vec<String>>::new();
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = discovery
+        .errors
+        .into_iter()
+        .map(|(path, error)| Diagnostic {
+            severity: Severity::Error,
+            code: "guide_unreadable",
+            guide: path,
+            line: None,
+            reference: None,
+            component: None,
+            message: format!("cannot discover guides: {error}"),
+        })
+        .collect::<Vec<_>>();
     for component in ctx.component_specs() {
         let Some(guidance) = &component.guidance else {
             continue;

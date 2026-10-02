@@ -71,6 +71,9 @@ including Rust and Go. `guidance` names a literal repository-relative regular gu
 it need not be called `AGENTS.md`. Omitted guidance and absent optional guides do not
 require placeholders. Git ignore rules do not exclude existing guides. Guide discovery
 excludes `.git` and `target` directory components and does not traverse symlinked directories.
+Unreadable discovery paths produce `guide_unreadable` errors with the affected path,
+while discovery continues through other directories. Optional entries that disappear
+during discovery are skipped.
 
 Supported epochs 2 through 8 retain their original backend-guide discovery, required
 headings, and literal Rust/Go entrypoint checks. They do not validate Markdown link
@@ -93,7 +96,7 @@ before decoding; the command does not change manifest schemas.
 | `owner_guide_invalid` | error | Authored guidance is not a portable repository-relative path |
 | `owner_guide_missing` | error | A component explicitly names an absent guide |
 | `owner_guide_unreadable` | error | An explicit guide cannot be safely read as a regular UTF-8 file |
-| `guide_unreadable` | error | A discovered guide cannot be safely read |
+| `guide_unreadable` | error | A discovered guide cannot be safely read, or a discovery path cannot be inspected |
 | `reference_missing` | error | A local link target does not exist |
 | `reference_unsafe` | error | A target has a symlink, unsupported type, or inaccessible path |
 | `reference_invalid` | error | A link has malformed encoding, nonportable syntax, or escapes the repository |

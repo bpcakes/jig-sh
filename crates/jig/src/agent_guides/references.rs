@@ -1,8 +1,7 @@
-use std::collections::BTreeSet;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, OpenOptions};
 use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag};
@@ -10,6 +9,8 @@ use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag};
 use crate::repository_path::normalize_portable_repo_path;
 
 pub(crate) const MAX_GUIDE_BYTES: u64 = 1024 * 1024;
+
+mod discovery;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Reference {
@@ -22,8 +23,12 @@ pub(crate) struct Reference {
 /// Source offsets refer to the link use, including for reference-style links.
 pub(crate) fn markdown_references(text: &str) -> Vec<Reference> {
     let newlines = text
-        .match_indices('\n')
-        .map(|(offset, _)| offset)
+        .bytes()
+        .enumerate()
+        .filter_map(|(offset, byte)| {
+            (byte == b'\n' || (byte == b'\r' && text.as_bytes().get(offset + 1) != Some(&b'\n')))
+                .then_some(offset)
+        })
         .collect::<Vec<_>>();
     let line = |offset| newlines.partition_point(|newline| *newline < offset) + 1;
     let mut undefined = Vec::new();
@@ -174,38 +179,6 @@ impl GuideFiles {
         Ok(Self {
             root: Dir::open_ambient_dir(root, cap_std::ambient_authority())?,
         })
-    }
-
-    /// Existing guides are independent of Git ignore rules. Directory handles
-    /// keep discovery beneath the same pinned root used for guide reads.
-    pub(crate) fn discover(&self) -> Result<BTreeSet<String>> {
-        let mut guides = BTreeSet::new();
-        Self::collect_guides(&self.root, Path::new(""), &mut guides)?;
-        Ok(guides)
-    }
-
-    fn collect_guides(directory: &Dir, parent: &Path, guides: &mut BTreeSet<String>) -> Result<()> {
-        for entry in directory.entries()? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let relative = parent.join(&name);
-            if relative.components().any(super::is_ignored_guide_component) {
-                continue;
-            }
-            if name == "AGENTS.md" {
-                guides.insert(
-                    relative
-                        .to_str()
-                        .context("guide path must be valid UTF-8")?
-                        .replace(std::path::MAIN_SEPARATOR, "/"),
-                );
-            }
-            if entry.file_type()?.is_dir() {
-                let child = directory.open_dir_nofollow(&name)?;
-                Self::collect_guides(&child, &relative, guides)?;
-            }
-        }
-        Ok(())
     }
 
     fn parent(&self, relative: &str) -> Result<(Dir, PathBuf)> {

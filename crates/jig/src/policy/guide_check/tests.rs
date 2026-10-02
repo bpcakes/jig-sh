@@ -11,6 +11,8 @@ use crate::agent_guides::references::{
 use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 
+mod diagnostics;
+
 fn fixture(root: &Path, language: &str, guidance: Option<&str>) -> RepoContext {
     let mut component = json!({"id":"example", "root":".", "adapters":[language]});
     if let Some(guidance) = guidance {
