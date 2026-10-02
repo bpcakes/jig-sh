@@ -192,16 +192,17 @@ impl GuideFiles {
             if relative.components().any(super::is_ignored_guide_component) {
                 continue;
             }
-            if entry.file_type()?.is_dir() {
-                let child = directory.open_dir_nofollow(&name)?;
-                Self::collect_guides(&child, &relative, guides)?;
-            } else if name == "AGENTS.md" {
+            if name == "AGENTS.md" {
                 guides.insert(
                     relative
                         .to_str()
                         .context("guide path must be valid UTF-8")?
                         .replace(std::path::MAIN_SEPARATOR, "/"),
                 );
+            }
+            if entry.file_type()?.is_dir() {
+                let child = directory.open_dir_nofollow(&name)?;
+                Self::collect_guides(&child, &relative, guides)?;
             }
         }
         Ok(())

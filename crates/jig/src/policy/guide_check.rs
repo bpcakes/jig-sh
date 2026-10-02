@@ -80,7 +80,7 @@ pub(super) fn check(ctx: &RepoContext) -> Result<Value> {
             Ok(text) => text,
             Err(error) => {
                 if is_missing(&error) && !owners.contains_key(&guide) {
-                    // Git can still list an optional guide deleted from the worktree.
+                    // An optional guide can disappear after filesystem discovery.
                     guide_count -= 1;
                     continue;
                 }
