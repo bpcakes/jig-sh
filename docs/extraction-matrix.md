@@ -20,8 +20,8 @@ This matrix captures what was extracted from the source application workflow and
 | `scripts/install-jig.sh` + `scripts/jig` | Templated | Contract/profile-compatible runtime launcher and installer for generated repos. |
 | `scripts/enforce-coverage.cjs` | Extracted | Kept generic and CommonJS so it runs inside ESM frontend packages. |
 | `scripts/new-checkout.sh` | Extracted + generalized | Uses current repo basename instead of source-specific naming. |
-| `.github/workflows/agent-map-check.yml` | Templated | Runner label is configurable. |
-| `.github/workflows/repo-policy.yml` | Templated subset | Keeps core policy checks and only includes SQLx/migration jobs when `sqlx_enabled` is `true`. |
+| `.github/workflows/agent-map-check.yml` | Templated | Generated projects keep a standalone agent-map workflow with a configurable runner; the source repository runs this check in `repo-policy.yml`. |
+| `.github/workflows/repo-policy.yml` | Templated subset | Generated projects keep core policy checks and only include SQLx/migration jobs when `sqlx_enabled` is `true`. The source repository shares its Clippy builds with native policy checks. |
 | `.github/workflows/rust-tests.yml` | Templated subset | Simplified to generic fmt, clippy, and locked workspace tests. |
 | `.github/workflows/webapp-checks-reusable.yml` + app workflows | Consolidated | Replaced with one generated matrix-style workflow or a disabled placeholder. |
 | `scripts/dev.sh` | Excluded | Too application-specific. Downstream repos implement dev orchestration through `[dev]`, `[[dev.apps]]`, or project-owned scripts. |
