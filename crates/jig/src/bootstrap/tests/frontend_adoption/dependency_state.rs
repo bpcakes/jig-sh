@@ -537,6 +537,27 @@ fn generated_web_checks_track_lockfile_install_state(
     fs::write(
         &fake_node,
         r#"#!/bin/sh
+# Metadata queries describe this fixed fixture. Do not feed their directory
+# arguments through the fingerprint fallback, which would hash the whole repo
+# on every Yarn identity lookup. Input and artifact changes are hashed below.
+case "${JIG_WEB_NODE_HELPER:-}" in
+  workspace_metadata)
+    case "${3:-}" in
+      contains) [ "${4:-}" = apps/web ] ;;
+      manifests) printf '%s\n' apps/web/package.json ;;
+      *) exit 2 ;;
+    esac
+    exit $?
+    ;;
+  yarn_package_manager_spec_for_scope)
+    printf '%s\n' yarn@4.17.1
+    exit 0
+    ;;
+  yarn_runtime_identity)
+    printf '%s\n' fixture-yarn-runtime
+    exit 0
+    ;;
+esac
 if [ "${1:-}" = "-" ] && [ "${2:-}" = "--jig-process-probe" ]; then
   if kill -0 "$3" 2>/dev/null; then printf '%s\n' live; else printf '%s\n' stale; fi
   exit 0
