@@ -29,7 +29,9 @@ case "$1" in
     cargo nextest run --workspace -P local \
       -E "($vault_filter) & not (package(jig-sh) & binary(vault_tui))" \
       "${status_args[@]}"
-    exec cargo nextest run -P local -p jig-sh --test vault_tui -j 1 \
+    # Keep workspace features identical to the preceding build.
+    exec cargo nextest run --workspace -P local \
+      -E 'package(jig-sh) & binary(vault_tui)' -j 1 \
       "${status_args[@]}"
     ;;
   process)
