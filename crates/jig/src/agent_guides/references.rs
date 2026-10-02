@@ -1,7 +1,8 @@
+use std::collections::BTreeSet;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, OpenOptions};
 use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag};
@@ -173,6 +174,37 @@ impl GuideFiles {
         Ok(Self {
             root: Dir::open_ambient_dir(root, cap_std::ambient_authority())?,
         })
+    }
+
+    /// Existing guides are independent of Git ignore rules. Directory handles
+    /// keep discovery beneath the same pinned root used for guide reads.
+    pub(crate) fn discover(&self) -> Result<BTreeSet<String>> {
+        let mut guides = BTreeSet::new();
+        Self::collect_guides(&self.root, Path::new(""), &mut guides)?;
+        Ok(guides)
+    }
+
+    fn collect_guides(directory: &Dir, parent: &Path, guides: &mut BTreeSet<String>) -> Result<()> {
+        for entry in directory.entries()? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let relative = parent.join(&name);
+            if relative.components().any(super::is_ignored_guide_component) {
+                continue;
+            }
+            if entry.file_type()?.is_dir() {
+                let child = directory.open_dir_nofollow(&name)?;
+                Self::collect_guides(&child, &relative, guides)?;
+            } else if name == "AGENTS.md" {
+                guides.insert(
+                    relative
+                        .to_str()
+                        .context("guide path must be valid UTF-8")?
+                        .replace(std::path::MAIN_SEPARATOR, "/"),
+                );
+            }
+        }
+        Ok(())
     }
 
     fn parent(&self, relative: &str) -> Result<(Dir, PathBuf)> {

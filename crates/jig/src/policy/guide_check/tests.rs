@@ -277,6 +277,15 @@ fn symlink_guides_targets_and_ancestors_never_read_outside_content() {
     )
     .unwrap();
     let ctx = fixture(temp.path(), "go", Some("linked/guide.md"));
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::write(temp.path().join(".gitignore"), "AGENTS.md\nlinked/\n").unwrap();
     symlink(outside.path(), temp.path().join("linked")).unwrap();
     symlink(
         outside.path().join("guide.md"),

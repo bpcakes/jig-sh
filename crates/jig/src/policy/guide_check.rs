@@ -48,9 +48,7 @@ pub(super) fn check(ctx: &RepoContext) -> Result<Value> {
         return legacy::check(ctx);
     }
     let files = GuideFiles::new(ctx.root())?;
-    let mut guides: BTreeSet<String> = super::agent_map::list_guides(ctx.root())?
-        .into_iter()
-        .collect();
+    let mut guides: BTreeSet<String> = files.discover()?;
     let mut owners = BTreeMap::<String, Vec<String>>::new();
     let mut diagnostics = Vec::new();
     for component in ctx.component_specs() {

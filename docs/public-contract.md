@@ -69,7 +69,8 @@ At contract epoch 9, `scripts/jig check agent-guides` validates existing root an
 nested `AGENTS.md` files and explicit `repository.components[].guidance` references for all component adapters,
 including Rust and Go. `guidance` names a literal repository-relative regular guide file;
 it need not be called `AGENTS.md`. Omitted guidance and absent optional guides do not
-require placeholders. Guide discovery excludes `.git` and `target` directory components.
+require placeholders. Git ignore rules do not exclude existing guides. Guide discovery
+excludes `.git` and `target` directory components and does not traverse symlinked directories.
 
 Supported epochs 2 through 8 retain their original backend-guide discovery, required
 headings, and literal Rust/Go entrypoint checks. They do not validate Markdown link
