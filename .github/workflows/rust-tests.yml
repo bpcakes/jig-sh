@@ -223,7 +223,7 @@ jobs:
         run: cargo check --workspace --all-targets --all-features --locked
 
   no-default-features:
-    name: cargo test -p jig-sh --no-default-features
+    name: cargo build and test -p jig-sh --no-default-features
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -242,6 +242,8 @@ jobs:
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
+      - name: Run no-default-features build
+        run: cargo build -p jig-sh --no-default-features --locked
       # Match test-locked's isolation: process-heavy tests, then crypto, then PTY.
       # Nextest isolates the library tests' process-global environment mutexes.
       - name: Run no-default-features tests
@@ -261,25 +263,6 @@ jobs:
       # Nextest does not run doctests. Preserve cargo test's documentation coverage.
       - name: Run no-default-features doctests
         run: cargo test -p jig-sh --no-default-features --doc --locked
-
-  no-default-features-build:
-    name: cargo build -p jig-sh --no-default-features
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          cache: false
-          rustflags: ""
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}
-      - name: Run no-default-features build
-        run: cargo build -p jig-sh --no-default-features --locked
 
   no-default-features-clippy:
     name: cargo clippy -p jig-sh --no-default-features --all-targets

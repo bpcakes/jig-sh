@@ -37,7 +37,9 @@ runtime selected by `.jig/source-runtime-version`.
 ## Source repository CI
 
 The Rust Tests workflow runs formatting and launcher checks together without
-building Jig. Its longer test and fixture jobs run independently.
+building Jig. Its longer test and fixture jobs run independently. The Linux
+no-default-features test job first runs the explicit no-default-features build
+check, sharing checkout, toolchain setup, and cache restoration.
 
 The Repo Policy workflow builds Jig once on each of Linux and macOS, then reuses
 that binary for Clippy and file-budget checks. The Linux job also validates the
