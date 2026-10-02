@@ -26,7 +26,7 @@ plugins = [
 source = "bpcakes/jig-skills"
 
 [commands]
-api_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' --status-level fail --final-status-level fail && cargo nextest run --workspace --locked -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' --status-level fail --final-status-level fail && cargo nextest run -p jig-sh --test vault_tui --locked -j 1 --status-level fail --final-status-level fail"
+api_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' --status-level fail --final-status-level fail && cargo nextest run --workspace --locked -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' --status-level fail --final-status-level fail && cargo nextest run --workspace --locked -E 'package(jig-sh) & binary(vault_tui)' -j 1 --status-level fail --final-status-level fail"
 
 [dev]
 http2 = true

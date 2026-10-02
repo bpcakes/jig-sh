@@ -48,3 +48,7 @@ Rust test suite. The generated project workflows retain their own layout in
 
 Manual policy runs compare the selected ref with its merge base against the
 remote default branch, so they also work without a local `master` branch.
+
+The locked test suite and local vault partition keep workspace selection for
+all phases. The final phase filters to the two vault PTY tests and runs them
+serially, reusing the workspace binaries without changing dependency features.
