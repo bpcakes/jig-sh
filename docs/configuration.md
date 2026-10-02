@@ -700,9 +700,11 @@ silently weakened check. Existing string arguments and old run records retain
 their meaning. Probe CLI help before sending focus
 arguments to an older endpoint.
 
-### Optional Beads task snapshots
+### Legacy Beads tracker configuration
 
-A repository can opt into a Beads-compatible JSONL task snapshot explicitly:
+Contracts through version 8 still accept and validate this legacy declaration
+for configuration compatibility. Jig no longer reads Beads task snapshots, and
+Doctor does not inspect their exports or report a tracker check:
 
 ```toml
 [work.tracker]
@@ -712,19 +714,19 @@ export = "manual"
 manual_export_guidance = "Run the repository's documented Beads export step."
 ```
 
-`workspace_id` is a stable, canonical uppercase ULID copied with the repository. It is not inferred from a checkout directory, Git remote, machine path, or issue prefix. The supported tracker root is the exact repository-local `.beads/` directory. `export` may be omitted and currently has only the conservative `manual` value. `manual_export_guidance` is bounded display text used when Doctor reports a missing manual export, including an absent `.beads/` directory; Jig never executes it, and it never replaces safety- or structure-specific repair instructions. Tracker kind, workspace identity, and export policy participate in execution-authority hashing; changing only the guidance preserves the contract digest.
+`workspace_id` must be a canonical uppercase ULID. The tracker root remains
+fixed at `.beads/`, and `export` defaults to its only accepted value, `manual`.
+Tracker kind, workspace identity, and export policy remain in these legacy
+contracts' execution authority; changing only the bounded compatibility text
+in `manual_export_guidance` preserves the contract digest. These accepted
+settings do not select or validate an export, read issues, or mutate Beads data.
 
-JSONL is Jig's task-data boundary. A configured repository must contain exactly one supported export: current `.beads/issues.jsonl` or legacy `.beads/beads.jsonl`. Having both is an error because one may be a stale snapshot. The export and `.beads/` path must be real repository-local files and directories rather than symlinks; on Unix the export must not have another hard link. Jig pins the real `.beads` directory, performs both filename selection and the no-follow file open relative to that directory handle, acquires the Unix leaf nonblocking before validating its descriptor type, reads the file twice through one descriptor, and re-witnesses the selected leaf before accepting it. Concurrently replacing the `.beads` pathname therefore cannot redirect the read outside the repository, and replacing the validated leaf with a FIFO cannot hang the reader; a non-regular or changing leaf or selection fails closed.
-
-The `beads-rust-jsonl-v1` reader is pure and read-only. It invokes no `br` executable, opens no SQLite database, imports or exports no data, and has no platform-specific process dependency. It validates the whole export before exposing exact issue IDs: at most 16 MiB, 1 MiB per record, 10,000 issues, 64 JSON container levels, unique JSON object keys, unique issue IDs, Beads prefix/hash ID grammar (including `:` and `#` in prefixes), required field types, and RFC 3339 timestamps. Long producer text and unknown string fields are accepted up to the record and export ceilings; consumed text must be NUL-free, and titles retain Beads' 500-character limit. Status and issue-type values are NUL-free producer-owned strings rather than closed Jig enums; workflow-specific operations can enforce their own semantics when they act on those values. Unknown fields are accepted within the record and nesting bounds so a newer producer can add data without breaking read-only linking. Errors identify structure and line number without echoing task bodies.
-
-Omitting `[work.tracker]` disables task-snapshot inspection. Doctor then reports the tracker as not configured even if `.beads/` exists. With configuration present, Doctor validates the JSONL snapshot and reports its selected relative path, profile, issue count, and the sole current capability, `read_issue_snapshot`. Configured results include `freshness: "not_checked"`: a `ready` result confirms readable export data, not current tracker state. The pure tracker check neither requests Doctor's process-wide signal session nor depends on that session's retirement. It does not require `br` on `PATH` and does not inspect whether a Beads SQLite database contains newer, unexported edits.
-
-Because this repository may deliberately disable automatic Beads flush and use a privacy-cleaning helper such as `scripts/beads-sync.py`, `manual` means the exported file is an explicit snapshot. Before handing task-writing ownership from `br` to a future Jig writer, complete and export pending `br` edits. Before handing ownership back, let `br` import and verify Jig's result. Ordinary automatic import is not treated as a general conflict merge when both the database and JSONL changed.
-
-Current source does not mutate Beads JSONL, claim tasks, publish backlinks, add comments, or close tasks. Those operations require a separate native-writer milestone. Its compatibility gate must prove a serialized handoff through create/update and export in `br`, Jig's atomic snapshot edit, an ordinary `br` import, re-export, unknown-field preservation, disabled-auto-import behavior, divergent edits, and explicit conflict reporting. Compatibility with Beads data does not imply behavioral equivalence with every `br` command.
-
-The tracker section contributes to repository authority, so changing its workspace identity or export policy changes the authority digest. Existing update/readoption flows preserve an already valid section independently of unrelated configuration validity, but do not generate one. Malformed tracker or receipt-metadata authority makes write-mode update/readoption fail rather than silently deleting it.
+Tracker state ownership is a separate declaration: through contract v8,
+`[work] receipt_metadata = ["beads"]` excludes `.beads/` from source identity.
+Contract v9 rejects `[work]` and uses `[repository] tracker = "beads"` for that
+ownership. Refreshes to v9 migrate the receipt metadata declaration and report
+dropped work settings, including `[work.tracker]`. Use the repository's Beads
+workflow to inspect and export tasks; see [Tracker state](public-contract.md#tracker-state).
 
 ### Gates
 
@@ -1253,9 +1255,10 @@ It also provides runtime-owned commands, including maintenance of append-only me
 - `scripts/jig state archive --before YYYY-MM-DD`
 
 The former `scripts/jig work ...` commands were removed; every invocation fails
-as a usage error that points to `scripts/jig check COMPONENT:ACTION` and
-`scripts/jig state summary`. Jig no longer reads plans, sessions, or decisions, so
-plans that were open at upgrade are not listed anywhere.
+with an unrecognized-subcommand usage error and exit status 2. Validate changes
+with `scripts/jig check COMPONENT:ACTION`; use `scripts/jig state summary` to
+inspect run history. Jig no longer reads plans, sessions, or decisions, so plans
+that were open at upgrade are not listed anywhere.
 
 Checks and runs on contract v6 and later append run history to
 `.agent/state/runs.jsonl`. Jig no longer writes receipts or returns

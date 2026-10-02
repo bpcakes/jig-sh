@@ -77,7 +77,8 @@
 - **Breaking:** remove the MCP stdio server, `jig mcp`, every MCP tool, and the
   `mcp` runtime/install profile in all contract epochs. Agents use the CLI with
   `--json` for inspection, plan previews, execution, and run status. The current
-  unreleased contract remains v9. Generated repositories no longer receive
+  unreleased contract remains v9. `jig mcp` is an unknown command that exits
+  with status 2. Generated repositories no longer receive
   `.mcp.json`, contract checks do not require it, and `jig info` omits MCP command
   discovery fields. Update and re-adoption with `--force` retire a previously
   managed exact Jig registration, preserving other servers and settings and
@@ -95,20 +96,18 @@
   `jig-exec-plans@jig-skills` there to stop expecting it.
 - **Breaking:** remove the `jig work` commands and the `jig.work_*` MCP tools.
   `jig work` is an unknown command that exits with status 2, and generated
-  launchers no longer list it; removed MCP tools return the standard
-  unsupported-tool error. Work-gate evaluation and the receipt reuse it performed
-  are gone, so every check executes its targets. The hidden
+  launchers no longer list it. Work-gate evaluation and the receipt reuse it
+  performed are gone, so every check executes its targets. The hidden
   `jig status --freshness-timeout-ms` option is removed, and `jig status` human
   output no longer prints a `Work:` line. `[work]` configuration still loads
   through contract version 8.
 - **Breaking:** stop reading work plans, sessions, and decisions. The hidden
-  `--plan-id` option, the MCP `work_plan_id` argument of `jig.plan_run` and
-  `jig.execute_run`, and the `plan_id` argument of contract 2–5 manifest tools
+  `--plan-id` option and the `plan_id` argument of contract 2–5 manifest tools
   are removed in every contract version and rejected; those manifest tools now
   reject any argument they do not declare. Generated launchers no longer
   special-case `check --plan-id … contract`. Automatic Rust focus
   (`{"kind": "automatic"}`) rejects its former `plan_id` field. Runs no longer
-  record a plan, and `jig status run` and MCP run inspection no longer report
+  record a plan, and `jig status run` no longer reports
   `work_plan_id`; run history that recorded one in a prepared native input
   still loads. jig-contract drops `RustFocusV1::Automatic::plan_id` and
   `PreparedNativeInputV1::work_plan_id`.
@@ -126,15 +125,15 @@
   place and are still sized by `jig state diagnose`, which no longer analyzes
   session recursion. The loop `noop-status` workflow no longer reports open plans
   or work-gate counts.
-- **Breaking:** stop recording check receipts and target freshness. `jig check`,
-  `jig run`, and MCP `jig.execute_run` record their results only in run history
+- **Breaking:** stop recording check receipts and target freshness. `jig check`
+  and `jig run` record their results only in run history
   (`runs.jsonl`). Directly executed manifest tools, `migration add`, and policy
   checks no longer record anything. Target identities, dependency execution
   proofs, and their validation are gone. Epoch-8 `inputs_policy` and
   `source_state` declarations are still validated and reported, and action
-  `inputs` still drive `--affected`. `--no-receipt` and the MCP `record_receipts`
-  field are rejected, and check, run, and MCP output no longer includes
-  `receipt_id`, `reused_from`, `target_freshness`, `target_identity`, or
+  `inputs` still drive `--affected`. `--no-receipt` is rejected, and check and run
+  output no longer includes `receipt_id`, `reused_from`, `target_freshness`,
+  `target_identity`, or
   `target_identity_error`; plan again instead of submitting a plan from an
   earlier runtime. Existing `runs.jsonl` records that carry those fields still
   load. `jig state summary` now reports `runs`, `target_results`,

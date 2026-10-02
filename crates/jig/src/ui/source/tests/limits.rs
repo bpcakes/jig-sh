@@ -1,3 +1,4 @@
+use jig_contract::TargetOutputTailV1;
 use jig_ui::dashboard::{CollectionDomain, DashboardSource, LimitId, RecorderMode, TimelineLimit};
 use serde_json::json;
 use tempfile::tempdir;
@@ -58,6 +59,82 @@ fn recorder_reports_exact_root_and_nested_omissions() {
     assert_eq!(tail.omitted_chars(), Some(7));
     assert!(tail.text().starts_with("ad-e"), "{}", tail.text());
     assert_eq!(snapshot.timeline[0].output_tail, Some(tail.clone()));
+}
+
+#[test]
+fn recorder_reports_unknown_omission_after_run_log_truncation() {
+    let limit = LimitId::FailureOutputChars.ceiling();
+    for (stdout, stderr, expected) in [
+        ("unused".to_owned(), "e".repeat(10_000), "e".repeat(limit)),
+        ("o".repeat(10_000), String::new(), "o".repeat(limit)),
+        ("unused".to_owned(), "界".repeat(1_500), "界".repeat(limit)),
+        ("🦀".repeat(1_250), String::new(), "🦀".repeat(limit)),
+    ] {
+        let (_root, source) = source_fixture();
+        let persisted = TargetOutputTailV1::from_streams(&stdout, &stderr).unwrap();
+        assert!(persisted.stdout_omitted_bytes > 0 || persisted.stderr_omitted_bytes > 0);
+        let mut result = target_result("repo:truncated-output", "failure", 30, 40);
+        result["output_tail"] = serde_json::to_value(persisted).unwrap();
+        append_target_results(&source.context, [result]);
+
+        let snapshot = source
+            .recorder(recorder_request(RecorderMode::Refresh), &|| false)
+            .unwrap()
+            .recorder;
+        assert!(
+            snapshot
+                .errors
+                .iter()
+                .all(|error| error.scope() != CollectionDomain::Runs.as_str()),
+            "{:?}",
+            snapshot.errors
+        );
+        let tail = &snapshot.failures[0].output_tail;
+        assert_eq!(tail.text(), expected);
+        assert_eq!(tail.applied_chars(), limit);
+        assert_eq!(tail.omitted_chars(), None);
+        let timeline = snapshot
+            .timeline
+            .iter()
+            .find(|row| row.target == "repo:truncated-output")
+            .unwrap();
+        assert_eq!(timeline.output_tail.as_ref(), Some(tail));
+    }
+}
+
+#[test]
+fn recorder_counts_complete_stderr_when_only_stdout_was_truncated() {
+    let (_root, source) = source_fixture();
+    let limit = LimitId::FailureOutputChars.ceiling();
+    let persisted =
+        TargetOutputTailV1::from_streams(&"o".repeat(10_000), &"é".repeat(limit + 7)).unwrap();
+    assert!(persisted.stdout_omitted_bytes > 0);
+    assert_eq!(persisted.stderr_omitted_bytes, 0);
+    let mut result = target_result("repo:complete-stderr", "failure", 30, 40);
+    result["output_tail"] = serde_json::to_value(persisted).unwrap();
+    append_target_results(&source.context, [result]);
+
+    let snapshot = source
+        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
+        .unwrap()
+        .recorder;
+    assert!(
+        snapshot
+            .errors
+            .iter()
+            .all(|error| error.scope() != CollectionDomain::Runs.as_str()),
+        "{:?}",
+        snapshot.errors
+    );
+    let tail = &snapshot.failures[0].output_tail;
+    assert_eq!(tail.text(), "é".repeat(limit));
+    assert_eq!(tail.omitted_chars(), Some(7));
+    let timeline = snapshot
+        .timeline
+        .iter()
+        .find(|row| row.target == "repo:complete-stderr")
+        .unwrap();
+    assert_eq!(timeline.output_tail.as_ref(), Some(tail));
 }
 
 #[test]

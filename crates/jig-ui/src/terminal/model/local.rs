@@ -202,7 +202,10 @@ pub(crate) struct TimelineItemView {
 
 impl From<TimelineRow> for TimelineItemView {
     fn from(row: TimelineRow) -> Self {
-        let failed = !row.succeeded();
+        let failed = matches!(
+            row.conclusion.as_deref(),
+            Some("failure" | "timed_out" | "blocked")
+        );
         let outcome = outcome_label(row.conclusion.as_deref(), row.exit_code);
         let mut lines = vec![
             field("Run", &row.run_id),
