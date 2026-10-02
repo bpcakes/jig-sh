@@ -318,6 +318,26 @@ impl OccurrenceGuard {
 }
 
 impl OccurrenceStore {
+    #[cfg(test)]
+    pub(super) fn claim_with_cancellation_for_test(
+        &mut self,
+        workflow_id: &str,
+        scheduled_at_ms: u64,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<OccurrenceClaim> {
+        self.claim_with_execution_at(
+            workflow_id,
+            scheduled_at_ms,
+            60,
+            now_ms(),
+            claim::OccurrenceClaimExecution::scheduled(
+                OccurrenceAttentionScope::None,
+                false,
+                cancelled,
+            ),
+        )
+    }
+
     pub(super) fn new(ctx: &RepoContext) -> Self {
         Self {
             persistence: SchedulePersistence::new(ctx),
@@ -532,6 +552,16 @@ impl OccurrenceStore {
     ) -> Result<Vec<ScheduleOccurrence>> {
         let store = self.persistence.read_only(cancelled)?;
         Ok(sorted_occurrences(&store))
+    }
+
+    /// Holds the schedule authority locks throughout an operation that must
+    /// exclude claims, abandonment, and history reclamation.
+    pub(super) fn with_retained_occurrences<T>(
+        &self,
+        action: impl FnOnce(&[ScheduleOccurrence]) -> Result<T>,
+    ) -> Result<T> {
+        self.persistence
+            .read_locked(|store| action(&sorted_occurrences(store)))
     }
 
     pub(super) fn latest_for_workflow(

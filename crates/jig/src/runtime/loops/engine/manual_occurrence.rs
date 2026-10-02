@@ -162,11 +162,11 @@ impl ManualOccurrenceGuard {
         self.guard.occurrence_id()
     }
 
-    /// Completions that need attention or retain a worktree are finalized
-    /// before their evidence is written, so a failed write cannot lose them.
-    /// Others are staged, then finalized once their evidence is durable.
+    /// Attention is already terminal and is published before evidence.
+    /// Other completions stage their diagnostics and worktree reservation,
+    /// then finalize once their evidence is durable.
     pub(super) fn finalizes_before_evidence(completion: &WorkflowCompletion) -> bool {
-        completion.outcome == WorkflowOutcome::NeedsAttention || completion.worktree.is_some()
+        completion.outcome == WorkflowOutcome::NeedsAttention
     }
 
     pub(super) fn stage_tick(

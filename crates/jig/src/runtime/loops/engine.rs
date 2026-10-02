@@ -501,7 +501,8 @@ fn tick_with_execution(
     }
 
     if let Some(manual_guard) = manual_evidence_guard.take() {
-        let (_occurrence, finalization_error) = manual_guard.complete_tick(&mut completion);
+        let (occurrence, finalization_error) = manual_guard.complete_tick(&mut completion);
+        manual_occurrence = occurrence;
         let unexpected_attention =
             (completion.outcome == WorkflowOutcome::NeedsAttention).then(|| {
                 completion.error.clone().unwrap_or_else(|| {
@@ -545,7 +546,7 @@ fn tick_with_execution(
         "state_errors": evidence["state_errors"],
         "release_warning": release_warning,
         "item_key": evidence["item_key"],
-        "manual_occurrence": evidence["manual_occurrence"],
+        "manual_occurrence": manual_occurrence,
     });
     if let Some(error) = evidence["error"].as_str() {
         return Ok(ScheduledTick::Errored {

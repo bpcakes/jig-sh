@@ -9,7 +9,7 @@
 
     <details open>
       <summary>Why not just put instructions in AGENTS.md? <span class="plus">+</span></summary>
-      <div class="a">AGENTS.md is a starting point, not a contract. An agent that reads prose may still call the wrong commands, skip a gate, or quietly diverge from your conventions across runs. Jig encodes the contract as <code>scripts/jig</code> tools with declared inputs and outputs in <code>.agent/jig-contract.json</code>, so the agent's actions are <span class="acid">checkable</span>, and writes receipts so they are <span class="acid">auditable</span>.</div>
+      <div class="a">AGENTS.md is a starting point, not a contract. An agent that reads prose may still call the wrong commands, skip a check, or quietly diverge from your conventions across runs. Jig encodes the contract as <code>scripts/jig</code> tools with declared inputs and outputs in <code>.agent/jig-contract.json</code>, so the agent's actions are <span class="acid">checkable</span>, and records check and run outcomes so they are <span class="acid">auditable</span>.</div>
     </details>
 
     <details>
@@ -19,7 +19,7 @@
 
     <details>
       <summary>What languages and stacks does jig support today? <span class="plus">+</span></summary>
-      <div class="a"><b>Rust</b> covers Cargo workspaces with optional SQLx for Postgres or SQLite. <b>Go</b> covers a chi/Huma API with optional PostgreSQL. <b>JavaScript / TypeScript web apps</b> ship through <code>frontend_apps</code>, with <code>lint</code>, <code>typecheck</code>, <code>build:bundle</code>, and <code>test:coverage</code> scripts run through Bun by default. The <code>rust-react</code> and <code>go-react</code> presets can scaffold an API plus Vite React and Astro apps; the dev proxy, vault, receipts, gates, and CI workflows are <span class="acid">stack-agnostic</span>.</div>
+      <div class="a"><b>Rust</b> covers Cargo workspaces with optional SQLx for Postgres or SQLite. <b>Go</b> covers a chi/Huma API with optional PostgreSQL. <b>JavaScript / TypeScript web apps</b> ship through <code>frontend_apps</code>, with <code>lint</code>, <code>typecheck</code>, <code>build:bundle</code>, and <code>test:coverage</code> scripts run through Bun by default. The <code>rust-react</code> and <code>go-react</code> presets can scaffold an API plus Vite React and Astro apps; the dev proxy, vault, run history, check profiles, and CI workflows are <span class="acid">stack-agnostic</span>.</div>
     </details>
 
     <details>
@@ -49,7 +49,7 @@
 
     <details>
       <summary>Why does the vault exist if I already have <em>1Password / Vault / AWS Secrets Manager</em>? <span class="plus">+</span></summary>
-      <div class="a">It doesn't replace them. The jig vault is for the agent loop: a place where a coding agent can ask for a named secret to run one specific command without ever seeing the plaintext through structured results, receipts, or <code>Debug</code> output. For production secret management, keep using your existing provider — the vault is a <span class="acid">blast-radius reducer</span> for local development, not a cloud KMS.</div>
+      <div class="a">It doesn't replace them. The jig vault is for the agent loop: a place where a coding agent can ask for a named secret to run one specific command without ever seeing the plaintext through structured results, run history, or <code>Debug</code> output. For production secret management, keep using your existing provider — the vault is a <span class="acid">blast-radius reducer</span> for local development, not a cloud KMS.</div>
     </details>
 
     <details>

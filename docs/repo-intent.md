@@ -104,7 +104,7 @@ human-authored waiver.
 
 `crates/jig-dev-proxy` implements the Jig local development proxy used by `scripts/jig dev` and `scripts/jig proxy ...`. It is split from `crates/jig` so route storage, HTTP/HTTPS forwarding, certificates, service files, LAN mode, workspace discovery, and process supervision remain testable without depending on the broader CLI, state, or template runtime.
 
-The canonical `scripts/jig ui` entrypoint starts on Timeline, while `scripts/jig status --tui` starts the same application on Status. Both use one local refresh domain that publishes repository status and recorder state as one epoch. One-shot `jig ui --json` uses bounded recorder schema 3, built from run history, without starting the terminal application. The retired browser transport has no replacement server or HTTP compatibility layer.
+The canonical `scripts/jig ui` entrypoint starts on Timeline, while `scripts/jig status --tui` starts the same application on Status. Both use one local refresh domain that publishes repository status and recorder state as one epoch. One-shot `jig ui --json` uses bounded recorder schema 4, built from run history, without starting the terminal application. The retired browser transport has no replacement server or HTTP compatibility layer.
 
 `crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract and check runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 

@@ -114,26 +114,38 @@ pub(super) fn read(
     directory.read_json(&name, &location.path(&name), cancelled)
 }
 
-/// Removes records for occurrences no longer in the schedule. Names are listed
-/// before the schedule is read: a record written after the listing is never
-/// considered, and one listed belongs to an occurrence claimed before it.
+/// Removes orphan evidence under the schedule locks. Names are listed first
+/// so newly created names are not considered; holding the locks also prevents
+/// a previously listed name from being reclaimed and replaced before unlink.
 fn prune_orphans(
     ctx: &RepoContext,
     location: &EvidenceLocation,
     directory: &StateDirectory,
 ) -> Result<()> {
     let names = directory.regular_file_names(&location.dir)?;
-    let retained = OccurrenceStore::new(ctx)
-        .snapshot_read_only_with_cancellation(&|| false)?
-        .iter()
-        .map(|occurrence| file_name(&occurrence.occurrence_id))
-        .collect::<BTreeSet<_>>();
-    for name in names {
-        if is_evidence_file_name(&name) && !retained.contains(&name) {
-            directory.remove_file(&name, &location.path(&name))?;
+    remove_orphans(ctx, location, directory, &names, || {})
+}
+
+fn remove_orphans(
+    ctx: &RepoContext,
+    location: &EvidenceLocation,
+    directory: &StateDirectory,
+    names: &[OsString],
+    after_snapshot: impl FnOnce(),
+) -> Result<()> {
+    OccurrenceStore::new(ctx).with_retained_occurrences(|occurrences| {
+        let retained = occurrences
+            .iter()
+            .map(|occurrence| file_name(&occurrence.occurrence_id))
+            .collect::<BTreeSet<_>>();
+        after_snapshot();
+        for name in names {
+            if is_evidence_file_name(name) && !retained.contains(name) {
+                directory.remove_file(name, &location.path(name))?;
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 fn file_name(occurrence_id: &str) -> OsString {

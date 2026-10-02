@@ -1,0 +1,83 @@
+use super::*;
+
+#[test]
+fn inventory_commands_bound_recursive_syntax_and_preserve_failed_output() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs")).unwrap();
+    fs::write(
+        root.join(".jig.toml"),
+        "_src_path = '/tmp/jig-template'\n_commit = 'HEAD'\ndefault_branch = 'main'\nrepo_name = 'ExampleProject'\njig_version = '0.2.0-beta.1'\nrust_crate_roots = ['src']\nrust_test_command = 'cargo test'\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        json!({"contract_version": 2, "jig_version": "0.2.0-beta.1",
+               "tool_namespace": "jig", "required_commands": ["rust_test_command"],
+               "tools": []})
+        .to_string(),
+    )
+    .unwrap();
+    assert!(
+        Command::new("git")
+            .current_dir(root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let todo_path = root.join("docs/sqlx-unchecked-queries-todo.md");
+    let sentinel = "existing inventory must survive a failed scan\n";
+    fs::write(&todo_path, sentinel).unwrap();
+    let commands: [&[&str]; 2] = [
+        &["check", "sqlx-unchecked-non-test", "--json"],
+        &["generate-sqlx-unchecked-queries-todo", "--json"],
+    ];
+    for expression in [
+        format!("{}0{}", "(".repeat(5_000), ")".repeat(5_000)),
+        format!("{}0{}", "(".repeat(200_000), ")".repeat(200_000)),
+        format!("{}0", "!".repeat(5_000)),
+        format!("0{}", "+0".repeat(5_000)),
+        format!("value{}", ".method()".repeat(5_000)),
+        format!("None::<{}u8{}>", "Vec<".repeat(5_000), ">".repeat(5_000)),
+    ] {
+        // Full files and include! expression fragments share the resource
+        // boundary, as do expression macros visited inside their ASTs.
+        for source in [
+            format!("fn example() {{ sqlx::query(\"SELECT 1\"); let _ = {expression}; }}"),
+            format!("{{ sqlx::query(\"SELECT 1\"); {expression} }}"),
+            format!("fn example() {{ let _ = vec![sqlx::query(\"SELECT 1\"), {expression}]; }}"),
+        ] {
+            fs::write(root.join("src/resource.rs"), source).unwrap();
+            for args in commands {
+                let output = jig(root, args);
+                assert!(matches!(output.status.code(), Some(1 | 2)), "{output:?}");
+                let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+                let error = value["error"]["message"].as_str().unwrap();
+                assert!(error.contains("src/resource.rs"), "{error}");
+                assert!(error.contains("token complexity limit"), "{error}");
+                assert_eq!(fs::read_to_string(&todo_path).unwrap(), sentinel);
+            }
+        }
+    }
+    // The original aborting input is valid and near the supported budget:
+    // the worker must parse, visit, and destroy its AST successfully.
+    let source = format!(
+        "fn example() {{ let _ = {}sqlx::query(\"SELECT 1\"){}; }}",
+        "(".repeat(2_000),
+        ")".repeat(2_000)
+    );
+    fs::write(root.join("src/resource.rs"), source).unwrap();
+    check(root, 1);
+    let output = jig(root, commands[1]);
+    assert!(output.status.success(), "{output:?}");
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["non_test_count"], 1);
+    assert!(
+        fs::read_to_string(&todo_path)
+            .unwrap()
+            .contains("src/resource.rs:1")
+    );
+}

@@ -12,7 +12,7 @@
         <span class="hot">vault run --env TOKEN=gh_token -- gh release create</span> resolves a named secret from an encrypted local vault, injects it into the child's environment only, redacts known forms of it from output, and records the run in a tamper-evident audit log.
       </p>
       <p class="sub">
-        A separate crate, <span class="hot">crates/jig-vault</span>, owns the encrypted store, broker, and audit chain. <b>Argon2id</b> passphrase derivation, <b>XChaCha20-Poly1305</b> AEAD, owner-only filesystem permissions. Plaintext never lands in repo state, command results, command receipts, or <span class="mono">Debug</span> output.
+        A separate crate, <span class="hot">crates/jig-vault</span>, owns the encrypted store, broker, and audit chain. <b>Argon2id</b> passphrase derivation, <b>XChaCha20-Poly1305</b> AEAD, owner-only filesystem permissions. Plaintext never lands in repo state, command results, loop evidence, or <span class="mono">Debug</span> output.
       </p>
     </div>
 
@@ -74,7 +74,7 @@
         </div>
         <div class="zone-divider">plaintext never reaches</div>
         <div class="zone-deny">
-          <span>.agent/state</span><span>command results</span><span>receipts</span><span>Debug logs</span>
+          <span>.agent/state</span><span>command results</span><span>loop evidence</span><span>Debug logs</span>
         </div>
       </div>
     </div>
@@ -83,7 +83,7 @@
     <div class="feature-grid">
       <div class="feature-list">
         <div class="feature-row"><span class="feature-num">01</span><div><b>Strong crypto, no knobs.</b> Argon2id (128 MiB · 3 iter · 4 lanes) wraps a random data key; XChaCha20-Poly1305 seals state with role-tagged AEAD. Nothing to weaken.</div></div>
-        <div class="feature-row"><span class="feature-num">02</span><div><b>Brokered, not granted.</b> Secrets resolve in-memory and inject only into the child's env. <span class="mono">jig</span> never returns plaintext through public APIs, receipts, or <span class="mono">Debug</span>.</div></div>
+        <div class="feature-row"><span class="feature-num">02</span><div><b>Brokered, not granted.</b> Secrets resolve in-memory and inject only into the child's env. <span class="mono">jig</span> never returns plaintext through public APIs, run history, or <span class="mono">Debug</span>.</div></div>
         <div class="feature-row"><span class="feature-num">03</span><div><b>Cleaned environment.</b> The child sees a strict allowlist — PATH, HOME, TMPDIR, locale — plus the secret vars you named. No <span class="mono">SSH_AUTH_SOCK</span>, no <span class="mono">XDG_*</span>, no surprise inheritance.</div></div>
         <div class="feature-row"><span class="feature-num">04</span><div><b>Output redaction.</b> Known forms of resolved secrets are scrubbed from captured stdout and stderr before display. A backup control &mdash; <span class="serif ink">never the boundary</span>.</div></div>
         <div class="feature-row"><span class="feature-num">05</span><div><b>Tamper-evident audit.</b> Every mutation, every run, every verify is an HMAC-chained JSONL event. <span class="mono hot">vault audit verify</span> walks the chain and reports edits, torn tails, or broken links.</div></div>
@@ -122,13 +122,13 @@
       </div>
       <div class="cmdrail-foot">
         <span>state · <span class="mono">~/.jig/vault</span> &nbsp;·&nbsp; override with <span class="mono">JIG_VAULT_HOME</span></span>
-        <span class="d">runtime-owned · <s>not</s> in <span class="mono">.agent/jig-contract.json</span> · <s>not</s> in receipts</span>
+        <span class="d">runtime-owned · <s>not</s> in <span class="mono">.agent/jig-contract.json</span> · <s>not</s> in run history</span>
       </div>
     </div>
 
     <!-- honest caveat -->
     <div class="caveat">
       <div class="caveat-tag">⚠ &nbsp;blast-radius reducer, not a sandbox</div>
-      <p>Once a child process receives a secret in its environment, that process can use or disclose it. Redaction catches accidental output, not malicious transformations or side channels. The vault shrinks what your repo, your receipts, and your command output can leak — it doesn't replace a real secret manager for production.</p>
+      <p>Once a child process receives a secret in its environment, that process can use or disclose it. Redaction catches accidental output, not malicious transformations or side channels. The vault shrinks what your repo, your run history, and your command output can leak — it doesn't replace a real secret manager for production.</p>
     </div>
   </section>

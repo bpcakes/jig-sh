@@ -40,6 +40,14 @@ const EXPRESSION_MACROS: &[&str] = &[
 const EXPRESSION_MACRO_NAMESPACES: &[&str] = &["alloc", "core", "futures", "std", "tokio"];
 
 pub(super) fn scan_sqlx_calls(path: &str, text: &str) -> Result<Vec<SqlxCall>> {
+    crate::rust_syntax::with_bounded_syntax(
+        text,
+        &format!("cannot parse SQLx inventory source {path}"),
+        || scan_bounded_sqlx_calls(path, text),
+    )
+}
+
+fn scan_bounded_sqlx_calls(path: &str, text: &str) -> Result<Vec<SqlxCall>> {
     let mut scanner = SqlxScanner {
         path,
         is_test: is_test_path(path),
