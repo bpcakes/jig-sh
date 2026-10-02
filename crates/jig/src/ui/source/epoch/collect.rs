@@ -36,9 +36,10 @@ pub(super) fn collect_runs(
                 conclusion: conclusion.clone().unwrap_or_default(),
                 exit_code: result.exit_code.map(i64::from),
                 ended_at_ms: result.ended_at_ms,
-                output_tail: output_tail
-                    .clone()
-                    .map_or_else(|| bounded_tail("", LimitId::FailureOutputChars), Ok)?,
+                output_tail: output_tail.clone().map_or_else(
+                    || bounded_tail("", Some(0), LimitId::FailureOutputChars),
+                    Ok,
+                )?,
             });
         }
         if !facts.targets.contains_key(&target) && facts.targets.len() == MAX_AGGREGATION_KEYS {
@@ -127,14 +128,16 @@ pub(super) fn collect_runs(
 
 /// The stderr tail when a target wrote one, otherwise its stdout tail.
 fn output_tail(tail: Option<&TargetOutputTailV1>) -> Result<BoundedText, SourceError> {
-    let text = tail.map_or("", |tail| {
+    let (text, omitted_bytes) = tail.map_or(("", 0), |tail| {
         if tail.stderr.is_empty() {
-            &tail.stdout
+            (tail.stdout.as_str(), tail.stdout_omitted_bytes)
         } else {
-            &tail.stderr
+            (tail.stderr.as_str(), tail.stderr_omitted_bytes)
         }
     });
-    bounded_tail(text, LimitId::FailureOutputChars)
+    // Earlier byte omissions cannot recover the original Unicode character count.
+    let total_input_chars = (omitted_bytes == 0).then(|| text.chars().count());
+    bounded_tail(text, total_input_chars, LimitId::FailureOutputChars)
 }
 
 fn snake_case(value: impl serde::Serialize) -> String {

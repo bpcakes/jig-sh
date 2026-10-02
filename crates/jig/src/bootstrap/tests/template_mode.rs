@@ -344,6 +344,12 @@ fn update_and_recopy_from_contract_eight_drop_work_and_report_it() {
                 )),
             "{warnings:#?}"
         );
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| !warning.as_str().unwrap().contains("`verify`")),
+            "{warnings:#?}"
+        );
     }
 }
 

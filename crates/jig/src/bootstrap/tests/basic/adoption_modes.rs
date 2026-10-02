@@ -44,7 +44,8 @@ fn full_readoption_from_contract_eight_moves_tracker_ownership_and_reports_dropp
     for gate in gates.iter_mut() {
         let gate = gate.as_table_mut().unwrap();
         if gate["id"].as_str().unwrap() == "verify" {
-            gate.insert("profile".into(), toml::Value::String("outdated".into()));
+            gate.remove("profile");
+            gate.insert("target".into(), toml::Value::String("api:test".into()));
             gate.insert("required".into(), toml::Value::Boolean(false));
         }
     }
@@ -139,20 +140,10 @@ fn full_readoption_from_contract_eight_moves_tracker_ownership_and_reports_dropp
         &[
             "Retired [work] settings are dropped from .jig.toml: ",
             "`checks`",
-            "gates `project-fmt`, `project-review`, `project-evidence`",
+            "gates `verify`, `project-fmt`, `project-review`, `project-evidence`",
             "`refinements`",
         ],
     );
-    assert!(
-        output["notes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|note| !note.as_str().unwrap().contains("`verify`")),
-        "{:#}",
-        output["notes"]
-    );
-
     let ctx = crate::context::RepoContext::load_from_root(repo).unwrap();
     assert_eq!(
         ctx.contract_version(),

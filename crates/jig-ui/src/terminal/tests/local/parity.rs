@@ -128,6 +128,51 @@ fn timeline_filters_select_failures_and_preserve_raw_identity() {
 }
 
 #[test]
+fn timeline_failure_filter_excludes_cancelled_and_skipped_targets() {
+    let mut recorder = scenarios::recorder_snapshot();
+    recorder.timeline = vec![
+        result_row("run_cancelled", 600, "cancelled"),
+        result_row("run_skipped", 500, "skipped"),
+        result_row("run_timed_out", 400, "timed_out"),
+        result_row("run_blocked", 300, "blocked"),
+        result_row("run_failed", 200, "failure"),
+        result_row("run_success", 100, "success"),
+    ];
+    for row in &mut recorder.timeline {
+        if matches!(row.conclusion.as_deref(), Some("cancelled" | "skipped")) {
+            row.started_at_ms = None;
+            row.duration_ms = None;
+            row.exit_code = None;
+        }
+    }
+    let mut app = App::new(Tab::Timeline);
+    accept_recorder(&mut app, recorder);
+    assert_eq!(app.timeline_rows().len(), 6);
+
+    app.cycle_timeline_filter(false);
+    assert_eq!(app.timeline_filter, TimelineFilter::Failures);
+    assert_eq!(
+        app.timeline_rows()
+            .iter()
+            .map(|row| row.identity.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "run_timed_out:api:test",
+            "run_blocked:api:test",
+            "run_failed:api:test",
+        ]
+    );
+
+    app.cycle_timeline_filter(false);
+    assert_eq!(app.timeline_filter, TimelineFilter::All);
+    assert_eq!(app.timeline_rows().len(), 6);
+    assert_eq!(
+        app.selected_timeline().unwrap().identity,
+        "run_cancelled:api:test"
+    );
+}
+
+#[test]
 fn target_result_timeline_is_newest_first_and_rows_open_their_detail() {
     let mut newest = result_row("run_newest", 400, "failure");
     newest.exit_code = Some(9);

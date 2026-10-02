@@ -1,5 +1,5 @@
-//! Contract 9 retires `[work]`. A refresh that renders it keeps tracker
-//! ownership as `[repository] tracker` and reports the settings it drops.
+//! Tracker ownership follows the rendered contract epoch. Contract 9 retires
+//! `[work]`, moves ownership to `[repository] tracker`, and reports dropped settings.
 
 use super::*;
 use crate::context::{RepositoryTracker, WORK_CONFIG_RETIRED_CONTRACT_VERSION};
@@ -8,12 +8,22 @@ pub(super) fn apply_retained_tracker(existing: &toml::Table, destination: &Path)
     let Some(tracker) = retained_tracker(existing)? else {
         return Ok(());
     };
+    let contract_version = RepoContext::declared_contract_version_from_root(destination)?;
     rewrite_rendered_config(destination, |rendered| {
-        rendered
-            .get_mut("repository")
-            .and_then(toml::Value::as_table_mut)
-            .ok_or_else(|| anyhow::anyhow!("Rendered [repository] is not a TOML table"))?
-            .insert("tracker".into(), tracker);
+        if contract_version >= WORK_CONFIG_RETIRED_CONTRACT_VERSION {
+            rendered
+                .get_mut("repository")
+                .and_then(toml::Value::as_table_mut)
+                .ok_or_else(|| anyhow::anyhow!("Rendered [repository] is not a TOML table"))?
+                .insert("tracker".into(), tracker);
+        } else {
+            rendered
+                .entry("work")
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                .as_table_mut()
+                .ok_or_else(|| anyhow::anyhow!("Rendered [work] is not a TOML table"))?
+                .insert("receipt_metadata".into(), toml::Value::Array(vec![tracker]));
+        }
         Ok(())
     })
 }
@@ -78,6 +88,11 @@ pub(in crate::bootstrap) fn retired_work_notes(
     let Some(work) = existing_work(&existing)? else {
         return Ok(Vec::new());
     };
+    let default_check_profile = existing
+        .get("repository")
+        .and_then(toml::Value::as_table)
+        .and_then(|repository| repository.get("default_check_profile"))
+        .and_then(toml::Value::as_str);
     let mut notes = Vec::new();
     if declares_beads_metadata(&existing)? {
         notes.push(
@@ -95,7 +110,7 @@ pub(in crate::bootstrap) fn retired_work_notes(
                     .into_iter()
                     .flatten()
                     .filter_map(toml::Value::as_table)
-                    .filter(|gate| !is_generated_gate(gate))
+                    .filter(|gate| !is_generated_gate(gate, default_check_profile))
                     .map(|gate| {
                         format!(
                             "`{}`",
@@ -122,16 +137,34 @@ pub(in crate::bootstrap) fn retired_work_notes(
     Ok(notes)
 }
 
-fn is_generated_gate(gate: &toml::Table) -> bool {
+fn is_generated_gate(gate: &toml::Table, default_check_profile: Option<&str>) -> bool {
     let field = |name| gate.get(name).and_then(toml::Value::as_str);
-    matches!(
-        (field("id"), field("kind")),
-        (Some("verify"), Some("evidence"))
-    ) || is_retired_generated_check_gate(gate)
-        || matches!(
-            (field("id"), field("tool")),
-            (Some("sqlx"), Some("jig.sqlx_check"))
-                | (Some("sqlc"), Some("jig.sqlc_check"))
-                | (Some("schema"), Some("jig.schema_check"))
-        )
+    if !gate.iter().all(|(key, value)| match key.as_str() {
+        "id" | "kind" => true,
+        "tool" => field("kind") == Some("check"),
+        "profile" | "conclusion" => field("kind") == Some("evidence"),
+        "required" => value.as_bool() == Some(true),
+        "reuse" => field("kind") == Some("check") && value.as_bool() == Some(false),
+        _ => false,
+    }) {
+        return false;
+    }
+    match field("kind") {
+        Some("evidence") => {
+            field("id") == Some("verify")
+                && field("profile").is_some()
+                && field("profile") == default_check_profile
+                && field("conclusion").unwrap_or("success") == "success"
+        }
+        Some("check") => {
+            is_retired_generated_check_gate(gate)
+                || matches!(
+                    (field("id"), field("tool")),
+                    (Some("sqlx"), Some("jig.sqlx_check"))
+                        | (Some("sqlc"), Some("jig.sqlc_check"))
+                        | (Some("schema"), Some("jig.schema_check"))
+                )
+        }
+        _ => false,
+    }
 }

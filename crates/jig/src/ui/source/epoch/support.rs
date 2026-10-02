@@ -194,13 +194,17 @@ impl Timestamped for Failure {
 }
 
 /// Keeps the final characters of `value`, where failure output is most useful.
-pub(super) fn bounded_tail(value: &str, limit: LimitId) -> Result<BoundedText, SourceError> {
+pub(super) fn bounded_tail(
+    value: &str,
+    total_input_chars: Option<usize>,
+    limit: LimitId,
+) -> Result<BoundedText, SourceError> {
     let total = value.chars().count();
     let text = value
         .chars()
         .skip(total.saturating_sub(limit.ceiling()))
         .collect::<String>();
-    BoundedText::for_limit(text, Some(total), limit).map_err(limit_error)
+    BoundedText::for_limit(text, total_input_chars, limit).map_err(limit_error)
 }
 
 pub(super) fn bounded_rows<T>(

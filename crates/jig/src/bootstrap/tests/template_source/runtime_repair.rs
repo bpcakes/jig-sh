@@ -641,3 +641,5 @@ fn embedded_adopt_replaces_current_contract_repair_seed() {
 }
 
 mod launcher_only;
+
+mod pinned_templates;
