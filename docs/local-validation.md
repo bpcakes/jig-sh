@@ -45,3 +45,6 @@ agent map and Beads export. Its path filters include Rust, policy, and agent-gui
 inputs; guide-only changes therefore run the policy jobs without starting the
 Rust test suite. The generated project workflows retain their own layout in
 `templates/project/.github/workflows/`.
+
+Manual policy runs compare the selected ref with its merge base against the
+remote default branch, so they also work without a local `master` branch.
