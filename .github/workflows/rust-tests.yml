@@ -80,33 +80,15 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests -p 'test_jig_*.py'
 
   rendered-fixtures:
-    name: Validate rendered repository fixtures
+    name: Validate rendered fixtures and generated Rust
     runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
     env:
       JIG_FIXTURE_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/fixture-builds
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          cache: false
-          rustflags: ""
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}-fixtures-v3
-          cache-directories: ${{ env.JIG_FIXTURE_TARGET_DIR }}
-      - name: Validate behavioral fixtures
-        run: bash scripts/validate-fixtures.sh
-
-  generated-rust-clippy:
-    name: Check generated Rust scaffold Clippy policy at declared minima
-    runs-on: ubicloud-standard-4-ubuntu-2404
-    timeout-minutes: 20
-    env:
       JIG_GENERATED_RUST_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/generated-rust-builds
+      # Path/profile/compatibility fixtures need real installs, not optimized code.
+      # The isolated Git installation explicitly retains production optimization.
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -116,23 +98,32 @@ jobs:
           cache: false
           rustflags: ""
           components: clippy
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}-fixtures-v2
-          cache-directories: ${{ env.JIG_GENERATED_RUST_TARGET_DIR }}
-      - name: Build current Jig binary
-        run: cargo build -p jig-sh --bin jig --locked
+      # Install every compiler before rust-cache calculates its toolchain key.
       - name: Install generated-project Rust toolchains
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component clippy
           rustup toolchain install 1.94.0 --profile minimal --component clippy
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: rust-${{ runner.os }}-${{ github.job }}-fixtures-v4
+          cache-directories: |
+            ${{ env.JIG_FIXTURE_TARGET_DIR }}
+            ${{ env.JIG_GENERATED_RUST_TARGET_DIR }}
+      - name: Build current Jig binary
+        id: build
+        run: cargo build -p jig-sh --bin jig --locked
       - name: Validate generated Rust Clippy policy
         env:
           JIG_DEV_BIN: target/debug/jig
           JIG_GENERATED_RUST_ONLY_TOOLCHAIN: 1.88.0
           JIG_GENERATED_RUST_REACT_TOOLCHAIN: 1.94.0
         run: bash scripts/check-generated-rust-clippy.sh
+      - name: Validate behavioral fixtures
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        # Cargo reuses the development binary built above; fixture installs use
+        # a separate target directory and retain fresh installation roots.
+        run: bash scripts/validate-fixtures.sh
 
   test:
     name: scripts/jig check test-locked
@@ -159,8 +150,8 @@ jobs:
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
-      - name: Build current Jig binary
-        run: cargo build -p jig-sh --bin jig --locked
+      - name: Build and validate the current source runtime through the launcher
+        run: scripts/jig-dev check contract
       - name: Start the systemd user manager
         run: bash scripts/ci/setup-user-systemd.sh
       - name: Run locked Rust tests
@@ -168,10 +159,6 @@ jobs:
           JIG_DEV_BIN: target/debug/jig
           JIG_REQUIRE_GO_TOOLCHAIN: "1"
         run: scripts/jig check test-locked
-      - name: Validate the current source runtime through the launcher
-        env:
-          JIG_DEV_BIN: target/debug/jig
-        run: scripts/jig check repo:source-runtime-check
 
   test-macos:
     name: scripts/jig check test-locked (macOS)
@@ -198,17 +185,13 @@ jobs:
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
-      - name: Build current Jig binary
-        run: cargo build -p jig-sh --bin jig --locked
+      - name: Build and validate the current source runtime through the launcher
+        run: scripts/jig-dev check contract
       - name: Run locked Rust tests
         env:
           JIG_DEV_BIN: target/debug/jig
           JIG_REQUIRE_GO_TOOLCHAIN: "1"
         run: scripts/jig check test-locked
-      - name: Validate the current source runtime through the launcher
-        env:
-          JIG_DEV_BIN: target/debug/jig
-        run: scripts/jig check repo:source-runtime-check
 
   msrv:
     name: cargo check --workspace --all-targets --all-features (MSRV 1.88)
@@ -272,26 +255,6 @@ jobs:
       - name: Run no-default-features doctests
         run: cargo test -p jig-sh --no-default-features --doc --locked
 
-  no-default-features-clippy:
-    name: cargo clippy -p jig-sh --no-default-features --all-targets
-    runs-on: ubicloud-standard-4-ubuntu-2404
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          cache: false
-          rustflags: ""
-          components: clippy
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}
-      - name: Run no-default-features clippy
-        run: cargo clippy -p jig-sh --no-default-features --all-targets --locked -- -D warnings
-
   no-default-features-macos:
     name: cargo test -p jig-sh --no-default-features (macOS)
     runs-on: macos-latest
@@ -336,69 +299,3 @@ jobs:
       # Nextest does not run doctests. Preserve cargo test's documentation coverage.
       - name: Run no-default-features doctests
         run: cargo test -p jig-sh --no-default-features --doc --locked
-
-  no-default-features-clippy-macos:
-    name: cargo clippy -p jig-sh --no-default-features --all-targets (macOS)
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          cache: false
-          rustflags: ""
-          components: clippy
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}
-      - name: Run no-default-features clippy
-        run: cargo clippy -p jig-sh --no-default-features --all-targets --locked -- -D warnings
-
-  dev-proxy-macos:
-    name: cargo test -p jig-dev-proxy (macOS)
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          cache: false
-          rustflags: ""
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}
-      - name: Run dev proxy tests
-        run: cargo test -p jig-dev-proxy --locked
-        # Dev-proxy tests exercise process-global signal hooks and fixed OS trust/process boundaries.
-        env:
-          RUST_TEST_THREADS: "1"
-
-  dev-proxy-linux:
-    name: cargo test -p jig-dev-proxy (Linux)
-    runs-on: ubicloud-standard-4-ubuntu-2404
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          cache: false
-          rustflags: ""
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}
-      - name: Run dev proxy tests
-        run: cargo test -p jig-dev-proxy --locked
-        # Dev-proxy tests exercise process-global signal hooks and fixed OS trust/process boundaries.
-        env:
-          RUST_TEST_THREADS: "1"
-      - name: Run dev proxy clippy
-        run: cargo clippy -p jig-dev-proxy --all-targets --locked -- -D warnings

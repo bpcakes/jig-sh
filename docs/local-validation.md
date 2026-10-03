@@ -42,12 +42,20 @@ macOS jobs use GitHub-hosted `macos-latest` runners. The repository's
 `ci_github_runner` setting in `.jig.toml` records the Linux runner selection.
 
 The Rust Tests workflow runs formatting and launcher checks together without
-building Jig. Its longer test and fixture jobs run independently. The Linux
+building Jig. Generated-Rust Clippy validation and rendered fixtures share a job
+and development binary, with both generated-project toolchains installed before
+cache restoration. Full tests build and validate the source runtime through
+`scripts/jig-dev check contract` before testing, avoiding a final development
+rebuild after test-only dependency features have been enabled. The Linux
 no-default-features test job first runs the explicit no-default-features build
 check, sharing checkout, toolchain setup, and cache restoration.
 
 The Repo Policy workflow builds Jig once on each of Linux and macOS, then reuses
-that binary for Clippy and file-budget checks. The Linux job also validates the
+that binary for Clippy and file-budget checks. Each platform job also runs
+no-default-features Clippy and the serial dev-proxy test harness; Linux retains
+the standalone dev-proxy Clippy command. These checks share one cache containing
+their distinct Cargo configurations. Both the serial proxy harness and the full
+workspace Nextest coverage are retained. The Linux job also validates the
 agent map and Beads export. Its path filters include Rust, policy, and agent-guide
 inputs; guide-only changes therefore run the policy jobs without starting the
 Rust test suite. The generated project workflows retain their own layout in
@@ -69,8 +77,14 @@ from the source workspace. CI sets absolute `JIG_FIXTURE_TARGET_DIR` and
 `JIG_GENERATED_RUST_TARGET_DIR` paths under `.agent/.cache/`; fixture repositories and
 installation roots remain temporary. The fresh-Cargo-home Git installation test
 also keeps a separate temporary target so its different registry paths cannot
-invalidate the shared dependency artifacts. Without these overrides, local checks retain
-their existing temporary build-directory behavior.
+invalidate the shared dependency artifacts. The pull-request/push fixture job sets
+`CARGO_PROFILE_RELEASE_OPT_LEVEL=0` for ordinary installation fixtures, which test
+paths, profiles, and compatibility. The isolated Git installation clears that
+override and exercises the normal optimized release profile. Release validation
+does not set the override: all its installation fixtures retain production
+optimization. Cache keys include the Cargo profile environment, so these
+configurations cannot share incompatible artifacts. Without these overrides,
+local checks retain their existing temporary build-directory behavior.
 
 The release workflow commits prepared files locally, then validates that commit
 once before any push or publish. `RELEASE_VALIDATION_RECEIPT` lets tag and publish

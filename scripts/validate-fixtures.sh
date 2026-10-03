@@ -16,7 +16,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-cargo build -p jig-sh --bin jig >/dev/null
+cargo build -p jig-sh --bin jig --locked >/dev/null
 export JIG_DEV_BIN="$ROOT_DIR/target/debug/jig"
 export CARGO_TARGET_DIR="${JIG_FIXTURE_TARGET_DIR:-${CARGO_TARGET_DIR:-$TMP_DIR/cargo-target}}"
 
