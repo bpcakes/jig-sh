@@ -58,16 +58,36 @@ the standalone dev-proxy Clippy command. These checks share one cache containing
 their distinct Cargo configurations. Both the serial proxy harness and the full
 workspace Nextest coverage are retained. The Linux job also validates the
 agent map and Beads export. Its path filters include Rust, policy, and agent-guide
-inputs; guide-only changes therefore run the policy jobs without starting the
-Rust test suite. The generated project workflows retain their own layout in
+inputs. When every changed path is Beads metadata, an `AGENTS.md`, or
+`agent-map.md`, only Linux repository policy checks run; the macOS job stops
+after checkout and classification, and both platforms skip Clippy and proxy
+tests. Unknown paths, unavailable comparison trees, manual runs, and merge
+queues retain full policy coverage. The generated project workflows retain their own layout in
 `templates/project/.github/workflows/`.
 
 Manual policy runs compare the selected ref with its merge base against the
 remote default branch, so they also work without a local `master` branch.
 
-The locked test suite and local vault partition keep workspace selection for
-all phases. The final phase filters to the two vault PTY tests and runs them
-serially, reusing the workspace binaries without changing dependency features.
+The locked test suite uses `scripts/ci/test-rust.sh workspace`; minimal-feature
+jobs use its `minimal` mode. Each invocation builds the complete selected set
+of test binaries once, then passes Cargo and binary metadata to Nextest for
+the non-vault, vault, and serial vault-PTY phases. Test-induced Git index
+refreshes cannot cause an intervening rebuild. Each phase retains the default
+test-group limits, and a failed phase still fails the job after the remaining
+phases finish. Separate JUnit reports are saved under
+`.agent/.cache/test-reports/` and uploaded for seven days. Set
+`JIG_TEST_REPORT_DIR` to override the local report destination.
+
+Generated frontend tests use Node 24 in CI. Their package-manager scenario
+matrices are separate tests so Nextest can schedule and report each manager
+independently, while retaining every scenario and the two-test frontend limit.
+The local vault partition continues to use identical workspace features for
+both of its phases.
+
+The Rust Tests workflow accepts `benchmark_only=true` with `runner_size=2` or
+`4` on manual runs. This runs just formatting/launcher and MSRV checks with the
+same commands and cache keys as ordinary CI, for comparing complete job time
+and billed minutes on the two runner sizes.
 
 The Linux full-test and release jobs start a systemd user manager and export its
 bus address before testing proxy shutdown. These tests exercise the real service

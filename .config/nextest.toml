@@ -9,6 +9,10 @@ test-threads = 4
 # Surface stalled supported-host tests promptly; CI jobs retain their hard timeout.
 slow-timeout = { period = "60s" }
 
+[profile.ci.junit]
+# scripts/ci/test-rust.sh saves a separate report after each isolated phase.
+path = "junit.xml"
+
 [profile.local]
 # Local checks optimize for the first actionable failure. CI intentionally uses
 # the comprehensive default profile above.
