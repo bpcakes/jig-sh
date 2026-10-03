@@ -54,6 +54,7 @@ fn run_vault_command_with_terminal_state(
         runtime::prepare_vault_raw_input(&mut runtime_command)?;
     }
     apply_repo_vault_scope(&mut runtime_command)?;
+    runtime::preflight_vault_scope(vault_options_mut(&mut runtime_command))?;
     runtime::preflight_scoped_vault_command(&mut runtime_command)?;
     if let crate::command::VaultCommand::Tui(request) = runtime_command {
         let initial_passphrase = runtime::take_optional_vault_tui_passphrase()?;

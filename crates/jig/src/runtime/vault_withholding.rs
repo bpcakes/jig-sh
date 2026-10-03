@@ -12,11 +12,9 @@ use super::VAULT_PASSPHRASE_OPERATOR_GUIDANCE;
 /// passphrase variable, so nested vault commands can explain the missing value.
 pub(crate) const VAULT_PASSPHRASE_WITHHELD_ENV: &str = "JIG_VAULT_PASSPHRASE_WITHHELD";
 
-/// Agents read this note, so it offers `vault exec` wrapping only for the
-/// non-interactive outer commands the passphrase-withholding docs allow:
-/// wrapping `scripts/jig dev` breaks app shutdown, and wrapping an agent
-/// launch hands every resolved value to the agent session.
-const WITHHELD_PASSPHRASE_NOTE: &str = "An outer Jig command withheld the vault passphrase from its child processes (JIG_VAULT_PASSPHRASE_WITHHELD=1), so this nested command cannot use it. Run vault commands directly rather than from Jig checks, run actions, dev apps, or Jig-launched agents. To give a non-interactive `scripts/jig check` or `scripts/jig run` invocation resolved values instead of the passphrase, wrap that invocation in `scripts/jig vault exec --env-file FILE -- ...`. Do not wrap `scripts/jig dev` or an agent launch this way; a Jig-launched agent must instead ask the operator to run the vault command in a terminal.";
+/// Agents read this note. Keep the task outside recording runners, which can
+/// persist secret-bearing output before an outer vault wrapper redacts it.
+const WITHHELD_PASSPHRASE_NOTE: &str = "An outer Jig command withheld the vault passphrase from its child processes (JIG_VAULT_PASSPHRASE_WITHHELD=1), so this nested command cannot use it. Run vault commands directly rather than from Jig checks, run actions, dev apps, or Jig-launched agents. Ask the operator to run the task directly with `scripts/jig vault exec --env-file FILE -- TASK_COMMAND` outside the recording runner. Do not wrap `scripts/jig check` or `scripts/jig run` in vault exec: those commands can persist secret-bearing output in run history before the outer wrapper redacts it. Do not wrap `scripts/jig dev` or an agent launch either; a Jig-launched agent must instead ask the operator to run the vault command in a terminal.";
 
 /// Removes both reserved variables from Jig's own environment, and therefore
 /// from every child it starts, then sets the non-secret withheld marker. The
@@ -119,15 +117,15 @@ mod tests {
         for expected in [
             "outer Jig command withheld the vault passphrase",
             "Run vault commands directly",
-            "non-interactive `scripts/jig check` or `scripts/jig run` invocation resolved values instead of the passphrase",
-            "wrap that invocation in `scripts/jig vault exec --env-file FILE -- ...`",
-            "Do not wrap `scripts/jig dev` or an agent launch this way",
+            "run the task directly with `scripts/jig vault exec --env-file FILE -- TASK_COMMAND` outside the recording runner",
+            "Do not wrap `scripts/jig check` or `scripts/jig run` in vault exec",
+            "persist secret-bearing output in run history before the outer wrapper redacts it",
+            "Do not wrap `scripts/jig dev` or an agent launch either",
             "a Jig-launched agent must instead ask the operator to run the vault command in a terminal",
         ] {
             assert!(guidance.contains(expected), "{expected}: {guidance}");
         }
-        // Wrapping is offered only for check and run invocations, never for
-        // an arbitrary outer command such as a dev app or an agent launch.
+        assert!(!guidance.contains("wrap that invocation"), "{guidance}");
         assert!(!guidance.contains("wrap the outer command"), "{guidance}");
         assert!(!guidance.contains("export "), "{guidance}");
 

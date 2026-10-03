@@ -628,6 +628,12 @@ struct ResolvedVaultRuntime {
     main_checkout_root: Option<PathBuf>,
 }
 
+pub(crate) fn preflight_scope(options: &VaultRuntimeOptions) -> Result<()> {
+    // Resolve metadata only; do not open or create a vault (including restore's
+    // absent destination) before command-specific preflight and capture.
+    resolve_vault_runtime(options).map(|_| ())
+}
+
 fn resolve_vault_runtime(options: &VaultRuntimeOptions) -> Result<ResolvedVaultRuntime> {
     if let Some(home) = &options.home {
         return Ok(ResolvedVaultRuntime {

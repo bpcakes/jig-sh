@@ -9,6 +9,9 @@ use std::process::{Command, Output};
 use jig_vault::{FieldKind, FieldMutation, SecretBytes, Vault, VaultReference};
 use secrecy::SecretString;
 
+#[path = "vault_worktree_scope/regressions.rs"]
+mod regressions;
+
 const PASSPHRASE: &str = "test-only-worktree-passphrase";
 const FIELD_VALUE: &str = "test-only-worktree-field-value";
 const REFERENCE: &str = "jig://Example/TOKEN";

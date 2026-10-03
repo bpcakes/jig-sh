@@ -189,6 +189,10 @@ pub(crate) fn preflight_scoped_vault_command(
     vault::preflight_scoped_command(command)
 }
 
+pub(crate) fn preflight_vault_scope(options: &crate::command::VaultRuntimeOptions) -> Result<()> {
+    vault::preflight_scope(options)
+}
+
 /// Value-free operator guidance appended to every vault passphrase-unavailable
 /// diagnostic. Agents read these errors, so they must route passphrase entry to
 /// the operator instead of suggesting environment assignments.
