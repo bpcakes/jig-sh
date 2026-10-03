@@ -318,6 +318,7 @@ mod tests {
         assert!(summary.contains(
             "Capabilities: SQLx, schema dumps, frontend apps, dev proxy, vault initialized"
         ));
+        assert!(summary.contains("Vault: shared with main checkout /tmp/main"));
     }
 
     #[test]
@@ -374,6 +375,7 @@ mod tests {
         );
         let summary = format_summary(&output);
         assert!(summary.contains("vault available (not initialized)"));
+        assert!(!summary.contains("shared with main checkout"), "{summary}");
     }
 
     #[test]
