@@ -1,34 +1,6 @@
 use super::*;
 
 mod dependency_scope;
-use dependency_scope::assert_dependency_scope_case;
-
-#[test]
-fn generated_web_dependency_scope_requires_workspace_membership_and_honors_app_locks() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let generated_scripts = generated_web_check_scripts();
-
-    for (case_name, package_manager, lockfile) in [
-        ("bun", "bun", "bun.lock"),
-        ("npm-package-lock", "npm", "package-lock.json"),
-        ("npm-shrinkwrap", "npm", "npm-shrinkwrap.json"),
-        ("pnpm", "pnpm", "pnpm-lock.yaml"),
-        ("yarn", "yarn", "yarn.lock"),
-    ] {
-        for workspace_member in [false, true] {
-            assert_dependency_scope_case(
-                temp.path(),
-                &generated_scripts[package_manager],
-                case_name,
-                package_manager,
-                lockfile,
-                workspace_member,
-            );
-        }
-    }
-}
-
 #[cfg(unix)]
 fn init_pnpm_dependency_checker_fixture(
     repo: &Path,

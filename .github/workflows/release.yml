@@ -40,6 +40,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     if: ${{ github.event.inputs.backfill_v0_1_0 != 'true' }}
+    env:
+      RELEASE_VALIDATION_RECEIPT: ${{ github.workspace }}/target/release-validation
+      ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
+      JIG_FIXTURE_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/fixture-builds
+      JIG_GENERATED_RUST_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/generated-rust-builds
     # This environment must stay protected with required reviewers because it
     # grants the OIDC token used for crates.io Trusted Publishing.
     environment: crates-io
@@ -78,6 +83,14 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: release-fixtures-v3
+          cache-directories: |
+            ${{ env.JIG_FIXTURE_TARGET_DIR }}
+            ${{ env.JIG_GENERATED_RUST_TARGET_DIR }}
+
+      - name: Start the systemd user manager
+        run: bash scripts/ci/setup-user-systemd.sh
 
       - name: Configure release git identity
         run: |
@@ -159,11 +172,6 @@ jobs:
             echo "No release prep diff; continuing explicit-version resume."
           fi
 
-      - name: Validate prepared release
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: ALLOW_DIRTY=1 scripts/release.sh check "$VERSION"
-
       - name: Commit release prep
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -178,14 +186,12 @@ jobs:
       - name: Validate committed release
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
         run: scripts/release.sh check "$VERSION"
 
       - name: Create local tag
         if: ${{ github.event.inputs.dry_run != 'true' && steps.version.outputs.tag_exists != 'true' }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
         run: scripts/release.sh tag "$VERSION"
 
       - name: Stop before remote side effects
@@ -213,7 +219,6 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TAG_EXISTS: ${{ steps.version.outputs.tag_exists }}
           CARGO_REGISTRY_TOKEN: ${{ steps.crates.outputs.token }}
-          ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
         run: |
           # scripts/release.sh publish pushes the tag only after all crates publish.
           # If a publish step fails, rerun this workflow with the explicit version.

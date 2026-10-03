@@ -347,3 +347,45 @@ esac
         );
     }
 }
+
+fn assert_workspace_membership_and_app_locks(selected_manager: &str) {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let generated_scripts = generated_web_check_scripts(selected_manager);
+
+    for (case_name, package_manager, lockfile) in [
+        ("bun", "bun", "bun.lock"),
+        ("npm-package-lock", "npm", "package-lock.json"),
+        ("npm-shrinkwrap", "npm", "npm-shrinkwrap.json"),
+        ("pnpm", "pnpm", "pnpm-lock.yaml"),
+        ("yarn", "yarn", "yarn.lock"),
+    ] {
+        if package_manager != selected_manager {
+            continue;
+        }
+        for workspace_member in [false, true] {
+            assert_dependency_scope_case(
+                temp.path(),
+                &generated_scripts,
+                case_name,
+                package_manager,
+                lockfile,
+                workspace_member,
+            );
+        }
+    }
+}
+
+macro_rules! workspace_membership_test {
+    ($name:ident, $manager:literal) => {
+        #[test]
+        fn $name() {
+            assert_workspace_membership_and_app_locks($manager);
+        }
+    };
+}
+
+workspace_membership_test!(generated_web_workspace_membership_bun, "bun");
+workspace_membership_test!(generated_web_workspace_membership_npm, "npm");
+workspace_membership_test!(generated_web_workspace_membership_pnpm, "pnpm");
+workspace_membership_test!(generated_web_workspace_membership_yarn, "yarn");
