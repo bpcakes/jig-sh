@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$ROOT_DIR/scripts/release-validation.sh"
+
 PACKAGE_NAME="jig-sh"
 # Publish workspace library crates before the CLI; cargo publish strips path
 # dependencies, so every exact-version internal crate must exist on crates.io
@@ -75,6 +77,8 @@ Commands:
 VERSION defaults to the package version from Cargo metadata.
 
 Set ALLOW_DIRTY=1 only with `check` to validate working-tree release tooling before committing it.
+CI may set RELEASE_VALIDATION_RECEIPT to reuse a successful committed-tree check
+within the same GitHub Actions job and run attempt. Missing or stale evidence fails closed.
 EOF
 }
 
@@ -239,27 +243,6 @@ else:
 
 print(f"{major}.{minor}.{patch}")
 PY
-}
-
-require_clean_tree() {
-  local status
-
-  if [[ "${ALLOW_DIRTY:-}" == "1" ]]; then
-    echo "ALLOW_DIRTY=1 set; skipping clean working tree requirement." >&2
-    return 0
-  fi
-
-  status="$(git status --short --untracked-files=all)"
-  if [[ "${ALLOW_RELEASE_RUN_JOURNAL_DIRTY:-}" == "1" && "$status" == " M .agent/state/runs.jsonl" ]]; then
-    echo "ALLOW_RELEASE_RUN_JOURNAL_DIRTY=1 set; allowing the ephemeral release-check run journal." >&2
-    return 0
-  fi
-
-  if [[ -n "$status" ]]; then
-    echo "Working tree is not clean. Commit or discard changes before releasing." >&2
-    printf '%s\n' "$status" >&2
-    exit 1
-  fi
 }
 
 require_version_consistency() {
@@ -671,7 +654,7 @@ run_ci_checks() {
   check_launcher_template
 }
 
-release_check() {
+run_release_checks() {
   local version="$1"
   local package_name
   local dependency_status
@@ -720,7 +703,7 @@ release_tag() {
     exit 1
   fi
 
-  release_check "$version"
+  require_release_validation "$version"
 
   run git tag -a "$tag" -m "$PACKAGE_NAME $tag"
   echo "Created tag $tag. release-publish will push it to origin after all crates publish successfully."
@@ -783,7 +766,7 @@ release_publish() {
     exit 1
   fi
 
-  release_check "$version"
+  require_release_validation "$version"
   local package_name
   for package_name in "${PUBLISH_PACKAGE_NAMES[@]}"; do
     publish_package_if_missing "$package_name" "$version"

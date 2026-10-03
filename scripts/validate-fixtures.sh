@@ -18,7 +18,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 cargo build -p jig-sh --bin jig >/dev/null
 export JIG_DEV_BIN="$ROOT_DIR/target/debug/jig"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$TMP_DIR/cargo-target}"
+export CARGO_TARGET_DIR="${JIG_FIXTURE_TARGET_DIR:-${CARGO_TARGET_DIR:-$TMP_DIR/cargo-target}}"
 
 source "$ROOT_DIR/scripts/fixtures/lib.sh"
 source "$ROOT_DIR/scripts/fixtures/runtime-smoke.sh"

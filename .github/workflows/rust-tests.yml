@@ -83,6 +83,8 @@ jobs:
     name: Validate rendered repository fixtures
     runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
+    env:
+      JIG_FIXTURE_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/fixture-builds
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -94,7 +96,8 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}
+          shared-key: rust-${{ runner.os }}-${{ github.job }}-fixtures-v2
+          cache-directories: ${{ env.JIG_FIXTURE_TARGET_DIR }}
       - name: Validate behavioral fixtures
         run: bash scripts/validate-fixtures.sh
 
@@ -102,6 +105,8 @@ jobs:
     name: Check generated Rust scaffold Clippy policy at declared minima
     runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 20
+    env:
+      JIG_GENERATED_RUST_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/generated-rust-builds
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -114,7 +119,8 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}
+          shared-key: rust-${{ runner.os }}-${{ github.job }}-fixtures-v2
+          cache-directories: ${{ env.JIG_GENERATED_RUST_TARGET_DIR }}
       - name: Build current Jig binary
         run: cargo build -p jig-sh --bin jig --locked
       - name: Install generated-project Rust toolchains
@@ -155,6 +161,8 @@ jobs:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Build current Jig binary
         run: cargo build -p jig-sh --bin jig --locked
+      - name: Start the systemd user manager
+        run: bash scripts/ci/setup-user-systemd.sh
       - name: Run locked Rust tests
         env:
           JIG_DEV_BIN: target/debug/jig

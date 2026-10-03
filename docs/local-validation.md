@@ -59,3 +59,20 @@ remote default branch, so they also work without a local `master` branch.
 The locked test suite and local vault partition keep workspace selection for
 all phases. The final phase filters to the two vault PTY tests and runs them
 serially, reusing the workspace binaries without changing dependency features.
+
+The Linux full-test and release jobs start a systemd user manager and export its
+bus address before testing proxy shutdown. These tests exercise the real service
+manager; an unreachable manager still blocks proxy shutdown.
+
+Rendered-fixture and generated-Rust compilation artifacts are cached separately
+from the source workspace. CI sets absolute `JIG_FIXTURE_TARGET_DIR` and
+`JIG_GENERATED_RUST_TARGET_DIR` paths under `.agent/.cache/`; fixture repositories and
+installation roots remain temporary. Without these overrides, local checks retain
+their existing temporary build-directory behavior.
+
+The release workflow commits prepared files locally, then validates that commit
+once before any push or publish. `RELEASE_VALIDATION_RECEIPT` lets tag and publish
+reuse that success only for the same version, commit, GitHub job, run and attempt,
+with a clean working tree except for the existing explicit run-journal allowance.
+A failed recheck removes prior evidence. Standalone release commands without this
+override still perform full validation.
