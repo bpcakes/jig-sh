@@ -9,7 +9,7 @@ require_clean_tree() {
     return 0
   fi
 
-  status="$(git status --short --untracked-files=all)"
+  status="$(git status --short --untracked-files=all)" || return 1
   if [[ "${ALLOW_RELEASE_RUN_JOURNAL_DIRTY:-}" == "1" && "$status" == " M .agent/state/runs.jsonl" ]]; then
     echo "ALLOW_RELEASE_RUN_JOURNAL_DIRTY=1 set; allowing the ephemeral release-check run journal." >&2
     return 0
@@ -32,7 +32,7 @@ release_validation_identity() {
   : "${GITHUB_RUN_ID:?Release validation reuse requires a GitHub Actions run}"
   : "${GITHUB_RUN_ATTEMPT:?Release validation reuse requires a run attempt}"
   : "${GITHUB_JOB:?Release validation reuse requires a job}"
-  require_clean_tree
+  require_clean_tree || return 1
   commit="$(git rev-parse --verify HEAD)" || return 1
   printf '%s\n' "jig-release-validation-v1" "$version" "$commit" \
     "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_JOB"

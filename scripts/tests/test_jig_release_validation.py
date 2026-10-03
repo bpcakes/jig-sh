@@ -125,6 +125,13 @@ run_release_checks() {
         self.git("add", ".agent/state/runs.jsonl")
         self.assertNotEqual(self.run_shell("require_release_validation 1.2.3", env=env).returncode, 0)
 
+    def test_unreadable_git_index_cannot_be_treated_as_clean(self):
+        self.checked()
+        (self.root / ".git/index").write_bytes(b"invalid")
+        self.assertNotEqual(self.run_shell("require_release_validation 1.2.3").returncode, 0)
+        self.assertNotEqual(self.run_shell("release_check 1.2.3").returncode, 0)
+        self.assertFalse(self.receipt.exists())
+
     def test_allow_dirty_never_authorizes_reuse(self):
         self.checked()
         env = dict(self.env, ALLOW_DIRTY="1")
