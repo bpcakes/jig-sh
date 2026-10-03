@@ -159,6 +159,9 @@ fn vault_detail(output: &Value) -> String {
     if let Some(main_checkout_root) = output["vault_main_checkout_root"].as_str() {
         let _ = write!(detail, " main_checkout_root={main_checkout_root}");
     }
+    if output["vault_worktree_local"].as_bool() == Some(true) {
+        detail.push_str(" worktree_local=true");
+    }
     detail
 }
 

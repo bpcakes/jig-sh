@@ -39,6 +39,9 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
     if let Some(main_checkout_root) = value_str(value, "vault_main_checkout_root") {
         lines.push(format!("  Shared with main checkout: {main_checkout_root}"));
     }
+    if let Some(guidance) = value_str(value, "vault_worktree_local_guidance") {
+        lines.push(format!("  Worktree-local vault: {guidance}"));
+    }
     match command {
         "vault init" => {
             let created = value_bool(value, "created").unwrap_or(false);
@@ -239,6 +242,22 @@ mod tests {
             "exists": true,
         }));
         assert!(!checkout.contains("Shared with main checkout"));
+        assert!(!checkout.contains("Worktree-local vault"));
+
+        let worktree_local = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault status",
+            "vault_scope": "repo",
+            "vault_home": "/tmp/jig-vault/scopes/repo-2",
+            "vault_main_checkout_root": null,
+            "vault_worktree_local": true,
+            "vault_worktree_local_guidance": "This linked Git worktree keeps its own repo-scoped vault.",
+            "exists": true,
+        }));
+        assert!(worktree_local.contains(
+            "Worktree-local vault: This linked Git worktree keeps its own repo-scoped vault."
+        ));
+        assert!(!worktree_local.contains("Shared with main checkout"));
     }
 
     #[test]

@@ -35,7 +35,7 @@ fn assert_scope_refusal(worktree: &Path, vault_base: &Path, expected: &str) {
 }
 
 #[test]
-fn worktree_cutover_refusal_precedes_passphrase_capture() {
+fn worktree_local_vault_keeps_working_through_the_cli() {
     let temp = tempfile::tempdir().unwrap();
     let main = temp.path().join("ExampleProject");
     let worktree = temp.path().join("worktree");
@@ -62,18 +62,41 @@ fn worktree_cutover_refusal_precedes_passphrase_capture() {
     );
     std::fs::rename(worktree.join("git-pointer"), worktree.join(".git")).unwrap();
     let local_home = PathBuf::from(local["vault_home"].as_str().unwrap());
-    std::fs::create_dir_all(&local_home).unwrap();
-    std::fs::write(local_home.join("vault.json"), b"existing-vault-marker").unwrap();
+    initialize_vault(local_home.clone());
 
-    assert_scope_refusal(
-        &worktree,
-        &vault_base,
-        "already has its own repo-scoped vault",
+    let status = json(
+        "worktree-local status",
+        &jig(&worktree, &vault_base, &["--json", "vault", "status"])
+            .output()
+            .unwrap(),
     );
     assert_eq!(
-        std::fs::read(local_home.join("vault.json")).unwrap(),
-        b"existing-vault-marker"
+        PathBuf::from(status["vault_home"].as_str().unwrap()),
+        local_home
     );
+    assert_eq!(status["vault_worktree_local"], true);
+    assert_eq!(status["vault_main_checkout_root"], serde_json::Value::Null);
+    let guidance = status["vault_worktree_local_guidance"].as_str().unwrap();
+    assert!(
+        guidance.contains("keeps its own repo-scoped vault"),
+        "{guidance}"
+    );
+
+    let listed = jig(
+        &worktree,
+        &vault_base,
+        &["--json", "vault", "field", "list"],
+    )
+    .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
+    .output()
+    .unwrap();
+    assert!(
+        json("worktree-local field list", &listed)
+            .to_string()
+            .contains("TOKEN")
+    );
+    assert_value_free("worktree-local field list", &listed);
+    // Using the kept vault never creates the shared namespace.
     assert_eq!(
         std::fs::read_dir(vault_base.join("scopes"))
             .unwrap()

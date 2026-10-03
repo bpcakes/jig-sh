@@ -16,7 +16,7 @@ use crate::test_env::{EnvLockGuard, EnvVarGuard, lock_env};
 use super::super::{VAULT_HOME_ENV, status};
 
 mod forgery;
-mod orphan;
+mod worktree_local;
 
 const SCOPE_ID: &str = "scope_worktree";
 const REPO_NAME: &str = "vault-consumer-fixture";

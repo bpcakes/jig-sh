@@ -6,11 +6,12 @@
 //! environment cannot redirect a vault namespace. Nothing here creates files.
 
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use cap_std::{ambient_authority, fs::Dir};
 
 use crate::runtime::git_path::{
@@ -20,6 +21,9 @@ use crate::runtime::git_path::{
 use super::VAULT_STORAGE_OPERATOR_STEP;
 
 const MAX_GIT_CONFIG_BYTES: u64 = 1024 * 1024;
+
+/// Repairs the Git link of a moved worktree so the proof can succeed again.
+pub(super) const WORKTREE_REPAIR_STEP: &str = "If this worktree was moved, run `git worktree repair` inside it, or `git worktree repair <path>` from the main checkout.";
 
 /// Returns the repository root inside the main checkout that corresponds to
 /// the canonical `repo_root` when `repo_root` lies in a verified linked Git
@@ -272,11 +276,31 @@ fn owned_by_current_user(_metadata: &fs::Metadata) -> bool {
     true
 }
 
+/// A `.git` pointer that claims a linked worktree but fails the proof.
+#[derive(Debug)]
+pub(super) struct UnverifiedWorktree {
+    top: PathBuf,
+    pub(super) reason: String,
+}
+
+impl fmt::Display for UnverifiedWorktree {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} has a Git worktree pointer, but Jig could not verify it as a linked worktree: {}. Refusing to derive a repo-scoped vault namespace from unverified Git metadata. {WORKTREE_REPAIR_STEP} {VAULT_STORAGE_OPERATOR_STEP} for diagnostics, pass an absolute --home <path> to select a vault explicitly",
+            self.top.display(),
+            self.reason
+        )
+    }
+}
+
+impl std::error::Error for UnverifiedWorktree {}
+
 fn unverified(top: &Path, reason: &str) -> anyhow::Error {
-    anyhow!(
-        "{} has a Git worktree pointer, but Jig could not verify it as a linked worktree: {reason}. Refusing to derive a repo-scoped vault namespace from unverified Git metadata. If this worktree was moved, run `git worktree repair` inside it, or `git worktree repair <path>` from the main checkout. {VAULT_STORAGE_OPERATOR_STEP} for diagnostics, pass an absolute --home <path> to select a vault explicitly",
-        top.display()
-    )
+    anyhow::Error::new(UnverifiedWorktree {
+        top: top.to_path_buf(),
+        reason: reason.to_string(),
+    })
 }
 
 #[cfg(test)]

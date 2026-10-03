@@ -626,6 +626,7 @@ struct ResolvedVaultRuntime {
     scope_id: Option<String>,
     repo_name: Option<String>,
     main_checkout_root: Option<PathBuf>,
+    worktree_local_guidance: Option<String>,
 }
 
 pub(crate) fn preflight_scope(options: &VaultRuntimeOptions) -> Result<()> {
@@ -642,6 +643,7 @@ fn resolve_vault_runtime(options: &VaultRuntimeOptions) -> Result<ResolvedVaultR
             scope_id: None,
             repo_name: None,
             main_checkout_root: None,
+            worktree_local_guidance: None,
         });
     }
 
@@ -654,6 +656,7 @@ fn resolve_vault_runtime(options: &VaultRuntimeOptions) -> Result<ResolvedVaultR
                 scope_id: Some(scope.scope_id.clone()),
                 repo_name: Some(scope.repo_name.clone()),
                 main_checkout_root: scoped.main_checkout_root,
+                worktree_local_guidance: scoped.worktree_local_guidance,
             })
         }
         VaultScopeSelection::Global => Ok(ResolvedVaultRuntime {
@@ -662,6 +665,7 @@ fn resolve_vault_runtime(options: &VaultRuntimeOptions) -> Result<ResolvedVaultR
             scope_id: None,
             repo_name: None,
             main_checkout_root: None,
+            worktree_local_guidance: None,
         }),
         VaultScopeSelection::Auto => Ok(ResolvedVaultRuntime {
             home: None,
@@ -669,6 +673,7 @@ fn resolve_vault_runtime(options: &VaultRuntimeOptions) -> Result<ResolvedVaultR
             scope_id: None,
             repo_name: None,
             main_checkout_root: None,
+            worktree_local_guidance: None,
         }),
     }
 }
@@ -683,6 +688,8 @@ fn add_vault_scope_fields(output: &mut Value, resolved: &ResolvedVaultRuntime) {
             .as_ref()
             .map(|root| root.display().to_string())
     );
+    output["vault_worktree_local"] = json!(resolved.worktree_local_guidance.is_some());
+    output["vault_worktree_local_guidance"] = json!(resolved.worktree_local_guidance.as_deref());
 }
 
 fn parse_env_mappings(values: &[String]) -> Result<Vec<BrokeredEnv>> {
