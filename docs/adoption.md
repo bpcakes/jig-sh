@@ -52,6 +52,33 @@ infers it from affected-file hints. See
 [Preview and apply declarations](target-freshness-integration.md#preview-and-apply-declarations)
 for exact target selection, custom inputs, review/apply commands and limitations.
 
+### Frontend dependency installation
+
+Jig validates configured package scripts during adoption; generated web CI validates
+those scripts again before running. Install scope follows package-manager workspace
+membership. Keep registry, authentication, and install-script policy project-owned.
+Run package scripts through `scripts/check-webapps.sh run-script <app-dir> <script>`.
+The generated root guide retains required scripts, coverage output, app locations,
+and CI/development configuration so ordinary app work needs no installer internals.
+
+npm, pnpm, Bun, and Yarn Classic workspace members install from the root project;
+standalone apps and nested Yarn Berry projects use their app-local project. Root-lock
+presence alone does not establish workspace membership. The dependency checker
+supports stock macOS Bash 3.2 and treats authority-enumeration failures as errors.
+Missing, empty, and cache-only real `node_modules` roots share the absent proof:
+only real top-level `.cache`, `.vite`, `.vite-temp`, and `.tmp` directories and a
+regular `.DS_Store` are ignored. Other entries, symlinks, package metadata, and
+launchers remain part of the dependency proof.
+
+Generated npm installs pin real writes, lock creation, workspace participation,
+platform packages, executable links, and dependency classes. Package-script
+execution selects the configured app and requires the named script. Explicit app
+environment, registry/authentication, dependency layout, peer resolution, and
+install-script approval remain project-owned.
+
+Contributors changing dependency proof, locking, environment handling, or generated
+installers must follow the [bootstrap guide](../crates/jig/src/bootstrap/AGENTS.md).
+
 ### Review component ownership
 
 The preview lists each component candidate's relative root, proposed ID, evidence,

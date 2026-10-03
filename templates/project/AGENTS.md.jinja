@@ -6,7 +6,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 ## Start Here
 
 - Use this file for repo-wide defaults.
-- Use [agent-map.md](./agent-map.md) to locate ownership guidance for [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
+- Use [agent-map.md](./agent-map.md) when you need help locating ownership guidance for [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
 - Read the nearest [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] `AGENTS.md` before changing a [% if rust_workspace_guidance_enabled %]crate[% else %]package or crate[% endif %] when one exists.
 - Use `scripts/jig` for the typed repo contract; pass `--json` for agent automation.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
@@ -78,14 +78,11 @@ Each configured app is expected to support `lint`, `typecheck`, `build:bundle`, 
 Application contract freshness and public deployment boundaries have separate `scripts/check-webapps.sh application-contracts` and `scripts/check-webapps.sh public-artifacts` checks; `jig-contract` remains limited to Jig harness wiring.
 [% endif -%]
 `test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
-Jig validates those scripts during adoption; generated web CI validates them again before running.
-Generated install steps select the package-manager project from workspace membership, not root-lock presence: npm, pnpm, Bun, and Yarn Classic members use the root project, while standalone apps and nested Yarn Berry projects use their app-local project.
-Generated npm installs pin real writes, lock creation, workspace participation, platform packages, executable links, and all dependency classes despite ambient install-shaping variables; registry/authentication, dependency layout, peer resolution, and install-script approval remain project-owned.
-Run package-local scripts through `scripts/check-webapps.sh run-script <app-dir> <script>` for the generated execution boundary; generated web and browser-E2E workflows do this for every package script. For npm it pins the exact current package and required-script behavior despite ambient npm selectors; explicit app environment plus registry, authentication, layout, peer, and lifecycle policy remain project-owned.
-The dependency checker supports stock macOS Bash 3.2, treats Yarn authority-enumeration failures as hard errors, and follows Bash-owned worker-job identity after an interrupted `wait` rather than probing a reaped PID.
-Dependency readiness treats a missing, empty, or exact cache-only real `node_modules` root equivalently. It ignores only real top-level tool-cache directories (`.cache`, `.vite`, `.vite-temp`, and `.tmp`) plus a regular `.DS_Store`; unknown entries, nested/type-replaced cache names, package entries, metadata, symlinks, and launchers remain attested.
-`[[frontend_apps]]` keeps CI, coverage, and semantic role metadata; generated `[[dev.apps]]` drives `scripts/jig dev` and takes precedence for local dev settings. When both sections are present, Jig requires a matching dev app name and dir for every frontend app. `kind` selects `vite` versus `env-port`; `role` selects `spa`, `admin`, or `astro` without guessing from the directory name. Extra `[[dev.apps]]` entries without `[[frontend_apps]]` are treated as dev-only and are not covered by generated web CI.
-Remove legacy `dev_command` keys; local dev now runs through `[dev]` and `[[dev.apps]]`.
+Run package scripts through `scripts/check-webapps.sh run-script <app-dir> <script>`.
+Keep registry, authentication, and install-script policy project-owned.
+For dependency installation details, see the [Jig frontend installation reference](https://github.com/bpcakes/jig-sh/blob/master/docs/adoption.md#frontend-dependency-installation).
+`[[frontend_apps]]` owns CI and coverage metadata; matching `[[dev.apps]]` entries own local development. Extra dev apps have no generated web CI. Replace legacy `dev_command` with `[dev]` and `[[dev.apps]]`.
+`kind` selects `vite` or `env-port`; `role` selects `spa`, `admin`, or `astro`.
 [% else -%]
 No web apps are configured in `.jig.toml`.
 [% endif %]
@@ -152,11 +149,14 @@ No web apps are configured in `.jig.toml`.
 
 ## [% if rust_workspace_guidance_enabled %]Crate Guide[% else %]Backend Guide[% endif %] Conventions
 
-When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, use these sections:
+When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, [% if _jig.contract_version >= 9 %]these sections are optional suggestions:[% else %]use these sections:[% endif %]
 
 - `## Purpose`
 - `## Key entrypoints`
 - `## Edit here for X`
 - `## Invariants`
 - `## Common commands`
+[% if _jig.contract_version >= 9 %]
+Use the structure that fits the area. Preserve ownership, entrypoints, invariants, and useful commands. Link to repository files when a reference must be checked. Run `scripts/jig check agent-guides` to validate local links and explicitly declared component guidance.
+[% endif %]
 <!-- END JIG MANAGED BLOCK -->

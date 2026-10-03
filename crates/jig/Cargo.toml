@@ -70,6 +70,7 @@ libc.workspace = true
 # The SQLx AST inventory retains source line numbers outside procedural macros.
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 minijinja = { version = "2.19.0", features = ["custom_syntax", "json"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
 rpassword.workspace = true
 reqwest.workspace = true
 secrecy.workspace = true

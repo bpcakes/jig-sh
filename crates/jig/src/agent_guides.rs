@@ -1,3 +1,5 @@
+pub(crate) mod references;
+
 use std::path::Component;
 
 pub(crate) fn is_ignored_guide_component(component: Component<'_>) -> bool {
