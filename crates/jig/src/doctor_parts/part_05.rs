@@ -215,7 +215,10 @@ impl DoctorCheck {
     }
 
     fn operator_only(mut self) -> Self {
-        debug_assert!(!self.required, "operator-only doctor checks must be optional");
+        debug_assert!(
+            !self.required,
+            "operator-only doctor checks must be optional"
+        );
         self.operator_only = true;
         self
     }
