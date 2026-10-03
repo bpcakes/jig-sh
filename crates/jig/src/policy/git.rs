@@ -148,4 +148,32 @@ mod tests {
             assert!(removed.contains(&OsStr::new(name)), "{name}");
         }
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn policy_git_helpers_never_hand_reserved_passphrase_variables_to_git() {
+        use std::time::Duration;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env = lock_env();
+        let _current = EnvVarGuard::set(VAULT_PASSPHRASE_ENV, "test-only-reserved-current");
+        let _new = EnvVarGuard::set(VAULT_NEW_PASSPHRASE_ENV, "test-only-reserved-new");
+        let temp = tempfile::tempdir().unwrap();
+        // A shell alias stands in for any program Git may start; it prints
+        // `clean` only when neither reserved variable reached it.
+        let probe = [
+            "-c",
+            "alias.reserved-probe=!test -z \"${JIG_VAULT_PASSPHRASE+x}${JIG_VAULT_NEW_PASSPHRASE+x}\" && printf clean",
+            "reserved-probe",
+        ];
+
+        assert_eq!(git_output(temp.path(), &probe).unwrap(), b"clean");
+        assert!(git_success(temp.path(), &probe).unwrap());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        assert_eq!(
+            controlled_git_bytes(temp.path(), &probe, deadline, &|| false).unwrap(),
+            b"clean"
+        );
+    }
 }
