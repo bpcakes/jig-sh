@@ -35,7 +35,7 @@ pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
     }
     if value["capabilities"]["vault_worktree_local"].as_bool() == Some(true) {
         lines.push(
-            "Vault: worktree-local, not shared with the main checkout; `vault status` shows the operator migration steps".to_string(),
+            "Vault: worktree-local, not shared with the main checkout; run `scripts/jig vault status` for details".to_string(),
         );
     }
     if let Some(check_tools) = value["check_tools"].as_array() {

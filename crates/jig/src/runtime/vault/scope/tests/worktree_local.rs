@@ -214,3 +214,68 @@ fn forged_worktree_pointer_keeps_its_own_vault_and_never_reaches_the_victim() {
         "{guidance}"
     );
 }
+
+#[test]
+fn shared_home_probe_failure_never_blocks_the_kept_vault() {
+    let local = worktree_local();
+    // A stray regular file at the shared path makes probing its vault.json
+    // fail with ENOTDIR rather than NotFound.
+    fs::create_dir_all(local.shared_home.parent().unwrap()).unwrap();
+    fs::write(&local.shared_home, "not a vault home").unwrap();
+
+    let guidance = kept_guidance(&local);
+
+    assert!(
+        guidance.contains("could not inspect the shared vault home"),
+        "{guidance}"
+    );
+}
+
+#[test]
+fn git_metadata_inspection_error_keeps_the_vault_without_guidance() {
+    // SAFETY: geteuid has no pointer or lifetime requirements.
+    if unsafe { libc::geteuid() } == 0 {
+        return; // Root bypasses the permission denial this test relies on.
+    }
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let main = fixture.main_checkout("main", &["sub"]);
+    let worktree = fixture.linked_worktree(&main, "wt");
+    let nested_root = worktree.join("sub");
+    let own_home = fixture.home_for(&nested_root);
+    write_vault_file(&own_home);
+    // An untraversable directory on the mapped main-checkout path makes the
+    // nested-repository probe fail after the link itself verified.
+    let blocked = main.join("sub");
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = status_for(&nested_root);
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = output.unwrap();
+
+    assert_eq!(home_of(&output), own_home);
+    assert_eq!(output["vault_worktree_local"], false);
+    assert_eq!(output["vault_worktree_local_guidance"], Value::Null);
+}
+
+#[test]
+fn checkouts_with_their_own_vault_are_not_worktree_local() {
+    let fixture = Fixture::new();
+    let main = fixture.main_checkout("main", &[]);
+    fixture.linked_worktree(&main, "wt");
+    let plain = fixture.root.join("plain");
+    fs::create_dir(&plain).unwrap();
+
+    for root in [&main, &plain] {
+        let home = fixture.home_for(root);
+        write_vault_file(&home);
+
+        let output = status_for(root).unwrap();
+
+        assert_eq!(home_of(&output), home, "{}", root.display());
+        assert_eq!(output["vault_main_checkout_root"], Value::Null);
+        assert_eq!(output["vault_worktree_local"], false);
+        assert_eq!(output["vault_worktree_local_guidance"], Value::Null);
+    }
+}

@@ -49,7 +49,8 @@ pub(super) fn scoped_vault_home(scope: &VaultRepoScope) -> Result<ScopedVaultHom
 
     // Existing data wins: a checkout whose own namespace already holds a vault
     // keeps it, as earlier Jig versions resolved it, so an upgrade never
-    // strands persisted secrets. Only worktrees without one share.
+    // strands persisted secrets. Only worktrees without one share. Guidance
+    // is advisory and must never make the kept vault unreachable.
     if vault_file_exists(&checkout_home)? {
         let worktree_local_guidance = match linkage {
             Ok(Some(main_root)) if main_root != repo_root => {
@@ -58,10 +59,14 @@ pub(super) fn scoped_vault_home(scope: &VaultRepoScope) -> Result<ScopedVaultHom
                     &main_root,
                     &checkout_home,
                     &shared_home,
-                )?)
+                ))
             }
+            Err(error) => error
+                .downcast_ref::<worktree::UnverifiedWorktree>()
+                .map(|unverified| unverified_worktree_local_guidance(&checkout_home, unverified)),
+            // Like earlier versions, a checkout whose Git metadata cannot be
+            // inspected simply keeps its own vault.
             Ok(_) => None,
-            Err(error) => Some(unverified_worktree_local_guidance(&checkout_home, &error)),
         };
         return Ok(ScopedVaultHome {
             home: checkout_home,
@@ -115,42 +120,42 @@ fn worktree_local_guidance(
     main_checkout_root: &Path,
     checkout_home: &Path,
     shared_home: &Path,
-) -> Result<String> {
+) -> String {
     // A relative JIG_VAULT_HOME resolves from this process' working
     // directory, so print absolute paths that stay valid from any directory.
     let checkout = absolute_display(checkout_home);
     let shared = absolute_display(shared_home);
-    let migration = if vault_file_exists(shared_home)? {
-        format!(
+    let migration = match (vault_file_exists(shared_home), path_exists(shared_home)) {
+        (Ok(true), _) => format!(
             "Both vaults hold data: copy the fields this worktree still needs into the shared vault from the main checkout, then move {checkout} aside."
-        )
-    } else if path_exists(shared_home)? {
-        format!(
+        ),
+        (Ok(false), Ok(true)) => format!(
             "The shared vault home {shared} exists but has no vault.json. After confirming it holds no vault data, remove that directory, then rename {checkout} to exactly {shared}."
-        )
-    } else {
-        format!(
+        ),
+        (Ok(false), Ok(false)) => format!(
             "After confirming this repository should own those secrets, rename {checkout} to exactly {shared}."
-        )
+        ),
+        (Err(error), _) | (_, Err(error)) => format!(
+            "Jig could not inspect the shared vault home {shared} ({error:#}). Confirm whether it holds vault data before renaming {checkout} to exactly {shared} or copying fields into it."
+        ),
     };
-    Ok(format!(
+    format!(
         "This linked Git worktree keeps its own repo-scoped vault at {checkout}, created by an earlier Jig version, instead of the vault shared with the main checkout {} at {shared}. It shares the main checkout's vault once {checkout} no longer holds vault.json. {VAULT_STORAGE_OPERATOR_STEP} {migration}",
         main_checkout_root.display()
-    ))
+    )
 }
 
 /// Explains why a checkout whose worktree link fails verification keeps the
 /// vault already in its own namespace, as earlier Jig versions resolved it.
-fn unverified_worktree_local_guidance(checkout_home: &Path, error: &anyhow::Error) -> String {
-    let checkout = absolute_display(checkout_home);
-    let reason = error
-        .downcast_ref::<worktree::UnverifiedWorktree>()
-        .map_or_else(
-            || format!("{error:#}"),
-            |unverified| unverified.reason.clone(),
-        );
+/// Migration steps follow once the link verifies.
+fn unverified_worktree_local_guidance(
+    checkout_home: &Path,
+    unverified: &worktree::UnverifiedWorktree,
+) -> String {
     format!(
-        "Jig could not verify this checkout as a linked Git worktree ({reason}), so it keeps the repo-scoped vault already at {checkout}. {} Jig then reports how to share the main checkout's vault.",
+        "Jig could not verify this checkout as a linked Git worktree ({}), so it keeps the repo-scoped vault already at {}. {} Jig then reports how to share the main checkout's vault.",
+        unverified.reason,
+        absolute_display(checkout_home),
         worktree::WORKTREE_REPAIR_STEP
     )
 }

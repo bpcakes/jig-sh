@@ -52,7 +52,10 @@ fn worktree_local_vault_keeps_working_through_the_cli() {
         ],
     );
 
-    // Query the old checkout namespace without reimplementing its digest.
+    // Query the old checkout namespace without reimplementing its digest. A
+    // `.git` directory ceiling keeps that probe's walk-up inside the fixture
+    // even when the temporary directory itself lies in a linked worktree.
+    std::fs::create_dir(temp.path().join(".git")).unwrap();
     std::fs::rename(worktree.join(".git"), worktree.join("git-pointer")).unwrap();
     let local = json(
         "checkout-local scope",
@@ -96,6 +99,17 @@ fn worktree_local_vault_keeps_working_through_the_cli() {
             .contains("TOKEN")
     );
     assert_value_free("worktree-local field list", &listed);
+    let info = json(
+        "worktree-local info",
+        &jig(&worktree, &vault_base, &["--json", "info"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(info["capabilities"]["vault_worktree_local"], true);
+    assert_eq!(
+        info["capabilities"]["vault_main_checkout_root"],
+        serde_json::Value::Null
+    );
     // Using the kept vault never creates the shared namespace.
     assert_eq!(
         std::fs::read_dir(vault_base.join("scopes"))
