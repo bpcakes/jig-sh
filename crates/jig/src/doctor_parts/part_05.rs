@@ -156,6 +156,9 @@ fn vault_detail(output: &Value) -> String {
     if let Some(scope_id) = output["vault_scope_id"].as_str() {
         let _ = write!(detail, " scope_id={scope_id}");
     }
+    if let Some(main_checkout_root) = output["vault_main_checkout_root"].as_str() {
+        let _ = write!(detail, " main_checkout_root={main_checkout_root}");
+    }
     detail
 }
 

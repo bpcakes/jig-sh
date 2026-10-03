@@ -8,18 +8,21 @@ Own vault scope, passphrase capture, raw-output dispatch, lifecycle, and the CLI
 
 - [vault.rs](../vault.rs): raw and structured command dispatch.
 - [lifecycle.rs](lifecycle.rs): passphrase and backup lifecycle.
+- [scope.rs](scope.rs): repo-scope namespace derivation and cutover guards; [scope/worktree.rs](scope/worktree.rs) proves linked-worktree sharing.
 - [tui.rs](tui.rs): fixed-scope backend adapter.
 - [vault_withholding.rs](../vault_withholding.rs): startup passphrase withholding and the withheld-passphrase note.
 
 ## Edit here for X
 
 - Change scope, environment capture, and core calls here.
+- Change repo-scope namespace derivation or linked-worktree sharing in [scope.rs](scope.rs) and [scope/worktree.rs](scope/worktree.rs).
 - Change storage/broker internals in [jig-vault](../../../../jig-vault/AGENTS.md).
 - Change terminal forms/navigation in [jig-vault-tui](../../../../jig-vault-tui/AGENTS.md).
 
 ## Invariants
 
-- Vault references stay project-relative as `jig://ITEM/FIELD`; repository scope, `--global`, or `--home` selects the vault and a reference must never override that selection.
+- Vault references stay project-relative as `jig://ITEM/FIELD`; repository scope (which a verified linked Git worktree shares with its main checkout), `--global`, or `--home` selects the vault and a reference must never override that selection.
+- Repo scope hashes the canonical repo root with the unchanged v2 recipe. A verified linked Git worktree hashes the literal corresponding path in its main checkout instead and must never canonicalize it, so only a writer of a repository's own `.git` can join that repository's namespace. Prove linkage only from bounded no-follow regular Git files, never from `GIT_*` environment or `git` output: a current-user regular `.git` pointer, an admin directory directly in `<common>/worktrees`, a `commondir` resolving to that common directory, and a `gitdir` back-link naming the checkout's literal `.git`. A failed claim fails closed. Submodules, separate-git-dir or bare commons, `core.bare` or `core.worktree` found by the best-effort common-config scan, and independent repositories nested in the main checkout keep checkout scope. An existing worktree-local vault blocks the switch with value-free, absolute-path recovery instead of being shadowed. Scope derivation is read-only.
 - Validate vault raw input, `vault run` mappings, import sources/destinations, and lifecycle paths before passphrase capture. Revealed values and transparent child output must bypass structured emitters, JSON and run or loop records; errors and recovery commands must remain value-free.
 - Passphrase-unavailable diagnostics, including init/adopt bootstrap, append the shared `VAULT_PASSPHRASE_OPERATOR_GUIDANCE` from [runtime.rs](../../runtime.rs), through `vault_passphrase_operator_guidance` where a missing passphrase may have been withheld: route passphrase entry to the operator's terminal or operator-managed automation, and never tell callers to choose, request, print, store, export, or set a passphrase themselves.
 - Keep `vault exec` as transparent inherited-stdin/environment streaming with exact child status, and keep the compatible `vault run` broker constrained, buffered, capped, timed, and process-tree-owned. Successful vault capture and every spawned resolver/child must strip both reserved passphrase variables.

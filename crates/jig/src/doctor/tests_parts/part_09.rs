@@ -110,3 +110,25 @@ fn check_by_id<'a>(output: &'a Value, id: &str) -> &'a Value {
         .find(|check| check["id"] == id)
         .unwrap()
 }
+
+#[test]
+fn vault_detail_names_the_shared_main_checkout() {
+    let shared = vault_detail(&json!({
+        "vault_home": "/tmp/jig-vault/scopes/repo-1",
+        "vault_scope": "repo",
+        "vault_scope_id": "scope_1",
+        "vault_main_checkout_root": "/tmp/ExampleProject",
+    }));
+    assert_eq!(
+        shared,
+        "vault_home=/tmp/jig-vault/scopes/repo-1 scope=repo scope_id=scope_1 main_checkout_root=/tmp/ExampleProject"
+    );
+
+    let checkout = vault_detail(&json!({
+        "vault_home": "/tmp/jig-vault/scopes/repo-1",
+        "vault_scope": "repo",
+        "vault_scope_id": "scope_1",
+        "vault_main_checkout_root": null,
+    }));
+    assert!(!checkout.contains("main_checkout_root"), "{checkout}");
+}

@@ -130,6 +130,7 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             "vault_home": vault.home,
             "vault_scope": vault.scope,
             "vault_scope_id": vault.scope_id,
+            "vault_main_checkout_root": vault.main_checkout_root,
             "vault_error": vault.error,
         },
         "contract_tools": ctx.tool_specs().iter().map(|tool| {
@@ -171,6 +172,9 @@ struct VaultCapability {
     home: Option<String>,
     scope: Option<String>,
     scope_id: Option<String>,
+    /// Repository root in the main checkout whose repo-scoped vault a linked
+    /// Git worktree shares.
+    main_checkout_root: Option<String>,
     error: Option<String>,
 }
 
@@ -185,6 +189,9 @@ fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
             home: output["vault_home"].as_str().map(str::to_string),
             scope: output["vault_scope"].as_str().map(str::to_string),
             scope_id: output["vault_scope_id"].as_str().map(str::to_string),
+            main_checkout_root: output["vault_main_checkout_root"]
+                .as_str()
+                .map(str::to_string),
             error: None,
         },
         Err(error) => VaultCapability {
@@ -193,6 +200,7 @@ fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
             error: Some(format!("{error:#}")),
         },
     }
@@ -285,6 +293,7 @@ mod tests {
         assert_eq!(capabilities["vault_home"], "/tmp/vault");
         assert_eq!(capabilities["vault_scope"], "repo");
         assert_eq!(capabilities["vault_scope_id"], "scope_1");
+        assert_eq!(capabilities["vault_main_checkout_root"], "/tmp/main");
     }
 
     fn assert_repo_integrations(output: &Value) {
@@ -325,6 +334,7 @@ mod tests {
                 home: Some("/tmp/vault".into()),
                 scope: Some("repo".into()),
                 scope_id: Some("scope_1".into()),
+                main_checkout_root: Some("/tmp/main".into()),
                 error: None,
             },
         );
@@ -349,6 +359,7 @@ mod tests {
                 home: Some("/tmp/vault".into()),
                 scope: Some("repo".into()),
                 scope_id: Some("scope_1".into()),
+                main_checkout_root: None,
                 error: None,
             },
         );
@@ -357,6 +368,10 @@ mod tests {
         assert_eq!(output["capabilities"]["vault_available"], true);
         assert_eq!(output["capabilities"]["vault_initialized"], false);
         assert_eq!(output["capabilities"]["vault_home"], "/tmp/vault");
+        assert_eq!(
+            output["capabilities"]["vault_main_checkout_root"],
+            Value::Null
+        );
         let summary = format_summary(&output);
         assert!(summary.contains("vault available (not initialized)"));
     }
@@ -375,6 +390,7 @@ mod tests {
                 home: None,
                 scope: None,
                 scope_id: None,
+                main_checkout_root: None,
                 error: Some("vault status failed".into()),
             },
         );

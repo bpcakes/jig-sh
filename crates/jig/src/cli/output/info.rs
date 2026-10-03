@@ -28,6 +28,11 @@ pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
         "Capabilities: {}",
         enabled_capabilities(value).join(", ")
     ));
+    if let Some(main_checkout_root) = value["capabilities"]["vault_main_checkout_root"].as_str() {
+        lines.push(format!(
+            "Vault: shared with main checkout {main_checkout_root}"
+        ));
+    }
     if let Some(check_tools) = value["check_tools"].as_array() {
         lines.push(format!(
             "Check tools: {}",

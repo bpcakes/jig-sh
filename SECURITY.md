@@ -28,4 +28,7 @@ malicious child, transformed output, operating-system inspection, or side
 channels. Jig commands other than `vault`, and `init` or `adopt --write` with
 vault setup, remove `JIG_VAULT_PASSPHRASE` and `JIG_VAULT_NEW_PASSPHRASE` at
 startup, so configured commands, dev apps, workers, and launched agents do not
-inherit the vault passphrase itself.
+inherit the vault passphrase itself. Repo-scoped vault namespaces are
+path-bound: a linked Git worktree shares its main checkout's vault only after
+Jig verifies the link from Git metadata that only a writer of that
+repository's `.git` can create.
