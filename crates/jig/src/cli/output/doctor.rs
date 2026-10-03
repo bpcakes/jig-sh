@@ -18,6 +18,8 @@ pub(in crate::cli) fn format_doctor_summary(value: &serde_json::Value) -> String
             "ok"
         } else if required {
             "needs setup"
+        } else if is_operator_only(check) {
+            "operator setup"
         } else {
             "optional setup"
         };
@@ -41,7 +43,15 @@ pub(in crate::cli) fn format_doctor_summary(value: &serde_json::Value) -> String
         Some(step) => lines.push(format!("Optional setup: {}", optional_setup_label(step))),
         None => lines.push("Optional setup: none".into()),
     }
+    if let Some(step) = value["operator_setup"].as_str() {
+        let step = step.strip_prefix("Operator step: ").unwrap_or(step);
+        lines.push(format!("Operator setup: {step}"));
+    }
     lines.join("\n")
+}
+
+fn is_operator_only(check: &serde_json::Value) -> bool {
+    check["operator_only"].as_bool().unwrap_or(false)
 }
 
 fn summary_step<'a>(value: &'a serde_json::Value, key: &str, required: bool) -> Option<&'a str> {
@@ -62,6 +72,7 @@ fn step_from_checks(value: &serde_json::Value, required: bool) -> Option<&str> {
         .find(|check| {
             !check["ok"].as_bool().unwrap_or(false)
                 && check["required"].as_bool().unwrap_or(false) == required
+                && !is_operator_only(check)
         })
         .and_then(|check| check["fix"].as_str())
 }

@@ -118,7 +118,7 @@ fn vault_check(ctx: std::result::Result<&RepoContext, String>) -> DoctorCheck {
     })) {
         Ok(output) => {
             let initialized = output["exists"].as_bool().unwrap_or(false);
-            check(
+            let check = check(
                 "vault",
                 "Vault",
                 false,
@@ -130,8 +130,15 @@ fn vault_check(ctx: std::result::Result<&RepoContext, String>) -> DoctorCheck {
                 },
                 vault_detail(&output),
             )
-            .with_optional_fix((!initialized).then_some("Run `scripts/jig vault init`."))
-            .with_data(output)
+            .with_optional_fix((!initialized).then_some(VAULT_INIT_OPERATOR_FIX))
+            .with_data(output);
+            // `vault init` needs a human-chosen passphrase, so it must never
+            // become an agent-facing next step.
+            if initialized {
+                check
+            } else {
+                check.operator_only()
+            }
         }
         Err(error) => check("vault", "Vault", false, false, "error", error.to_string())
             .with_fix("Run `scripts/jig vault status` for vault diagnostics."),
@@ -152,11 +159,19 @@ fn vault_detail(output: &Value) -> String {
     detail
 }
 
+/// Remediation for an uninitialized vault. It is an operator step because the
+/// command prompts for a new passphrase that agents must never choose.
+const VAULT_INIT_OPERATOR_FIX: &str = "Operator step: run `scripts/jig vault init` in a terminal; it prompts for a new vault passphrase. Agents should ask the operator and never choose or handle the passphrase.";
+
 #[derive(Clone, Debug, Serialize)]
 struct DoctorCheck {
     id: String,
     label: String,
     required: bool,
+    /// Optional setup that only the operator can perform, such as choosing a
+    /// secret. Never promoted to `next_step`, `next_issue`, or
+    /// `optional_setup`; reported through top-level `operator_setup` instead.
+    operator_only: bool,
     ok: bool,
     status: String,
     detail: String,
@@ -176,6 +191,7 @@ fn check(
         id: id.to_string(),
         label: label.to_string(),
         required,
+        operator_only: false,
         ok,
         status: status.to_string(),
         detail: detail.into(),
@@ -192,6 +208,12 @@ impl DoctorCheck {
 
     fn with_optional_fix(mut self, fix: Option<&str>) -> Self {
         self.fix = fix.map(str::to_string);
+        self
+    }
+
+    fn operator_only(mut self) -> Self {
+        debug_assert!(!self.required, "operator-only doctor checks must be optional");
+        self.operator_only = true;
         self
     }
 

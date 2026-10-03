@@ -47,6 +47,7 @@
 - Preserve generated-repo compatibility for `.jig.toml`, `.agent/jig-contract.json`, and `.agent/state/*.jsonl`.
 - Treat `.agent/state/*.jsonl` as append-only unless a migration path is explicit.
 - Keep execution tools aligned with the generated contract manifest and template outputs.
+- Doctor checks whose remediation needs a human-chosen secret (`vault init`) are `operator_only`; never promote them into `next_step`, `next_issue`, `next_required_step`, or `optional_setup`. Report them through `operator_setup` instead.
 - Before changing bootstrap entrypoints, toolchain checks, or templates, read the [bootstrap guide](src/bootstrap/AGENTS.md).
 - Before changing vault entrypoints or dispatch, read the [vault runtime guide](src/runtime/vault/AGENTS.md).
 - Before changing process supervision or Bash probes, read the [process reference](../../docs/process-supervision.md) and [owned-process guide](../jig-owned-process/AGENTS.md).

@@ -247,7 +247,9 @@ marketplaces = []
     );
     assert_eq!(
         command_by_name(&output, "vault")["next_step"],
-        format!("Run `{launcher} vault init`.")
+        format!(
+            "Operator step: run `{launcher} vault init` in a terminal; it prompts for a new vault passphrase. Agents should ask the operator and never choose or handle the passphrase."
+        )
     );
     assert!(
         command_by_name(&output, "bootstrap")["next_step"]

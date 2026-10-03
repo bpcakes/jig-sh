@@ -484,7 +484,9 @@ fn vault_command(vault: VaultCapability, jig: &str) -> Value {
         );
     }
     if !vault.initialized {
-        let next_step = format!("Run `{jig} vault init`.");
+        let next_step = format!(
+            "Operator step: run `{jig} vault init` in a terminal; it prompts for a new vault passphrase. Agents should ask the operator and never choose or handle the passphrase."
+        );
         return command_value(
             root_commands::VAULT,
             "needs_setup",

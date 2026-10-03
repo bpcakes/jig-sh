@@ -50,6 +50,7 @@ include!("tests_parts/part_08.rs");
 include!("tests_parts/part_09.rs");
 
 mod argv;
+mod operator_setup;
 mod root;
 mod runtime;
 #[cfg(unix)]
