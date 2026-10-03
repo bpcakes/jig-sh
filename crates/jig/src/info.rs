@@ -130,6 +130,8 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             "vault_home": vault.home,
             "vault_scope": vault.scope,
             "vault_scope_id": vault.scope_id,
+            "vault_main_checkout_root": vault.main_checkout_root,
+            "vault_worktree_local": vault.worktree_local,
             "vault_error": vault.error,
         },
         "contract_tools": ctx.tool_specs().iter().map(|tool| {
@@ -171,6 +173,12 @@ struct VaultCapability {
     home: Option<String>,
     scope: Option<String>,
     scope_id: Option<String>,
+    /// Repository root in the main checkout whose repo-scoped vault a linked
+    /// Git worktree shares.
+    main_checkout_root: Option<String>,
+    /// Whether a linked Git worktree keeps the vault an earlier Jig version
+    /// created in its own namespace instead of sharing the main checkout's.
+    worktree_local: bool,
     error: Option<String>,
 }
 
@@ -185,6 +193,10 @@ fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
             home: output["vault_home"].as_str().map(str::to_string),
             scope: output["vault_scope"].as_str().map(str::to_string),
             scope_id: output["vault_scope_id"].as_str().map(str::to_string),
+            main_checkout_root: output["vault_main_checkout_root"]
+                .as_str()
+                .map(str::to_string),
+            worktree_local: output["vault_worktree_local"].as_bool().unwrap_or(false),
             error: None,
         },
         Err(error) => VaultCapability {
@@ -193,6 +205,8 @@ fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
+            worktree_local: false,
             error: Some(format!("{error:#}")),
         },
     }
@@ -285,6 +299,7 @@ mod tests {
         assert_eq!(capabilities["vault_home"], "/tmp/vault");
         assert_eq!(capabilities["vault_scope"], "repo");
         assert_eq!(capabilities["vault_scope_id"], "scope_1");
+        assert_eq!(capabilities["vault_main_checkout_root"], "/tmp/main");
     }
 
     fn assert_repo_integrations(output: &Value) {
@@ -309,6 +324,7 @@ mod tests {
         assert!(summary.contains(
             "Capabilities: SQLx, schema dumps, frontend apps, dev proxy, vault initialized"
         ));
+        assert!(summary.contains("Vault: shared with main checkout /tmp/main"));
     }
 
     #[test]
@@ -325,6 +341,8 @@ mod tests {
                 home: Some("/tmp/vault".into()),
                 scope: Some("repo".into()),
                 scope_id: Some("scope_1".into()),
+                main_checkout_root: Some("/tmp/main".into()),
+                worktree_local: false,
                 error: None,
             },
         );
@@ -349,6 +367,8 @@ mod tests {
                 home: Some("/tmp/vault".into()),
                 scope: Some("repo".into()),
                 scope_id: Some("scope_1".into()),
+                main_checkout_root: None,
+                worktree_local: false,
                 error: None,
             },
         );
@@ -357,8 +377,47 @@ mod tests {
         assert_eq!(output["capabilities"]["vault_available"], true);
         assert_eq!(output["capabilities"]["vault_initialized"], false);
         assert_eq!(output["capabilities"]["vault_home"], "/tmp/vault");
+        assert_eq!(
+            output["capabilities"]["vault_main_checkout_root"],
+            Value::Null
+        );
         let summary = format_summary(&output);
         assert!(summary.contains("vault available (not initialized)"));
+        assert!(!summary.contains("shared with main checkout"), "{summary}");
+        assert_eq!(output["capabilities"]["vault_worktree_local"], false);
+        assert!(!summary.contains("worktree-local"), "{summary}");
+    }
+
+    #[test]
+    fn reports_a_kept_worktree_local_vault() {
+        let temp = tempdir().unwrap();
+        write_info_fixture(temp.path());
+        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+
+        let output = repo_info_with_vault(
+            &ctx,
+            VaultCapability {
+                available: true,
+                initialized: true,
+                home: Some("/tmp/vault/scopes/repo-2".into()),
+                scope: Some("repo".into()),
+                scope_id: Some("scope_1".into()),
+                main_checkout_root: None,
+                worktree_local: true,
+                error: None,
+            },
+        );
+
+        assert_eq!(output["capabilities"]["vault_worktree_local"], true);
+        let summary = format_summary(&output);
+        assert!(
+            summary.contains("Vault: worktree-local, not shared with the main checkout"),
+            "{summary}"
+        );
+        assert!(
+            !summary.contains("shared with main checkout /"),
+            "{summary}"
+        );
     }
 
     #[test]
@@ -375,6 +434,8 @@ mod tests {
                 home: None,
                 scope: None,
                 scope_id: None,
+                main_checkout_root: None,
+                worktree_local: false,
                 error: Some("vault status failed".into()),
             },
         );

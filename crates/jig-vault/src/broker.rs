@@ -1,12 +1,13 @@
 use crate::Result;
 use crate::env_policy::{env_var_names_equal, is_preserved_env_var_name};
-use crate::types::{EnvVarName, SecretName};
+use crate::types::{EnvVarName, SecretName, VaultReference};
 
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct BrokeredEnv {
     var: EnvVarName,
     secret_name: SecretName,
+    reference: Option<VaultReference>,
 }
 
 impl BrokeredEnv {
@@ -26,29 +27,41 @@ impl BrokeredEnv {
                 ),
             ));
         }
-        Ok(Self { var, secret_name })
+        Ok(Self {
+            var,
+            secret_name,
+            reference: None,
+        })
     }
 
-    /// Parses a `VAR=SECRET_NAME` environment mapping.
+    /// Parses a `VAR=SECRET_NAME` or `VAR=jig://ITEM/FIELD` environment
+    /// mapping. A canonical reference resolves the same field key as the
+    /// legacy `ITEM/FIELD` secret name.
     ///
     /// # Errors
     ///
-    /// Returns an error when the mapping shape, environment variable, or secret
-    /// name is invalid, or the destination environment variable is preserved.
+    /// Returns an error when the mapping shape, environment variable, secret
+    /// name, or vault reference is invalid, or the destination environment
+    /// variable is preserved.
     pub fn parse(value: &str) -> Result<Self> {
-        let (var, secret_name) = value.split_once('=').ok_or_else(|| {
+        let (var, source) = value.split_once('=').ok_or_else(|| {
             crate::VaultError::new(
                 crate::VaultErrorKind::InvalidInput,
-                format!("vault env mapping '{value}' must have the form VAR=SECRET_NAME"),
+                format!(
+                    "vault env mapping '{value}' must have the form VAR=SECRET_NAME or VAR=jig://ITEM/FIELD"
+                ),
             )
         })?;
-        if var.is_empty() || secret_name.is_empty() {
+        if var.is_empty() || source.is_empty() {
             return Err(crate::VaultError::new(
                 crate::VaultErrorKind::InvalidInput,
                 format!("vault env mapping '{value}' must have non-empty VAR and SECRET_NAME"),
             ));
         }
-        Self::new(EnvVarName::parse(var)?, SecretName::parse(secret_name)?)
+        let (secret_name, reference) = parse_mapping_source("env", value, source)?;
+        let mut mapping = Self::new(EnvVarName::parse(var)?, secret_name)?;
+        mapping.reference = reference;
+        Ok(mapping)
     }
 
     pub const fn var(&self) -> &EnvVarName {
@@ -59,8 +72,8 @@ impl BrokeredEnv {
         &self.secret_name
     }
 
-    pub(crate) fn into_parts(self) -> (EnvVarName, SecretName) {
-        (self.var, self.secret_name)
+    pub(crate) fn into_parts(self) -> (EnvVarName, SecretName, Option<VaultReference>) {
+        (self.var, self.secret_name, self.reference)
     }
 }
 
@@ -69,6 +82,7 @@ impl BrokeredEnv {
 pub struct BrokeredFile {
     var: EnvVarName,
     secret_name: SecretName,
+    reference: Option<VaultReference>,
 }
 
 impl BrokeredFile {
@@ -102,22 +116,30 @@ impl BrokeredFile {
                     ),
                 ));
             }
-            Ok(Self { var, secret_name })
+            Ok(Self {
+                var,
+                secret_name,
+                reference: None,
+            })
         }
     }
 
-    /// Parses a `VAR=SECRET_NAME` temporary-file mapping.
+    /// Parses a `VAR=SECRET_NAME` or `VAR=jig://ITEM/FIELD` temporary-file
+    /// mapping. A canonical reference resolves the same field key as the
+    /// legacy `ITEM/FIELD` secret name.
     ///
     /// # Errors
     ///
-    /// Returns an error when the mapping shape, environment variable, or secret
-    /// name is invalid, the destination is preserved, or the platform cannot
-    /// provide owner-only temporary secret files.
+    /// Returns an error when the mapping shape, environment variable, secret
+    /// name, or vault reference is invalid, the destination is preserved, or
+    /// the platform cannot provide owner-only temporary secret files.
     pub fn parse(value: &str) -> Result<Self> {
-        let (var, secret_name) = value.split_once('=').ok_or_else(|| {
+        let (var, source) = value.split_once('=').ok_or_else(|| {
             crate::VaultError::new(
                 crate::VaultErrorKind::InvalidInput,
-                format!("vault file mapping '{value}' must have the form VAR=SECRET_NAME"),
+                format!(
+                    "vault file mapping '{value}' must have the form VAR=SECRET_NAME or VAR=jig://ITEM/FIELD"
+                ),
             )
         })?;
         if var.is_empty() {
@@ -126,13 +148,16 @@ impl BrokeredFile {
                 format!("vault file mapping '{value}' must have a non-empty VAR"),
             ));
         }
-        if secret_name.is_empty() {
+        if source.is_empty() {
             return Err(crate::VaultError::new(
                 crate::VaultErrorKind::InvalidInput,
                 format!("vault file mapping '{value}' must have a non-empty SECRET_NAME"),
             ));
         }
-        Self::new(EnvVarName::parse(var)?, SecretName::parse(secret_name)?)
+        let (secret_name, reference) = parse_mapping_source("file", value, source)?;
+        let mut mapping = Self::new(EnvVarName::parse(var)?, secret_name)?;
+        mapping.reference = reference;
+        Ok(mapping)
     }
 
     pub const fn var(&self) -> &EnvVarName {
@@ -143,9 +168,38 @@ impl BrokeredFile {
         &self.secret_name
     }
 
-    pub(crate) fn into_parts(self) -> (EnvVarName, SecretName) {
-        (self.var, self.secret_name)
+    pub(crate) fn into_parts(self) -> (EnvVarName, SecretName, Option<VaultReference>) {
+        (self.var, self.secret_name, self.reference)
     }
+}
+
+/// Parses the source half of a brokered mapping.
+///
+/// Legacy secret names cannot contain ':', so a case-insensitive `jig:` prefix
+/// unambiguously selects strict canonical reference parsing; `SecretName`
+/// itself stays strict. The reference maps through
+/// [`VaultReference::to_secret_name`] to the same key in version 1 and 2
+/// vaults, so resolution, scope selection, and audit details are unchanged.
+fn parse_mapping_source(
+    mapping_kind: &str,
+    mapping: &str,
+    source: &str,
+) -> Result<(SecretName, Option<VaultReference>)> {
+    let is_reference = source
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("jig:"));
+    if !is_reference {
+        return Ok((SecretName::parse(source)?, None));
+    }
+    let reference = VaultReference::parse(source).map_err(|error| {
+        crate::VaultError::new(
+            crate::VaultErrorKind::InvalidInput,
+            format!(
+                "vault {mapping_kind} mapping '{mapping}' has an invalid vault reference: {error}; use VAR=jig://ITEM/FIELD or a legacy VAR=SECRET_NAME"
+            ),
+        )
+    })?;
+    Ok((reference.to_secret_name(), Some(reference)))
 }
 
 #[non_exhaustive]
@@ -270,6 +324,77 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("unsupported characters"));
+    }
+
+    #[test]
+    fn brokered_env_accepts_canonical_reference_as_field_key() {
+        let mapping = BrokeredEnv::parse("TOKEN=jig://Production/TOKEN").unwrap();
+
+        assert_eq!(mapping.var().as_str(), "TOKEN");
+        assert_eq!(mapping.secret_name().as_str(), "Production/TOKEN");
+        let (_, _, reference) = mapping.into_parts();
+        assert_eq!(reference.unwrap().to_string(), "jig://Production/TOKEN");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn brokered_file_accepts_canonical_reference_as_field_key() {
+        let mapping = BrokeredFile::parse("TOKEN_FILE=jig://Production/TOKEN").unwrap();
+
+        assert_eq!(mapping.var().as_str(), "TOKEN_FILE");
+        assert_eq!(mapping.secret_name().as_str(), "Production/TOKEN");
+        let (_, _, reference) = mapping.into_parts();
+        assert_eq!(reference.unwrap().to_string(), "jig://Production/TOKEN");
+    }
+
+    #[test]
+    fn brokered_mappings_keep_legacy_names() {
+        for (value, name) in [
+            ("TOKEN=api_token", "api_token"),
+            ("TOKEN=Production/TOKEN", "Production/TOKEN"),
+        ] {
+            let mapping = BrokeredEnv::parse(value).unwrap();
+            assert_eq!(mapping.secret_name().as_str(), name);
+            let (_, _, reference) = mapping.into_parts();
+            assert!(reference.is_none());
+        }
+        let error = BrokeredEnv::parse("TOKEN=bad name")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unsupported characters"));
+    }
+
+    #[test]
+    fn brokered_mappings_reject_noncanonical_references() {
+        for source in [
+            "jig://Production",
+            "JIG://Production/TOKEN",
+            "jig://Production/TOKEN?x",
+            "jig://ExampleProject/Production/TOKEN",
+            "jig:Production/TOKEN",
+        ] {
+            let mut errors = vec![BrokeredEnv::parse(&format!("TOKEN={source}")).unwrap_err()];
+            #[cfg(unix)]
+            errors.push(BrokeredFile::parse(&format!("TOKEN_FILE={source}")).unwrap_err());
+            for error in errors {
+                assert_eq!(error.kind(), VaultErrorKind::InvalidInput, "{source}");
+                let message = error.to_string();
+                assert!(message.contains("invalid vault reference"), "{message}");
+                assert!(message.contains("VAR=jig://ITEM/FIELD"), "{message}");
+                assert!(!message.contains("unsupported characters;"), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn brokered_mapping_shape_errors_name_both_source_forms() {
+        let env = BrokeredEnv::parse("TOKEN").unwrap_err().to_string();
+        assert!(env.contains("VAR=SECRET_NAME or VAR=jig://ITEM/FIELD"));
+        #[cfg(unix)]
+        {
+            let file = BrokeredFile::parse("TOKEN_FILE").unwrap_err().to_string();
+            assert!(file.contains("VAR=SECRET_NAME or VAR=jig://ITEM/FIELD"));
+        }
     }
 
     #[test]

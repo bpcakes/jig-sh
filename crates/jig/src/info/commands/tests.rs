@@ -29,6 +29,8 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
             home: Some("/tmp/vault".into()),
             scope: Some("repo".into()),
             scope_id: Some("scope_1".into()),
+            main_checkout_root: None,
+            worktree_local: false,
             error: None,
         },
         &agent,
@@ -197,6 +199,8 @@ marketplaces = []
             home: Some("/tmp/vault".into()),
             scope: Some("repo".into()),
             scope_id: Some("scope_1".into()),
+            main_checkout_root: None,
+            worktree_local: false,
             error: None,
         },
         &agent,
@@ -247,7 +251,9 @@ marketplaces = []
     );
     assert_eq!(
         command_by_name(&output, "vault")["next_step"],
-        format!("Run `{launcher} vault init`.")
+        format!(
+            "Operator step: run `{launcher} vault init` in a terminal; it prompts for a new vault passphrase. Agents should ask the operator and never choose or handle the passphrase."
+        )
     );
     assert!(
         command_by_name(&output, "bootstrap")["next_step"]
@@ -276,6 +282,8 @@ enabled = false
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
+            worktree_local: false,
             error: None,
         },
         &agent,
@@ -297,6 +305,8 @@ fn command_inventory_without_repo_context_keeps_onboarding_commands_available() 
                 home: Some("/tmp/vault".into()),
                 scope: Some("legacy".into()),
                 scope_id: None,
+                main_checkout_root: None,
+                worktree_local: false,
                 error: None,
             },
             jig: "jig".into(),
@@ -429,6 +439,8 @@ fn tolerant_fallback_uses_recovered_context_only_for_tolerant_workflows() {
                 home: Some("/tmp/vault".into()),
                 scope: Some("repo".into()),
                 scope_id: Some("scope_1".into()),
+                main_checkout_root: None,
+                worktree_local: false,
                 error: None,
             },
             jig: command_prefix(&context),
@@ -465,6 +477,8 @@ fn context_free_inventory_prioritizes_compiled_dev_availability() {
                 home: None,
                 scope: None,
                 scope_id: None,
+                main_checkout_root: None,
+                worktree_local: false,
                 error: None,
             },
             jig: "jig".into(),
@@ -653,6 +667,8 @@ fn command_inventory_marks_dev_and_proxy_unavailable_without_feature() {
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
+            worktree_local: false,
             error: None,
         },
         &json!({ "ok": true }),
@@ -694,6 +710,8 @@ fn command_inventory_marks_indeterminate_local_capabilities_unavailable() {
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
+            worktree_local: false,
             error: Some("vault failed".into()),
         },
         &agent,

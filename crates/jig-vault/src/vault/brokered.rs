@@ -5,13 +5,13 @@ use super::OpenVault;
 use crate::audit::AuditAction;
 use crate::broker::BrokeredRun;
 use crate::error::{
-    ClassifiedVaultError, classified_kind, classify_source, vault_error_from_anyhow,
+    ClassifiedVaultError, classified, classified_kind, classify_source, vault_error_from_anyhow,
 };
 use crate::run::{
     ResolvedBrokeredEnv, ResolvedBrokeredFile, ResolvedBrokeredRun, RunOutput, run_brokered,
 };
 use crate::store::VaultStore;
-use crate::{Result, VaultError, VaultErrorKind};
+use crate::{Result, SecretBytes, SecretName, VaultError, VaultErrorKind, VaultReference};
 
 struct PreparedBrokeredRun {
     handle: BrokeredRunHandle,
@@ -179,19 +179,19 @@ fn resolve_brokered_run(vault: &OpenVault, request: BrokeredRun) -> AnyResult<Re
     let (command, env_mappings, file_mappings) = request.into_parts();
     let mut env = Vec::with_capacity(env_mappings.len());
     for mapping in env_mappings {
-        let (var, secret_name) = mapping.into_parts();
+        let (var, secret_name, reference) = mapping.into_parts();
         env.push(ResolvedBrokeredEnv {
             var,
-            value: vault.secret_value(&secret_name)?,
+            value: mapping_value(vault, &secret_name, reference.as_ref())?,
             secret_name,
         });
     }
     let mut files = Vec::with_capacity(file_mappings.len());
     for mapping in file_mappings {
-        let (var, secret_name) = mapping.into_parts();
+        let (var, secret_name, reference) = mapping.into_parts();
         files.push(ResolvedBrokeredFile {
             var,
-            value: vault.secret_value(&secret_name)?,
+            value: mapping_value(vault, &secret_name, reference.as_ref())?,
             secret_name,
         });
     }
@@ -200,4 +200,24 @@ fn resolve_brokered_run(vault: &OpenVault, request: BrokeredRun) -> AnyResult<Re
         env,
         files,
     })
+}
+
+/// Resolves one mapping, reporting a missing canonical reference in the
+/// `jig://ITEM/FIELD` spelling the caller used rather than its internal key.
+fn mapping_value(
+    vault: &OpenVault,
+    secret_name: &SecretName,
+    reference: Option<&VaultReference>,
+) -> AnyResult<SecretBytes> {
+    vault
+        .secret_value(secret_name)
+        .map_err(|error| match reference {
+            Some(reference) if classified_kind(&error) == Some(VaultErrorKind::NotFound) => {
+                classified(
+                    VaultErrorKind::NotFound,
+                    format!("vault field '{reference}' does not exist"),
+                )
+            }
+            _ => error,
+        })
 }

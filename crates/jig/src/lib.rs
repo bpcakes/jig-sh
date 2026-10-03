@@ -87,6 +87,12 @@ pub(crate) const CARGO_SKIP_OUTPUT_PREFIX: &str = "No Cargo.toml found; skipping
 
 /// Runs the Jig command-line interface.
 ///
+/// Call this before the process creates any threads. Right after parsing,
+/// commands that cannot capture the vault passphrase remove the reserved
+/// `JIG_VAULT_PASSPHRASE` and `JIG_VAULT_NEW_PASSPHRASE` variables from the
+/// process environment, and launcher handoffs set `JIG_REPO_ROOT`; those
+/// environment mutations are sound only while the process is single-threaded.
+///
 /// # Errors
 ///
 /// Returns an error when command parsing, repository loading, command

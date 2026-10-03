@@ -91,36 +91,37 @@ fn cli_generated_v1_fixture_opens_lists_and_maps_concealed_fields() {
 #[cfg(unix)]
 #[test]
 fn cli_generated_v1_fixture_runs_without_emitting_plaintext() {
-    let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    install_cli_generated_v1_fixture(&vault.store);
-    let passphrase = cli_generated_v1_fixture_passphrase();
-    let request = BrokeredRun::new(
-        vec![
-            "sh".into(),
-            "-c".into(),
-            "test \"$V1_FIXTURE_RESTIC_PASSWORD\" = \"v1-fixture-restic-password-6f2ab1\" && printf fixture-v1-run-ok".into(),
-        ],
-        vec![
-            BrokeredEnv::parse(
-                "V1_FIXTURE_RESTIC_PASSWORD=Production/RESTIC_PASSWORD",
-            )
-            .unwrap(),
-        ],
-    )
-    .unwrap();
+    // The canonical reference resolves the same legacy map key as the name.
+    for mapping in [
+        "V1_FIXTURE_RESTIC_PASSWORD=Production/RESTIC_PASSWORD",
+        "V1_FIXTURE_RESTIC_PASSWORD=jig://Production/RESTIC_PASSWORD",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+        install_cli_generated_v1_fixture(&vault.store);
+        let passphrase = cli_generated_v1_fixture_passphrase();
+        let request = BrokeredRun::new(
+            vec![
+                "sh".into(),
+                "-c".into(),
+                "test \"$V1_FIXTURE_RESTIC_PASSWORD\" = \"v1-fixture-restic-password-6f2ab1\" && printf fixture-v1-run-ok".into(),
+            ],
+            vec![BrokeredEnv::parse(mapping).unwrap()],
+        )
+        .unwrap();
 
-    let output = vault.run_brokered(&passphrase, request).unwrap();
-    assert_eq!(output.exit_status, 0);
-    assert_eq!(output.exit_signal, None);
-    assert_eq!(output.stdout, "fixture-v1-run-ok");
-    assert!(output.stderr.is_empty());
-    assert!(!output.stdout.contains("v1-fixture-restic-password-6f2ab1"));
-    assert!(!output.stderr.contains("v1-fixture-restic-password-6f2ab1"));
+        let output = vault.run_brokered(&passphrase, request).unwrap();
+        assert_eq!(output.exit_status, 0, "{mapping}");
+        assert_eq!(output.exit_signal, None);
+        assert_eq!(output.stdout, "fixture-v1-run-ok");
+        assert!(output.stderr.is_empty());
+        assert!(!output.stdout.contains("v1-fixture-restic-password-6f2ab1"));
+        assert!(!output.stderr.contains("v1-fixture-restic-password-6f2ab1"));
 
-    let audit = vault.verify_audit(&passphrase).unwrap();
-    assert_eq!(audit.event_count, 4);
-    assert_eq!(audit.torn_tail_bytes, 0);
+        let audit = vault.verify_audit(&passphrase).unwrap();
+        assert_eq!(audit.event_count, 4);
+        assert_eq!(audit.torn_tail_bytes, 0);
+    }
 }
 
 #[cfg(unix)]

@@ -260,10 +260,30 @@ fn vault_help_includes_quick_start_examples() {
         "jig vault backup restore --in ../ExampleProject-vault.backup",
     );
     assert_help_contains(&vault_help, "jig vault secret set api_token --value-prompt");
+    assert_help_contains(
+        &vault_help,
+        "jig vault run --env TOKEN=jig://Production/TOKEN -- command",
+    );
+    assert_help_contains(
+        &vault_help,
+        "vault run broker redacts every injected value of at least 4 bytes",
+    );
+
+    assert_help_contains(
+        &vault_help,
+        "operator to run passphrase-requiring commands in a terminal",
+    );
+    assert_help_omits(&vault_help, "scripts can set");
 
     let vault_init_help = rendered_help(&["vault", "init"]);
     assert_help_contains(&vault_init_help, "prompts twice for a new vault passphrase");
+    assert_help_contains(&vault_init_help, "operator chooses and enters it");
+    assert_help_contains(
+        &vault_init_help,
+        "Agents must ask the operator to run this command in a terminal",
+    );
     assert_help_contains(&vault_init_help, "jig vault init");
+    assert_help_omits(&vault_init_help, "export JIG_VAULT_PASSPHRASE");
 
     let vault_tui_help = rendered_help(&["vault", "tui"]);
     assert_help_contains(&vault_tui_help, "keyboard-first full-screen vault manager");
@@ -312,6 +332,7 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_exec_help, "Single quotes preserve");
     assert_help_contains(&vault_exec_help, "Within env-file values");
     assert_help_contains(&vault_exec_help, "older vault run command");
+    assert_help_contains(&vault_exec_help, "or jig:// references into a cleaned");
     assert_help_contains(&vault_exec_help, "Exec is transparent, not a sandbox");
     assert_help_contains(&vault_exec_help, "must follow --");
 
@@ -328,6 +349,10 @@ fn vault_help_includes_quick_start_examples() {
     let vault_passphrase_help = rendered_help(&["vault", "passphrase", "change"]);
     assert_help_contains(&vault_passphrase_help, "JIG_VAULT_PASSPHRASE");
     assert_help_contains(&vault_passphrase_help, "JIG_VAULT_NEW_PASSPHRASE");
+    assert_help_contains(
+        &vault_passphrase_help,
+        "never set either variable themselves",
+    );
     assert_help_contains(
         &vault_passphrase_help,
         "never accepted as command-line arguments",
@@ -362,6 +387,15 @@ fn vault_help_includes_quick_start_examples() {
     let vault_run_help = rendered_help(&["vault", "run"]);
     assert_help_contains(&vault_run_help, "--file");
     assert_help_contains(&vault_run_help, "jig vault run --file TOKEN_FILE=api_token");
+    assert_help_contains(&vault_run_help, "VAR=SECRET_NAME or VAR=jig://ITEM/FIELD");
+    assert_help_contains(
+        &vault_run_help,
+        "jig vault run --env TOKEN=jig://Production/TOKEN",
+    );
+    assert_help_contains(
+        &vault_run_help,
+        "every injected value of at least 4 bytes is masked",
+    );
 }
 
 #[test]

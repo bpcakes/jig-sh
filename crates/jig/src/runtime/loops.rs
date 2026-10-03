@@ -10,7 +10,6 @@ mod codex_task;
 mod dashboard;
 mod engine;
 mod evidence;
-mod git_path;
 mod github;
 mod managed_path;
 mod noop;

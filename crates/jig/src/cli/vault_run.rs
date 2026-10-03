@@ -1,7 +1,7 @@
 use std::io::IsTerminal;
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use super::output::{HumanOutput, emit};
 use super::run::finish_after_json_output;
@@ -54,6 +54,7 @@ fn run_vault_command_with_terminal_state(
         runtime::prepare_vault_raw_input(&mut runtime_command)?;
     }
     apply_repo_vault_scope(&mut runtime_command)?;
+    runtime::preflight_vault_scope(vault_options_mut(&mut runtime_command))?;
     runtime::preflight_scoped_vault_command(&mut runtime_command)?;
     if let crate::command::VaultCommand::Tui(request) = runtime_command {
         let initial_passphrase = runtime::take_optional_vault_tui_passphrase()?;
@@ -230,13 +231,21 @@ const fn vault_command_requires_passphrase(command: &crate::command::VaultComman
     )
 }
 
+/// Context for a discovered repository configuration that fails to load.
+/// Agents act on error text, so it must not suggest deleting configuration or
+/// writing harness files, routes `--home` to the operator as the generated
+/// Vault rules do, and stays value-free; the load error follows it.
+const VAULT_REPO_CONTEXT_HINT: &str = "Vault scope selection could not load the Jig repository configuration found in this directory or a parent. Do not delete or bypass an existing repository's configuration; fix the reported problem (for example by updating Jig) or ask the operator. Placeholder harness files created only to reach the vault are unsupported. Outside a Jig repository, `jig vault` uses the user-level vault. Selecting a vault directory with `--home DIR` (a private directory outside any repository) is an operator diagnostic step; agents must ask the operator instead of passing it. Reported problem";
+
 pub(super) fn apply_repo_vault_scope(command: &mut crate::command::VaultCommand) -> Result<()> {
     let options = vault_options_mut(command);
     if options.home.is_some() {
         return Ok(());
     }
 
-    let Some(ctx) = RepoContext::load_optional()? else {
+    // Fail closed: a configuration that exists but cannot load must never
+    // fall back to the user-level vault or bypass `allow_global`.
+    let Some(ctx) = RepoContext::load_optional().context(VAULT_REPO_CONTEXT_HINT)? else {
         return Ok(());
     };
     let vault = ctx.vault_config();
@@ -313,3 +322,7 @@ pub(super) fn apply_repo_vault_scope_to_options(
 #[cfg(test)]
 #[path = "vault_run_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "vault_run_context_tests.rs"]
+mod context_tests;

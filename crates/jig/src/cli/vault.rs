@@ -7,23 +7,30 @@ use jig_vault::{VaultItem, VaultReference};
 use crate::tool_defs;
 
 const VAULT_RUN_AFTER_HELP: &str = "\
-The brokered command must come after --. Secrets are resolved from the local
-vault and injected only into the child process environment. File delivery is
-Unix-only because Jig requires 0600 secret-file permissions. Output is buffered,
-then redacted. Stdout and stderr are capped at 1 MiB each; brokered runs have a
-30-minute timeout.
+The brokered command must come after --. Each mapping source is a legacy secret
+name or a canonical jig://ITEM/FIELD reference in the selected vault; both
+spellings resolve the same field. Secrets are resolved from the local vault and
+injected only into the child process environment. File delivery is Unix-only
+because Jig requires 0600 secret-file permissions. Output is buffered, then
+redacted: every injected value of at least 4 bytes is masked, text fields
+included; use vault exec when contextual text should stay visible. Stdout and
+stderr are capped at 1 MiB each; brokered runs have a 30-minute timeout.
 
 Examples:
+  jig vault run --env TOKEN=jig://Production/TOKEN -- sh -c 'printf \"%s\" \"$TOKEN\"'
   jig vault run --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'
   jig vault run --file TOKEN_FILE=api_token -- sh -c 'cat \"$TOKEN_FILE\"'
   jig vault run --json --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'";
 
 const VAULT_INIT_AFTER_HELP: &str = "\
-Jig prompts twice for a new vault passphrase when run from a terminal. Scripts
-can set JIG_VAULT_PASSPHRASE instead. Command-line passphrases are not accepted.
+Jig prompts twice for a new vault passphrase when run from a terminal; the
+operator chooses and enters it. Automation the operator runs outside any agent
+session can provide JIG_VAULT_PASSPHRASE instead. Command-line passphrases are
+not accepted. Agents must ask the operator to run this command in a terminal
+and must never request, print, store, or choose the passphrase, or set
+JIG_VAULT_PASSPHRASE themselves.
 
-Examples:
-  export JIG_VAULT_PASSPHRASE='choose-a-long-local-passphrase'
+Example:
   jig vault init";
 
 const VAULT_SECRET_SET_AFTER_HELP: &str = "\
@@ -43,7 +50,8 @@ same behavior, or --value-stdin for automation. Stdin must be piped or
 redirected and is read byte-for-byte; use printf instead of echo when a
 trailing newline is not part of the field value. Fields are encrypted whether
 they are concealed or text; --text only prevents a contextual value from being
-used as an output-redaction needle.
+used as an output-redaction needle by vault exec. The compatible vault run
+broker still masks every injected value of at least 4 bytes.
 
 Examples:
   jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt
@@ -106,9 +114,10 @@ bind a vault field.
 and other special files are rejected before passphrase capture.
 
 Unlike exec, the older vault run command injects selected legacy secret names
-into a cleaned, closed-stdin child with buffered/capped output, a timeout, and
-owned process-tree cleanup. Exec is transparent, not a sandbox or a substitute
-for run's constrained agent boundary.
+or jig:// references into a cleaned, closed-stdin child with buffered/capped
+output, a timeout, and owned process-tree cleanup.
+Exec is transparent, not a sandbox or a substitute for run's constrained
+broker.
 
 Example:
   jig vault exec --env-file .env.jig -- sh -c 'printf \"%s\" \"$TOKEN\"'";
@@ -137,9 +146,11 @@ currently Unix-only.";
 const VAULT_PASSPHRASE_CHANGE_AFTER_HELP: &str = "\
 Reseals the complete version 2 vault under a new passphrase without changing
 its fields, identity, or timestamps. Interactive use prompts once for the
-current passphrase and twice for the new passphrase. Non-interactive use must
-set both JIG_VAULT_PASSPHRASE and JIG_VAULT_NEW_PASSPHRASE. Passphrases are
-never accepted as command-line arguments.
+current passphrase and twice for the new passphrase. Without a terminal,
+automation the operator runs outside any agent session must provide both
+JIG_VAULT_PASSPHRASE and JIG_VAULT_NEW_PASSPHRASE; agents must ask the operator
+to run this command in a terminal and never set either variable themselves.
+Passphrases are never accepted as command-line arguments.
 
 Example:
   jig vault passphrase change";
@@ -645,12 +656,12 @@ impl std::fmt::Debug for VaultExecOpts {
 pub(crate) struct VaultRunOpts {
     #[arg(
         long = "env",
-        help = "Environment mapping VAR=SECRET_NAME; VAR must match [A-Za-z_][A-Za-z0-9_]* and must not be a preserved process variable such as PATH or HOME; may be repeated"
+        help = "Environment mapping VAR=SECRET_NAME or VAR=jig://ITEM/FIELD; VAR must match [A-Za-z_][A-Za-z0-9_]* and must not be a preserved process variable such as PATH or HOME; may be repeated"
     )]
     pub(crate) env: Vec<String>,
     #[arg(
         long = "file",
-        help = "File mapping VAR=SECRET_NAME; writes the secret to a private temp file (0600 on Unix) and injects its path as VAR; may be repeated"
+        help = "File mapping VAR=SECRET_NAME or VAR=jig://ITEM/FIELD; writes the secret to a private temp file (0600 on Unix) and injects its path as VAR; may be repeated"
     )]
     pub(crate) files: Vec<String>,
     #[command(flatten)]

@@ -10,6 +10,7 @@
 - `src/lib.rs`: library entrypoint and module wiring.
 - `src/cli.rs`: clap command definitions and top-level command dispatch.
 - `src/cli/run/dev_launch.rs`: private dev-worker CLI handoff; its worker owns the existing dev lifecycle and output.
+- `src/cli/run/vault_environment.rs`: CLI-startup boundary that withholds the reserved vault passphrase variables from commands that cannot capture them.
 - `src/runtime.rs`: command-backed tool execution.
 - `src/state.rs`: run history under `.agent/state`, with its diagnosis, archive, and restore maintenance.
 - `src/runtime/loops/evidence.rs`: per-occurrence loop evidence recorded under Git metadata; `src/runtime/loops/show.rs` reports it for `jig loop show`.
@@ -23,6 +24,7 @@
 ## Edit here for X
 
 - Change CLI flags or subcommands: `src/cli.rs`.
+- Change which commands may keep the reserved vault passphrase variables past startup: `src/cli/run/vault_environment.rs` (read the vault runtime guide first).
 - Add an agent provider: `src/agent_provider.rs` defines the internal contract; `src/claude/provider.rs` and `src/codex/provider.rs` are implementations. Keep home identity and credential policy provider-owned; `src/cli/agent_run.rs` owns common homes/launch orchestration. See [agent providers](../../docs/agent-providers.md).
 - Change shared Claude/Codex path primitives: `src/home_paths.rs`; keep discovery and default-home policy in the provider modules.
 - Change Claude credential lookup and read-only subscription usage: `src/claude/usage/`; keep secrets, HTTP, and platform storage out of the TUI and output renderers.
@@ -47,8 +49,10 @@
 - Preserve generated-repo compatibility for `.jig.toml`, `.agent/jig-contract.json`, and `.agent/state/*.jsonl`.
 - Treat `.agent/state/*.jsonl` as append-only unless a migration path is explicit.
 - Keep execution tools aligned with the generated contract manifest and template outputs.
+- Doctor checks whose remediation needs a human-chosen secret (`vault init`) are `operator_only`; never promote them into `next_step`, `next_issue`, `next_required_step`, or `optional_setup`. Report them through `operator_setup` instead.
 - Before changing bootstrap entrypoints, toolchain checks, or templates, read the [bootstrap guide](src/bootstrap/AGENTS.md).
 - Before changing vault entrypoints or dispatch, read the [vault runtime guide](src/runtime/vault/AGENTS.md).
+- New top-level commands must choose a branch in the exhaustive `CommandKind::may_capture_vault_passphrase` match; commands that never unlock the vault withhold the passphrase. Do not add per-spawn passphrase plumbing.
 - Before changing process supervision or Bash probes, read the [process reference](../../docs/process-supervision.md) and [owned-process guide](../jig-owned-process/AGENTS.md).
 - Use `scripts/jig` with the repository's selected release for routine checks. Validate edited runtime behavior with `scripts/jig-dev ...`, which incrementally builds the current source before invoking the launcher. `repo:source-runtime-check` is available for current-source contract validation; select checks for the affected behavior.
 

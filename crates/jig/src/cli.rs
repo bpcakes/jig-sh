@@ -203,10 +203,13 @@ const VAULT_AFTER_HELP: &str = "\
 Jig Vault stores encrypted project fields outside the repository. References
 are project-relative: jig://Production/TOKEN selects the current repo-scoped,
 global, or explicit-home vault; the project name is never a reference segment.
-Both concealed and text fields are encrypted. Concealed fields are redaction
-needles, while text fields remain visible when deliberately passed to a command.
-Terminal use prompts for the vault passphrase; scripts can set
-JIG_VAULT_PASSPHRASE. Command-line passphrases are not accepted.
+Both concealed and text fields are encrypted. vault exec redacts only concealed
+fields, so text stays visible when deliberately passed to a command; the
+compatible vault run broker redacts every injected value of at least 4 bytes.
+Terminal use prompts for the vault passphrase; automation the operator runs
+outside any agent session can provide JIG_VAULT_PASSPHRASE. Agents must ask the
+operator to run passphrase-requiring commands in a terminal and must never
+request, choose, or set the passphrase. Command-line passphrases are not accepted.
 
 Quick start:
   jig vault init
@@ -224,6 +227,7 @@ Quick start:
 
 Compatibility commands (concealed fields and constrained execution):
   jig vault secret set api_token --value-prompt
+  jig vault run --env TOKEN=jig://Production/TOKEN -- command
   jig vault run --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'
   jig vault run --file TOKEN_FILE=api_token -- sh -c 'cat \"$TOKEN_FILE\"'";
 

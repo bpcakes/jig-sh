@@ -77,6 +77,8 @@ pub(super) fn ready_local_inventory(ctx: &RepoContext) -> Value {
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
+            worktree_local: false,
             error: None,
         },
         &json!({ "ok": true }),

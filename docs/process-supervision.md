@@ -8,4 +8,4 @@ Unix doctor signal sessions are serialized and reusable only after clean retirem
 
 ## Bash probe environment
 
-Jig-owned Bash probes such as dependency readiness, Codex capability checks, and launcher-backed doctor diagnostics must remove startup, directory, option, trace, and byte-exact exported-function controls. Do not apply that constrained environment to agent bootstrap, committed checks, or configured development commands, which intentionally inherit the caller's ordinary environment.
+Jig-owned Bash probes such as dependency readiness, Codex capability checks, and launcher-backed doctor diagnostics must remove startup, directory, option, trace, and byte-exact exported-function controls. Do not apply that constrained environment to agent bootstrap, committed checks, or configured development commands, which intentionally inherit the caller's ordinary environment. That ordinary environment never contains `JIG_VAULT_PASSPHRASE` or `JIG_VAULT_NEW_PASSPHRASE`: every non-vault command removes both at CLI startup (see [passphrase withholding](configuration.md#passphrase-withholding)).

@@ -1,17 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
-use cap_std::{
-    ambient_authority,
-    fs::{Dir, OpenOptions},
-};
+use cap_std::{ambient_authority, fs::Dir};
 use jig_owned_process::ProcessOutputOverflowPolicy;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -22,12 +17,15 @@ use crate::execution::{
     AdditionalCancellationControl, ExecutionCommandError, ExecutionControl, NoopExecutionObserver,
     run_authoritative_execution_command,
 };
+use crate::runtime::git_path::{
+    MAX_GIT_POINTER_BYTES, parse_gitdir_pointer, path_from_git_bytes, read_nofollow_regular_file,
+    trim_ascii_line,
+};
 use crate::runtime::worker_runner::{
     CodexExecFailure, CodexExecOutcome, CodexExecRequest, WorkerRunLabel, run_codex_exec,
 };
 use crate::state::now_ms;
 
-use super::git_path::{path_from_git_bytes, trim_ascii_line};
 use super::github;
 use super::managed_path::{ensure_managed_directory, inspect_managed_directory};
 use super::occurrence::{OccurrenceWorktreeReservation, encode_worktree_path};

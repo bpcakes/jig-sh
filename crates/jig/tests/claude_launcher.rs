@@ -237,7 +237,7 @@ fn launch_preserves_argv_environment_streams_cwd_and_exit_status() {
     fs::create_dir(root.join(".claude-work")).unwrap();
     let stub = executable(
         root.join("claude-stub"),
-        "#!/bin/sh\nprintf '%s\\n' \"$CLAUDE_CONFIG_DIR\" \"$JIG_TEST_PRESERVED\"\npwd -P\nprintf '<%s>\\n' \"$@\"\ncat\nprintf 'child stderr' >&2\nexit 37\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$CLAUDE_CONFIG_DIR\" \"$JIG_TEST_PRESERVED\" \"${JIG_VAULT_PASSPHRASE+leaked}${JIG_VAULT_NEW_PASSPHRASE+leaked}\" \"${JIG_VAULT_PASSPHRASE_WITHHELD-}\"\npwd -P\nprintf '<%s>\\n' \"$@\"\ncat\nprintf 'child stderr' >&2\nexit 37\n",
     );
     let mut child = jig(root)
         .args([
@@ -254,6 +254,8 @@ fn launch_preserves_argv_environment_streams_cwd_and_exit_status() {
         .env("JIG_CLAUDE_BIN", stub)
         .env("CLAUDE_CONFIG_DIR", "/unused/ambient")
         .env("JIG_TEST_PRESERVED", "preserved")
+        .env("JIG_VAULT_PASSPHRASE", "test-only-reserved-current")
+        .env("JIG_VAULT_NEW_PASSPHRASE", "test-only-reserved-new")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -269,7 +271,7 @@ fn launch_preserves_argv_environment_streams_cwd_and_exit_status() {
     assert_eq!(output.status.code(), Some(37));
     assert_eq!(output.stderr, b"child stderr");
     let expected = format!(
-        "{}\npreserved\n{}\n<--model>\n<two words>\n<$(touch forbidden)>\n<>\n<--json>\nchild stdin\n",
+        "{}\npreserved\n\n1\n{}\n<--model>\n<two words>\n<$(touch forbidden)>\n<>\n<--json>\nchild stdin\n",
         root.join(".claude-work").canonicalize().unwrap().display(),
         root.canonicalize().unwrap().display()
     );

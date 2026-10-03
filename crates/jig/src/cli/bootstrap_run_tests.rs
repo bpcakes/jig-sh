@@ -69,16 +69,23 @@ fn noninteractive_init_vault_error_names_init_and_its_escape_hatches() {
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("JIG_VAULT_PASSPHRASE is required"));
-    assert!(error.contains("`jig init`"));
+    assert!(error.contains("`jig init` cannot prompt for an initial vault passphrase"));
+    assert!(error.contains("not running from a terminal"));
+    assert!(!error.contains("--no-input"));
     assert!(error.contains("--no-vault"));
-    assert!(error.contains("export JIG_VAULT_PASSPHRASE"));
+    assert!(error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
+    assert!(!error.contains("export "));
 
     let no_input_error =
         BootstrapVaultPlan::resolve(Initialize, NoInput, Prompt, BootstrapVaultCommand::Adopt)
             .unwrap_err()
             .to_string();
     assert!(no_input_error.contains("`jig adopt --write`"));
+    assert!(no_input_error.contains("the exact command must omit --no-input"));
+    assert!(!no_input_error.contains("not running from a terminal"));
+    assert!(no_input_error.contains("--no-vault"));
+    assert!(no_input_error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
+    assert!(!no_input_error.contains("export "));
 }
 
 #[test]
@@ -186,6 +193,68 @@ fn invalid_go_module_fails_before_vault_capture_or_destination_writes() {
         assert!(!error.contains("JIG_VAULT_PASSPHRASE"));
         assert!(!destination.exists());
     }
+}
+
+#[test]
+fn prepare_bootstrap_vault_leaves_no_reserved_variables_before_rendering() {
+    use BootstrapPassphraseAvailability::{Prompt, Unavailable};
+    use BootstrapVaultIntent::{Disabled, Initialize};
+
+    let _env = lock_env();
+    let _current = EnvVarGuard::remove("JIG_VAULT_PASSPHRASE");
+    // Neither plan reads a stale rotation value, so nothing is captured.
+    for (intent, mode, availability, expected) in [
+        (
+            Disabled,
+            BootstrapInputMode::NoInput,
+            Unavailable,
+            BootstrapVaultPlan::Disabled,
+        ),
+        (
+            Initialize,
+            BootstrapInputMode::Interactive,
+            Prompt,
+            BootstrapVaultPlan::CaptureAfterRender,
+        ),
+    ] {
+        let _new = EnvVarGuard::set("JIG_VAULT_NEW_PASSPHRASE", "test-only-reserved-new");
+
+        let plan = prepare_bootstrap_vault_with_availability(
+            intent,
+            mode,
+            availability,
+            BootstrapVaultCommand::Init,
+        )
+        .unwrap();
+
+        assert_eq!(plan, expected);
+        assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
+        assert!(std::env::var_os("JIG_VAULT_NEW_PASSPHRASE").is_none());
+    }
+}
+
+#[test]
+fn noninteractive_bootstrap_vault_error_explains_an_outer_withheld_passphrase() {
+    let _env = lock_env();
+    let _current = EnvVarGuard::remove("JIG_VAULT_PASSPHRASE");
+    let _new = EnvVarGuard::remove("JIG_VAULT_NEW_PASSPHRASE");
+    let _marker = EnvVarGuard::set(runtime::VAULT_PASSPHRASE_WITHHELD_ENV, "1");
+
+    let error = BootstrapVaultPlan::resolve(
+        BootstrapVaultIntent::Initialize,
+        BootstrapInputMode::NoInput,
+        BootstrapPassphraseAvailability::Unavailable,
+        BootstrapVaultCommand::Adopt,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("`jig adopt --write`"), "{error}");
+    assert!(
+        error.contains("outer Jig command withheld the vault passphrase"),
+        "{error}"
+    );
+    assert!(error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
 }
 
 #[test]

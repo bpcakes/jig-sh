@@ -10,8 +10,10 @@ const MAX_VAULT_REFERENCE_SEGMENT_LEN: usize = 64;
 /// Handling policy for an encrypted vault field.
 ///
 /// Both variants are encrypted at rest. `Concealed` values participate in
-/// output redaction; `Text` values remain encrypted but do not become
-/// redaction needles for ordinary command output.
+/// kind-aware output redaction such as transparent exec; `Text` values remain
+/// encrypted but do not become redaction needles there. The compatible
+/// brokered run is kind-agnostic and redacts every injected value of at least
+/// 4 bytes, text included.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldKind {

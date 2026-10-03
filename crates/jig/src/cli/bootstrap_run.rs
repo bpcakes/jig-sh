@@ -13,7 +13,7 @@ pub(super) fn run_init_command(mut opts: bootstrap::InitOpts, json_output: bool)
     let prepared_answers = prepare_init_interaction(&mut opts)?;
     preflight_init_package_manager(&opts)?;
     let vault_setup = prepare_bootstrap_vault(
-        BootstrapVaultIntent::from_requested(!opts.no_vault),
+        BootstrapVaultIntent::from_requested(init_requests_vault_setup(&opts)),
         BootstrapInputMode::from_flags(opts.no_input, opts.defaults),
         BootstrapVaultCommand::Init,
     )?;
@@ -38,7 +38,7 @@ pub(super) fn run_presets_command(json_output: bool) -> Result<()> {
 
 pub(super) fn run_adopt_command(opts: bootstrap::AdoptOpts, json_output: bool) -> Result<()> {
     let vault_setup = prepare_bootstrap_vault(
-        BootstrapVaultIntent::from_requested(opts.write && !opts.no_vault),
+        BootstrapVaultIntent::from_requested(adopt_requests_vault_setup(&opts)),
         BootstrapInputMode::from_flags(opts.no_input, opts.defaults),
         BootstrapVaultCommand::Adopt,
     )?;
@@ -62,6 +62,18 @@ pub(super) fn run_update_command(opts: bootstrap::UpdateOpts, json_output: bool)
     } else {
         print_human_summary(format_update_human_summary(&output))
     }
+}
+
+/// `jig init` sets up the vault, and may capture its passphrase, unless
+/// `--no-vault` opts out. The CLI startup boundary shares this predicate.
+pub(super) const fn init_requests_vault_setup(opts: &bootstrap::InitOpts) -> bool {
+    !opts.no_vault
+}
+
+/// `jig adopt` sets up the vault only when `--write` renders files without
+/// `--no-vault`. The CLI startup boundary shares this predicate.
+pub(super) const fn adopt_requests_vault_setup(opts: &bootstrap::AdoptOpts) -> bool {
+    opts.write && !opts.no_vault
 }
 
 fn attach_bootstrap_vault(
@@ -161,10 +173,24 @@ fn prepare_bootstrap_vault(
         runtime::vault_passphrase_env_present(),
         runtime::vault_passphrase_prompt_available(),
     );
+    prepare_bootstrap_vault_with_availability(intent, input_mode, availability, command)
+}
+
+fn prepare_bootstrap_vault_with_availability(
+    intent: BootstrapVaultIntent,
+    input_mode: BootstrapInputMode,
+    availability: BootstrapPassphraseAvailability,
+    command: BootstrapVaultCommand,
+) -> Result<BootstrapVaultPlan> {
     let plan = BootstrapVaultPlan::resolve(intent, input_mode, availability, command)?;
     if plan == BootstrapVaultPlan::PreCaptured {
         runtime::capture_new_vault_passphrase()?;
     }
+    // Rendering, Git, and template commands run next. Pre-capture already
+    // consumed the passphrase; also drop a stale JIG_VAULT_NEW_PASSPHRASE that
+    // `CaptureAfterRender` never reads, so no render child inherits it. Like
+    // capture, this runs before Jig starts background threads.
+    runtime::strip_vault_passphrase_environment();
     Ok(plan)
 }
 
@@ -182,8 +208,16 @@ impl BootstrapVaultPlan {
             || (input_mode == BootstrapInputMode::NoInput
                 && availability != BootstrapPassphraseAvailability::Environment)
         {
+            // `--no-input` never prompts, even from a terminal, so only that
+            // mode tells the operator to drop the flag.
+            let reason = if input_mode == BootstrapInputMode::NoInput {
+                "with --no-input; for a terminal prompt, the exact command must omit --no-input"
+            } else {
+                "because it is not running from a terminal"
+            };
+            let guidance = runtime::vault_passphrase_operator_guidance();
             anyhow::bail!(
-                "JIG_VAULT_PASSPHRASE is required because `{}` cannot prompt for an initial vault passphrase in non-interactive mode; pass --no-vault to skip initial vault setup, or export JIG_VAULT_PASSPHRASE",
+                "`{}` cannot prompt for an initial vault passphrase {reason}. Pass --no-vault to skip initial vault setup; the operator can run `jig vault init` in a terminal later. {guidance}",
                 command.invocation()
             );
         }

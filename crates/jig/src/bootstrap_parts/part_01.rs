@@ -160,7 +160,7 @@ pub struct AdoptOpts {
     pub defaults: bool,
     #[arg(
         long,
-        help = "Fail instead of prompting for missing answers and skip adopt write confirmation; vault setup requires JIG_VAULT_PASSPHRASE or --no-vault"
+        help = "Fail instead of prompting for missing answers and skip adopt write confirmation; vault setup requires --no-vault or an operator-provided JIG_VAULT_PASSPHRASE"
     )]
     pub no_input: bool,
     #[arg(

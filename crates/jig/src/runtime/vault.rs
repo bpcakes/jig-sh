@@ -1,6 +1,4 @@
 use std::io::{ErrorKind, IsTerminal, Read};
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -9,14 +7,13 @@ use jig_vault::{
     InjectionTemplate, MAX_SECRET_VALUE_LEN, PreparedPrivateFile, SecretBytes, Vault, VaultExec,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::command::{
     VaultAuditCommand, VaultBackupCommand, VaultCommand, VaultExecRequest, VaultExecValue,
     VaultFieldCommand, VaultFieldListRequest, VaultFieldRemoveRequest, VaultFieldSetRequest,
     VaultImportCommand, VaultImportOnePasswordRequest, VaultInitRequest, VaultInjectRequest,
-    VaultMigrateRequest, VaultPassphraseCommand, VaultReadRequest, VaultRepoScope, VaultRunRequest,
+    VaultMigrateRequest, VaultPassphraseCommand, VaultReadRequest, VaultRunRequest,
     VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest,
     VaultSecretRemoveRequest, VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest,
 };
@@ -27,6 +24,7 @@ const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
 const VAULT_FILE_NAME: &str = "vault.json";
 
 mod lifecycle;
+mod scope;
 pub(super) mod tui;
 
 #[cfg(test)]
@@ -40,6 +38,7 @@ use lifecycle::{
     change_passphrase, create_backup, hidden_terminal_input_available, passphrase,
     prompt_zeroizing, restore_backup,
 };
+use scope::{scoped_vault_home, vault_base_home};
 type VaultResolver = fn(Option<PathBuf>) -> jig_vault::Result<Vault>;
 
 #[cfg(not(test))]
@@ -626,6 +625,14 @@ struct ResolvedVaultRuntime {
     scope: &'static str,
     scope_id: Option<String>,
     repo_name: Option<String>,
+    main_checkout_root: Option<PathBuf>,
+    worktree_local_guidance: Option<String>,
+}
+
+pub(crate) fn preflight_scope(options: &VaultRuntimeOptions) -> Result<()> {
+    // Resolve metadata only; do not open or create a vault (including restore's
+    // absent destination) before command-specific preflight and capture.
+    resolve_vault_runtime(options).map(|_| ())
 }
 
 fn resolve_vault_runtime(options: &VaultRuntimeOptions) -> Result<ResolvedVaultRuntime> {
@@ -635,105 +642,39 @@ fn resolve_vault_runtime(options: &VaultRuntimeOptions) -> Result<ResolvedVaultR
             scope: "explicit-home",
             scope_id: None,
             repo_name: None,
+            main_checkout_root: None,
+            worktree_local_guidance: None,
         });
     }
 
     match &options.scope {
-        VaultScopeSelection::Repo(scope) => Ok(ResolvedVaultRuntime {
-            home: Some(scoped_vault_home(scope)?),
-            scope: "repo",
-            scope_id: Some(scope.scope_id.clone()),
-            repo_name: Some(scope.repo_name.clone()),
-        }),
+        VaultScopeSelection::Repo(scope) => {
+            let scoped = scoped_vault_home(scope)?;
+            Ok(ResolvedVaultRuntime {
+                home: Some(scoped.home),
+                scope: "repo",
+                scope_id: Some(scope.scope_id.clone()),
+                repo_name: Some(scope.repo_name.clone()),
+                main_checkout_root: scoped.main_checkout_root,
+                worktree_local_guidance: scoped.worktree_local_guidance,
+            })
+        }
         VaultScopeSelection::Global => Ok(ResolvedVaultRuntime {
             home: None,
             scope: "global",
             scope_id: None,
             repo_name: None,
+            main_checkout_root: None,
+            worktree_local_guidance: None,
         }),
         VaultScopeSelection::Auto => Ok(ResolvedVaultRuntime {
             home: None,
             scope: "legacy",
             scope_id: None,
             repo_name: None,
+            main_checkout_root: None,
+            worktree_local_guidance: None,
         }),
-    }
-}
-
-fn scoped_vault_home(scope: &VaultRepoScope) -> Result<PathBuf> {
-    if !crate::command::is_valid_vault_scope_id(&scope.scope_id) {
-        bail!("invalid repo vault scope id '{}'", scope.scope_id);
-    }
-    let scopes_home = vault_base_home()?.join("scopes");
-    let trusted_home = scopes_home.join(trusted_repo_scope_dir(scope)?);
-    let legacy_home = scopes_home.join(&scope.scope_id);
-    reject_legacy_repo_scope_cutover(scope, &trusted_home, &legacy_home)?;
-    Ok(trusted_home)
-}
-
-fn reject_legacy_repo_scope_cutover(
-    scope: &VaultRepoScope,
-    trusted_home: &Path,
-    legacy_home: &Path,
-) -> Result<()> {
-    if vault_file_exists(trusted_home)? || !vault_file_exists(legacy_home)? {
-        return Ok(());
-    }
-
-    bail!(
-        "legacy repo-scoped vault data exists at {}, but this Jig version now stores repo-scoped vaults in the trusted repo-local vault namespace at {} for '{}'. Refusing to treat the new namespace as empty. Move the legacy vault directory after confirming this checkout should own those secrets, or pass --home {} to inspect it explicitly",
-        legacy_home.display(),
-        trusted_home.display(),
-        scope.repo_name,
-        legacy_home.display()
-    );
-}
-
-fn vault_file_exists(home: &Path) -> Result<bool> {
-    let vault_file = home.join(VAULT_FILE_NAME);
-    match std::fs::symlink_metadata(&vault_file) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to inspect vault file {}", vault_file.display())),
-    }
-}
-
-fn trusted_repo_scope_dir(scope: &VaultRepoScope) -> Result<String> {
-    let repo_root = std::fs::canonicalize(&scope.repo_root).with_context(|| {
-        format!(
-            "failed to canonicalize repo root for vault scope: {}",
-            scope.repo_root.display()
-        )
-    })?;
-    let mut digest = Sha256::new();
-    digest.update(b"jig-vault-repo-scope-v2\0");
-    #[cfg(unix)]
-    digest.update(repo_root.as_os_str().as_bytes());
-    #[cfg(not(unix))]
-    digest.update(repo_root.to_string_lossy().as_bytes());
-    digest.update(b"\0");
-    digest.update(scope.scope_id.as_bytes());
-    Ok(format!("repo-{}", lower_hex(&digest.finalize())))
-}
-
-fn lower_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
-}
-
-fn vault_base_home() -> Result<PathBuf> {
-    match std::env::var_os(VAULT_HOME_ENV) {
-        Some(value) if value.is_empty() => bail!("{VAULT_HOME_ENV} must not be empty"),
-        Some(value) => Ok(PathBuf::from(value)),
-        None => Ok(dirs::home_dir()
-            .context("could not resolve home directory for Jig vault")?
-            .join(".jig/vault")),
     }
 }
 
@@ -741,6 +682,14 @@ fn add_vault_scope_fields(output: &mut Value, resolved: &ResolvedVaultRuntime) {
     output["vault_scope"] = json!(resolved.scope);
     output["vault_scope_id"] = json!(resolved.scope_id.as_deref());
     output["vault_repo_name"] = json!(resolved.repo_name.as_deref());
+    output["vault_main_checkout_root"] = json!(
+        resolved
+            .main_checkout_root
+            .as_ref()
+            .map(|root| root.display().to_string())
+    );
+    output["vault_worktree_local"] = json!(resolved.worktree_local_guidance.is_some());
+    output["vault_worktree_local_guidance"] = json!(resolved.worktree_local_guidance.as_deref());
 }
 
 fn parse_env_mappings(values: &[String]) -> Result<Vec<BrokeredEnv>> {

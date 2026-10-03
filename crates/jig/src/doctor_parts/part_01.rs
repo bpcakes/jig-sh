@@ -206,8 +206,18 @@ fn output(repo: Option<Value>, checks: Vec<DoctorCheck>) -> Value {
     let required_ok = checks.iter().all(|check| !check.required || check.ok);
     let next_required_issue = checks.iter().find(|check| check.required && !check.ok);
     let next_optional_issue = required_ok
-        .then(|| checks.iter().find(|check| !check.required && !check.ok))
+        .then(|| {
+            checks
+                .iter()
+                .find(|check| !check.required && !check.ok && !check.operator_only)
+        })
         .flatten();
+    // Operator-only setup needs a human-chosen secret, so it is reported apart
+    // from every agent-facing next step.
+    let operator_setup = checks
+        .iter()
+        .find(|check| check.operator_only && !check.ok)
+        .and_then(|check| check.fix.clone());
     let next_issue = next_required_issue.or(next_optional_issue);
     let next_step = next_issue.and_then(|check| check.fix.clone());
     let next_required_step = next_required_issue.and_then(|check| check.fix.clone());
@@ -231,6 +241,7 @@ fn output(repo: Option<Value>, checks: Vec<DoctorCheck>) -> Value {
         "next_issue": next_issue,
         "next_required_step": next_required_step,
         "optional_setup": optional_setup,
+        "operator_setup": operator_setup,
         "next_step": next_step,
     })
 }
