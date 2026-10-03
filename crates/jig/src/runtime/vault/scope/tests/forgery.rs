@@ -6,7 +6,7 @@ use std::os::unix::fs::symlink;
 
 use serde_json::Value;
 
-use super::{Fixture, git, home_of, status_for, write_vault_file};
+use super::{Fixture, assert_operator_routed, git, home_of, status_for, write_vault_file};
 
 fn assert_unverified(error: &str) {
     assert!(
@@ -15,6 +15,7 @@ fn assert_unverified(error: &str) {
     );
     assert!(error.contains("git worktree repair"), "{error}");
     assert!(error.contains("--home"), "{error}");
+    assert_operator_routed(error);
 }
 
 #[test]

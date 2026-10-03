@@ -146,6 +146,20 @@ fn write_vault_file(home: &Path) {
     fs::write(home.join("vault.json"), "{}").unwrap();
 }
 
+/// Agents act on error text, so recovery that passes `--home` or moves vault
+/// directories must follow the operator routing and never precede it.
+fn assert_operator_routed(error: &str) {
+    let routing = error
+        .find(super::VAULT_STORAGE_OPERATOR_STEP)
+        .unwrap_or_else(|| panic!("missing operator routing: {error}"));
+    for step in ["--home", "rename ", "remove ", "move "] {
+        assert!(
+            !error[..routing].contains(step),
+            "{step:?} precedes operator routing: {error}"
+        );
+    }
+}
+
 #[test]
 fn checkout_namespace_digest_is_unchanged() {
     let fixture = Fixture::new();
@@ -366,4 +380,24 @@ fn explicit_home_and_global_ignore_worktree_linkage() {
     .unwrap();
     assert_eq!(output["vault_scope"], "global");
     assert_eq!(output["vault_main_checkout_root"], Value::Null);
+}
+
+#[test]
+fn legacy_scope_recovery_is_routed_to_the_operator() {
+    let fixture = Fixture::new();
+    let main = fixture.main_checkout("main", &[]);
+    let legacy_home = fixture.base.join("scopes").join(SCOPE_ID);
+    write_vault_file(&legacy_home);
+
+    let error = format!("{:#}", status_for(&main).unwrap_err());
+
+    assert!(
+        error.contains("legacy repo-scoped vault data exists"),
+        "{error}"
+    );
+    assert!(
+        error.contains(&format!("--home {}", legacy_home.display())),
+        "{error}"
+    );
+    assert_operator_routed(&error);
 }

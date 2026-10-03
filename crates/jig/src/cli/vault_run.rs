@@ -232,8 +232,9 @@ const fn vault_command_requires_passphrase(command: &crate::command::VaultComman
 
 /// Context for a discovered repository configuration that fails to load.
 /// Agents act on error text, so it must not suggest deleting configuration or
-/// writing harness files, and it stays value-free; the load error follows it.
-const VAULT_REPO_CONTEXT_HINT: &str = "Vault scope selection could not load the Jig repository configuration found in this directory or a parent. Do not delete or bypass an existing repository's configuration; fix the reported problem (for example by updating Jig) or ask the operator. Placeholder harness files created only to reach the vault are unsupported. Outside a Jig repository, `jig vault` uses the user-level vault, or `--home DIR` (a private directory outside any repository) for diagnostics. Reported problem";
+/// writing harness files, routes `--home` to the operator as the generated
+/// Vault rules do, and stays value-free; the load error follows it.
+const VAULT_REPO_CONTEXT_HINT: &str = "Vault scope selection could not load the Jig repository configuration found in this directory or a parent. Do not delete or bypass an existing repository's configuration; fix the reported problem (for example by updating Jig) or ask the operator. Placeholder harness files created only to reach the vault are unsupported. Outside a Jig repository, `jig vault` uses the user-level vault. Selecting a vault directory with `--home DIR` (a private directory outside any repository) is an operator diagnostic step; agents must ask the operator instead of passing it. Reported problem";
 
 pub(super) fn apply_repo_vault_scope(command: &mut crate::command::VaultCommand) -> Result<()> {
     let options = vault_options_mut(command);

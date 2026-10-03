@@ -17,6 +17,8 @@ use crate::runtime::git_path::{
     MAX_GIT_POINTER_BYTES, parse_git_path_line, parse_gitdir_pointer, read_nofollow_regular_file,
 };
 
+use super::VAULT_STORAGE_OPERATOR_STEP;
+
 const MAX_GIT_CONFIG_BYTES: u64 = 1024 * 1024;
 
 /// Returns the repository root inside the main checkout that corresponds to
@@ -272,7 +274,7 @@ fn owned_by_current_user(_metadata: &fs::Metadata) -> bool {
 
 fn unverified(top: &Path, reason: &str) -> anyhow::Error {
     anyhow!(
-        "{} has a Git worktree pointer, but Jig could not verify it as a linked worktree: {reason}. Refusing to derive a repo-scoped vault namespace from unverified Git metadata. If this worktree was moved, run `git worktree repair` inside it, or `git worktree repair <path>` from the main checkout; for diagnostics, pass an absolute --home <path> to select a vault explicitly",
+        "{} has a Git worktree pointer, but Jig could not verify it as a linked worktree: {reason}. Refusing to derive a repo-scoped vault namespace from unverified Git metadata. If this worktree was moved, run `git worktree repair` inside it, or `git worktree repair <path>` from the main checkout. {VAULT_STORAGE_OPERATOR_STEP} for diagnostics, pass an absolute --home <path> to select a vault explicitly",
         top.display()
     )
 }

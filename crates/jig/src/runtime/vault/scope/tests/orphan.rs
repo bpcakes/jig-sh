@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::test_env::{CurrentDirGuard, EnvVarGuard};
 
 use super::super::super::VAULT_HOME_ENV;
-use super::{Fixture, home_of, status_for, write_vault_file};
+use super::{Fixture, assert_operator_routed, home_of, status_for, write_vault_file};
 
 struct Orphan {
     fixture: Fixture,
@@ -51,6 +51,7 @@ fn assert_names_both_homes(orphan: &Orphan, error: &str) {
         error.contains(&orphan.main.display().to_string()),
         "{error}"
     );
+    assert_operator_routed(error);
 }
 
 #[test]

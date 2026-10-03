@@ -17,6 +17,10 @@ mod worktree;
 #[cfg(test)]
 mod tests;
 
+/// Precedes recovery that passes `--home` or moves vault directories. Agents
+/// act on error text, and the generated Vault rules make both operator-only.
+const VAULT_STORAGE_OPERATOR_STEP: &str = "Operator step (agents must stop and ask the operator instead of passing --home or moving, renaming, or removing vault directories themselves):";
+
 /// Physical vault home selected for a repo scope.
 pub(super) struct ScopedVaultHome {
     pub(super) home: PathBuf,
@@ -69,7 +73,7 @@ fn reject_legacy_repo_scope_cutover(
     }
 
     bail!(
-        "legacy repo-scoped vault data exists at {}, but this Jig version now stores repo-scoped vaults in the trusted repo-local vault namespace at {} for '{}'. Refusing to treat the new namespace as empty. Move the legacy vault directory after confirming this checkout should own those secrets, or pass --home {} to inspect it explicitly",
+        "legacy repo-scoped vault data exists at {}, but this Jig version now stores repo-scoped vaults in the trusted repo-local vault namespace at {} for '{}'. Refusing to treat the new namespace as empty. {VAULT_STORAGE_OPERATOR_STEP} Move the legacy vault directory after confirming this checkout should own those secrets, or pass --home {} to inspect it explicitly",
         legacy_home.display(),
         trusted_home.display(),
         scope.repo_name,
@@ -107,7 +111,7 @@ fn reject_orphan_worktree_scope_cutover(
         )
     };
     bail!(
-        "this linked Git worktree already has its own repo-scoped vault at {checkout}, created before Jig shared repo-scoped vaults with the main checkout, but '{}' now resolves to the vault shared with the main checkout {} at {shared}. Refusing to switch away from existing vault data. {recovery}",
+        "this linked Git worktree already has its own repo-scoped vault at {checkout}, created before Jig shared repo-scoped vaults with the main checkout, but '{}' now resolves to the vault shared with the main checkout {} at {shared}. Refusing to switch away from existing vault data. {VAULT_STORAGE_OPERATOR_STEP} {recovery}",
         scope.repo_name,
         main_checkout_root.display(),
     );

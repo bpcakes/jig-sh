@@ -13,7 +13,8 @@ fn assert_explains_unsupported_harness_stubs(error: &str) {
         "fix the reported problem (for example by updating Jig) or ask the operator",
         "Placeholder harness files created only to reach the vault are unsupported",
         "Outside a Jig repository, `jig vault` uses the user-level vault",
-        "`--home DIR` (a private directory outside any repository) for diagnostics",
+        "`--home DIR` (a private directory outside any repository) is an operator diagnostic step",
+        "agents must ask the operator instead of passing it",
         "Reported problem: ",
     ] {
         assert!(error.contains(expected), "missing {expected:?}: {error}");
