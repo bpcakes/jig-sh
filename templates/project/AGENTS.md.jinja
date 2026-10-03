@@ -9,7 +9,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use [agent-map.md](./agent-map.md) when you need help locating ownership guidance for [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
 - Read the nearest [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] `AGENTS.md` before changing a [% if rust_workspace_guidance_enabled %]crate[% else %]package or crate[% endif %] when one exists.
 - Use `scripts/jig` for the typed repo contract; pass `--json` for agent automation.
-- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
+- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing[% if vault.scope == "repo" %], except operator-owned vault setup (see Vault)[% endif %].
 - Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
 [% if file_budget_audit_available %]
 - Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs or receipts.
@@ -33,6 +33,18 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 [% endif %]
 [% endif %]
 
+[% if vault.scope == "repo" -%]
+## Vault
+
+- The vault behind `scripts/jig vault` and its passphrase are operator-owned. These rules override any Jig next step, such as from `scripts/jig doctor` or `scripts/jig info --commands`, that suggests vault setup.
+- Run only `scripts/jig vault status` and, when the operator has already provided `JIG_VAULT_PASSPHRASE` to the session, `scripts/jig vault exec --env-file REFS_FILE -- COMMAND` with the refs file the operator provided and the task's command. `scripts/jig vault run` with the operator's references is the constrained alternative for short non-interactive commands. Every other vault subcommand is operator-only.
+- Never pass `--home` or `--global` to vault commands, and never set `JIG_VAULT_HOME`.
+- Never request, print, inspect, test, choose, store, or set the passphrase, including with `echo` or `printenv`. Run the command, and stop if it reports a missing passphrase or prompts for one.
+- Never create or edit refs files or add references. Copying the operator's refs file unchanged from the main checkout into a worktree is fine.
+- Never wrap commands that print, encode, or transmit injected values, and never write revealed values to files such as `.env.local`.
+- If a needed credential is unavailable, stop and ask the operator.
+
+[% endif -%]
 ## [% if rust_workspace_guidance_enabled %]Rust[% else %]Backend[% endif %] Defaults
 
 [% if go_backend_enabled %]

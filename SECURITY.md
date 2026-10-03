@@ -31,4 +31,7 @@ startup, so configured commands, dev apps, workers, and launched agents do not
 inherit the vault passphrase itself. Repo-scoped vault namespaces are
 path-bound: a linked Git worktree shares its main checkout's vault only after
 Jig verifies the link from Git metadata that only a writer of that
-repository's `.git` can create.
+repository's `.git` can create. The operator-owned vault rules in generated
+`AGENTS.md` guidance are advice for coding agents, not an enforcement boundary:
+a passphrase exported into an agent session is visible to every process that
+agent starts.

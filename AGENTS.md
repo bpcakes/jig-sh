@@ -9,7 +9,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use [agent-map.md](./agent-map.md) when you need help locating ownership guidance for backend work.
 - Read the nearest backend-level `AGENTS.md` before changing a package or crate when one exists.
 - Use `scripts/jig` for the typed repo contract; pass `--json` for agent automation.
-- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
+- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing, except operator-owned vault setup (see Vault).
 - Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
 - Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs or receipts.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
@@ -22,6 +22,16 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 
 
+
+## Vault
+
+- The vault behind `scripts/jig vault` and its passphrase are operator-owned. These rules override any Jig next step, such as from `scripts/jig doctor` or `scripts/jig info --commands`, that suggests vault setup.
+- Run only `scripts/jig vault status` and, when the operator has already provided `JIG_VAULT_PASSPHRASE` to the session, `scripts/jig vault exec --env-file REFS_FILE -- COMMAND` with the refs file the operator provided and the task's command. `scripts/jig vault run` with the operator's references is the constrained alternative for short non-interactive commands. Every other vault subcommand is operator-only.
+- Never pass `--home` or `--global` to vault commands, and never set `JIG_VAULT_HOME`.
+- Never request, print, inspect, test, choose, store, or set the passphrase, including with `echo` or `printenv`. Run the command, and stop if it reports a missing passphrase or prompts for one.
+- Never create or edit refs files or add references. Copying the operator's refs file unchanged from the main checkout into a worktree is fine.
+- Never wrap commands that print, encode, or transmit injected values, and never write revealed values to files such as `.env.local`.
+- If a needed credential is unavailable, stop and ask the operator.
 
 ## Backend Defaults
 
@@ -101,6 +111,8 @@ scripts/jig-dev --json info
 `scripts/jig-dev` incrementally builds the workspace binary and passes the resulting executable through the normal launcher. It respects Cargo's configured target directory and fails if the build fails. No environment override is needed for routine development.
 
 For runtime, launcher, template, or build configuration changes, use `scripts/jig check repo:source-runtime-check` when validating the current implementation through the launcher. The same target is available in the `verify` profile. `JIG_DEV_BIN` remains an explicit override for an already-built binary; its freshness is the caller's responsibility.
+
+The managed Vault rules protect the operator's vault. Vault tests in this source tree create their own throwaway vault homes and test-only passphrases; when a manual check of edited vault behavior needs a vault, use a throwaway `--home` directory in a scratch location outside the repository, never the operator's vault or passphrase.
 
 <!-- bv-agent-instructions-v3 -->
 

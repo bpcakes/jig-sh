@@ -289,7 +289,7 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-Vault metadata, child output, and plaintext do not enter run history, loop evidence, or structured command results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
+Vault metadata, child output, and plaintext do not enter run history, loop evidence, or structured command results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. Generated agent guidance keeps vault setup and the passphrase operator-owned (see [coding agents](docs/configuration.md#coding-agents)). See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
 
 ### Local development proxy
 
