@@ -267,3 +267,82 @@ fn exec_spawn_failure_records_value_free_terminal_event() {
             .contains(command_sentinel)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn brokered_run_resolves_canonical_references_in_version_two() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+    vault
+        .apply_field_batch(
+            &passphrase(),
+            vec![
+                FieldMutation::set(
+                    VaultReference::parse("jig://Production/TOKEN").unwrap(),
+                    FieldKind::Concealed,
+                    SecretBytes::new(b"canonical-token-value".to_vec()),
+                ),
+                FieldMutation::set(
+                    VaultReference::parse("jig://Production/FLAG").unwrap(),
+                    FieldKind::Text,
+                    SecretBytes::new(b"text-flag-value".to_vec()),
+                ),
+            ],
+        )
+        .unwrap();
+    let request = BrokeredRun::new(
+        vec![
+            "sh".into(),
+            "-c".into(),
+            "test \"$TOKEN\" = canonical-token-value && test \"$LEGACY\" = \"$TOKEN\" && test \"$FLAG\" = text-flag-value && printf '%s %s %s' \"$TOKEN\" \"$FLAG\" \"$LEGACY\"".into(),
+        ],
+        vec![
+            BrokeredEnv::parse("TOKEN=jig://Production/TOKEN").unwrap(),
+            BrokeredEnv::parse("FLAG=jig://Production/FLAG").unwrap(),
+            BrokeredEnv::parse("LEGACY=Production/TOKEN").unwrap(),
+        ],
+    )
+    .unwrap();
+
+    let output = vault.run_brokered(&passphrase(), request).unwrap();
+
+    assert_eq!(output.exit_status, 0, "{}", output.stderr);
+    // The compatible broker redacts every injected value of at least 4 bytes,
+    // including text fields, unlike exec's concealed-only redaction.
+    assert_eq!(output.stdout, "[REDACTED] [REDACTED] [REDACTED]");
+    let audit = vault.store.read_audit_text().unwrap().unwrap();
+    assert!(audit.contains("\"secret_name\":\"Production/TOKEN\""));
+    assert!(!audit.contains("canonical-token-value"));
+    assert!(!audit.contains("text-flag-value"));
+}
+
+#[cfg(unix)]
+#[test]
+fn brokered_run_reports_missing_canonical_reference_in_reference_form() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+    let missing = |mapping: &str| {
+        let request = BrokeredRun::new(
+            vec!["true".into()],
+            vec![BrokeredEnv::parse(mapping).unwrap()],
+        )
+        .unwrap();
+        vault.run_brokered(&passphrase(), request).unwrap_err()
+    };
+
+    let canonical = missing("TOKEN=jig://Production/MISSING");
+    assert_eq!(canonical.kind(), VaultErrorKind::NotFound);
+    assert_eq!(
+        canonical.to_string(),
+        "vault field 'jig://Production/MISSING' does not exist"
+    );
+
+    let legacy = missing("TOKEN=Production/MISSING");
+    assert_eq!(legacy.kind(), VaultErrorKind::NotFound);
+    assert_eq!(
+        legacy.to_string(),
+        "vault secret 'Production/MISSING' does not exist"
+    );
+}

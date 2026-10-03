@@ -7,7 +7,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
-    SecretBytes, VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV,
+    BrokeredRun, SecretBytes, VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV,
     VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, validate_new_vault_passphrase,
 };
 use secrecy::{ExposeSecret, SecretString};
@@ -21,7 +21,8 @@ use crate::command::{
 use crate::runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE;
 
 use super::{
-    ResolvedVaultRuntime, add_vault_scope_fields, resolve_vault_runtime, vault, vault_base_home,
+    ResolvedVaultRuntime, add_vault_scope_fields, parse_env_mappings, parse_file_mappings,
+    resolve_vault_runtime, vault, vault_base_home,
 };
 
 struct CapturedPassphrases {
@@ -87,6 +88,16 @@ pub(crate) fn preflight_scoped_command(command: &mut VaultCommand) -> Result<()>
             };
             let resolved = resolve_vault_runtime(&request.vault)?;
             vault(&resolved)?.preflight_private_output(output, request.overwrite)?;
+            Ok(())
+        }
+        VaultCommand::Run(request) => {
+            // Reject malformed mappings before passphrase capture so they never
+            // cost an operator terminal round trip; `run` parses them again.
+            BrokeredRun::with_files(
+                request.command.clone(),
+                parse_env_mappings(&request.env)?,
+                parse_file_mappings(&request.files)?,
+            )?;
             Ok(())
         }
         _ => Ok(()),

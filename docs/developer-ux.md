@@ -370,7 +370,7 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-`vault exec` invokes the command directly, inherits stdin and the ordinary environment, streams stdout and stderr without a Jig timeout or output cap, redacts concealed values, and preserves the child status. It is the developer-facing analogue of `op run --env-file`. The older `vault run` remains intentionally different: it uses an allowlisted environment, closes stdin, caps and buffers output, applies a timeout, and owns child-tree cleanup. That constrained behavior remains useful for agent-controlled execution, and `vault secret` remains the compatible concealed-field vocabulary.
+`vault exec` invokes the command directly, inherits stdin and the ordinary environment, streams stdout and stderr without a Jig timeout or output cap, redacts concealed values, and preserves the child status. It is the developer-facing analogue of `op run --env-file`. The older `vault run` remains intentionally different: it accepts legacy secret names or `jig://ITEM/FIELD` references, uses an allowlisted environment, closes stdin, caps and buffers output, redacts every injected value of at least 4 bytes regardless of kind, applies a timeout, and owns child-tree cleanup. That constrained behavior remains useful for agent-controlled execution, and `vault secret` remains the compatible concealed-field vocabulary.
 
 `vault read` is the exact-byte analogue of `op read`; terminal stdout requires `--reveal`, while pipelines are accepted and private file output requires an explicit overwrite opt-in. `vault inject` replaces only `{{ jig://ITEM/FIELD }}` placeholders under the same output rules. Raw reveal commands reject `--json` so values cannot enter structured results.
 

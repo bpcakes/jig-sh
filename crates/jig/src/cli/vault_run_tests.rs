@@ -626,3 +626,43 @@ fn vault_tui_rejects_json_and_redirected_streams_before_scope_or_environment_cap
     );
     assert!(!vault_home.exists());
 }
+
+#[test]
+fn malformed_run_mapping_refusal_precedes_passphrase_capture() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("must-remain-absent");
+    let passphrase = "run-passphrase-must-not-be-consumed";
+
+    for provided in [Some(passphrase), None] {
+        let _passphrase = match provided {
+            Some(value) => EnvVarGuard::set("JIG_VAULT_PASSPHRASE", value),
+            None => EnvVarGuard::remove("JIG_VAULT_PASSPHRASE"),
+        };
+        let command = VaultCommand::Run(super::super::vault::VaultRunOpts {
+            env: vec!["TOKEN=jig://Production".into()],
+            files: Vec::new(),
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+            command: vec!["true".into()],
+        });
+
+        let error = run_vault_command_with_stdout_terminal(command, true, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("invalid vault reference"), "{error}");
+        assert!(error.contains("VAR=jig://ITEM/FIELD"), "{error}");
+        assert!(
+            !error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE),
+            "{error}"
+        );
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref().ok(),
+            provided
+        );
+        assert!(!vault_home.exists());
+    }
+}
