@@ -38,6 +38,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 - The vault behind `scripts/jig vault` and its passphrase are operator-owned. These rules override any Jig next step, such as from `scripts/jig doctor` or `scripts/jig info --commands`, that suggests vault setup.
 - Run only `scripts/jig vault status` and, when the operator has already provided `JIG_VAULT_PASSPHRASE` to the session, `scripts/jig vault exec --env-file REFS_FILE -- COMMAND` with the refs file the operator provided and the task's command. `scripts/jig vault run` with the operator's references is the constrained alternative for short non-interactive commands. Every other vault subcommand is operator-only.
+- `COMMAND` is the underlying task command itself. Never wrap `scripts/jig check`, `scripts/jig run`, or another Jig runner in `vault exec` or `vault run`: a failing target records its stdout and stderr in `.agent/state/runs.jsonl` outside vault redaction, so incidental failure output can persist an injected value.
 - Never pass `--home` or `--global` to vault commands, and never set `JIG_VAULT_HOME`.
 - Never request, print, inspect, test, choose, store, or set the passphrase, including with `echo` or `printenv`. Run the command, and stop if it reports a missing passphrase or prompts for one.
 - Never create or edit refs files or add references. Copying the operator's refs file unchanged from the main checkout into a worktree is fine.
