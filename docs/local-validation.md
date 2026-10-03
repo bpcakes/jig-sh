@@ -67,7 +67,9 @@ manager; an unreachable manager still blocks proxy shutdown.
 Rendered-fixture and generated-Rust compilation artifacts are cached separately
 from the source workspace. CI sets absolute `JIG_FIXTURE_TARGET_DIR` and
 `JIG_GENERATED_RUST_TARGET_DIR` paths under `.agent/.cache/`; fixture repositories and
-installation roots remain temporary. Without these overrides, local checks retain
+installation roots remain temporary. The fresh-Cargo-home Git installation test
+also keeps a separate temporary target so its different registry paths cannot
+invalidate the shared dependency artifacts. Without these overrides, local checks retain
 their existing temporary build-directory behavior.
 
 The release workflow commits prepared files locally, then validates that commit

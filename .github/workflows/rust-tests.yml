@@ -96,7 +96,7 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}-fixtures-v2
+          shared-key: rust-${{ runner.os }}-${{ github.job }}-fixtures-v3
           cache-directories: ${{ env.JIG_FIXTURE_TARGET_DIR }}
       - name: Validate behavioral fixtures
         run: bash scripts/validate-fixtures.sh
