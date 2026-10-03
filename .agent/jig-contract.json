@@ -309,6 +309,8 @@
       "process"
     ],
     "inputs": [
+      "scripts/ci/test-rust.sh",
+      ".config/nextest.toml",
       "Cargo.toml",
       "Cargo.lock",
       "**/Cargo.toml",
@@ -335,7 +337,7 @@
     ],
     "provenance": {
       "effects": "inherited",
-      "inputs": "inherited",
+      "inputs": "overridden",
       "intent": "inherited",
       "legacy_aliases": "inherited",
       "runner": "overridden",
