@@ -14,6 +14,7 @@ use crate::tool_defs::tool;
 
 mod agent;
 mod file_budget;
+mod git_path;
 mod loops;
 mod migration;
 mod repository_run;

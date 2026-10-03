@@ -51,7 +51,9 @@ fn validate_linked_worktree_gitfile(
     let worktree_dir = Dir::open_ambient_dir(worktree, ambient_authority()).with_context(|| {
         format!("Failed to open PR repair worktree {}", worktree.display())
     })?;
-    let Some(gitdir_pointer) = read_nofollow_regular_file(&worktree_dir, ".git")? else {
+    let Some(gitdir_pointer) =
+        read_nofollow_regular_file(&worktree_dir, ".git", MAX_GIT_POINTER_BYTES)?
+    else {
         return Ok(false);
     };
     let Some(gitdir_path) = parse_gitdir_pointer(&gitdir_pointer, worktree) else {
@@ -83,7 +85,9 @@ fn validate_linked_worktree_gitfile(
             gitdir.display()
         )
     })?;
-    let Some(back_pointer) = read_nofollow_regular_file(&gitdir_directory, "gitdir")? else {
+    let Some(back_pointer) =
+        read_nofollow_regular_file(&gitdir_directory, "gitdir", MAX_GIT_POINTER_BYTES)?
+    else {
         return Ok(false);
     };
     let back_pointer = path_from_git_bytes(trim_ascii_line(&back_pointer));
@@ -94,39 +98,4 @@ fn validate_linked_worktree_gitfile(
     };
     let expected_gitfile = fs::canonicalize(worktree.join(".git"))?;
     Ok(fs::canonicalize(back_pointer).ok().as_ref() == Some(&expected_gitfile))
-}
-
-fn read_nofollow_regular_file(directory: &Dir, name: &str) -> Result<Option<Vec<u8>>> {
-    const MAX_GIT_POINTER_BYTES: u64 = 16 * 1024;
-
-    let mut options = OpenOptions::new();
-    options.read(true).follow(FollowSymlinks::No);
-    let mut file = match directory.open_with(name, &options) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("Failed to open {name} without following links"));
-        }
-    };
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_GIT_POINTER_BYTES {
-        return Ok(None);
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.read_to_end(&mut bytes)?;
-    Ok(Some(bytes))
-}
-
-fn parse_gitdir_pointer(bytes: &[u8], worktree: &Path) -> Option<PathBuf> {
-    let line = trim_ascii_line(bytes);
-    if line.contains(&b'\n') || line.contains(&b'\r') {
-        return None;
-    }
-    let path = path_from_git_bytes(line.strip_prefix(b"gitdir: ")?);
-    Some(if path.is_absolute() {
-        path
-    } else {
-        worktree.join(path)
-    })
 }

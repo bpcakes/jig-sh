@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::git_path::{path_from_git_bytes, trim_ascii_line};
+use crate::runtime::git_path::{path_from_git_bytes, trim_ascii_line};
 
 const PROTECTED_LOOP_DIR: &str = "jig/loop";
 const MAX_GITDIR_FILE_BYTES: u64 = 16 * 1024;
