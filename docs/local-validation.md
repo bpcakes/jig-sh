@@ -36,6 +36,11 @@ runtime selected by `.jig/source-runtime-version`.
 
 ## Source repository CI
 
+All Linux jobs in this repository use `ubicloud-standard-4-ubuntu-2404`
+(4 vCPU, 16 GB RAM, Ubuntu 24.04), including policy and release workflows.
+macOS jobs use GitHub-hosted `macos-latest` runners. The repository's
+`ci_github_runner` setting in `.jig.toml` records the Linux runner selection.
+
 The Rust Tests workflow runs formatting and launcher checks together without
 building Jig. Its longer test and fixture jobs run independently. The Linux
 no-default-features test job first runs the explicit no-default-features build

@@ -58,7 +58,7 @@ concurrency:
 jobs:
   launcher-contract:
     name: Formatting and launcher checks
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -81,7 +81,7 @@ jobs:
 
   rendered-fixtures:
     name: Validate rendered repository fixtures
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -100,7 +100,7 @@ jobs:
 
   generated-rust-clippy:
     name: Check generated Rust scaffold Clippy policy at declared minima
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -204,7 +204,7 @@ jobs:
 
   msrv:
     name: cargo check --workspace --all-targets --all-features (MSRV 1.88)
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -224,7 +224,7 @@ jobs:
 
   no-default-features:
     name: cargo build and test -p jig-sh --no-default-features
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -266,7 +266,7 @@ jobs:
 
   no-default-features-clippy:
     name: cargo clippy -p jig-sh --no-default-features --all-targets
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -373,7 +373,7 @@ jobs:
 
   dev-proxy-linux:
     name: cargo test -p jig-dev-proxy (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout

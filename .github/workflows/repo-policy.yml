@@ -70,16 +70,18 @@ concurrency:
 jobs:
   clippy:
     name: Rust lint and repository policy (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
+            runner: ubicloud-standard-4-ubuntu-2404
             cache-key: clippy
             timeout: 30
           - os: macos-latest
+            runner: macos-latest
             cache-key: clippy-macos
             timeout: 45
     env:
