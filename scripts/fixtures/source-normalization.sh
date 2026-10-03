@@ -474,7 +474,12 @@ validate_template_source_url_installs_from_recorded_commit() {
   (
     cd "$rendered_dir"
     rm -rf .git .agent/.cache
-    env -u JIG_DEV_BIN CARGO_HOME="$TMP_DIR/cargo-home-git-install" \
+    # A fresh Cargo home changes registry source paths in Cargo fingerprints.
+    # Keep its target separate so it cannot invalidate the reusable artifacts
+    # from the other fixture installations. Keep this real Git installation on
+    # the production release profile even when other CI fixtures lower its opt-level.
+    env -u JIG_DEV_BIN -u CARGO_PROFILE_RELEASE_OPT_LEVEL CARGO_HOME="$TMP_DIR/cargo-home-git-install" \
+      CARGO_TARGET_DIR="$TMP_DIR/cargo-target-git-install" \
       scripts/install-jig.sh ".agent/.cache/jig/$contract_cache_key" >/dev/null
     [[ -x ".agent/.cache/jig/$contract_cache_key/bin/jig" ]]
     ".agent/.cache/jig/$contract_cache_key/bin/jig" __runtime-compatible --profile default .

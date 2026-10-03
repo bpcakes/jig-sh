@@ -70,16 +70,18 @@ concurrency:
 jobs:
   clippy:
     name: Rust lint and repository policy (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
+            runner: ubicloud-standard-4-ubuntu-2404
             cache-key: clippy
             timeout: 30
           - os: macos-latest
+            runner: macos-latest
             cache-key: clippy-macos
             timeout: 45
     env:
@@ -90,18 +92,24 @@ jobs:
         with:
           # File budgets need the event's comparison tree, including merge groups.
           fetch-depth: 0
+      - name: Select policy checks
+        id: scope
+        run: python3 scripts/ci/policy-scope.py
       - name: Install Rust toolchain
+        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
           cache: false
           rustflags: ""
           components: clippy
       - name: Cache Rust artifacts
+        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          # Reuse the existing per-platform Clippy caches after moving these jobs.
-          shared-key: rust-${{ runner.os }}-${{ matrix.cache-key }}
+          # Cache all three command configurations from this job together.
+          shared-key: rust-${{ runner.os }}-${{ matrix.cache-key }}-combined-v1
       - name: Build current Jig binary
+        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
         id: build
         run: cargo build -p jig-sh --bin jig --locked
       - name: Test export guard
@@ -148,5 +156,18 @@ jobs:
               ;;
           esac
       - name: Run clippy
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.scope.outputs.rust != 'false' }}
         run: scripts/jig check clippy
+      - name: Run no-default-features clippy
+        if: ${{ !cancelled() && steps.scope.outputs.rust != 'false' }}
+        run: cargo clippy -p jig-sh --no-default-features --all-targets --locked -- -D warnings
+      - name: Run serial dev proxy tests
+        if: ${{ !cancelled() && steps.scope.outputs.rust != 'false' }}
+        # Preserve the standard harness's process-global signal/trust coverage
+        # alongside the full workspace's process-per-test Nextest coverage.
+        env:
+          RUST_TEST_THREADS: "1"
+        run: cargo test -p jig-dev-proxy --locked
+      - name: Run dev proxy clippy
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        run: cargo clippy -p jig-dev-proxy --all-targets --locked -- -D warnings

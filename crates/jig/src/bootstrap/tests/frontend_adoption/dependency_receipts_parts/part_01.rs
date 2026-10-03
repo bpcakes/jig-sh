@@ -230,11 +230,10 @@ esac
     );
 }
 
-#[test]
-fn generated_web_dependency_scope_and_fingerprints_use_only_selected_manager_metadata() {
+fn assert_selected_manager_metadata(selected_manager: &str) {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
-    let generated_scripts = generated_web_check_scripts();
+    let generated_scripts = generated_web_check_scripts(selected_manager);
     let cases = [
         (
             "npm-package-wins",
@@ -309,9 +308,12 @@ fn generated_web_dependency_scope_and_fingerprints_use_only_selected_manager_met
     ];
 
     for (case_name, package_manager, package_json, pnpm_workspace, root_scope) in cases {
+        if package_manager != selected_manager {
+            continue;
+        }
         assert_dependency_scope_case(
             temp.path(),
-            &generated_scripts[package_manager],
+            &generated_scripts,
             case_name,
             package_manager,
             package_json,
@@ -320,6 +322,20 @@ fn generated_web_dependency_scope_and_fingerprints_use_only_selected_manager_met
         );
     }
 }
+
+macro_rules! selected_manager_metadata_test {
+    ($name:ident, $manager:literal) => {
+        #[test]
+        fn $name() {
+            assert_selected_manager_metadata($manager);
+        }
+    };
+}
+
+selected_manager_metadata_test!(generated_web_dependency_metadata_bun, "bun");
+selected_manager_metadata_test!(generated_web_dependency_metadata_npm, "npm");
+selected_manager_metadata_test!(generated_web_dependency_metadata_pnpm, "pnpm");
+selected_manager_metadata_test!(generated_web_dependency_metadata_yarn, "yarn");
 
 #[cfg(unix)]
 #[test]
