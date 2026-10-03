@@ -115,8 +115,9 @@ and other special files are rejected before passphrase capture.
 
 Unlike exec, the older vault run command injects selected legacy secret names
 or jig:// references into a cleaned, closed-stdin child with buffered/capped
-output, a timeout, and owned process-tree cleanup. Exec is transparent, not a sandbox or a substitute
-for run's constrained agent boundary.
+output, a timeout, and owned process-tree cleanup.
+Exec is transparent, not a sandbox or a substitute for run's constrained agent
+boundary.
 
 Example:
   jig vault exec --env-file .env.jig -- sh -c 'printf \"%s\" \"$TOKEN\"'";
