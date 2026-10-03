@@ -15,6 +15,7 @@ const OPERATOR_GUIDANCE_MARKERS: [&str; 4] = [
     "must never request, print, store, or choose a vault passphrase",
     "must not set JIG_VAULT_PASSPHRASE or JIG_VAULT_NEW_PASSPHRASE themselves",
 ];
+const WITHHELD_NOTE: &str = "outer Jig command withheld the vault passphrase";
 
 /// Runs `jig --json vault SUBCOMMAND --home HOME TRAILING...`.
 fn jig_vault(
@@ -33,7 +34,8 @@ fn jig_vault(
         .arg(home)
         .args(trailing)
         .env_remove("JIG_VAULT_PASSPHRASE")
-        .env_remove("JIG_VAULT_NEW_PASSPHRASE");
+        .env_remove("JIG_VAULT_NEW_PASSPHRASE")
+        .env_remove("JIG_VAULT_PASSPHRASE_WITHHELD");
     if let Some(passphrase) = passphrase {
         command.env("JIG_VAULT_PASSPHRASE", passphrase);
     }
@@ -114,6 +116,44 @@ fn vault_run_without_terminal_or_passphrase_returns_operator_guidance() {
         "{message}"
     );
     assert!(message.contains("stdin and stderr"), "{message}");
+    assert!(!message.contains(WITHHELD_NOTE), "{message}");
+    assert_operator_guidance(&message);
+}
+
+#[test]
+fn nested_vault_run_explains_a_passphrase_withheld_by_an_outer_command() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("vault-home");
+
+    // An outer non-vault Jig command removes both reserved variables and
+    // leaves only the non-secret marker for its children.
+    let output = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .args([
+            "--json",
+            "vault",
+            "run",
+            "--env",
+            "TOKEN=api_token",
+            "--home",
+        ])
+        .arg(&home)
+        .args(["--", "true"])
+        .env_remove("JIG_VAULT_PASSPHRASE")
+        .env_remove("JIG_VAULT_NEW_PASSPHRASE")
+        .env("JIG_VAULT_PASSPHRASE_WITHHELD", "1")
+        .output()
+        .unwrap();
+
+    let message = error_message(&output);
+    assert!(
+        message.contains("cannot prompt for the vault passphrase"),
+        "{message}"
+    );
+    assert!(message.contains(WITHHELD_NOTE), "{message}");
+    assert!(
+        message.contains("scripts/jig vault exec --env-file FILE"),
+        "{message}"
+    );
     assert_operator_guidance(&message);
 }
 

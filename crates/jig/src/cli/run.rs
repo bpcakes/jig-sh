@@ -24,6 +24,9 @@ use super::*;
 
 pub(crate) fn run() -> Result<()> {
     let cli = parse_cli();
+    // Invariant: before launcher validation, repository loading, worker
+    // threads, or any child process.
+    enforce_vault_passphrase_startup_boundary(&cli.command);
     let json_output = cli.json;
     let report_json_errors = should_report_json_command_errors(json_output, &cli.command);
     let name_ui_errors = json_output && matches!(cli.command, CommandKind::Ui(_));
@@ -728,8 +731,10 @@ fn dispatch_runtime_command(
 
 mod argument_parsing;
 mod freshness;
+mod vault_environment;
 mod workflow_recovery;
 pub(super) use argument_parsing::*;
+use vault_environment::enforce_vault_passphrase_startup_boundary;
 #[cfg(feature = "dev-proxy")]
 mod dev_launch;
 #[cfg(feature = "dev-proxy")]

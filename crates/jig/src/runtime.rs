@@ -24,8 +24,15 @@ mod tool_execution;
 mod vault;
 mod vault_env;
 mod vault_import;
+mod vault_withholding;
 
 pub(crate) use file_budget::{FileBudgetEvaluationMode, run_direct_file_budget};
+#[cfg(test)]
+pub(crate) use vault_withholding::VAULT_PASSPHRASE_WITHHELD_ENV;
+pub(crate) use vault_withholding::{
+    vault_passphrase_operator_guidance, withhold_vault_passphrase,
+    withhold_vault_passphrase_environment,
+};
 mod worker_runner;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

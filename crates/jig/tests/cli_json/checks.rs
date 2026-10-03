@@ -344,6 +344,56 @@ fn foreground_run_json_failure_and_human_explain_use_run_output() {
 }
 
 #[test]
+fn non_vault_targets_do_not_inherit_reserved_vault_passphrase_variables() {
+    // The target fails with a distinct status unless both reserved variables
+    // are absent, the withheld marker matches the expectation, and an ordinary
+    // variable still flows through.
+    const COMMAND: &str = r#"[ -z "${JIG_VAULT_PASSPHRASE+x}" ] && [ -z "${JIG_VAULT_NEW_PASSPHRASE+x}" ] || exit 86; [ "${JIG_VAULT_PASSPHRASE_WITHHELD-unset}" = "$JIG_TEST_EXPECTED_MARKER" ] || exit 87; [ "${JIG_TEST_ORDINARY_ENV-}" = preserved ] || exit 88"#;
+    const CURRENT: &str = "test-only-reserved-current";
+    const NEW: &str = "test-only-reserved-new";
+
+    for (reserved, expected_marker) in [(true, "1"), (false, "unset")] {
+        for args in [
+            ["check", "api:test", "--json"],
+            ["run", "api:test", "--json"],
+        ] {
+            // A fresh repository keeps every case from reusing a receipt.
+            let repo = tempdir().unwrap();
+            write_v6_command_test_repo(repo.path(), COMMAND);
+            let mut command = jig();
+            command
+                .current_dir(repo.path())
+                .args(args)
+                .env_remove("JIG_VAULT_PASSPHRASE")
+                .env_remove("JIG_VAULT_NEW_PASSPHRASE")
+                .env_remove("JIG_VAULT_PASSPHRASE_WITHHELD")
+                .env("JIG_TEST_EXPECTED_MARKER", expected_marker)
+                .env("JIG_TEST_ORDINARY_ENV", "preserved");
+            if reserved {
+                command
+                    .env("JIG_VAULT_PASSPHRASE", CURRENT)
+                    .env("JIG_VAULT_NEW_PASSPHRASE", NEW);
+            }
+
+            let output = command.output().unwrap();
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let label =
+                format!("{args:?} reserved={reserved}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            assert!(output.status.success(), "{label}");
+            let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(payload["run"]["conclusion"], "success", "{label}");
+            assert_eq!(payload["run"]["targets"][0]["exit_code"], 0, "{label}");
+            for value in [CURRENT, NEW] {
+                assert!(!stdout.contains(value), "{label}");
+                assert!(!stderr.contains(value), "{label}");
+            }
+        }
+    }
+}
+
+#[test]
 fn foreground_run_inventory_is_ready_on_v6_and_v7() {
     for version in [6, 7] {
         let temp = tempdir().unwrap();

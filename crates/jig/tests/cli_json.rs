@@ -33,6 +33,14 @@ fn jig() -> Command {
 }
 
 fn write_v6_failing_test_repo(root: &Path) {
+    write_v6_command_test_repo(root, r"printf 'tests failed\n' >&2; exit 7");
+}
+
+/// Writes a committed v6 repository whose `api:test` target runs `command`
+/// through Bash. The command is embedded in a TOML multi-line literal string,
+/// so it may contain single quotes and backslashes but not `'''`.
+fn write_v6_command_test_repo(root: &Path, command: &str) {
+    assert!(!command.contains("'''"));
     fs::create_dir_all(root.join(".agent")).unwrap();
     fs::create_dir_all(root.join("api")).unwrap();
     fs::write(root.join("api/example.rs"), "pub fn example() {}\n").unwrap();
@@ -44,7 +52,7 @@ repo_name = "ExampleProject"
 default_branch = "main"
 
 [commands]
-api_test_command = "printf 'tests failed\n' >&2; exit 7"
+api_test_command = '''__API_TEST_COMMAND__'''
 
 [repository]
 default_check_profile = "verify"
@@ -63,7 +71,8 @@ inputs = ["api/**"]
 [[repository.profiles]]
 id = "verify"
 targets = [{ component = "api", action = "test" }]
-"#,
+"#
+        .replace("__API_TEST_COMMAND__", command),
     )
     .unwrap();
     fs::write(

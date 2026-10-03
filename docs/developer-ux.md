@@ -344,7 +344,7 @@ The proxy is friendly because it removes repeated port hunting, browser bookmark
 - Trust-store mutation requires `--accept-trust-scope`.
 - LAN mode must be enabled deliberately.
 - Alias routes remain loopback-client-only even when LAN mode is enabled.
-- App commands inherit the developer environment, but the long-running background proxy process starts with a constrained environment.
+- App commands inherit the developer environment except the reserved vault passphrase variables, which every non-vault Jig command withholds at startup; the long-running background proxy process starts with a constrained environment.
 - Jig replaces inherited `JIG_DEV_<APP>_{HOST,PORT,ORIGIN,URL}` coordinates with the current app selection. Generated Vite apps prefer the current namespaced API origin, while `API_ORIGIN` remains the explicit override for direct or web-only starts.
 
 Those constraints keep the normal path smooth while making machine-wide or network-visible changes visible in the command line.
@@ -370,7 +370,7 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-`vault exec` invokes the command directly, inherits stdin and the ordinary environment, streams stdout and stderr without a Jig timeout or output cap, redacts concealed values, and preserves the child status. It is the developer-facing analogue of `op run --env-file`. The older `vault run` remains intentionally different: it accepts legacy secret names or `jig://ITEM/FIELD` references, uses an allowlisted environment, closes stdin, caps and buffers output, redacts every injected value of at least 4 bytes regardless of kind, applies a timeout, and owns child-tree cleanup. That constrained behavior remains useful for agent-controlled execution, and `vault secret` remains the compatible concealed-field vocabulary.
+`vault exec` invokes the command directly, inherits stdin and the ordinary environment, streams stdout and stderr without a Jig timeout or output cap, redacts concealed values, and preserves the child status. It is the developer-facing analogue of `op run --env-file`. The older `vault run` remains intentionally different: it accepts legacy secret names or `jig://ITEM/FIELD` references, uses an allowlisted environment, closes stdin, caps and buffers output, redacts every injected value of at least 4 bytes regardless of kind, applies a timeout, and owns child-tree cleanup. That constrained behavior remains useful when a command needs the broker's limits, and `vault secret` remains the compatible concealed-field vocabulary. Nested vault commands cannot borrow a passphrase from an outer Jig command: checks, `jig run` actions, dev apps, and Jig-launched agents never receive `JIG_VAULT_PASSPHRASE`, so wrap a non-interactive outer command that needs vault values in `vault exec` instead (see [passphrase withholding](configuration.md#passphrase-withholding)).
 
 `vault read` is the exact-byte analogue of `op read`; terminal stdout requires `--reveal`, while pipelines are accepted and private file output requires an explicit overwrite opt-in. `vault inject` replaces only `{{ jig://ITEM/FIELD }}` placeholders under the same output rules. Raw reveal commands reject `--json` so values cannot enter structured results.
 

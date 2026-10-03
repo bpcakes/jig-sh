@@ -1,4 +1,9 @@
 //! Jig-owned Git helpers for repository policy checks.
+//!
+//! Every Git process starts from `git_command`, which withholds the reserved
+//! vault passphrase variables: repository policy code also runs during
+//! launcher validation, before a `vault` command captures and clears its
+//! passphrase, and repository configuration can make Git start other programs.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -14,6 +19,13 @@ use super::{ControlledBytesOutput, controlled_output_bytes_with_limits};
 // Keep that capture bounded, but large enough for ordinary repositories and
 // fail closed below if the bound is ever exceeded.
 const CONTROLLED_GIT_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
+
+fn git_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.current_dir(root);
+    crate::runtime::withhold_vault_passphrase(&mut command);
+    command
+}
 
 pub(super) fn controlled_git_text(
     root: &Path,
@@ -58,8 +70,8 @@ pub(super) fn controlled_git_output(
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<ControlledBytesOutput> {
-    let mut command = Command::new("git");
-    command.current_dir(root).args(args);
+    let mut command = git_command(root);
+    command.args(args);
     crate::bootstrap::scrub_known_repository_git_environment(&mut command);
     let output = controlled_output_bytes_with_limits(
         &mut command,
@@ -87,8 +99,7 @@ pub(super) fn git_list_files(root: &Path, roots: &[String]) -> Result<Vec<String
 }
 
 pub(super) fn git_success(root: &Path, args: &[&str]) -> Result<bool> {
-    Ok(Command::new("git")
-        .current_dir(root)
+    Ok(git_command(root)
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -97,7 +108,7 @@ pub(super) fn git_success(root: &Path, args: &[&str]) -> Result<bool> {
 }
 
 pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let output = Command::new("git").current_dir(root).args(args).output()?;
+    let output = git_command(root).args(args).output()?;
     if !output.status.success() {
         bail!(
             "git {} failed with status {}\nstderr:\n{}",
@@ -115,4 +126,26 @@ pub(super) fn split_nul(bytes: &[u8]) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(|part| String::from_utf8_lossy(part).into_owned())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use jig_vault::{VAULT_NEW_PASSPHRASE_ENV, VAULT_PASSPHRASE_ENV};
+
+    use super::*;
+
+    #[test]
+    fn policy_git_commands_withhold_reserved_passphrase_variables() {
+        let command = git_command(Path::new("."));
+        let removed = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        for name in [VAULT_PASSPHRASE_ENV, VAULT_NEW_PASSPHRASE_ENV] {
+            assert!(removed.contains(&OsStr::new(name)), "{name}");
+        }
+    }
 }

@@ -25,4 +25,7 @@ keeps plaintext out of repository state, structured command output, and
 receipts, but a child process that receives a value can still use or disclose
 it. Output redaction reduces accidental exposure; it cannot stop a
 malicious child, transformed output, operating-system inspection, or side
-channels.
+channels. Jig commands other than `vault`, and `init` or `adopt --write` with
+vault setup, remove `JIG_VAULT_PASSPHRASE` and `JIG_VAULT_NEW_PASSPHRASE` at
+startup, so configured commands, dev apps, workers, and launched agents do not
+inherit the vault passphrase itself.

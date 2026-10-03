@@ -18,7 +18,7 @@ use crate::command::{
     VaultBackupCommand, VaultBackupCreateRequest, VaultBackupRestoreRequest, VaultCommand,
     VaultImportCommand, VaultPassphraseChangeRequest, VaultPassphraseCommand,
 };
-use crate::runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE;
+use crate::runtime::{VAULT_PASSPHRASE_OPERATOR_GUIDANCE, vault_passphrase_operator_guidance};
 
 use super::{
     ResolvedVaultRuntime, add_vault_scope_fields, parse_env_mappings, parse_file_mappings,
@@ -220,8 +220,9 @@ pub(crate) fn capture_passphrase_change() -> Result<()> {
 }
 
 fn passphrase_change_prompt_unavailable() -> anyhow::Error {
+    let guidance = vault_passphrase_operator_guidance();
     anyhow!(
-        "`jig vault passphrase change` cannot prompt for the current and new vault passphrases because {NO_PROMPT_TERMINAL}. Without a terminal, operator-managed automation must provide both {PASSPHRASE_ENV} and {NEW_PASSPHRASE_ENV}. {VAULT_PASSPHRASE_OPERATOR_GUIDANCE}"
+        "`jig vault passphrase change` cannot prompt for the current and new vault passphrases because {NO_PROMPT_TERMINAL}. Without a terminal, operator-managed automation must provide both {PASSPHRASE_ENV} and {NEW_PASSPHRASE_ENV}. {guidance}"
     )
 }
 
@@ -238,12 +239,13 @@ fn require_captured_passphrase(kind: PromptKind) -> Result<()> {
     if passphrase_is_captured {
         return Ok(());
     }
+    let guidance = vault_passphrase_operator_guidance();
     Err(match kind {
         PromptKind::Unlock => anyhow!(
-            "`jig vault` cannot prompt for the vault passphrase because {NO_PROMPT_TERMINAL}, and no operator-provided {PASSPHRASE_ENV} is present. {VAULT_PASSPHRASE_OPERATOR_GUIDANCE}"
+            "`jig vault` cannot prompt for the vault passphrase because {NO_PROMPT_TERMINAL}, and no operator-provided {PASSPHRASE_ENV} is present. {guidance}"
         ),
         PromptKind::NewVault => anyhow!(
-            "The operator must choose and enter a new vault passphrase, but Jig cannot prompt for it because {NO_PROMPT_TERMINAL}. {VAULT_PASSPHRASE_OPERATOR_GUIDANCE}"
+            "The operator must choose and enter a new vault passphrase, but Jig cannot prompt for it because {NO_PROMPT_TERMINAL}. {guidance}"
         ),
     })
 }
@@ -375,10 +377,14 @@ fn clear_captured_passphrase() -> Result<()> {
 }
 
 pub(crate) fn strip_passphrase_environment() {
-    // SAFETY: every caller runs at the CLI capture boundary before any vault
-    // runtime can start background threads. Removing both reserved variables
-    // cannot affect the parent shell and prevents unrelated vault operations
-    // or their child processes from inheriting stale rotation material.
+    // SAFETY: every caller runs before Jig starts background threads: the
+    // vault CLI capture boundary (`cli/vault_run.rs`) and the capture paths it
+    // invokes, and bootstrap vault preparation before rendering. Non-vault
+    // commands already withheld both variables at CLI startup through
+    // `runtime::withhold_vault_passphrase_environment`. Removing both reserved
+    // variables cannot affect the parent shell and prevents unrelated vault
+    // operations or their child processes from inheriting stale rotation
+    // material.
     unsafe {
         std::env::remove_var(PASSPHRASE_ENV);
         std::env::remove_var(NEW_PASSPHRASE_ENV);
@@ -398,8 +404,9 @@ pub(super) fn passphrase() -> Result<SecretString> {
     }
     // Reached when capture was skipped, consumed, or cleared after rejection;
     // that does not prove a missing terminal, so keep the wording neutral.
+    let guidance = vault_passphrase_operator_guidance();
     Err(anyhow!(
-        "no captured vault passphrase is available for this command. {VAULT_PASSPHRASE_OPERATOR_GUIDANCE}"
+        "no captured vault passphrase is available for this command. {guidance}"
     ))
 }
 
@@ -411,8 +418,9 @@ fn passphrase_pair() -> Result<(SecretString, SecretString)> {
         current.zip(new)
     };
     pair.ok_or_else(|| {
+        let guidance = vault_passphrase_operator_guidance();
         anyhow!(
-            "no captured current and new vault passphrases are available for `jig vault passphrase change`. {VAULT_PASSPHRASE_OPERATOR_GUIDANCE}"
+            "no captured current and new vault passphrases are available for `jig vault passphrase change`. {guidance}"
         )
     })
 }
@@ -455,9 +463,12 @@ pub(super) fn hidden_terminal_input_available() -> bool {
 mod tests {
     use secrecy::ExposeSecret;
 
+    use crate::runtime::VAULT_PASSPHRASE_WITHHELD_ENV;
     use crate::test_env::{EnvVarGuard, lock_env};
 
     use super::*;
+
+    const WITHHELD_NOTE: &str = "outer Jig command withheld the vault passphrase";
 
     fn assert_operator_guidance(error: &str) {
         assert!(
@@ -490,6 +501,7 @@ mod tests {
     #[test]
     fn missing_captured_passphrases_route_to_the_operator() {
         let _env = lock_env();
+        let _marker = EnvVarGuard::remove(VAULT_PASSPHRASE_WITHHELD_ENV);
         clear_captured_passphrase().unwrap();
 
         let unlock = require_captured_passphrase(PromptKind::Unlock)
@@ -497,6 +509,7 @@ mod tests {
             .to_string();
         assert!(unlock.contains("cannot prompt for the vault passphrase"));
         assert!(unlock.contains(NO_PROMPT_TERMINAL));
+        assert!(!unlock.contains(WITHHELD_NOTE), "{unlock}");
         assert_operator_guidance(&unlock);
 
         let new_vault = require_captured_passphrase(PromptKind::NewVault)
@@ -521,6 +534,27 @@ mod tests {
         assert!(pair.contains("no captured current and new vault passphrases"));
         assert!(!pair.contains(NO_PROMPT_TERMINAL));
         assert_operator_guidance(&pair);
+    }
+
+    #[test]
+    fn missing_passphrase_errors_explain_an_outer_withheld_passphrase() {
+        let _env = lock_env();
+        let _current = EnvVarGuard::remove(PASSPHRASE_ENV);
+        let _new = EnvVarGuard::remove(NEW_PASSPHRASE_ENV);
+        let _marker = EnvVarGuard::set(VAULT_PASSPHRASE_WITHHELD_ENV, "1");
+        clear_captured_passphrase().unwrap();
+
+        for error in [
+            require_captured_passphrase(PromptKind::Unlock).unwrap_err(),
+            require_captured_passphrase(PromptKind::NewVault).unwrap_err(),
+            passphrase_change_prompt_unavailable(),
+            passphrase().unwrap_err(),
+            passphrase_pair().unwrap_err(),
+        ] {
+            let error = error.to_string();
+            assert!(error.contains(WITHHELD_NOTE), "{error}");
+            assert_operator_guidance(&error);
+        }
     }
 
     #[test]
