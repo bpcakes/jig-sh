@@ -121,8 +121,10 @@ jobs:
         run: bash scripts/check-generated-rust-clippy.sh
       - name: Validate behavioral fixtures
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        # Cargo reuses the development binary built above; fixture installs use
-        # a separate target directory and retain fresh installation roots.
+        # Reuse the binary built above even if Git metadata was refreshed by
+        # generated-project checks. Source inputs have not changed.
+        env:
+          JIG_DEV_BIN: target/debug/jig
         run: bash scripts/validate-fixtures.sh
 
   test:

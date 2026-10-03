@@ -44,7 +44,8 @@ macOS jobs use GitHub-hosted `macos-latest` runners. The repository's
 The Rust Tests workflow runs formatting and launcher checks together without
 building Jig. Generated-Rust Clippy validation and rendered fixtures share a job
 and development binary, with both generated-project toolchains installed before
-cache restoration. Full tests build and validate the source runtime through
+cache restoration. `validate-fixtures.sh` accepts an already-built `JIG_DEV_BIN`;
+as with the launcher, the caller is responsible for its freshness. Full tests build and validate the source runtime through
 `scripts/jig-dev check contract` before testing, avoiding a final development
 rebuild after test-only dependency features have been enabled. The Linux
 no-default-features test job first runs the explicit no-default-features build

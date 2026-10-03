@@ -16,8 +16,22 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-cargo build -p jig-sh --bin jig --locked >/dev/null
-export JIG_DEV_BIN="$ROOT_DIR/target/debug/jig"
+# As with the launcher, an explicit development binary is authoritative; its
+# caller is responsible for building it from the current source first.
+if [[ -n "${JIG_DEV_BIN:-}" ]]; then
+  case "$JIG_DEV_BIN" in
+    /*) ;;
+    *) JIG_DEV_BIN="$PWD/$JIG_DEV_BIN" ;;
+  esac
+  if [[ ! -x "$JIG_DEV_BIN" ]]; then
+    echo "JIG_DEV_BIN is not executable: $JIG_DEV_BIN" >&2
+    exit 1
+  fi
+else
+  cargo build -p jig-sh --bin jig --locked >/dev/null
+  JIG_DEV_BIN="$ROOT_DIR/target/debug/jig"
+fi
+export JIG_DEV_BIN
 export CARGO_TARGET_DIR="${JIG_FIXTURE_TARGET_DIR:-${CARGO_TARGET_DIR:-$TMP_DIR/cargo-target}}"
 
 source "$ROOT_DIR/scripts/fixtures/lib.sh"
