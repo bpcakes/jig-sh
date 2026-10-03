@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   disabled:
-    runs-on: ubicloud-standard-4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: No configured web apps
         run: echo "No web apps configured in .jig.toml"

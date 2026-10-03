@@ -36,12 +36,10 @@ runtime selected by `.jig/source-runtime-version`.
 
 ## Source repository CI
 
-Linux jobs use `ubicloud-standard-4-ubuntu-2404` (4 vCPU, 16 GB RAM,
-Ubuntu 24.04), except formatting/launcher and MSRV jobs, which use
-`ubicloud-standard-2-ubuntu-2404` (2 vCPU, 8 GB RAM). Policy and release jobs
-retain four cores.
-macOS jobs use GitHub-hosted `macos-latest` runners. The repository's
-`ci_github_runner` setting in `.jig.toml` records the Linux runner selection.
+Linux jobs use GitHub-hosted `ubuntu-latest` runners, including formatting,
+MSRV, policy, and release jobs. macOS jobs use GitHub-hosted `macos-latest`
+runners. The repository's `ci_github_runner` setting in `.jig.toml` records the
+Linux runner selection.
 
 The Rust Tests workflow runs formatting and launcher checks together without
 building Jig. Generated-Rust Clippy validation and rendered fixtures share a job
@@ -90,19 +88,20 @@ phases finish. Separate JUnit reports are saved under
 `.agent/.cache/test-reports/` and uploaded for seven days. Set
 `JIG_TEST_REPORT_DIR` to override the local report destination.
 
-Generated frontend tests pin Node 22 on Linux (the existing runner-image line)
-and Node 24 on macOS. Their package-manager scenario
-matrices are separate tests so Nextest can schedule and report each manager
+Generated frontend tests pin Node 22 on Linux and Node 24 on macOS. Their
+package-manager scenario matrices are separate tests so Nextest can schedule and report each manager
 independently, while retaining every scenario and the two-test frontend limit.
 The local vault partition continues to use identical workspace features for
 both of its phases.
 
-The Rust Tests workflow accepts `benchmark_only=true` with `runner_size=2` or
-`4` on manual runs. This runs just formatting/launcher and MSRV checks with the
-same commands and cache keys as ordinary CI, for comparing complete job time
-and billed minutes on the two runner sizes.
+The Rust Tests workflow accepts `benchmark_only=true` on manual runs. This
+runs just formatting/launcher and MSRV checks with the same commands, runner,
+and cache keys as ordinary CI, for measuring complete job time.
 
-The 2026-10-03 comparison at `b8d34b0c` used two successful runs per size:
+The separate [Ubicloud trial](https://github.com/bpcakes/jig-sh/pull/73) compared
+runner sizes on 2026-10-03 at `b8d34b0c`, using two successful runs per size.
+The following results describe that provider trial; they do not describe the
+GitHub-hosted runners used by this configuration:
 
 | Job | 2-core durations | 4-core durations | Total estimated 2-core / 4-core cost |
 | --- | --- | --- | --- |
