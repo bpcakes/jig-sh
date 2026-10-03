@@ -12,7 +12,11 @@ use super::VAULT_PASSPHRASE_OPERATOR_GUIDANCE;
 /// passphrase variable, so nested vault commands can explain the missing value.
 pub(crate) const VAULT_PASSPHRASE_WITHHELD_ENV: &str = "JIG_VAULT_PASSPHRASE_WITHHELD";
 
-const WITHHELD_PASSPHRASE_NOTE: &str = "An outer Jig command withheld the vault passphrase from its child processes (JIG_VAULT_PASSPHRASE_WITHHELD=1), so this nested command cannot use it. Run vault commands directly rather than from Jig checks, run actions, dev apps, or Jig-launched agents, or wrap the outer command in `scripts/jig vault exec --env-file FILE -- ...` so its children receive resolved values instead of the passphrase.";
+/// Agents read this note, so it offers `vault exec` wrapping only for the
+/// non-interactive outer commands the passphrase-withholding docs allow:
+/// wrapping `scripts/jig dev` breaks app shutdown, and wrapping an agent
+/// launch hands every resolved value to the agent session.
+const WITHHELD_PASSPHRASE_NOTE: &str = "An outer Jig command withheld the vault passphrase from its child processes (JIG_VAULT_PASSPHRASE_WITHHELD=1), so this nested command cannot use it. Run vault commands directly rather than from Jig checks, run actions, dev apps, or Jig-launched agents. To give a non-interactive `scripts/jig check` or `scripts/jig run` invocation resolved values instead of the passphrase, wrap that invocation in `scripts/jig vault exec --env-file FILE -- ...`. Do not wrap `scripts/jig dev` or an agent launch this way; a Jig-launched agent must instead ask the operator to run the vault command in a terminal.";
 
 /// Removes both reserved variables from Jig's own environment, and therefore
 /// from every child it starts, then sets the non-secret withheld marker. The
@@ -115,11 +119,16 @@ mod tests {
         for expected in [
             "outer Jig command withheld the vault passphrase",
             "Run vault commands directly",
-            "scripts/jig vault exec --env-file FILE",
-            "resolved values instead of the passphrase",
+            "non-interactive `scripts/jig check` or `scripts/jig run` invocation resolved values instead of the passphrase",
+            "wrap that invocation in `scripts/jig vault exec --env-file FILE -- ...`",
+            "Do not wrap `scripts/jig dev` or an agent launch this way",
+            "a Jig-launched agent must instead ask the operator to run the vault command in a terminal",
         ] {
             assert!(guidance.contains(expected), "{expected}: {guidance}");
         }
+        // Wrapping is offered only for check and run invocations, never for
+        // an arbitrary outer command such as a dev app or an agent launch.
+        assert!(!guidance.contains("wrap the outer command"), "{guidance}");
         assert!(!guidance.contains("export "), "{guidance}");
 
         for (name, value) in [
