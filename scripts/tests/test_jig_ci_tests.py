@@ -42,7 +42,8 @@ class TestBuildReuseTests(unittest.TestCase):
                 marker = root / "tests-started"
                 first = not marker.exists()
                 marker.touch()
-                report = root / "custom target/nextest/ci/junit.xml"
+                profile = args[args.index("-P") + 1]
+                report = root / "custom target/nextest" / profile / "junit.xml"
                 report.parent.mkdir(parents=True, exist_ok=True)
                 report.write_text('<testsuites tests="1"/>')
                 if first and os.environ.get("EXAMPLE_TEST_FAIL"):
@@ -54,8 +55,8 @@ class TestBuildReuseTests(unittest.TestCase):
         self.env = dict(os.environ, EXAMPLE_ROOT=str(self.repo), PATH=str(tools) + os.pathsep + os.environ["PATH"])
         self.env.pop("JIG_TEST_REPORT_DIR", None)
 
-    def invoke(self):
-        return subprocess.run(["/bin/bash", "scripts/ci/test-rust.sh", "minimal"],
+    def invoke(self, mode="minimal"):
+        return subprocess.run(["/bin/bash", "scripts/ci/test-rust.sh", mode],
                               cwd=self.repo, env=self.env, text=True, capture_output=True, timeout=10)
 
     def calls(self):
@@ -76,6 +77,26 @@ class TestBuildReuseTests(unittest.TestCase):
         self.env["EXAMPLE_BUILD_FAIL"] = "1"
         self.assertEqual(self.invoke().returncode, 23)
         self.assertFalse((self.repo / "tests-started").exists())
+
+    def test_workspace_mode_accepts_empty_feature_arguments_on_bash_3(self):
+        result = self.invoke("workspace")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_focused_mode_compiles_all_minimal_targets_before_selecting_tests(self):
+        result = self.invoke("minimal-focused")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        builds = [args for args in self.calls() if args[:2] == ["nextest", "list"]]
+        self.assertEqual(len(builds), 1)
+        self.assertIn("--no-default-features", builds[0])
+        self.assertNotIn("-E", builds[0])
+        runs = [args for args in self.calls() if args[:2] == ["nextest", "run"]]
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0][runs[0].index("-P") + 1], "minimal-ci")
+        self.assertTrue((self.repo / ".agent/.cache/test-reports/minimal-focused/compatibility.xml").is_file())
+
+    def test_focused_failure_is_not_masked_by_exit(self):
+        self.env["EXAMPLE_TEST_FAIL"] = "1"
+        self.assertEqual(self.invoke("minimal-focused").returncode, 42)
 
     def test_later_success_cannot_mask_failed_phase(self):
         self.env["EXAMPLE_TEST_FAIL"] = "1"

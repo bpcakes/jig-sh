@@ -56,7 +56,7 @@ on:
         description: CPU count for the formatting and MSRV benchmark
         type: choice
         options: ['2', '4']
-        default: '4'
+        default: '2'
 
 permissions:
   contents: read
@@ -68,7 +68,7 @@ concurrency:
 jobs:
   launcher-contract:
     name: Formatting and launcher checks
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner_size == '2' && 'ubicloud-standard-2-ubuntu-2404' || 'ubicloud-standard-4-ubuntu-2404' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner_size == '4' && 'ubicloud-standard-4-ubuntu-2404' || 'ubicloud-standard-2-ubuntu-2404' }}
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -149,7 +149,8 @@ jobs:
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '24'
+          # Keep Linux on its image's Node 22 line; avoid the slower macOS system Node.
+          node-version: ${{ runner.os == 'macOS' && '24' || '22' }}
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
@@ -197,7 +198,8 @@ jobs:
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '24'
+          # Keep Linux on its image's Node 22 line; avoid the slower macOS system Node.
+          node-version: ${{ runner.os == 'macOS' && '24' || '22' }}
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
@@ -234,7 +236,7 @@ jobs:
 
   msrv:
     name: cargo check --workspace --all-targets --all-features (MSRV 1.88)
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner_size == '2' && 'ubicloud-standard-2-ubuntu-2404' || 'ubicloud-standard-4-ubuntu-2404' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner_size == '4' && 'ubicloud-standard-4-ubuntu-2404' || 'ubicloud-standard-2-ubuntu-2404' }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -263,7 +265,8 @@ jobs:
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '24'
+          # Keep Linux on its image's Node 22 line; avoid the slower macOS system Node.
+          node-version: ${{ runner.os == 'macOS' && '24' || '22' }}
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
@@ -280,7 +283,7 @@ jobs:
       - name: Run no-default-features build
         run: cargo build -p jig-sh --no-default-features --locked
       - name: Run no-default-features tests
-        run: bash scripts/ci/test-rust.sh minimal
+        run: bash scripts/ci/test-rust.sh ${{ github.event_name == 'pull_request' && 'minimal-focused' || 'minimal' }}
       # Nextest does not run doctests. Preserve cargo test's documentation coverage.
       - name: Run no-default-features doctests
         run: cargo test -p jig-sh --no-default-features --doc --locked
@@ -309,7 +312,8 @@ jobs:
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '24'
+          # Keep Linux on its image's Node 22 line; avoid the slower macOS system Node.
+          node-version: ${{ runner.os == 'macOS' && '24' || '22' }}
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
@@ -324,7 +328,7 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Run no-default-features tests
-        run: bash scripts/ci/test-rust.sh minimal
+        run: bash scripts/ci/test-rust.sh ${{ github.event_name == 'pull_request' && 'minimal-focused' || 'minimal' }}
       # Nextest does not run doctests. Preserve cargo test's documentation coverage.
       - name: Run no-default-features doctests
         run: cargo test -p jig-sh --no-default-features --doc --locked

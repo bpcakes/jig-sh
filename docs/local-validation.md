@@ -36,8 +36,10 @@ runtime selected by `.jig/source-runtime-version`.
 
 ## Source repository CI
 
-All Linux jobs in this repository use `ubicloud-standard-4-ubuntu-2404`
-(4 vCPU, 16 GB RAM, Ubuntu 24.04), including policy and release workflows.
+Linux jobs use `ubicloud-standard-4-ubuntu-2404` (4 vCPU, 16 GB RAM,
+Ubuntu 24.04), except formatting/launcher and MSRV jobs, which use
+`ubicloud-standard-2-ubuntu-2404` (2 vCPU, 8 GB RAM). Policy and release jobs
+retain four cores.
 macOS jobs use GitHub-hosted `macos-latest` runners. The repository's
 `ci_github_runner` setting in `.jig.toml` records the Linux runner selection.
 
@@ -62,14 +64,24 @@ inputs. When every changed path is Beads metadata, an `AGENTS.md`, or
 `agent-map.md`, only Linux repository policy checks run; the macOS job stops
 after checkout and classification, and both platforms skip Clippy and proxy
 tests. Unknown paths, unavailable comparison trees, manual runs, and merge
-queues retain full policy coverage. The generated project workflows retain their own layout in
+queues retain full policy coverage. The generated project workflows retain
+their own layout in
 `templates/project/.github/workflows/`.
 
 Manual policy runs compare the selected ref with its merge base against the
 remote default branch, so they also work without a local `master` branch.
 
-The locked test suite uses `scripts/ci/test-rust.sh workspace`; minimal-feature
-jobs use its `minimal` mode. Each invocation builds the complete selected set
+The locked test suite uses `scripts/ci/test-rust.sh workspace`. Minimal-feature
+jobs use `minimal-focused` on pull requests and `minimal` on master, merge
+queues, and full manual runs. Both modes compile every minimal-feature test
+target; focused mode executes CLI/JSON and launcher-repair integration tests,
+proxy-disabled dispatch and discovery, runtime compatibility, configuration
+and TLD validation, and template/runtime repair tests. Full default-feature
+tests and all-target minimal Clippy still run on both platforms for every PR.
+This intentionally reduces repeated minimal-feature runtime coverage on PRs;
+master and merge queues retain the exhaustive matrix.
+
+For exhaustive execution, each invocation builds the complete selected set
 of test binaries once, then passes Cargo and binary metadata to Nextest for
 the non-vault, vault, and serial vault-PTY phases. Test-induced Git index
 refreshes cannot cause an intervening rebuild. Each phase retains the default
@@ -78,7 +90,8 @@ phases finish. Separate JUnit reports are saved under
 `.agent/.cache/test-reports/` and uploaded for seven days. Set
 `JIG_TEST_REPORT_DIR` to override the local report destination.
 
-Generated frontend tests use Node 24 in CI. Their package-manager scenario
+Generated frontend tests pin Node 22 on Linux (the existing runner-image line)
+and Node 24 on macOS. Their package-manager scenario
 matrices are separate tests so Nextest can schedule and report each manager
 independently, while retaining every scenario and the two-test frontend limit.
 The local vault partition continues to use identical workspace features for
@@ -88,6 +101,23 @@ The Rust Tests workflow accepts `benchmark_only=true` with `runner_size=2` or
 `4` on manual runs. This runs just formatting/launcher and MSRV checks with the
 same commands and cache keys as ordinary CI, for comparing complete job time
 and billed minutes on the two runner sizes.
+
+The 2026-10-03 comparison at `b8d34b0c` used two successful runs per size:
+
+| Job | 2-core durations | 4-core durations | Total estimated 2-core / 4-core cost |
+| --- | --- | --- | --- |
+| Formatting and launcher | 33s, 30s | 36s, 42s | $0.004 / $0.008 |
+| MSRV | 47s, 85s | 46s, 70s | $0.006 / $0.012 |
+
+Runs: [2-core A](https://github.com/bpcakes/jig-sh/actions/runs/37154621162),
+[4-core A](https://github.com/bpcakes/jig-sh/actions/runs/37154714188),
+[2-core B](https://github.com/bpcakes/jig-sh/actions/runs/37154821090),
+[4-core B](https://github.com/bpcakes/jig-sh/actions/runs/37154976390).
+MSRV restored dependency caches. Estimates round each complete job up to a
+minute at the published Premium rates of $0.002/minute for two cores and
+$0.004/minute for four, before credits and storage. Both pairs crossed the
+same billing boundaries, so two cores halved their sampled compute cost.
+These are a small warm-cache sample, not an invoice or a cold-build forecast.
 
 The Linux full-test and release jobs start a systemd user manager and export its
 bus address before testing proxy shutdown. These tests exercise the real service

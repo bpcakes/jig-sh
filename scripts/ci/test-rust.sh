@@ -4,11 +4,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 mode="${1:-workspace}"
+profile=ci
 case "$mode" in
   workspace) build_args=(--workspace); feature_args=() ;;
-  minimal) build_args=(-p jig-sh --no-default-features); feature_args=(--no-default-features) ;;
-  *) echo "Usage: scripts/ci/test-rust.sh [workspace|minimal]" >&2; exit 2 ;;
+  minimal|minimal-focused) build_args=(-p jig-sh --no-default-features); feature_args=(--no-default-features) ;;
+  *) echo "Usage: scripts/ci/test-rust.sh [workspace|minimal|minimal-focused]" >&2; exit 2 ;;
 esac
+if [ "$mode" = minimal-focused ]; then profile=minimal-ci; fi
 
 metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/jig-test-build.XXXXXX")"
 trap 'rm -rf "$metadata_dir"' EXIT
@@ -26,14 +28,19 @@ pty_filter='package(jig-sh) & binary(vault_tui)'
 run_phase() {
   local name="$1" result=0
   shift
-  rm -f "$target_dir/nextest/ci/junit.xml" "$report_dir/$name.xml"
-  cargo nextest run "${reuse_args[@]}" -P ci \
+  rm -f "$target_dir/nextest/$profile/junit.xml" "$report_dir/$name.xml"
+  cargo nextest run "${reuse_args[@]}" -P "$profile" \
     --status-level fail --final-status-level fail "$@" || result=$?
-  if [ -f "$target_dir/nextest/ci/junit.xml" ]; then
-    cp "$target_dir/nextest/ci/junit.xml" "$report_dir/$name.xml"
+  if [ -f "$target_dir/nextest/$profile/junit.xml" ]; then
+    cp "$target_dir/nextest/$profile/junit.xml" "$report_dir/$name.xml"
   fi
   return "$result"
 }
+
+if [ "$mode" = minimal-focused ]; then
+  run_phase compatibility
+  exit
+fi
 
 status=0
 run_phase non-vault -E "not ($vault_filter)" || status=$?
