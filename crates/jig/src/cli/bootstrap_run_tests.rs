@@ -69,16 +69,23 @@ fn noninteractive_init_vault_error_names_init_and_its_escape_hatches() {
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("JIG_VAULT_PASSPHRASE is required"));
-    assert!(error.contains("`jig init`"));
+    assert!(error.contains("`jig init` cannot prompt for an initial vault passphrase"));
+    assert!(error.contains("not running from a terminal"));
+    assert!(!error.contains("--no-input"));
     assert!(error.contains("--no-vault"));
-    assert!(error.contains("export JIG_VAULT_PASSPHRASE"));
+    assert!(error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
+    assert!(!error.contains("export "));
 
     let no_input_error =
         BootstrapVaultPlan::resolve(Initialize, NoInput, Prompt, BootstrapVaultCommand::Adopt)
             .unwrap_err()
             .to_string();
     assert!(no_input_error.contains("`jig adopt --write`"));
+    assert!(no_input_error.contains("the exact command must omit --no-input"));
+    assert!(!no_input_error.contains("not running from a terminal"));
+    assert!(no_input_error.contains("--no-vault"));
+    assert!(no_input_error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
+    assert!(!no_input_error.contains("export "));
 }
 
 #[test]

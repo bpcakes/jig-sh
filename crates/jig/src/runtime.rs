@@ -181,6 +181,11 @@ pub(crate) fn preflight_scoped_vault_command(
     vault::preflight_scoped_command(command)
 }
 
+/// Value-free operator guidance appended to every vault passphrase-unavailable
+/// diagnostic. Agents read these errors, so they must route passphrase entry to
+/// the operator instead of suggesting environment assignments.
+pub(crate) const VAULT_PASSPHRASE_OPERATOR_GUIDANCE: &str = "This step needs the operator: ask them to run the exact command in a terminal (stdin and stderr attached to an interactive terminal) so they can enter the passphrase at Jig's hidden prompt, or to provide JIG_VAULT_PASSPHRASE to automation outside the agent session. Agents and automation must never request, print, store, or choose a vault passphrase, and must not set JIG_VAULT_PASSPHRASE or JIG_VAULT_NEW_PASSPHRASE themselves (no inline VAR=value prefixes, exports, or .env files). Command-line passphrases are not supported.";
+
 pub(crate) fn capture_vault_passphrase() -> Result<()> {
     // SAFETY: Callers must invoke this before starting background threads in the
     // process; `runtime::vault` clears the captured environment variable.

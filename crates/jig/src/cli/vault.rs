@@ -19,11 +19,14 @@ Examples:
   jig vault run --json --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'";
 
 const VAULT_INIT_AFTER_HELP: &str = "\
-Jig prompts twice for a new vault passphrase when run from a terminal. Scripts
-can set JIG_VAULT_PASSPHRASE instead. Command-line passphrases are not accepted.
+Jig prompts twice for a new vault passphrase when run from a terminal; the
+operator chooses and enters it. Automation the operator runs outside any agent
+session can provide JIG_VAULT_PASSPHRASE instead. Command-line passphrases are
+not accepted. Agents must ask the operator to run this command in a terminal
+and must never request, print, store, or choose the passphrase, or set
+JIG_VAULT_PASSPHRASE themselves.
 
-Examples:
-  export JIG_VAULT_PASSPHRASE='choose-a-long-local-passphrase'
+Example:
   jig vault init";
 
 const VAULT_SECRET_SET_AFTER_HELP: &str = "\
@@ -137,9 +140,11 @@ currently Unix-only.";
 const VAULT_PASSPHRASE_CHANGE_AFTER_HELP: &str = "\
 Reseals the complete version 2 vault under a new passphrase without changing
 its fields, identity, or timestamps. Interactive use prompts once for the
-current passphrase and twice for the new passphrase. Non-interactive use must
-set both JIG_VAULT_PASSPHRASE and JIG_VAULT_NEW_PASSPHRASE. Passphrases are
-never accepted as command-line arguments.
+current passphrase and twice for the new passphrase. Without a terminal,
+automation the operator runs outside any agent session must provide both
+JIG_VAULT_PASSPHRASE and JIG_VAULT_NEW_PASSPHRASE; agents must ask the operator
+to run this command in a terminal and never set either variable themselves.
+Passphrases are never accepted as command-line arguments.
 
 Example:
   jig vault passphrase change";

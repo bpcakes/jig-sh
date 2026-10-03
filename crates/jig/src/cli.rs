@@ -205,8 +205,10 @@ are project-relative: jig://Production/TOKEN selects the current repo-scoped,
 global, or explicit-home vault; the project name is never a reference segment.
 Both concealed and text fields are encrypted. Concealed fields are redaction
 needles, while text fields remain visible when deliberately passed to a command.
-Terminal use prompts for the vault passphrase; scripts can set
-JIG_VAULT_PASSPHRASE. Command-line passphrases are not accepted.
+Terminal use prompts for the vault passphrase; automation the operator runs
+outside any agent session can provide JIG_VAULT_PASSPHRASE. Agents must ask the
+operator to run passphrase-requiring commands in a terminal and must never
+request, choose, or set the passphrase. Command-line passphrases are not accepted.
 
 Quick start:
   jig vault init

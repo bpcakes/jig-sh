@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::init_wizard::{preflight_init_package_manager, prepare_init_interaction};
 use super::output::print_json;
+use crate::runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE;
 use crate::{bootstrap, context::RepoContext, runtime};
 
 pub(super) fn run_init_command(mut opts: bootstrap::InitOpts, json_output: bool) -> Result<()> {
@@ -182,8 +183,15 @@ impl BootstrapVaultPlan {
             || (input_mode == BootstrapInputMode::NoInput
                 && availability != BootstrapPassphraseAvailability::Environment)
         {
+            // `--no-input` never prompts, even from a terminal, so only that
+            // mode tells the operator to drop the flag.
+            let reason = if input_mode == BootstrapInputMode::NoInput {
+                "with --no-input; for a terminal prompt, the exact command must omit --no-input"
+            } else {
+                "because it is not running from a terminal"
+            };
             anyhow::bail!(
-                "JIG_VAULT_PASSPHRASE is required because `{}` cannot prompt for an initial vault passphrase in non-interactive mode; pass --no-vault to skip initial vault setup, or export JIG_VAULT_PASSPHRASE",
+                "`{}` cannot prompt for an initial vault passphrase {reason}. Pass --no-vault to skip initial vault setup; the operator can run `jig vault init` in a terminal later. {VAULT_PASSPHRASE_OPERATOR_GUIDANCE}",
                 command.invocation()
             );
         }
