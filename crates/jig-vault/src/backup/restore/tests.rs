@@ -330,28 +330,48 @@ fn restore_clears_inherited_acls_before_writing_or_installing() {
 }
 
 #[cfg(target_os = "macos")]
+fn acl_fixture_directory(root: &Path, name: &str, entry: &str) -> PathBuf {
+    let directory = root.join(name);
+    fs::create_dir(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    add_acl_entry(&directory, entry);
+    directory
+}
+
+#[cfg(target_os = "macos")]
 #[test]
-fn preflight_refuses_parents_whose_acl_grants_shared_write() {
-    let temp = private_tempdir();
-    let shared = temp.path().join("shared-write");
-    fs::create_dir(&shared).unwrap();
-    fs::set_permissions(&shared, fs::Permissions::from_mode(0o700)).unwrap();
-    add_acl_entry(&shared, "everyone allow add_file,add_subdirectory");
+fn preflight_refuses_parents_whose_acl_allows_write_or_delete() {
+    // Place fixtures below the sticky shared /private/tmp: an allowed
+    // `delete` still lets another user rename a parent away from there.
+    let temp = tempfile::Builder::new()
+        .prefix("jig-vault-restore-acl-")
+        .tempdir_in("/private/tmp")
+        .unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
 
-    for home in [
-        shared.join("restored-home"),
-        shared.join("vault-base/scopes/repo-scope"),
+    for (name, entry) in [
+        ("allow-write", "everyone allow add_file,add_subdirectory"),
+        ("allow-delete", "everyone allow delete"),
     ] {
-        let error = preflight_target(home).unwrap_err().to_string();
-        assert!(error.contains("grants shared write access"), "{error}");
+        let parent = acl_fixture_directory(temp.path(), name, entry);
+        for home in [
+            parent.join("restored-home"),
+            parent.join("vault-base/scopes/repo-scope"),
+        ] {
+            let error = preflight_target(home).unwrap_err().to_string();
+            assert!(
+                error.contains("lets other users write to, delete, or re-permission it"),
+                "{entry}: {error}"
+            );
+        }
+        assert!(!parent.join("vault-base").exists(), "{entry}");
     }
-    assert!(!shared.join("vault-base").exists());
 
-    let narrowed = temp.path().join("deny-only");
-    fs::create_dir(&narrowed).unwrap();
-    fs::set_permissions(&narrowed, fs::Permissions::from_mode(0o700)).unwrap();
-    add_acl_entry(&narrowed, "everyone deny delete");
-    preflight_target(narrowed.join("restored-home")).unwrap();
+    let narrowed = acl_fixture_directory(temp.path(), "deny-delete", "everyone deny delete");
+    let direct = preflight_target(narrowed.join("restored-home")).unwrap();
+    assert!(!direct.home.exists());
+    let chained = preflight_target(narrowed.join("vault-base/scopes/repo-scope")).unwrap();
+    assert!(!chained.home.exists());
 }
 
 #[cfg(target_os = "macos")]
@@ -466,4 +486,50 @@ fn preflight_refuses_a_volume_that_ignores_ownership_before_creating_parents() {
         assert!(error.contains("ignores file ownership"), "{error}");
     }
     assert!(!root.join("vault-base").exists());
+}
+
+#[test]
+fn install_refuses_unexpected_or_non_private_staged_entries() {
+    type Tamper = fn(&Path);
+    let cases: [(&str, Tamper, Tamper, &str); 3] = [
+        (
+            "unexpected-entry",
+            |stage| fs::write(stage.join("extra"), b"extra").unwrap(),
+            |stage| fs::remove_file(stage.join("extra")).unwrap(),
+            "unexpected entry",
+        ),
+        (
+            "group-readable-file",
+            |stage| {
+                fs::set_permissions(stage.join(AUDIT_FILE), fs::Permissions::from_mode(0o640))
+                    .unwrap();
+            },
+            |stage| {
+                fs::set_permissions(stage.join(AUDIT_FILE), fs::Permissions::from_mode(0o600))
+                    .unwrap();
+            },
+            "not owner-only",
+        ),
+        (
+            "symlinked-lock",
+            |stage| std::os::unix::fs::symlink(VAULT_FILE, stage.join(LOCK_FILE)).unwrap(),
+            |stage| fs::remove_file(stage.join(LOCK_FILE)).unwrap(),
+            "not a regular file",
+        ),
+    ];
+    let temp = private_tempdir();
+    for (label, tamper, untamper, expected) in cases {
+        let target = preflight_target(temp.path().join(label)).unwrap();
+        let mut staging = OwnedStaging::create(&target).unwrap();
+        staging.write_file(VAULT_FILE, b"vault").unwrap();
+        staging.write_file(AUDIT_FILE, b"audit").unwrap();
+        tamper(&staging.path);
+
+        let error = staging.install(&target).unwrap_err().to_string();
+
+        assert!(error.contains(expected), "{label}: {error}");
+        assert!(!target.home.exists(), "{label}");
+        untamper(&staging.path);
+        staging.cleanup().unwrap();
+    }
 }

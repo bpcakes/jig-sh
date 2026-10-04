@@ -4,7 +4,8 @@
 //! inherited allow entry survives `chmod 0700`/`0600` and can still grant
 //! other principals access. Restore therefore clears every entry from the
 //! directories and files it creates before writing contents into them, and
-//! refuses existing parents whose ACLs grant shared write access. Linux POSIX
+//! refuses existing parents whose ACLs grant other principals write, delete,
+//! or permission-change access. Linux POSIX
 //! ACLs need no counterpart: the explicit mode change also narrows their mask.
 
 #[cfg(target_os = "macos")]
@@ -29,16 +30,21 @@ mod darwin {
     const ACL_NEXT_ENTRY: c_int = -1;
     const ACL_EXTENDED_ALLOW: c_int = 1;
     const ACL_ADD_FILE: c_int = 1 << 2;
+    const ACL_DELETE: c_int = 1 << 4;
     const ACL_ADD_SUBDIRECTORY: c_int = 1 << 5;
     const ACL_DELETE_CHILD: c_int = 1 << 6;
     const ACL_WRITE_SECURITY: c_int = 1 << 12;
     const ACL_CHANGE_OWNER: c_int = 1 << 13;
 
-    /// Directory permissions equivalent to the group/other write bits that
-    /// restore already refuses: adding, removing, or renaming entries, or
-    /// changing the directory's own permissions or owner.
-    const SHARED_WRITE_PERMISSIONS: [c_int; 5] = [
+    /// Directory permissions that let another principal disturb a protected
+    /// parent: adding, removing, or renaming its entries (the group/other
+    /// write bits restore already refuses), deleting or renaming the
+    /// directory itself, or changing its permissions or owner. XNU honors an
+    /// allowed `delete` before sticky-directory protection, so even a parent
+    /// inside a sticky shared directory can be moved away when it grants it.
+    const UNSAFE_PARENT_PERMISSIONS: [c_int; 6] = [
         ACL_ADD_FILE,
+        ACL_DELETE,
         ACL_ADD_SUBDIRECTORY,
         ACL_DELETE_CHILD,
         ACL_WRITE_SECURITY,
@@ -71,7 +77,7 @@ mod darwin {
 
     struct Entry {
         allows: bool,
-        grants_shared_write: bool,
+        grants_unsafe_parent_access: bool,
     }
 
     impl Acl {
@@ -121,13 +127,13 @@ mod darwin {
                         )
                     });
                 }
-                let grants_shared_write = SHARED_WRITE_PERMISSIONS
+                let grants_unsafe_parent_access = UNSAFE_PARENT_PERMISSIONS
                     .iter()
                     // SAFETY: `permset` belongs to the live entry above.
                     .any(|permission| unsafe { acl_get_perm_np(permset, *permission) } == 1);
                 entries.push(Entry {
                     allows: tag == ACL_EXTENDED_ALLOW,
-                    grants_shared_write,
+                    grants_unsafe_parent_access,
                 });
             }
         }
@@ -199,7 +205,8 @@ mod darwin {
         Ok(())
     }
 
-    /// Refuses an existing directory whose ACL grants write-equivalent access.
+    /// Refuses an existing directory whose ACL grants another principal
+    /// write, delete, or permission-change access.
     ///
     /// Deny entries, such as the "everyone deny delete" entries macOS places
     /// on home folders, only narrow access and are accepted.
@@ -211,10 +218,10 @@ mod darwin {
         if acl
             .entries(path)?
             .iter()
-            .any(|entry| entry.allows && entry.grants_shared_write)
+            .any(|entry| entry.allows && entry.grants_unsafe_parent_access)
         {
             bail!(
-                "restore target directory has an access control list that grants shared write access: {}",
+                "restore target directory has an access control list that lets other users write to, delete, or re-permission it: {}",
                 path.display()
             );
         }
