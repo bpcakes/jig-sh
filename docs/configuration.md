@@ -1301,7 +1301,9 @@ inspect run history. Jig no longer reads plans, sessions, or decisions, so plans
 that were open at upgrade are not listed anywhere.
 
 Checks and runs on contract v6 and later append run history to
-`.agent/state/runs.jsonl`. Jig no longer writes receipts or returns
+`.agent/state/runs.jsonl`. This is local execution history, ignored by Git in
+generated repositories. It supports run inspection, state summaries, and the UI;
+it does not need to be committed. Jig no longer writes receipts or returns
 `receipt_id`: loop occurrences record their evidence under Git metadata instead
 (see [Loop evidence](public-contract.md#loop-evidence)). Read-only inspection
 commands such as `state summary`, `status`, and `loop show` write nothing. The
@@ -1315,6 +1317,14 @@ before selecting validation commands for a worker prompt.
 A target that times out, is cancelled, or fails records its conclusion in run
 history along with the final 4,000 bytes of its stdout and stderr as
 `output_tail`.
+
+For an existing repository that tracks the journal, add
+`.agent/state/runs.jsonl` to `.gitignore`, then run
+`git rm --cached -- .agent/state/runs.jsonl` and commit the tracking change.
+This leaves the current checkout's history on disk. Preserve any needed history
+in other clones before they pull that deletion commit. `jig update` refreshes
+managed ignore rules but does not remove files from the Git index. Previously
+committed journals remain in Git history.
 
 Use `scripts/jig state diagnose` for a read-only size and integrity report.
 `ok` only means the command ran; the `integrity` object and `recommendations`

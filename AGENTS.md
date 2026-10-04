@@ -14,6 +14,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs or receipts.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
+- Keep `.agent/state/runs.jsonl` as local execution history; do not stage or commit it.
 
 ## Compatibility And Cutovers
 
