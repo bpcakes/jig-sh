@@ -132,6 +132,19 @@ run_release_checks() {
         self.assertNotEqual(self.run_shell("release_check 1.2.3").returncode, 0)
         self.assertFalse(self.receipt.exists())
 
+    def test_ignored_local_run_history_preserves_validation_and_contents(self):
+        self.git("rm", "--cached", ".agent/state/runs.jsonl")
+        (self.root / ".gitignore").write_text(".agent/state/runs.jsonl\n")
+        self.git("add", ".gitignore")
+        self.git("commit", "-qm", "Keep run history local")
+        self.checked()
+        journal = self.root / ".agent/state/runs.jsonl"
+        history = '{"event":"example"}\n'
+        journal.write_text(history)
+        self.assert_ok(self.run_shell("require_release_validation 1.2.3"))
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual(journal.read_text(), history)
+
     def test_allow_dirty_never_authorizes_reuse(self):
         self.checked()
         env = dict(self.env, ALLOW_DIRTY="1")
