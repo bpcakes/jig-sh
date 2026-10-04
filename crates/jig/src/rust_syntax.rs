@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use proc_macro2::{TokenStream, TokenTree};
 
 // Bound flat unary, binary, type, and method chains as well as delimiter depth.
+// Independent semicolon-separated declarations/statements share no AST path.
 const MAX_TOKEN_PATH_COST: usize = 2_048;
 const PARSER_STACK_BYTES: usize = 64 * 1024 * 1024;
 
@@ -48,14 +49,22 @@ fn check_token_complexity(text: &str, purpose: &str) -> Result<()> {
             cost += 1;
             if cost > MAX_TOKEN_PATH_COST {
                 bail!(
-                    "{purpose}: Rust source exceeds token complexity limit ({MAX_TOKEN_PATH_COST})"
+                    "{purpose}: Rust source exceeds token complexity limit ({MAX_TOKEN_PATH_COST} tokens along enclosing semicolon-separated regions); simplify nested syntax or split long expressions/declarations"
                 );
             }
-            if let TokenTree::Group(group) = token {
-                children.push(group.stream());
+            match token {
+                TokenTree::Group(group) => children.push(group.stream()),
+                TokenTree::Punct(punct) if punct.as_char() == ';' => {
+                    pending.extend(children.drain(..).map(|child| (child, cost)));
+                    cost = ancestors;
+                }
+                _ => {}
             }
         }
-        // Charge siblings at each enclosing level, not just delimiter nesting.
+        // Charge the complete enclosing region, including tokens after a group:
+        // a trailing method/binary chain still contributes to the AST depth.
+        // Do not reset at commas: nested generic types can contain commas at
+        // the same token-tree level and still form one recursive AST path.
         pending.extend(children.into_iter().map(|child| (child, cost)));
     }
     Ok(())
