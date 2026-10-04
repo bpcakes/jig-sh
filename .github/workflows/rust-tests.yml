@@ -52,6 +52,11 @@ on:
         description: Run only the formatting and MSRV jobs for runner comparison
         type: boolean
         default: false
+      runner_size:
+        description: CPU count for the formatting and MSRV benchmark
+        type: choice
+        options: ['2', '4']
+        default: '2'
 
 permissions:
   contents: read
@@ -63,7 +68,7 @@ concurrency:
 jobs:
   launcher-contract:
     name: Formatting and launcher checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner_size == '4' && 'ubicloud-standard-4-ubuntu-2404' || 'ubicloud-standard-2-ubuntu-2404' }}
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -87,7 +92,7 @@ jobs:
   rendered-fixtures:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.benchmark_only }}
     name: Validate rendered fixtures and generated Rust
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
     env:
       JIG_FIXTURE_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/fixture-builds
@@ -136,7 +141,7 @@ jobs:
   test:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.benchmark_only }}
     name: scripts/jig check test-locked
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -144,7 +149,7 @@ jobs:
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # Pin Node for predictable frontend fixture performance on each platform.
+          # Keep Linux on its image's Node 22 line; avoid the slower macOS system Node.
           node-version: ${{ runner.os == 'macOS' && '24' || '22' }}
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
@@ -193,7 +198,7 @@ jobs:
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # Pin Node for predictable frontend fixture performance on each platform.
+          # Keep Linux on its image's Node 22 line; avoid the slower macOS system Node.
           node-version: ${{ runner.os == 'macOS' && '24' || '22' }}
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
@@ -231,7 +236,7 @@ jobs:
 
   msrv:
     name: cargo check --workspace --all-targets --all-features (MSRV 1.88)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner_size == '4' && 'ubicloud-standard-4-ubuntu-2404' || 'ubicloud-standard-2-ubuntu-2404' }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -252,7 +257,7 @@ jobs:
   no-default-features:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.benchmark_only }}
     name: cargo build and test -p jig-sh --no-default-features
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -260,7 +265,7 @@ jobs:
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # Pin Node for predictable frontend fixture performance on each platform.
+          # Keep Linux on its image's Node 22 line; avoid the slower macOS system Node.
           node-version: ${{ runner.os == 'macOS' && '24' || '22' }}
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
@@ -307,7 +312,7 @@ jobs:
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # Pin Node for predictable frontend fixture performance on each platform.
+          # Keep Linux on its image's Node 22 line; avoid the slower macOS system Node.
           node-version: ${{ runner.os == 'macOS' && '24' || '22' }}
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
