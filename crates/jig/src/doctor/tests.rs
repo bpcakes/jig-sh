@@ -52,6 +52,7 @@ include!("tests_parts/part_09.rs");
 mod argv;
 mod operator_setup;
 mod root;
+mod run_history;
 mod runtime;
 #[cfg(unix)]
 mod sqlx_versions;
