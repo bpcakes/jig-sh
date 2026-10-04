@@ -67,17 +67,23 @@ impl AdoptInference {
         answer_shape: &AnswerInputShape,
     ) {
         let explicit_sqlx_enabled = answer_shape.explicit_sqlx_enabled(answers);
-        if answer_shape.should_apply_inferred_sqlx_enabled(answers) {
+        let inference_decides = answer_shape.should_apply_inferred_sqlx_enabled(answers);
+        if inference_decides {
             answers.sqlx_enabled = self.sqlx_enabled;
         }
         let detected = self.sqlx_enabled == Some(true);
-        // An explicit enable establishes SQLx, so a migration directory with a
-        // justified owner may supply its path; synthesized defaults may not.
-        let migration_dir = match explicit_sqlx_enabled {
-            Some(false) => return,
-            Some(true) if !detected => self.sqlx_migration_choice.selected_dir(),
-            _ if detected => self.rust_migration_dir.as_deref(),
-            _ => return,
+        // Without an explicit answer, SQLx-shaped answers and schema dumps
+        // imply SQLx, which resolution then enables.
+        if !explicit_sqlx_enabled.unwrap_or(detected || !inference_decides) {
+            return;
+        }
+        // Answers alone establish SQLx without evidence, so a migration
+        // directory with a justified owner may supply its path; synthesized
+        // defaults may not.
+        let migration_dir = if detected {
+            self.rust_migration_dir.as_deref()
+        } else {
+            self.sqlx_migration_choice.selected_dir()
         };
         if answers.migration_dir.is_none() && !answer_shape.contains_key("migration_dir") {
             fill_string(

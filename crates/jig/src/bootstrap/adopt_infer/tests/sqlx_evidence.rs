@@ -390,6 +390,23 @@ fn explicit_sqlx_answers_control_migration_defaults() {
     inference.apply_to_answers(&mut answers, &shape);
     assert_eq!(answers.rust_migration_dir, None);
 
+    // SQLx-shaped answers and schema dumps imply SQLx without sqlx_enabled.
+    let inference = infer_adopt_answers(generic.path());
+    for mut answers in [
+        AnswerOpts {
+            schema_dump_enabled: Some(true),
+            ..AnswerOpts::default()
+        },
+        AnswerOpts {
+            sqlx_check_command: Some("cargo sqlx prepare --check".into()),
+            ..AnswerOpts::default()
+        },
+    ] {
+        inference.apply_to_answers(&mut answers, &shape);
+        assert_eq!(answers.sqlx_enabled, None);
+        assert_eq!(answers.rust_migration_dir.as_deref(), Some("migrations"));
+    }
+
     let detected = repo(&[
         ("Cargo.toml", SQLX_PACKAGE),
         ("migrations/0001_init.sql", GENERIC_SQL),

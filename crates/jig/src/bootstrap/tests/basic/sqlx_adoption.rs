@@ -303,3 +303,35 @@ fn authored_sqlx_disable_survives_readoption_with_sqlx_evidence() {
     // Inferred SQLx defaults are moot for an authored model.
     assert!(sqlx_warnings(&output).is_empty(), "{output}");
 }
+
+#[test]
+fn implied_sqlx_enablement_uses_the_owned_migration_dir() {
+    let _guard = lock_env();
+    let template = materialize_template_worktree();
+    let temp = tempdir().unwrap();
+    // Schema dumps imply SQLx without an explicit sqlx_enabled answer.
+    let repo = fixture(
+        temp.path(),
+        &[
+            ("Cargo.toml", PLAIN_PACKAGE),
+            ("src/lib.rs", ""),
+            ("migrations/0001_init.sql", GENERIC_SQL),
+        ],
+    );
+    let output = run_adopt(adopt_opts(
+        &repo,
+        template.path(),
+        AnswerOpts {
+            schema_dump_enabled: Some(true),
+            ..AnswerOpts::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(output["detection_report"]["sqlx_enabled"], false);
+    assert_eq!(
+        sqlx_review(&output),
+        vec!["SQLx: enabled with migrations at migrations"]
+    );
+    assert!(generates_sqlx_check(&output), "{output}");
+}
