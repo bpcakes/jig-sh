@@ -4,13 +4,21 @@ use super::*;
 use crate::policy::sqlx::check_non_test;
 
 const CALL: &str = "fn example() { let _ = sqlx::query(\"SELECT 1\"); }\n";
+const MANIFEST: &str = "[package]\nname = \"example-project\"\nversion = \"0.1.0\"\n";
 
 /// Builds a Git repository whose only crate root is `src` and writes each
 /// `(path, contents)` pair, creating parent directories as needed.
 fn inventory(files: &[(&str, &str)]) -> tempfile::TempDir {
+    inventory_rooted("[\"src\"]", files)
+}
+
+/// The same repository with `roots` as the configured Rust crate roots.
+fn inventory_rooted(roots: &str, files: &[(&str, &str)]) -> tempfile::TempDir {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
-        .config("rust_crate_roots = [\"src\"]\nrust_test_command = \"cargo test\"\n")
+        .config(format!(
+            "rust_crate_roots = {roots}\nrust_test_command = \"cargo test\"\n"
+        ))
         .contract_version(2)
         .required_commands(["rust_test_command"])
         .write();
@@ -210,11 +218,13 @@ fn a_path_loaded_module_resolves_its_children_beside_itself() {
     assert!(test.contains("_None_"), "{test}");
 }
 
-/// Cargo compiles a crate entrypoint whatever else declares it as a module,
-/// so a test module loading one cannot turn its queries into test code.
+/// Cargo compiles a discovered crate entrypoint whatever else declares it as
+/// a module, so a test module loading one cannot turn its queries into test
+/// code.
 #[test]
-fn a_crate_entrypoint_declared_as_a_test_module_stays_non_test() {
+fn a_discovered_entrypoint_declared_as_a_test_module_stays_non_test() {
     let temp = inventory(&[
+        ("Cargo.toml", MANIFEST),
         (
             "src/lib.rs",
             "#[cfg(test)]\n#[path = \"main.rs\"]\nmod binary_cases;\n",
@@ -237,8 +247,7 @@ fn a_manifest_configured_target_declared_as_a_test_module_stays_non_test() {
     let temp = inventory(&[
         (
             "Cargo.toml",
-            "[package]\nname = \"example-project\"\nversion = \"0.1.0\"\n\
-             [[bin]]\nname = \"server\"\npath = \"src/server.rs\"\n",
+            &format!("{MANIFEST}[[bin]]\nname = \"server\"\npath = \"src/server.rs\"\n"),
         ),
         ("src/lib.rs", "#[cfg(test)]\nmod server;\n"),
         ("src/server.rs", &format!("mod handler;\n{CALL}")),
@@ -278,4 +287,46 @@ fn an_unparseable_manifest_fails_the_inventory() {
             .join("docs/sqlx-unchecked-queries-todo.md")
             .exists()
     );
+}
+
+/// Cargo discovers a build script at the package root without
+/// `package.build` naming it, and it resolves its children beside itself.
+#[test]
+fn a_discovered_build_script_is_a_production_root() {
+    let temp = inventory_rooted(
+        "[\".\"]",
+        &[
+            ("Cargo.toml", MANIFEST),
+            ("build.rs", "mod helper;\n"),
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\n#[path = \"../helper.rs\"]\nmod helper;\n",
+            ),
+            ("helper.rs", CALL),
+        ],
+    );
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`helper.rs:1`"), "{non_test}");
+    assert!(test.contains("_None_"), "{test}");
+}
+
+/// A module named `main` is an ordinary module, not a Cargo target, so
+/// extracting a test helper into one still classifies it as test code.
+#[test]
+fn a_nested_module_named_like_an_entrypoint_is_not_a_cargo_target() {
+    let temp = inventory(&[
+        ("Cargo.toml", MANIFEST),
+        ("src/lib.rs", "#[cfg(test)]\nmod unit_cases;\n"),
+        ("src/unit_cases/mod.rs", "mod main;\nmod lib;\n"),
+        ("src/unit_cases/main.rs", CALL),
+        ("src/unit_cases/lib.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("_None_"), "{non_test}");
+    assert!(test.contains("`src/unit_cases/main.rs:1`"), "{test}");
+    assert!(test.contains("`src/unit_cases/lib.rs:1`"), "{test}");
 }

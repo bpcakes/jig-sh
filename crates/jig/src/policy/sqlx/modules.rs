@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use super::cargo_targets::CargoTargets;
 use super::scanner::{has_cfg_test, unraw};
 
 /// How a `mod` item names what it loads. A `#[path]` value extends the
@@ -168,7 +169,7 @@ struct Claims<'a> {
 
 fn resolve_claims<'a>(
     files: &'a BTreeMap<String, FileModules>,
-    targets: &BTreeSet<String>,
+    targets: &CargoTargets,
 ) -> Claims<'a> {
     let mut claims = Claims::default();
     let mut directories: BTreeMap<&str, BTreeSet<Dir>> = BTreeMap::new();
@@ -216,37 +217,6 @@ fn resolve_claims<'a>(
     }
 }
 
-/// Target paths a Cargo manifest configures explicitly, resolved relative to
-/// the manifest. Cargo compiles each as its own crate root, so a module
-/// declaration elsewhere cannot make one test code. Conventional target
-/// locations need no manifest and are recognized by `cargo_target_dir`.
-pub(super) fn collect_target_paths(
-    manifest: &str,
-    value: &toml::Value,
-    out: &mut BTreeSet<String>,
-) {
-    let dir = parent_dir(manifest);
-    let mut record = |configured: Option<&toml::Value>| {
-        if let Some(path) = configured.and_then(toml::Value::as_str)
-            && let Some(target) = join_relative(&dir, path)
-        {
-            out.insert(target);
-        }
-    };
-    record(
-        value
-            .get("package")
-            .and_then(|package| package.get("build")),
-    );
-    record(value.get("lib").and_then(|library| library.get("path")));
-    for kind in ["bin", "example", "bench", "test"] {
-        let configured = value.get(kind).and_then(toml::Value::as_array);
-        for target in configured.into_iter().flatten() {
-            record(target.get("path"));
-        }
-    }
-}
-
 /// Records a directory a file can be loaded with, queueing it when it is new.
 fn seed<'a>(
     path: &'a str,
@@ -263,7 +233,7 @@ fn seed<'a>(
 /// reach, so every call site they contain belongs to the test inventory.
 pub(super) fn test_only_files(
     files: &BTreeMap<String, FileModules>,
-    targets: &BTreeSet<String>,
+    targets: &CargoTargets,
 ) -> BTreeSet<String> {
     let mut claims = resolve_claims(files, targets);
     // A file is test-only when it says so itself, or when every declaration
@@ -301,26 +271,19 @@ pub(super) fn test_only_files(
 }
 
 /// The directory a Cargo target resolves its declarations against, when the
-/// file is one: a conventional entrypoint location, or a path a manifest
-/// configures explicitly. Cargo compiles each as a crate root, so production
-/// code reaches it whatever else also declares it as a module.
-fn cargo_target_dir(path: &str, targets: &BTreeSet<String>) -> Option<Dir> {
-    let (parent, basename) = split_path(path);
-    let standalone = basename != "mod.rs"
-        && matches!(
-            split_path(parent).1,
-            "bin" | "benches" | "examples" | "tests"
-        );
-    let target = matches!(basename, "lib.rs" | "main.rs") || standalone || targets.contains(path);
-    target.then(|| Dir::owned(parent.to_string()))
+/// file is one. A crate root resolves its children beside itself.
+fn cargo_target_dir(path: &str, targets: &CargoTargets) -> Option<Dir> {
+    targets.contains(path).then(|| Dir::owned(parent_dir(path)))
 }
 
 /// The directory a file resolves its declarations against when no resolved
-/// declaration loads it: the conventional layout its own name implies.
+/// declaration loads it: the conventional layout its own name implies. A
+/// crate root and a `mod.rs` share their directory with their children; any
+/// other module file owns a directory named after it.
 fn unreached_dir(path: &str) -> Dir {
     let (parent, basename) = split_path(path);
     match basename.strip_suffix(".rs") {
-        Some(stem) if basename != "mod.rs" => Dir {
+        Some(stem) if !matches!(basename, "mod.rs" | "lib.rs" | "main.rs") => Dir {
             path: parent.to_string(),
             pending: Some(stem.to_string()),
         },
@@ -328,11 +291,11 @@ fn unreached_dir(path: &str) -> Dir {
     }
 }
 
-fn split_path(path: &str) -> (&str, &str) {
+pub(super) fn split_path(path: &str) -> (&str, &str) {
     path.rsplit_once('/').unwrap_or(("", path))
 }
 
-fn parent_dir(path: &str) -> String {
+pub(super) fn parent_dir(path: &str) -> String {
     split_path(path).0.to_string()
 }
 
@@ -357,7 +320,7 @@ fn path_attribute(attrs: &[syn::Attribute]) -> Option<String> {
 /// Resolves a declaration-relative path against a directory, producing a
 /// repository-relative path. An absolute path or one that leaves the
 /// repository root resolves to nothing rather than to a guess.
-fn join_relative(dir: &str, value: &str) -> Option<String> {
+pub(super) fn join_relative(dir: &str, value: &str) -> Option<String> {
     if value.starts_with('/') {
         return None;
     }
