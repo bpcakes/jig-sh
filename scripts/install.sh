@@ -111,10 +111,10 @@ def install(version, bin_dir):
         installed = bin_dir / "jig"
         os.replace(binary, installed)
     print(f"Installed Jig {version} to {installed}")
-    path_dirs = {Path(entry).expanduser().resolve() for entry in os.environ.get("PATH", "").split(os.pathsep) if entry}
-    if bin_dir not in path_dirs:
+    selected = shutil.which("jig")
+    if selected is None or Path(selected).resolve() != installed:
         import shlex
-        print("Add this directory to your shell's PATH:")
+        print("To use this installation, put its directory first on your shell's PATH:")
         print(f"  export PATH={shlex.quote(str(bin_dir))}:\"$PATH\"")
     print("Run jig --version to verify the installation.")
     return installed

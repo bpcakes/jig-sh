@@ -3,7 +3,6 @@
 import contextlib
 import hashlib
 import io
-import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -79,6 +78,14 @@ class StandaloneInstallTests(unittest.TestCase):
         self.assertNotIn(self.installer.LATEST, self.urls)
         self.assertIn("export PATH=", self.output.getvalue())
         self.assertFalse(list(self.bin_dir.glob(".jig-install-*")))
+
+    def test_existing_jig_earlier_on_path_still_gets_prepend_guidance(self):
+        old_bin = self.root / "old-bin"
+        old_bin.mkdir()
+        shutil.copy2(self.binaries / "0.5.1", old_bin / "jig")
+        with patch.dict(self.installer.os.environ, {"PATH": f"{old_bin}:{self.bin_dir}"}):
+            self.install()
+        self.assertIn("put its directory first", self.output.getvalue())
 
     def test_latest_resolves_once_then_uses_exact_versioned_assets(self):
         self.install(None)
