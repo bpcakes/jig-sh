@@ -70,8 +70,13 @@ class StandaloneInstallTests(unittest.TestCase):
             f"{hashlib.sha256(self.archive.read_bytes()).hexdigest()}  {self.archive.name}\n")
 
     def test_exact_release_installs_verified_native_binary_and_prints_path(self):
+        # macOS temporary directories can be reached through /var -> /private/var.
+        # Exercise the same aliasing on every host; installation resolves it.
+        linked_root = self.root / "linked-root"
+        linked_root.symlink_to(self.root, target_is_directory=True)
+        self.bin_dir = linked_root / self.bin_dir.name
         installed = self.install()
-        self.assertEqual(installed, self.bin_dir / "jig")
+        self.assertEqual(installed, (self.bin_dir / "jig").resolve())
         self.assertEqual(installed.read_bytes(), (self.binaries / "0.5.0").read_bytes())
         self.assertEqual(subprocess.check_output([str(installed), "--version"], text=True), "jig 0.5.0\n")
         self.assertEqual(len(self.urls), 2)

@@ -12,6 +12,9 @@ import subprocess
 import sys
 import tempfile
 
+# Dynamic imports must not leave generated files in the tooling checkout.
+sys.dont_write_bytecode = True
+
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("package_binary", ROOT / "scripts/package-release-binary.py")
 PACKAGE = importlib.util.module_from_spec(SPEC)
