@@ -6,6 +6,7 @@ use syn::parse::{ParseStream, Parser as _};
 use syn::visit::{self, Visit};
 
 use super::SqlxCall;
+use super::modules::{FileModules, collect_declarations};
 
 /// Macros whose input is a list of Rust expressions. Traversing these keeps
 /// call sites visible inside ordinary wrappers such as `vec![sqlx::query(..)]`,
@@ -39,23 +40,37 @@ const EXPRESSION_MACROS: &[&str] = &[
 /// Namespaces an expression macro may be spelled through, as in `std::vec!`.
 const EXPRESSION_MACRO_NAMESPACES: &[&str] = &["alloc", "core", "futures", "std", "tokio"];
 
-pub(super) fn scan_sqlx_calls(path: &str, text: &str) -> Result<Vec<SqlxCall>> {
+/// One scanned source file: its call sites, and what it contributes to
+/// resolving the module relationships that classify other files.
+pub(super) struct FileScan {
+    pub(super) calls: Vec<SqlxCall>,
+    pub(super) modules: FileModules,
+}
+
+pub(super) fn scan_sqlx_file(path: &str, text: &str) -> Result<FileScan> {
     crate::rust_syntax::with_bounded_syntax(
         text,
         &format!("cannot parse SQLx inventory source {path}"),
-        || scan_bounded_sqlx_calls(path, text),
+        || scan_bounded_sqlx_file(path, text),
     )
 }
 
-fn scan_bounded_sqlx_calls(path: &str, text: &str) -> Result<Vec<SqlxCall>> {
+#[cfg(test)]
+pub(super) fn scan_sqlx_calls(path: &str, text: &str) -> Result<Vec<SqlxCall>> {
+    scan_sqlx_file(path, text).map(|scan| scan.calls)
+}
+
+fn scan_bounded_sqlx_file(path: &str, text: &str) -> Result<FileScan> {
     let mut scanner = SqlxScanner {
         path,
         is_test: is_test_path(path),
         calls: Vec::new(),
     };
+    let mut declarations = Vec::new();
     match syn::parse_file(text) {
         Ok(file) => {
             scanner.is_test |= has_cfg_test(&file.attrs);
+            declarations = collect_declarations(path, &file.items);
             scanner.visit_file(&file);
         }
         Err(error) => {
@@ -77,7 +92,13 @@ fn scan_bounded_sqlx_calls(path: &str, text: &str) -> Result<Vec<SqlxCall>> {
             scanner.visit_expr(&expr);
         }
     }
-    Ok(scanner.calls)
+    Ok(FileScan {
+        modules: FileModules {
+            self_test: scanner.is_test,
+            declarations,
+        },
+        calls: scanner.calls,
+    })
 }
 
 struct SqlxScanner<'a> {
@@ -201,7 +222,7 @@ fn leading_exprs(input: ParseStream, exprs: &mut Vec<syn::Expr>) -> syn::Result<
     Ok(())
 }
 
-fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
+pub(super) fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
         is_ident(attr.path(), "cfg")
             && attr
@@ -214,7 +235,7 @@ fn is_ident(path: &syn::Path, name: &str) -> bool {
     path.get_ident().is_some_and(|ident| ident.unraw() == name)
 }
 
-fn unraw(ident: &syn::Ident) -> String {
+pub(super) fn unraw(ident: &syn::Ident) -> String {
     ident.unraw().to_string()
 }
 

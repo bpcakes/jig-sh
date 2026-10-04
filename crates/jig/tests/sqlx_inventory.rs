@@ -5,6 +5,8 @@ use std::process::{Command, Output};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+#[path = "sqlx_inventory/modules.rs"]
+mod modules;
 #[path = "sqlx_inventory/resources.rs"]
 mod resources;
 
@@ -16,6 +18,37 @@ fn jig(root: &Path, args: &[&str]) -> Output {
         .args(args)
         .output()
         .unwrap()
+}
+
+/// A Git repository whose only crate root is `src`, ready for the inventory.
+fn inventory_root() -> tempfile::TempDir {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs")).unwrap();
+    fs::write(
+        root.join(".jig.toml"),
+        "_src_path = '/tmp/jig-template'\n_commit = 'HEAD'\ndefault_branch = 'main'\nrepo_name = 'ExampleProject'\njig_version = '0.2.0-beta.1'\nrust_crate_roots = ['src']\nrust_test_command = 'cargo test'\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        json!({"contract_version": 2, "jig_version": "0.2.0-beta.1",
+               "tool_namespace": "jig", "required_commands": ["rust_test_command"],
+               "tools": []})
+        .to_string(),
+    )
+    .unwrap();
+    assert!(
+        Command::new("git")
+            .current_dir(root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    temp
 }
 
 fn check(root: &Path, expected: usize) {

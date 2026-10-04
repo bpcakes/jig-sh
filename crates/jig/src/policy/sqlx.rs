@@ -10,9 +10,12 @@ use serde_json::{Value, json};
 use crate::context::RepoContext;
 use crate::policy::SqlxTodoInput;
 
+mod modules;
 mod scanner;
 
+#[cfg(test)]
 use scanner::scan_sqlx_calls;
+use scanner::scan_sqlx_file;
 
 const DEFAULT_SQLX_TODO_PATH: &str = "docs/sqlx-unchecked-queries-todo.md";
 
@@ -54,6 +57,7 @@ struct SqlxCall {
 fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     let status_by_key = read_sqlx_statuses(&ctx.root().join(prior_path));
     let mut calls = Vec::new();
+    let mut modules = BTreeMap::new();
     for file in sqlx_rust_files(ctx)? {
         let text = match fs::read_to_string(ctx.root().join(&file)) {
             Ok(text) => text,
@@ -66,7 +70,15 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
                     .with_context(|| format!("cannot read SQLx inventory source {file}"));
             }
         };
-        calls.extend(scan_sqlx_calls(&file, &text)?);
+        let scan = scan_sqlx_file(&file, &text)?;
+        calls.extend(scan.calls);
+        modules.insert(file, scan.modules);
+    }
+    // A file that only a `#[cfg(test)]` module declaration reaches is test
+    // code, exactly as the equivalent inline module already is.
+    let test_only = modules::test_only_files(&modules);
+    for call in &mut calls {
+        call.is_test |= test_only.contains(&call.path);
     }
     calls.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
     let checked_count = calls.iter().filter(|call| call.checked).count();
@@ -97,7 +109,7 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     let mut body = String::new();
     body.push_str("# SQLx Unchecked Queries TODO\n\n");
     body.push_str("This checklist tracks detected `sqlx::query*` call sites under the configured Rust crate roots that are not yet using compile-time checked SQLx macros.\n\n");
-    body.push_str("Coverage is a source AST inventory, not complete Rust syntax coverage or compiler analysis. Sources are parsed as complete Rust files or expression fragments, as accepted by `include!`. Parsing, AST traversal, and destruction use a controlled stack and a conservative limit of 2,048 tokens along enclosing semicolon-separated regions (including delimiter groups and expression/type chains); sibling semicolon-separated declarations and statements do not accumulate toward that limit. Sources beyond that limit fail the inventory with a path-specific error; simplify nested syntax or split long expressions/declarations. It detects direct SQLx function calls and checked macro invocations. It does not resolve aliases or shadowing, expand macros, or evaluate arbitrary cfg expressions; macro input is read only for a fixed set of standard expression macros such as `vec!` and `assert!`. Test classification uses conventional test paths and exact `#[cfg(test)]` attributes on files and inline modules; external module and `include!` relationships are not resolved. Paths Git lists that are absent from the worktree are skipped; other unreadable or unparseable Rust sources fail the inventory.\n\n");
+    body.push_str("Coverage is a source AST inventory, not complete Rust syntax coverage or compiler analysis. Sources are parsed as complete Rust files or expression fragments, as accepted by `include!`. Parsing, AST traversal, and destruction use a controlled stack and a conservative limit of 2,048 tokens along enclosing semicolon-separated regions (including delimiter groups and expression/type chains); sibling semicolon-separated declarations and statements do not accumulate toward that limit. Sources beyond that limit fail the inventory with a path-specific error; simplify nested syntax or split long expressions/declarations. It detects direct SQLx function calls and checked macro invocations. It does not resolve aliases or shadowing, expand macros, or evaluate arbitrary cfg expressions; macro input is read only for a fixed set of standard expression macros such as `vec!` and `assert!`. Test classification uses conventional test paths and exact `#[cfg(test)]` attributes on files and inline modules, and extends to a file that only `#[cfg(test)]` module declarations reach, following `mod` items and their `#[path]` attributes; a file production code still reaches, or one whose declaration cannot be resolved to an inventoried file, stays classified by its own path and attributes, and `include!` relationships are not resolved. Paths Git lists that are absent from the worktree are skipped; other unreadable or unparseable Rust sources fail the inventory.\n\n");
     body.push_str("- Generated on: native jig\n");
     let _ = writeln!(body, "- Unchecked call sites: {}", unchecked.len());
     let _ = writeln!(
