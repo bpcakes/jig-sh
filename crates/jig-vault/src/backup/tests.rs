@@ -1,34 +1,34 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::fs::{self, File};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::crypto::{KEY_LEN, KdfParams, NONCE_LEN, SALT_LEN};
 use crate::format::{AEAD_ALGORITHM, FORMAT_VERSION, MAGIC, V1_FORMAT_VERSION};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::{FieldKind, FieldMutation, SecretBytes, Vault, VaultReference};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::codec::seal_archive;
 use super::codec::{
     BACKUP_AAD_DOMAIN, BACKUP_MAGIC, BackupEnvelope, backup_aad, parse_archive_bytes,
 };
 use super::*;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn test_passphrase() -> SecretString {
     SecretString::from("backup-test-passphrase".to_owned())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn reference() -> VaultReference {
     VaultReference::parse("jig://Production/TOKEN").unwrap()
 }
@@ -145,7 +145,7 @@ fn embedded_vault_validation_requires_complete_strict_v2_envelope() {
     assert!(error.to_string().contains("migrate --to 2"));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn restore_preflight_rejects_symlink_truncation_oversize_and_existing_target() {
     use std::os::unix::fs::symlink;
@@ -187,7 +187,7 @@ fn restore_preflight_rejects_symlink_truncation_oversize_and_existing_target() {
     assert!(existing.read_dir().unwrap().next().is_none());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn backup_create_preflight_is_noncreating_and_rejects_v1_before_capture() {
     let temp = tempfile::tempdir().unwrap();
@@ -221,7 +221,7 @@ fn backup_create_preflight_is_noncreating_and_rejects_v1_before_capture() {
     assert!(!output.exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn authenticated_tampered_audit_fails_and_cleans_owned_staging() {
     let temp = tempfile::tempdir().unwrap();
@@ -263,7 +263,7 @@ fn authenticated_tampered_audit_fails_and_cleans_owned_staging() {
     source.verify_audit(&test_passphrase()).unwrap();
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn creates_and_restores_private_complete_vault() {
     let temp = tempfile::tempdir().unwrap();
@@ -278,7 +278,7 @@ fn creates_and_restores_private_complete_vault() {
     assert_restore_round_trip(temp.path(), &output);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn initialized_backup_source(temp: &Path) -> (PathBuf, Vault) {
     let source_home = temp.join("source-vault");
     let source = Vault::resolve_for_test(Some(source_home.clone())).unwrap();
@@ -296,7 +296,7 @@ fn initialized_backup_source(temp: &Path) -> (PathBuf, Vault) {
     (source_home, source)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_create_race_is_non_destructive(temp: &Path, source_home: &Path, source: &Vault) {
     let raced_output = temp.join("raced-output.backup");
     let raced_request =
@@ -338,7 +338,7 @@ fn assert_create_race_is_non_destructive(temp: &Path, source_home: &Path, source
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn create_private_backup(
     temp: &Path,
     source_home: PathBuf,
@@ -389,7 +389,7 @@ fn create_private_backup(
     (output, created, source_audit_after_create)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_backup_create_preflight_rejections(
     temp: &Path,
     source: &Vault,
@@ -426,7 +426,7 @@ fn assert_backup_create_preflight_rejections(
     fs::remove_file(&hardlink).unwrap();
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_backup_ciphertext_is_random(temp: &Path, source: &Vault, output: &Path) {
     let output_two = temp.join("vault-two.backup");
     let request =
@@ -435,7 +435,7 @@ fn assert_backup_ciphertext_is_random(temp: &Path, source: &Vault, output: &Path
     assert_ne!(fs::read(output).unwrap(), fs::read(&output_two).unwrap());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_restore_rejections(temp: &Path, output: &Path, created_at_ms: i128) {
     let wrong_target = temp.join("wrong-pass-target");
     let request = Vault::preflight_backup_restore(output, wrong_target.clone()).unwrap();
@@ -475,12 +475,13 @@ fn assert_restore_rejections(temp: &Path, output: &Path, created_at_ms: i128) {
     assert_eq!(fs::read(raced_target.join("marker")).unwrap(), b"unchanged");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_restore_round_trip(temp: &Path, output: &Path) {
     let target = temp.join("restored-vault");
     let request = Vault::preflight_backup_restore(output, target.clone()).unwrap();
     let restored = Vault::restore_backup(&test_passphrase(), request).unwrap();
-    assert_eq!(restored.root, target);
+    // Restore reports the physical home, so macOS /var temp paths resolve.
+    assert_eq!(restored.root, fs::canonicalize(&target).unwrap());
     assert_eq!(restored.format_version, FORMAT_VERSION);
     assert_eq!(
         fs::metadata(&restored.root).unwrap().permissions().mode() & 0o777,

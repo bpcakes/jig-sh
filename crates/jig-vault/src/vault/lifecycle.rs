@@ -13,7 +13,7 @@ use crate::crypto::KdfParams;
 use crate::error::{
     ClassifiedVaultError, classified, classified_kind, classify_source, vault_error_from_anyhow,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::format::V1_FORMAT_VERSION;
 use crate::format::{FORMAT_VERSION, VaultFile, validate_header};
 use crate::store::VaultStore;
@@ -345,7 +345,7 @@ impl VaultStore {
         })
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn finalize_backup_restore(
         &self,
         passphrase: &SecretString,

@@ -174,9 +174,9 @@ to make legacy user-level selection explicit or --home for a specific location;
 omitting both retains legacy selection for contract-v4 compatibility.
 The target home must be absent; an existing directory, even an empty one, is
 never overwritten. The backup is read from a bounded regular file; --in - and
-symbolic links are rejected. Restore is currently Linux-only because other
-platforms do not yet provide the required atomic absent-directory installation
-path.
+symbolic links are rejected. Restore is supported on Linux and macOS, which
+provide the required atomic absent-directory installation; on macOS it refuses
+volumes mounted to ignore file ownership.
 
 Example:
   jig vault backup restore --in ../ExampleProject-vault.backup";
@@ -189,7 +189,7 @@ restores encrypted backups; rotates the passphrase; and verifies safe activity.
 
 Private-output actions (field export, 1Password destination installation, and
 backup creation) are available only on Unix. Peek and passphrase rotation remain
-portable; restore remains Linux-only.
+portable; restore is supported on Linux and macOS.
 
 Canonical fields can be exported directly to a hardened private file. The
 explicit Peek action bypasses Ratatui, shows a bounded terminal-safe escaped

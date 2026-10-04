@@ -379,7 +379,7 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_backup_restore_help, "contract-v4 compatibility");
     assert_help_contains(&vault_backup_restore_help, "The target home must be absent");
     assert_help_contains(&vault_backup_restore_help, "--in -");
-    assert_help_contains(&vault_backup_restore_help, "currently Linux-only");
+    assert_help_contains(&vault_backup_restore_help, "supported on Linux and macOS");
 
     let vault_field_list_help = rendered_help(&["vault", "field", "list"]);
     assert_help_contains(&vault_field_list_help, "jig://ITEM");

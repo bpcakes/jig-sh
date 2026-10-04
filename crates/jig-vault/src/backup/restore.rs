@@ -1,4 +1,4 @@
-use std::ffi::{CString, OsStr, OsString};
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -92,6 +92,10 @@ fn prepare_target_parent_from(parent: &Path, current_dir: &Path) -> AnyResult<Pa
     } else {
         current_dir.join(parent)
     };
+    // Resolve only fixed platform root aliases such as macOS /var and /tmp;
+    // every user-controlled component below them must still be a real
+    // directory.
+    let parent = crate::path_security::physical_path(&parent, "restore target parent")?;
     let missing = validate_creation_ancestors(&parent)?;
     create_private_parent_chain(&missing)?;
     reject_symlinked_ancestors(&parent)?;
@@ -156,6 +160,7 @@ fn validate_creation_ancestors(path: &Path) -> AnyResult<Vec<PathBuf>> {
                     ancestor.display()
                 );
             }
+            reject_ownership_ignoring_volume(ancestor)?;
             checked_creation_boundary = true;
         }
     }
@@ -513,7 +518,41 @@ fn validate_parent(path: &Path) -> AnyResult<fs::Metadata> {
             path.display()
         );
     }
+    reject_ownership_ignoring_volume(path)?;
     Ok(metadata)
+}
+
+/// Refuses volumes whose ownership checks prove nothing.
+///
+/// macOS can mount a volume with "ignore ownership", which reports every
+/// entry as owned by the accessing user. The owner and owner-only checks
+/// above would then pass for any local user, so restore fails closed.
+#[cfg(target_os = "macos")]
+fn reject_ownership_ignoring_volume(path: &Path) -> AnyResult<()> {
+    let c_path =
+        CString::new(path.as_os_str().as_bytes()).context("restore target path contains NUL")?;
+    let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: `c_path` is NUL-terminated and `stats` is valid for writes of
+    // one `statfs`; it is read only after the call reports success.
+    if unsafe { libc::statfs(c_path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!("failed to inspect the volume containing {}", path.display())
+        });
+    }
+    // SAFETY: statfs succeeded and initialized the structure.
+    let stats = unsafe { stats.assume_init() };
+    if stats.f_flags & libc::MNT_IGNORE_OWNERSHIP as u32 != 0 {
+        bail!(
+            "refusing restore onto a volume that ignores file ownership: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reject_ownership_ignoring_volume(_path: &Path) -> AnyResult<()> {
+    Ok(())
 }
 
 fn validate_owned_directory(path: &Path, metadata: &fs::Metadata) -> AnyResult<()> {
@@ -590,27 +629,16 @@ fn atomic_rename_noreplace(source: &Path, destination: &Path) -> AnyResult<()> {
         CString::new(source.as_os_str().as_bytes()).context("restore staging path contains NUL")?;
     let destination = CString::new(destination.as_os_str().as_bytes())
         .context("restore target path contains NUL")?;
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            source.as_ptr(),
-            libc::AT_FDCWD,
-            destination.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
+    let Err(error) = rename_noreplace(&source, &destination) else {
         return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
+    };
     match error.raw_os_error() {
         Some(libc::EEXIST | libc::ENOTEMPTY) => Err(classify_source(
             VaultErrorKind::AlreadyExists,
             "restore target appeared before atomic installation; nothing was overwritten",
             error.into(),
         )),
-        Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => Err(classify_source(
+        Some(errno) if noreplace_is_unsupported(errno) => Err(classify_source(
             VaultErrorKind::InvalidInput,
             "the restore target filesystem does not support atomic absent-target directory installation",
             error.into(),
@@ -628,6 +656,48 @@ fn atomic_rename_noreplace(source: &Path, destination: &Path) -> AnyResult<()> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn rename_noreplace(source: &CStr, destination: &CStr) -> std::io::Result<()> {
+    // SAFETY: both strings are NUL-terminated and live for the duration of the call.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_noreplace(source: &CStr, destination: &CStr) -> std::io::Result<()> {
+    // SAFETY: both strings are NUL-terminated and live for the duration of the call.
+    if unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "linux")]
+const fn noreplace_is_unsupported(errno: i32) -> bool {
+    matches!(errno, libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP)
+}
+
+/// Darwin reports a rename flag the filesystem cannot honor as `ENOTSUP`,
+/// which, unlike on Linux, is a different value from `EOPNOTSUPP`.
+#[cfg(target_os = "macos")]
+const fn noreplace_is_unsupported(errno: i32) -> bool {
+    matches!(errno, libc::EINVAL | libc::ENOTSUP | libc::EOPNOTSUPP)
+}
+
 fn sync_directory(path: &Path) -> AnyResult<()> {
     File::open(path)
         .with_context(|| format!("failed to open directory {} for sync", path.display()))?
@@ -640,249 +710,4 @@ fn vault_error_as_classified(error: VaultError) -> anyhow::Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::process::CommandExt;
-
-    const UMASK_CHILD_ENV: &str = "JIG_VAULT_RESTORE_UMASK_CHILD";
-
-    fn private_tempdir() -> tempfile::TempDir {
-        let temp = tempfile::tempdir().unwrap();
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        temp
-    }
-
-    fn rerun_current_test_with_umask(mode: libc::mode_t) -> bool {
-        if std::env::var_os(UMASK_CHILD_ENV).is_some() {
-            return false;
-        }
-        let test_name = std::thread::current()
-            .name()
-            .expect("test harness thread has no name")
-            .to_owned();
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .arg(&test_name)
-            .arg("--exact")
-            .arg("--nocapture")
-            .env(UMASK_CHILD_ENV, "1");
-        unsafe {
-            command.pre_exec(move || {
-                libc::umask(mode);
-                Ok(())
-            });
-        }
-        let output = command.output().unwrap();
-        assert!(
-            output.status.success(),
-            "test subprocess failed under umask {mode:03o}:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        true
-    }
-
-    #[test]
-    fn preflight_creates_private_missing_parents_but_keeps_the_vault_home_absent() {
-        if rerun_current_test_with_umask(0o777) {
-            return;
-        }
-        let temp = private_tempdir();
-        let parent = temp.path().join("vault-base/scopes");
-        let home = parent.join("repo-scope");
-
-        let target = preflight_target(home.clone()).unwrap();
-
-        assert_eq!(target.parent, fs::canonicalize(&parent).unwrap());
-        assert_eq!(
-            target.home,
-            fs::canonicalize(&parent).unwrap().join("repo-scope")
-        );
-        assert!(!home.exists());
-        for created in [temp.path().join("vault-base"), parent] {
-            assert_eq!(
-                fs::metadata(created).unwrap().permissions().mode() & 0o777,
-                0o700
-            );
-        }
-    }
-
-    #[test]
-    fn preflight_refuses_to_create_parents_below_a_group_writable_ancestor() {
-        let temp = private_tempdir();
-        let shared = temp.path().join("shared");
-        fs::create_dir(&shared).unwrap();
-        fs::set_permissions(&shared, fs::Permissions::from_mode(0o770)).unwrap();
-        let parent = shared.join("vault-base/scopes");
-
-        let error = preflight_target(parent.join("repo-scope"))
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("shared-writable ancestor"), "{error}");
-        assert!(!parent.exists());
-    }
-
-    #[test]
-    fn preflight_allows_a_sticky_shared_writable_boundary_owned_by_the_current_user() {
-        let temp = private_tempdir();
-        let shared = temp.path().join("shared");
-        fs::create_dir(&shared).unwrap();
-        fs::set_permissions(&shared, fs::Permissions::from_mode(0o1770)).unwrap();
-        let parent = shared.join("vault-base/scopes");
-
-        let target = preflight_target(parent.join("repo-scope")).unwrap();
-
-        assert_eq!(target.parent, fs::canonicalize(&parent).unwrap());
-        assert!(!target.home.exists());
-    }
-
-    #[test]
-    fn sticky_boundary_policy_rejects_an_untrusted_directory_owner() {
-        let effective_user = unsafe { libc::geteuid() };
-        let other_user = if effective_user == u32::MAX {
-            1
-        } else {
-            effective_user + 1
-        };
-
-        assert!(creation_boundary_is_safe(
-            0o1770,
-            effective_user,
-            effective_user
-        ));
-        assert!(creation_boundary_is_safe(0o1777, 0, effective_user));
-        assert!(!creation_boundary_is_safe(
-            0o1770,
-            other_user,
-            effective_user
-        ));
-        assert!(!creation_boundary_is_safe(
-            0o0770,
-            effective_user,
-            effective_user
-        ));
-    }
-
-    #[test]
-    fn preflight_resolves_a_bare_relative_missing_parent_from_the_current_directory() {
-        let temp = private_tempdir();
-        let parent = Path::new("recovery/vault-base/scopes");
-
-        let prepared = prepare_target_parent_from(parent, temp.path()).unwrap();
-
-        let expected = temp.path().join(parent);
-        assert_eq!(prepared, fs::canonicalize(&expected).unwrap());
-        assert!(expected.is_dir());
-    }
-
-    #[test]
-    fn preflight_rejects_parent_traversal_through_a_missing_component_without_mutation() {
-        let temp = private_tempdir();
-        let parent = Path::new("recovery/../vault-base/scopes");
-
-        let error = prepare_target_parent_from(parent, temp.path())
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("cannot traverse through a missing component"));
-        assert!(!temp.path().join("recovery").exists());
-        assert!(!temp.path().join("vault-base").exists());
-    }
-
-    #[test]
-    fn preflight_preserves_leading_parent_traversal_when_the_prefix_exists() {
-        let temp = private_tempdir();
-        let invocation_dir = temp.path().join("invocation");
-        fs::create_dir(&invocation_dir).unwrap();
-        fs::set_permissions(&invocation_dir, fs::Permissions::from_mode(0o700)).unwrap();
-        let parent = Path::new("../recovery/vault-base/scopes");
-
-        let prepared = prepare_target_parent_from(parent, &invocation_dir).unwrap();
-
-        let expected = temp.path().join("recovery/vault-base/scopes");
-        assert_eq!(prepared, fs::canonicalize(&expected).unwrap());
-        assert!(expected.is_dir());
-    }
-
-    #[test]
-    fn preflight_refuses_an_existing_symlink_above_the_creation_boundary() {
-        if rerun_current_test_with_umask(0o000) {
-            return;
-        }
-        let temp = private_tempdir();
-        let real = temp.path().join("real");
-        let existing = real.join("existing");
-        fs::create_dir_all(&existing).unwrap();
-        fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
-        fs::set_permissions(&existing, fs::Permissions::from_mode(0o700)).unwrap();
-        let link = temp.path().join("link");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        let parent = link.join("existing/vault-base/scopes");
-
-        let error = preflight_target(parent.join("repo-scope"))
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("symlinked ancestor"), "{error}");
-        assert!(!existing.join("vault-base").exists());
-    }
-
-    #[test]
-    fn owned_staging_cleanup_removes_only_validated_generated_entries() {
-        let temp = private_tempdir();
-        let target = preflight_target(temp.path().join("restored-home")).unwrap();
-        let mut staging = OwnedStaging::create(&target).unwrap();
-        let staging_path = staging.path.clone();
-        staging.write_file(VAULT_FILE, b"vault").unwrap();
-        staging.write_file(AUDIT_FILE, b"audit").unwrap();
-        staging.cleanup().unwrap();
-        assert!(!staging_path.exists());
-        assert!(!target.home.exists());
-    }
-
-    #[test]
-    fn staging_cleanup_refuses_a_replaced_directory_identity() {
-        let temp = private_tempdir();
-        let target = preflight_target(temp.path().join("restored-home")).unwrap();
-        let mut staging = OwnedStaging::create(&target).unwrap();
-        let original = staging.path.with_extension("original-stage");
-        fs::rename(&staging.path, &original).unwrap();
-        fs::create_dir(&staging.path).unwrap();
-        fs::set_permissions(&staging.path, fs::Permissions::from_mode(0o700)).unwrap();
-
-        let error = staging.cleanup().unwrap_err();
-        assert!(error.to_string().contains("identity changed"));
-        assert!(staging.path.exists());
-        assert!(original.exists());
-
-        // Test-only explicit cleanup of the two exact paths. Disable the
-        // guard first so Drop cannot act on the replacement.
-        staging.active = false;
-        fs::remove_dir(&staging.path).unwrap();
-        fs::remove_dir(&original).unwrap();
-    }
-
-    #[test]
-    fn atomic_install_never_replaces_a_raced_target() {
-        let temp = private_tempdir();
-        let target = preflight_target(temp.path().join("restored-home")).unwrap();
-        let mut staging = OwnedStaging::create(&target).unwrap();
-        let staging_path = staging.path.clone();
-        staging.write_file(VAULT_FILE, b"vault").unwrap();
-        staging.write_file(AUDIT_FILE, b"audit").unwrap();
-        fs::create_dir(&target.home).unwrap();
-        fs::write(target.home.join("marker"), b"unchanged").unwrap();
-
-        // Invoke the final primitive directly to model the target
-        // appearing after the last ordinary preflight check.
-        let error = atomic_rename_noreplace(&staging.path, &target.home).unwrap_err();
-        assert_eq!(
-            crate::error::classified_kind(&error),
-            Some(VaultErrorKind::AlreadyExists)
-        );
-        assert_eq!(fs::read(target.home.join("marker")).unwrap(), b"unchanged");
-        staging.cleanup().unwrap();
-        assert!(!staging_path.exists());
-    }
-}
+mod tests;

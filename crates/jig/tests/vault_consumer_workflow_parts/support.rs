@@ -97,7 +97,9 @@ pub(super) fn assert_restored(
             .as_str()
             .expect("restore omitted destination vault home"),
     );
-    assert!(restored_home.starts_with(destination_base.join("scopes")));
+    // Restore reports the physical home, so macOS /var temp paths resolve.
+    let destination_scopes = destination_base.join("scopes").canonicalize().unwrap();
+    assert!(restored_home.starts_with(destination_scopes));
     assert_ne!(restored_home, source_home);
     assert!(restored_home.join("vault.json").is_file());
     restored_home
