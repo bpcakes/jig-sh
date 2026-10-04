@@ -1319,7 +1319,8 @@ history along with the final 4,000 bytes of its stdout and stderr as
 `output_tail`.
 
 For an existing repository that tracks the journal, add
-`.agent/state/runs.jsonl` to `.gitignore`, then run
+`.agent/state/runs.jsonl` to `.gitignore` in the Jig root (the directory
+containing `.jig.toml`), then run from that directory
 `git rm --cached -- .agent/state/runs.jsonl` and commit the tracking change.
 This leaves the current checkout's history on disk. Preserve any needed history
 in other clones before they pull that deletion commit. `jig update` refreshes

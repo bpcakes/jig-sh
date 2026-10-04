@@ -36,11 +36,11 @@ pub(super) fn check_local_history(
                 let mut fix = String::new();
                 if !ignored {
                     fix.push_str(
-                        "Add `.agent/state/runs.jsonl` to the repository's `.gitignore`. ",
+                        "Add `.agent/state/runs.jsonl` to `.gitignore` in the Jig root (the directory containing `.jig.toml`). ",
                     );
                 }
                 if tracked {
-                    fix.push_str("Run `git rm --cached -- .agent/state/runs.jsonl` from the repository root to keep the local file and stop tracking it. ");
+                    fix.push_str("Run `git rm --cached -- .agent/state/runs.jsonl` from the Jig root (the directory containing `.jig.toml`) to keep the local file and stop tracking it. Before other clones pull the deletion commit, copy aside any `.agent/state/runs.jsonl` history they need to keep. ");
                 }
                 fix.push_str(
                     "Commit the tracking policy change; keep local run history out of commits.",
@@ -57,7 +57,7 @@ pub(super) fn check_local_history(
             "unverified",
             format!("Could not inspect run-history tracking: {error}"),
         )
-        .with_fix("Check Git access from the repository root, then rerun `scripts/jig doctor`."),
+        .with_fix("Check Git access from the Jig root containing `.jig.toml`, then rerun `scripts/jig doctor`."),
     })
 }
 
