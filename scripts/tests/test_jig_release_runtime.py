@@ -68,7 +68,7 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         cargo.chmod(0o755)
         self.env = {key: value for key, value in os.environ.items()
                     if not key.startswith("JIG_")}
-        self.env.update(PATH=str(self.tools), EXAMPLE_CARGO_LOG=str(self.log),
+        self.env.update(PATH=str(self.tools), JIG_INSTALL_SOURCE="1", EXAMPLE_CARGO_LOG=str(self.log),
                         EXAMPLE_BINARIES=str(self.binaries))
 
     def installer(self, *args, env=None):

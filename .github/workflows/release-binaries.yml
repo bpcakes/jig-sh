@@ -1,0 +1,121 @@
+name: Release binaries
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing release version to build (MAJOR.MINOR.PATCH)"
+        required: true
+        type: string
+      dry_run:
+        description: "Build and smoke-test without uploading to the GitHub Release"
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - ".github/workflows/release-binaries.yml"
+      - ".github/workflows/release.yml"
+      - "scripts/package-release-binary.py"
+      - "scripts/publish-release-binaries.py"
+      - "scripts/smoke-release-binary.py"
+      - "scripts/install-jig.sh"
+      - "scripts/tests/test_jig_binary_distribution.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-binaries-${{ inputs.version || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-14
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      # Keep distribution tooling from the workflow ref so existing tags can
+      # receive binaries even when they predate this workflow.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Validate release version
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+      - name: Checkout release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.version && format('refs/tags/v{0}', inputs.version) || github.sha }}
+          path: release-source
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: release-source
+          shared-key: release-binary-${{ matrix.target }}
+      - name: Build locked full-featured binary
+        working-directory: release-source
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --locked --release -p jig-sh --bin jig --target "$TARGET"
+      - name: Package and smoke-test installer without Cargo
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -z "$VERSION" ]]; then
+            VERSION="$(release-source/target/$TARGET/release/jig --version | awk '{print $2}')"
+          fi
+          python3 scripts/package-release-binary.py "release-source/target/$TARGET/release/jig" "$VERSION" "$TARGET" dist
+          python3 -m unittest discover -s scripts/tests -p 'test_jig_binary_distribution.py'
+          python3 scripts/smoke-release-binary.py "release-source/target/$TARGET/release/jig" "$TARGET"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jig-binary-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: ${{ github.event_name != 'pull_request' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: jig-binary-*
+          merge-multiple: true
+          path: dist
+      - name: Upload verified assets to existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: python3 scripts/publish-release-binaries.py "$VERSION" dist

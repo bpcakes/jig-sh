@@ -1223,10 +1223,23 @@ template-source runtime selection.
 
 The installer requires the exact version and a successful contract/profile
 compatibility probe. It first reuses a compatible cache or imports a matching
-native `jig` executable from `PATH`. Otherwise it runs
-`cargo install jig-sh --registry crates-io --version '=0.5.0' --locked` into the
-repository cache, adding `--no-default-features` for the runtime profile. A missing,
-unavailable, or incompatible release fails visibly; it never falls back to Git.
+native `jig` executable from `PATH`. Otherwise it downloads the exact version's
+`jig-VERSION-TARGET.tar.gz` and `.tar.gz.sha256` from the official GitHub Release.
+It verifies SHA-256, extracts only a single regular `jig` executable, checks the
+version and compatibility, then atomically publishes it under the cache lock.
+Linux x86-64/ARM64 binaries require glibc 2.35 or newer; macOS x86-64/ARM64
+binaries target macOS 13 or newer. Each asset includes all default features and
+can serve either installation profile.
+
+Older releases without the requested archive (HTTP 404), unsupported targets,
+older/non-glibc Linux hosts, and hosts without `curl` retain the source fallback:
+`cargo install jig-sh --registry crates-io --version '=0.5.0' --locked`, adding
+`--no-default-features` for the runtime profile. Set `JIG_INSTALL_SOURCE=1` to
+explicitly choose source installation; add `--refresh` to rebuild an existing
+cache. Transport errors, missing checksums, checksum mismatches, malformed
+archives, and incompatible downloaded executables fail visibly without invoking
+Cargo or replacing an existing cache. Retry the download or explicitly select
+source installation. It never falls back to Git.
 An empty or malformed pin is an error. Remove the file to return to template-source
 installation, or use the explicit `JIG_DEV_BIN` override for development.
 
@@ -1241,8 +1254,8 @@ release; `--refresh` or `JIG_INSTALL_REFRESH=1` reinstalls the same pinned versi
 
 Generated workflows that invoke Jig cache the runtime profile executable by
 operating system, architecture, profile, pin content, and launcher/installer
-content. Feature profiles use separate installation paths; lock files are not cached. A cold cache still
-compiles the published crate. Restoring the executable avoids compilation on later
+content. Feature profiles use separate installation paths; lock files are not cached. A cold cache
+downloads a verified release binary when available. Restoring the executable avoids downloading on later
 runs; crates.io does not distribute precompiled Jig binaries.
 
 ### Generated runtime files

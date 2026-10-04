@@ -76,8 +76,9 @@ You only need a global installation for the first `jig init` or `jig adopt`. Gen
 
 To select an exact published runtime independently of the template revision, commit
 a `.jig/runtime-version` file containing a stable version such as `0.5.0`. The
-generated installer reuses that installed release or installs it from crates.io;
-generated CI workflows cache the executable. See [runtime release pins](docs/configuration.md#runtime-release-pins).
+generated installer reuses that release or downloads its verified binary from
+GitHub Releases; generated CI workflows cache the executable. Releases without
+binary assets retain the crates.io source fallback. See [runtime release pins](docs/configuration.md#runtime-release-pins).
 
 ## Quick start
 

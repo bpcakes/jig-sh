@@ -31,6 +31,31 @@ Use the GitHub Actions `Release` workflow for the lowest-touch release path. The
 
 Keep in-progress release notes under `## Unreleased`. `scripts/release.sh prepare` promotes that curated section to `## vVERSION` when it contains `###` headings; otherwise it generates notes from git history. Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `build:`, `ci:`, `chore:`) drive the generated categories; unprefixed commits land in `Other`. Do not hand-edit an upcoming `## vVERSION` section before running the workflow.
 
+### Release binaries
+
+After the main release job succeeds, `Release binaries` builds the exact tag on
+Linux and macOS for x86-64 and ARM64. Linux builds use Ubuntu 22.04 (glibc 2.35);
+macOS builds target macOS 13. The full-featured executables are packaged as
+`jig-VERSION-TARGET.tar.gz`, containing only `jig`, with one `.tar.gz.sha256`
+sidecar per archive. Native version/contract/profile checks and a cold installer
+smoke test with no Cargo on PATH run before uploading. All four builds must
+succeed before any assets are attached to the existing GitHub Release.
+
+The binary workflow can also be dispatched for an existing stable `version` to
+backfill assets or retry failed builds. It defaults to `dry_run: true`, which
+keeps build artifacts for inspection without publishing. Set `dry_run: false`
+to attach them. Existing complete asset pairs are downloaded and checksum-verified,
+then preserved; an incomplete pair fails with repair guidance. Published assets
+are never overwritten automatically. The main Release workflow's dry run still
+performs its existing local validation; use the separate binary dry run against
+an existing tag to validate the platform matrix.
+
+Consumers need the updated `scripts/install-jig.sh` and an explicit
+`.jig/runtime-version` pin to a release containing assets. Keep template/source
+selection unchanged for unpinned checkouts. Use `JIG_INSTALL_SOURCE=1` for an
+explicit source build. Installer download or integrity errors fail visibly;
+only an unavailable archive or unsupported host automatically falls back to Cargo.
+
 ### Local release steps
 
 The local release script is the typed entrypoint for validation and manual recovery. The `github` subcommand requires the GitHub CLI (`gh`) with permission to create releases.
