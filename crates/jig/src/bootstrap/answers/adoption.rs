@@ -25,6 +25,8 @@ impl AnswerInput {
             }
             self.preserve_repository_model = true;
             inference.components_mut().preserve(model);
+            // Authored SQLx answers win, so inferred SQLx defaults are moot.
+            inference.retract_sqlx_warnings();
             inference.warn_preserved_workspace_changes(
                 self.raw
                     .frontend_workspace_roots

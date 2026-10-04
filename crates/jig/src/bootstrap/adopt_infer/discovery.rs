@@ -88,8 +88,7 @@ pub(in crate::bootstrap) fn infer_adopt_answers(root: &Path) -> AdoptInference {
     );
     record_frontend_and_ci_metadata(&mut inference, &package_manager, &frontend_apps, &github_ci);
 
-    let sqlx = infer_sqlx(root, &scan, &mut inference.warnings);
-    apply_sqlx_inference(&mut inference, &sqlx);
+    inference.infer_and_apply_sqlx(root, &scan);
     record_inference_signals(&mut inference, &github_ci);
 
     inference.scan = Some(scan);

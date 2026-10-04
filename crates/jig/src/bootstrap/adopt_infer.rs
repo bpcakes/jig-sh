@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde_json::{Value as JsonValue, json};
 
-use super::answers::AnswerInputShape;
+use super::answers::{AnswerInputShape, EffectiveSqlx};
 use super::{AnswerOpts, FrontendApp};
 
 mod commands;
@@ -21,6 +21,7 @@ mod profile;
 mod repo;
 mod rust_sqlx;
 mod scan;
+mod sqlx_adoption;
 mod topology;
 
 use self::commands::{CommandCandidate, CommandInference, infer_commands};
@@ -36,8 +37,8 @@ use self::repo::{
     RepoValueInference, infer_default_branch_with_metadata, infer_repo_name_with_metadata,
 };
 use self::rust_sqlx::{
-    RustCrateRootSourceKind, RustCrateRootsInference, SqlxInference,
-    infer_rust_crate_roots_from_scan, infer_rust_crate_roots_with_metadata, infer_sqlx,
+    MigrationChoice, RustCrateRootSourceKind, RustCrateRootsInference, SqlxInference,
+    infer_rust_crate_roots_from_scan, infer_rust_crate_roots_with_metadata,
 };
 use self::scan::{RepoScan, read_limited_text};
 use self::topology::{RepoTopology, infer_repo_topology};
@@ -62,6 +63,8 @@ use self::scan::MAX_SCAN_FILE_BYTES;
 pub(super) struct AdoptInference {
     scan: Option<RepoScan>,
     sqlx_signals: Vec<String>,
+    sqlx_warnings: Vec<String>,
+    sqlx_migration_choice: MigrationChoice,
     repo_name: Option<String>,
     default_branch: Option<String>,
     rust_crate_roots: Vec<String>,
@@ -245,6 +248,7 @@ fn record_frontend_and_ci_metadata(
 
 fn apply_sqlx_inference(inference: &mut AdoptInference, sqlx: &SqlxInference) {
     inference.sqlx_enabled = Some(sqlx.enabled.value);
+    inference.sqlx_migration_choice = sqlx.migration_choice.clone();
     inference.rust_migration_dirs = sqlx.migration_dirs.value.clone();
     inference
         .signals
@@ -488,30 +492,7 @@ impl AdoptInference {
             "rust_test_locked_command",
         );
 
-        let explicit_sqlx_enabled = answer_shape.explicit_sqlx_enabled(answers);
-        if answer_shape.should_apply_inferred_sqlx_enabled(answers) {
-            answers.sqlx_enabled = self.sqlx_enabled;
-        }
-        if self.sqlx_enabled == Some(true) && explicit_sqlx_enabled != Some(false) {
-            fill_string(
-                &mut answers.rust_migration_dir,
-                self.rust_migration_dir.as_deref(),
-                answer_shape,
-                "rust_migration_dir",
-            );
-            fill_string(
-                &mut answers.rust_sqlx_metadata_dir,
-                self.rust_sqlx_metadata_dir.as_deref(),
-                answer_shape,
-                "rust_sqlx_metadata_dir",
-            );
-            fill_string(
-                &mut answers.sqlx_check_command,
-                self.sqlx_check_command.as_deref(),
-                answer_shape,
-                "sqlx_check_command",
-            );
-        }
+        self.fill_sqlx_answers(answers, answer_shape);
     }
 
     pub(super) fn summary(&self) -> String {
@@ -553,6 +534,7 @@ impl AdoptInference {
         resolved_answers: &AnswerOpts,
         explicit_answers: &AnswerOpts,
         answer_shape: &AnswerInputShape,
+        effective_sqlx: &EffectiveSqlx,
     ) -> AdoptionReview {
         let mut items = Vec::new();
         items.extend(
@@ -574,16 +556,7 @@ impl AdoptInference {
                     .into(),
             );
         }
-        if self.sqlx_enabled == Some(true) {
-            match resolved_answers.rust_migration_dir.as_deref() {
-                Some(dir) => items.push(format!("SQLx: enabled with migrations at {dir}")),
-                None => {
-                    items.push(
-                        "SQLx: enabled; confirm migration and metadata paths in .jig.toml".into(),
-                    );
-                }
-            }
-        }
+        items.extend(self.sqlx_review_item(effective_sqlx));
         if matches!(
             self.rust_crate_root_source_kind,
             RustCrateRootSourceKind::WorkspaceFallback

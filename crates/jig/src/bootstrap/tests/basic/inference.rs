@@ -201,7 +201,7 @@ edition = "2024"
 }
 
 #[test]
-fn adopt_reports_sources_for_multiple_migration_dirs() {
+fn adopt_requires_an_explicit_dir_for_ambiguous_sqlx_migration_dirs() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
@@ -209,30 +209,45 @@ fn adopt_reports_sources_for_multiple_migration_dirs() {
     fs::create_dir_all(repo.join("crates/api/migrations")).unwrap();
     fs::create_dir_all(repo.join("migrations")).unwrap();
     fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname = \"example-service\"\nversion = \"0.1.0\"\n\n[dependencies]\nsqlx = \"0.9\"\n",
+    )
+    .unwrap();
+    fs::write(
         repo.join("crates/api/migrations/0001_api.sql"),
         "select 1;\n",
     )
     .unwrap();
     fs::write(repo.join("migrations/0001_root.sql"), "select 1;\n").unwrap();
-
-    let output = run_adopt(AdoptOpts {
+    let opts = |write, rust_migration_dir: Option<&str>| AdoptOpts {
         components: Default::default(),
-        path: repo,
+        path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
         vcs_ref: None,
         force: false,
-        write: true,
+        write,
         minimal: false,
         defaults: false,
         no_input: true,
         no_vault: true,
         answers: AnswerOpts {
             backend_language: Some(crate::backend::BackendLanguage::Rust),
+            rust_migration_dir: rust_migration_dir.map(Into::into),
             ..AnswerOpts::default()
         },
-    })
-    .unwrap();
+    };
+
+    let error = run_adopt(opts(false, None)).unwrap_err().to_string();
+    assert!(
+        error.contains(
+            "cannot infer the SQLx migration directory from crates/api/migrations (Cargo manifest at . declares sqlx), migrations (Cargo manifest at . declares sqlx)"
+        ),
+        "{error}"
+    );
+    assert!(!repo.join(".jig.toml").exists());
+
+    let output = run_adopt(opts(true, Some("migrations"))).unwrap();
 
     assert_eq!(
         output["detection_report"]["rust_migration_dirs"]
@@ -264,7 +279,20 @@ fn adopt_reports_sources_for_multiple_migration_dirs() {
             .any(|warning| warning
                 .as_str()
                 .unwrap()
-                .contains("multiple migration directories detected"))
+                .contains("cannot infer the SQLx migration directory"))
+    );
+    assert!(
+        output["adoption_review"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item == "SQLx: enabled with migrations at migrations")
+    );
+    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert!(answers.contains("sqlx_enabled = true"), "{answers}");
+    assert!(
+        answers.contains("rust_migration_dir = \"migrations\""),
+        "{answers}"
     );
 }
 

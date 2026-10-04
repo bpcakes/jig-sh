@@ -16,7 +16,10 @@
 
 Before publishing a generated repo contract, review [Public Contract](./public-contract.md) for the stable CLI, JSON, and manifest guarantees.
 
-SQLx detection combines dependency, directory, command, and Rust source signals.
+SQLx detection uses SQLx-specific evidence: a Cargo `sqlx` dependency, the
+`.sqlx` metadata directory, `cargo sqlx` invocations, and Rust source signals.
+Numbered SQL migration directories never enable SQLx; once SQLx is established,
+they only locate its migrations.
 The Rust source signal recognizes direct `sqlx::migrate!` macro paths in parsed
 files or complete expression fragments, including comments and newlines between
 path tokens. Strings and comments do not count. Sources that cannot be parsed

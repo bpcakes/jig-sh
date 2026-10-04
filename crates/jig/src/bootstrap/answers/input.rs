@@ -1,3 +1,10 @@
+/// The SQLx answer that resolution will apply, known before rendering.
+#[derive(Debug, Default)]
+pub(in crate::bootstrap) struct EffectiveSqlx {
+    pub(in crate::bootstrap) enabled: bool,
+    pub(in crate::bootstrap) migration_dir: Option<String>,
+}
+
 impl AnswerInput {
     pub(super) fn from_opts(opts: &AnswerOpts) -> Result<Self> {
         let Some(path) = opts.answers_file.as_deref() else {
@@ -334,6 +341,30 @@ impl AnswerInput {
             }
         }
         keys
+    }
+
+    /// Applies resolution's SQLx precedence (CLI and inferred answers over the
+    /// file, then `--defaults`, then enabled) so reviews match generated checks.
+    pub(in crate::bootstrap) fn effective_sqlx(
+        &self,
+        cli: &AnswerOpts,
+        use_defaults: bool,
+    ) -> EffectiveSqlx {
+        let mut raw = self.raw.clone();
+        raw.merge_opts(cli);
+        if use_defaults {
+            raw.apply_sqlx_default_for_cli_defaults();
+        }
+        let enabled = raw.sqlx_enabled.unwrap_or(true);
+        let migration_dir = [raw.migration_dir, raw.rust_migration_dir]
+            .into_iter()
+            .flatten()
+            .find(|dir| !dir.is_empty())
+            .filter(|_| enabled);
+        EffectiveSqlx {
+            enabled,
+            migration_dir,
+        }
     }
 
     pub(super) fn effective_opts(&self, cli: &AnswerOpts) -> Result<AnswerOpts> {

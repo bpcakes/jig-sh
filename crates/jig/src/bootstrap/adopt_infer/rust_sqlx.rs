@@ -7,8 +7,10 @@ use super::scan::{
 use crate::bootstrap::crate_classification::non_production_crate_reason;
 
 mod migrate;
+mod migrations;
 
-const MAX_MIGRATION_SQL_DEPTH: usize = 3;
+pub(super) use migrations::MigrationChoice;
+use migrations::MigrationSurvey;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum RustCrateRootSourceKind {
@@ -36,6 +38,15 @@ pub(super) struct SqlxInference {
     pub(super) metadata_dir: Option<InferredSqlxValue<String>>,
     pub(super) check_command: Option<InferredSqlxValue<String>>,
     pub(super) signals: Vec<String>,
+    pub(super) migration_choice: MigrationChoice,
+}
+
+impl SqlxInference {
+    fn enable(&mut self, signal: String, source: String) {
+        self.enabled.value = true;
+        self.signals.push(signal);
+        self.enabled.sources.push(source);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -213,156 +224,194 @@ pub(super) fn infer_sqlx(
     warnings: &mut Vec<String>,
 ) -> SqlxInference {
     let mut out = SqlxInference::default();
-    for path in scan.named_files("Cargo.toml") {
-        if let Some(source) = cargo_toml_sqlx_source(root, path, warnings) {
-            out.enabled.value = true;
-            out.signals.push(format!("SQLx dependency in {source}"));
-            out.enabled.sources.push(source);
-        }
-    }
-    if scan.has_dir_named_at_root(root, ".sqlx") {
-        out.enabled.value = true;
-        out.metadata_dir = Some(InferredSqlxValue::with_source(
-            ".sqlx".into(),
-            ".sqlx/".into(),
-        ));
-        out.signals.push("SQLx metadata directory .sqlx".into());
-        out.enabled.sources.push(".sqlx/".into());
-    }
-    let migration_candidates = find_migration_dirs(root, scan);
-    out.migration_dirs.value = migration_candidates
-        .iter()
-        .map(|candidate| candidate.dir.clone())
-        .collect();
-    out.migration_dirs.sources = migration_candidates
-        .iter()
-        .map(|candidate| candidate.source.clone())
-        .collect();
-    if let Some(candidate) = migration_candidates.first() {
-        let dir = &candidate.dir;
-        out.enabled.value = true;
-        out.migration_dir = Some(InferredSqlxValue::with_source(
-            dir.clone(),
-            candidate.source.clone(),
-        ));
-        out.enabled.sources.push(candidate.source.clone());
-        if out.migration_dirs.value.len() == 1 {
-            out.signals.push(format!("migration directory {dir}"));
-        } else {
-            let warning = format!(
-                "multiple migration directories detected; using alphabetically first {dir} unless overridden"
-            );
-            push_scan_warning(warnings, root, &warning);
-            if let Some(migration_dir) = &mut out.migration_dir {
-                migration_dir.warnings.push(warning.clone());
-            }
-            out.migration_dirs.warnings.push(warning);
-            out.signals.push(format!(
-                "migration directories detected: {}",
-                out.migration_dirs.value.join(", ")
-            ));
-        }
-    }
-    if let Some(source) =
-        first_text_file_matching(root, scan, &["rs"], warnings, migrate::has_migrate_macro)
-    {
-        out.enabled.value = true;
-        out.signals.push("sqlx::migrate! macro".into());
-        out.enabled
-            .sources
-            .push(format!("sqlx::migrate! macro in {source}"));
-    }
-    if let Some(source) = first_text_file_matching(root, scan, &["sh"], warnings, |text| {
-        Ok(text.lines().any(shell_line_invokes_cargo_sqlx))
-    }) {
-        out.enabled.value = true;
-        out.signals.push("cargo sqlx command".into());
-        out.enabled
-            .sources
-            .push(format!("cargo sqlx command in {source}"));
-    } else if let Some(source) =
-        first_text_file_matching(root, scan, &["yml", "yaml"], warnings, |text| {
-            Ok(text.lines().any(yaml_run_invokes_cargo_sqlx))
-        })
-    {
-        out.enabled.value = true;
-        out.signals.push("cargo sqlx command".into());
-        out.enabled
-            .sources
-            .push(format!("cargo sqlx command in {source}"));
-    }
+    let sqlx_manifest_dirs = record_sqlx_evidence(root, scan, warnings, &mut out);
+    let survey = migrations::survey_migration_dirs(root, scan, &sqlx_manifest_dirs);
     if out.enabled.value {
-        let synthesized_migration_dir = out.migration_dir.is_none();
-        let synthesized_metadata_dir = out.metadata_dir.is_none();
-        if synthesized_migration_dir {
-            out.migration_dir = Some(InferredSqlxValue::with_source(
-                "migrations".into(),
-                "SQLx default migrations/".into(),
-            ));
-        }
-        if synthesized_metadata_dir {
-            out.metadata_dir = Some(InferredSqlxValue::with_source(
-                ".sqlx".into(),
-                "SQLx default .sqlx/".into(),
-            ));
-        }
-        let warning = match (synthesized_migration_dir, synthesized_metadata_dir) {
-            (true, true) => Some(
-                "SQLx was detected but migration and metadata directories were not; using default SQLx paths unless overridden",
-            ),
-            (true, false) => Some(
-                "SQLx was detected but no migration directory was found; using default migrations/ unless overridden",
-            ),
-            (false, true) => Some(
-                "SQLx metadata directory was not detected; using default .sqlx/ unless overridden",
-            ),
-            (false, false) => None,
-        };
-        if let Some(warning) = warning {
-            push_scan_warning(warnings, root, warning);
-            if synthesized_migration_dir && let Some(migration_dir) = &mut out.migration_dir {
-                migration_dir.warnings.push(warning.into());
-            }
-            if synthesized_metadata_dir && let Some(metadata_dir) = &mut out.metadata_dir {
-                metadata_dir.warnings.push(warning.into());
-            }
-        }
-        let metadata_dir = out
-            .metadata_dir
-            .as_ref()
-            .map(|metadata_dir| metadata_dir.value.as_str())
-            .unwrap_or(".sqlx");
-        let mut check_sources = Vec::new();
-        let workspace_arg = if cargo_workspace_declared(root, warnings) {
-            check_sources.push("Cargo.toml [workspace]".into());
-            " --workspace"
-        } else {
-            ""
-        };
-        if let Some(metadata_dir) = &out.metadata_dir {
-            check_sources.extend(metadata_dir.sources.iter().cloned());
-        }
-        // `prepare --check` intentionally connects to the database while
-        // comparing against the configured metadata directory. Adopt renders
-        // this command for supported local and CI environments.
-        out.check_command = Some(InferredSqlxValue {
-            value: format!(
-                "SQLX_OFFLINE=false SQLX_OFFLINE_DIR='{}' cargo sqlx prepare --check{} -- --all-targets",
-                metadata_dir.replace('\'', "'\\''"),
-                workspace_arg
-            ),
-            sources: check_sources,
-            warnings: Vec::new(),
-        });
-        out.signals
-            .push("SQLx check command assumes online cargo sqlx prepare".into());
+        record_migration_survey(root, &survey, warnings, &mut out);
+        let synthesize_migration_dir = matches!(survey.choice, MigrationChoice::NoCandidates);
+        record_default_paths(root, warnings, &mut out, synthesize_migration_dir);
+        record_check_command(root, warnings, &mut out);
     } else {
         out.signals.push("no SQLx signals detected".into());
         out.enabled
             .sources
             .push("repository scan found no SQLx signals".into());
     }
+    out.migration_choice = survey.choice;
     out
+}
+
+/// Records SQLx-specific evidence and returns the directories whose
+/// Cargo.toml declares sqlx. Numbered SQL files are deliberately not evidence:
+/// many migration tools share that layout.
+fn record_sqlx_evidence(
+    root: &Path,
+    scan: &RepoScan,
+    warnings: &mut Vec<String>,
+    out: &mut SqlxInference,
+) -> BTreeSet<String> {
+    let mut sqlx_manifest_dirs = BTreeSet::new();
+    for path in scan.named_files("Cargo.toml") {
+        if let Some(source) = cargo_toml_sqlx_source(root, path, warnings) {
+            sqlx_manifest_dirs.insert(migrations::relative_dir(
+                root,
+                path.parent().unwrap_or(root),
+            ));
+            out.enable(format!("SQLx dependency in {source}"), source);
+        }
+    }
+    if scan.has_dir_named_at_root(root, ".sqlx") {
+        out.metadata_dir = Some(InferredSqlxValue::with_source(
+            ".sqlx".into(),
+            ".sqlx/".into(),
+        ));
+        out.enable("SQLx metadata directory .sqlx".into(), ".sqlx/".into());
+    }
+    if let Some(source) =
+        first_text_file_matching(root, scan, &["rs"], warnings, migrate::has_migrate_macro)
+    {
+        out.enable(
+            "sqlx::migrate! macro".into(),
+            format!("sqlx::migrate! macro in {source}"),
+        );
+    }
+    if let Some(source) = cargo_sqlx_command_source(root, scan, warnings) {
+        out.enable(
+            "cargo sqlx command".into(),
+            format!("cargo sqlx command in {source}"),
+        );
+    }
+    sqlx_manifest_dirs
+}
+
+fn cargo_sqlx_command_source(
+    root: &Path,
+    scan: &RepoScan,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
+    first_text_file_matching(root, scan, &["sh"], warnings, |text| {
+        Ok(text.lines().any(shell_line_invokes_cargo_sqlx))
+    })
+    .or_else(|| {
+        first_text_file_matching(root, scan, &["yml", "yaml"], warnings, |text| {
+            Ok(text.lines().any(yaml_run_invokes_cargo_sqlx))
+        })
+    })
+}
+
+fn record_migration_survey(
+    root: &Path,
+    survey: &MigrationSurvey,
+    warnings: &mut Vec<String>,
+    out: &mut SqlxInference,
+) {
+    out.migration_dirs.value = survey
+        .sqlx_candidates
+        .iter()
+        .map(|candidate| candidate.dir.clone())
+        .collect();
+    out.migration_dirs.sources = survey
+        .sqlx_candidates
+        .iter()
+        .map(|candidate| candidate.source.clone())
+        .collect();
+    for candidate in &survey.excluded {
+        out.signals.push(format!(
+            "migration directory not used for SQLx: {}",
+            candidate.describe()
+        ));
+    }
+    if out.migration_dirs.value.len() > 1 {
+        out.signals.push(format!(
+            "migration directories detected: {}",
+            out.migration_dirs.value.join(", ")
+        ));
+    }
+    if let MigrationChoice::Selected(candidate) = &survey.choice {
+        out.migration_dir = Some(InferredSqlxValue::with_source(
+            candidate.dir.clone(),
+            candidate.source.clone(),
+        ));
+        out.signals
+            .push(format!("migration directory {}", candidate.describe()));
+    } else if let Some(warning) = survey.choice.ambiguity() {
+        push_scan_warning(warnings, root, &warning);
+        out.migration_dirs.warnings.push(warning);
+    }
+}
+
+fn record_default_paths(
+    root: &Path,
+    warnings: &mut Vec<String>,
+    out: &mut SqlxInference,
+    synthesize_migration_dir: bool,
+) {
+    let synthesize_metadata_dir = out.metadata_dir.is_none();
+    if synthesize_migration_dir {
+        out.migration_dir = Some(InferredSqlxValue::with_source(
+            "migrations".into(),
+            "SQLx default migrations/".into(),
+        ));
+    }
+    if synthesize_metadata_dir {
+        out.metadata_dir = Some(InferredSqlxValue::with_source(
+            ".sqlx".into(),
+            "SQLx default .sqlx/".into(),
+        ));
+    }
+    let warning = match (synthesize_migration_dir, synthesize_metadata_dir) {
+        (true, true) => Some(
+            "SQLx was detected but migration and metadata directories were not; using default SQLx paths unless overridden",
+        ),
+        (true, false) => Some(
+            "SQLx was detected but no migration directory was found; using default migrations/ unless overridden",
+        ),
+        (false, true) => {
+            Some("SQLx metadata directory was not detected; using default .sqlx/ unless overridden")
+        }
+        (false, false) => None,
+    };
+    if let Some(warning) = warning {
+        push_scan_warning(warnings, root, warning);
+        if synthesize_migration_dir && let Some(migration_dir) = &mut out.migration_dir {
+            migration_dir.warnings.push(warning.into());
+        }
+        if synthesize_metadata_dir && let Some(metadata_dir) = &mut out.metadata_dir {
+            metadata_dir.warnings.push(warning.into());
+        }
+    }
+}
+
+fn record_check_command(root: &Path, warnings: &mut Vec<String>, out: &mut SqlxInference) {
+    let metadata_dir = out
+        .metadata_dir
+        .as_ref()
+        .map(|metadata_dir| metadata_dir.value.as_str())
+        .unwrap_or(".sqlx");
+    let mut check_sources = Vec::new();
+    let workspace_arg = if cargo_workspace_declared(root, warnings) {
+        check_sources.push("Cargo.toml [workspace]".into());
+        " --workspace"
+    } else {
+        ""
+    };
+    if let Some(metadata_dir) = &out.metadata_dir {
+        check_sources.extend(metadata_dir.sources.iter().cloned());
+    }
+    // `prepare --check` intentionally connects to the database while
+    // comparing against the configured metadata directory. Adopt renders
+    // this command for supported local and CI environments.
+    out.check_command = Some(InferredSqlxValue {
+        value: format!(
+            "SQLX_OFFLINE=false SQLX_OFFLINE_DIR='{}' cargo sqlx prepare --check{} -- --all-targets",
+            metadata_dir.replace('\'', "'\\''"),
+            workspace_arg
+        ),
+        sources: check_sources,
+        warnings: Vec::new(),
+    });
+    out.signals
+        .push("SQLx check command assumes online cargo sqlx prepare".into());
 }
 
 fn cargo_toml_sqlx_source(root: &Path, path: &Path, warnings: &mut Vec<String>) -> Option<String> {
@@ -399,56 +448,6 @@ fn toml_section<'a>(
         cursor = cursor.get(key)?;
     }
     cursor.as_table()
-}
-
-#[derive(Debug)]
-struct MigrationDirCandidate {
-    dir: String,
-    source: String,
-}
-
-fn find_migration_dirs(root: &Path, scan: &RepoScan) -> Vec<MigrationDirCandidate> {
-    let mut candidates = Vec::new();
-    for path in scan.dirs_named("migrations") {
-        if let Some(source_path) = migration_dir_sql_source(path, scan) {
-            candidates.push(MigrationDirCandidate {
-                dir: relative_path_string(path.strip_prefix(root).unwrap_or(path)),
-                source: relative_source_path(root, source_path),
-            });
-        }
-    }
-    candidates.sort_by(|left, right| left.dir.cmp(&right.dir));
-    candidates
-}
-
-fn migration_dir_sql_source<'a>(path: &'a Path, scan: &'a RepoScan) -> Option<&'a Path> {
-    scan.files_under(path)
-        .find(|entry_path| {
-            let Ok(relative) = entry_path.strip_prefix(path) else {
-                return false;
-            };
-            relative.components().count() <= MAX_MIGRATION_SQL_DEPTH + 1
-                && migration_sql_file_is_supported(entry_path)
-        })
-        .map(std::path::PathBuf::as_path)
-}
-
-fn migration_sql_file_is_supported(path: &Path) -> bool {
-    if path.extension().and_then(|ext| ext.to_str()) != Some("sql") {
-        return false;
-    }
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(starts_with_ascii_digit)
-        || path
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-            .is_some_and(starts_with_ascii_digit)
-}
-
-fn starts_with_ascii_digit(value: &str) -> bool {
-    value.as_bytes().first().is_some_and(u8::is_ascii_digit)
 }
 
 fn first_text_file_matching<F>(

@@ -306,4 +306,14 @@ fn adopt_components_no_root_backend_clears_sqlx_metadata_and_signals() {
             .iter()
             .any(|signal| signal.as_str().unwrap().contains("SQLx dependency"))
     );
+    // Discovery warned that the default .sqlx/ would be used; selection must
+    // withdraw it because no component can own SQLx.
+    assert!(
+        !report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("SQLx")),
+        "{report}"
+    );
 }
