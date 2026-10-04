@@ -161,6 +161,7 @@ fn validate_creation_ancestors(path: &Path) -> AnyResult<Vec<PathBuf>> {
                 );
             }
             reject_ownership_ignoring_volume(ancestor)?;
+            acl::reject_shared_write(ancestor)?;
             checked_creation_boundary = true;
         }
     }
@@ -210,6 +211,9 @@ fn create_private_parent_chain(missing: &[PathBuf]) -> AnyResult<()> {
                 path.display()
             );
         }
+        // Clear inherited entries before the next component is created so
+        // nothing below this directory can inherit them either.
+        acl::clear_directory(path)?;
         sync_directory(path).with_context(|| {
             format!(
                 "failed to sync created restore target parent {}",
@@ -331,6 +335,8 @@ impl OwnedStaging {
                     )
                 },
             )?;
+            // Staged files must not inherit the parent's ACL entries.
+            acl::clear_directory(&staging.path)?;
             let metadata = fs::symlink_metadata(&staging.path).with_context(|| {
                 format!(
                     "failed to inspect restore staging directory {}",
@@ -363,6 +369,7 @@ impl OwnedStaging {
             .custom_flags(libc::O_NOFOLLOW)
             .open(&path)
             .with_context(|| format!("failed to create staged restore file {name}"))?;
+        acl::clear_file(&file, &path)?;
         file.write_all(bytes)
             .with_context(|| format!("failed to write staged restore file {name}"))?;
         file.set_permissions(fs::Permissions::from_mode(0o600))
@@ -383,6 +390,7 @@ impl OwnedStaging {
 
     fn install(&mut self, target: &RestoreTarget) -> AnyResult<()> {
         self.validate_identity()?;
+        self.require_private_contents()?;
         revalidate_target(target)?;
         atomic_rename_noreplace(&self.path, &target.home)?;
         // The generated staging name no longer exists after this point;
@@ -456,6 +464,38 @@ impl OwnedStaging {
         Ok(())
     }
 
+    /// Rechecks everything that will be published, including files the
+    /// vault store wrote while finalizing the staged restore.
+    fn require_private_contents(&self) -> AnyResult<()> {
+        acl::require_none(&self.path)?;
+        for entry in fs::read_dir(&self.path).with_context(|| {
+            format!(
+                "failed to enumerate restore staging directory {}",
+                self.path.display()
+            )
+        })? {
+            let entry = entry.context("failed to inspect restore staging entry")?;
+            if !matches!(
+                entry.file_name().to_str(),
+                Some(VAULT_FILE | AUDIT_FILE | LOCK_FILE)
+            ) {
+                bail!(
+                    "refusing to install restore staging directory containing unexpected entry {}",
+                    entry.path().display()
+                );
+            }
+            let metadata = fs::symlink_metadata(entry.path()).with_context(|| {
+                format!(
+                    "failed to inspect staged restore entry {}",
+                    entry.path().display()
+                )
+            })?;
+            validate_owned_file(&entry.path(), &metadata)?;
+            acl::require_none(&entry.path())?;
+        }
+        Ok(())
+    }
+
     fn validate_identity(&self) -> AnyResult<()> {
         let metadata = fs::symlink_metadata(&self.path).with_context(|| {
             format!(
@@ -519,6 +559,7 @@ fn validate_parent(path: &Path) -> AnyResult<fs::Metadata> {
         );
     }
     reject_ownership_ignoring_volume(path)?;
+    acl::reject_shared_write(path)?;
     Ok(metadata)
 }
 
@@ -709,5 +750,6 @@ fn vault_error_as_classified(error: VaultError) -> anyhow::Error {
     classified(error.kind(), error.to_string())
 }
 
+mod acl;
 #[cfg(test)]
 mod tests;
