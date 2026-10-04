@@ -26,6 +26,7 @@ class ReleaseRuntimeTests(unittest.TestCase):
         source.write_text(NATIVE_FIXTURE)
         for name, version, contract in [("0.5.0", "0.5.0", "8"),
                                         ("0.5.1", "0.5.1", "8"),
+                                        ("development", "0.5.1-dev.3+gabcdef.dirty", "8"),
                                         ("incompatible", "0.5.0", "7")]:
             subprocess.run(["cc", str(source), "-o", str(cls.binaries / name),
                             f'-DVERSION="{version}"', f'-DCONTRACT="{contract}"',
@@ -68,7 +69,7 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         cargo.chmod(0o755)
         self.env = {key: value for key, value in os.environ.items()
                     if not key.startswith("JIG_")}
-        self.env.update(PATH=str(self.tools), EXAMPLE_CARGO_LOG=str(self.log),
+        self.env.update(PATH=str(self.tools), JIG_INSTALL_SOURCE="1", EXAMPLE_CARGO_LOG=str(self.log),
                         EXAMPLE_BINARIES=str(self.binaries))
 
     def installer(self, *args, env=None):

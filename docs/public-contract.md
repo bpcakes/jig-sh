@@ -641,7 +641,12 @@ A manual loop tick keeps its durable occurrence live until the tick's [loop evid
 
 `.agent/state/*.jsonl` is runtime-owned append-only memory during normal operation. Generated repos may back up, inspect, or remove these files intentionally, but application code should not edit individual records in place. Runtime-owned maintenance commands may perform validated whole-stream rewrites with recovery artifacts. Generated `.gitattributes` marks those JSONL files with `merge=union` to reduce avoidable merge conflicts between independent append-only records.
 
-The current JSONL state file is `runs.jsonl`.
+The current JSONL state file is `runs.jsonl`. Generated repositories ignore it
+in Git: it is local execution history, retained across runs without requiring
+commits. Ignore rules do not untrack existing journals; existing repositories
+can use `git rm --cached -- .agent/state/runs.jsonl` after adding the ignore rule
+to preserve the local file while removing it from future commits. The union
+merge rule remains for repositories that retain tracked legacy state.
 
 Repositories from earlier runtimes may also keep `receipts.jsonl`,
 `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl`. Jig no longer writes or

@@ -26,6 +26,18 @@ fn assert_native_init_ignore_files(destination: &Path) {
     }
     let attributes = fs::read_to_string(destination.join(".gitattributes")).unwrap();
     assert!(attributes.contains(".agent/state/*.jsonl merge=union"));
+    let ignored = Command::new("git")
+        .args([
+            "check-ignore",
+            "--no-index",
+            ".agent/state/runs.jsonl",
+            ".agent/jig-contract.json",
+        ])
+        .current_dir(destination)
+        .output()
+        .unwrap();
+    assert!(ignored.status.success());
+    assert_eq!(ignored.stdout, b".agent/state/runs.jsonl\n");
 }
 
 fn assert_native_init_manifest(destination: &Path) {

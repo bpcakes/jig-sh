@@ -1539,6 +1539,111 @@ released_binary_is_compatible() {
   [[ "$(binary_version "$bin_path")" == "$RUNTIME_VERSION" ]]
 }
 
+# Return 2 only when source installation is appropriate. Download, checksum,
+# and compatibility failures must never silently turn into a long Cargo build.
+install_released_binary() {
+  local target os arch libc_version asset base temporary status suffix
+  case "${JIG_INSTALL_SOURCE:-0}" in
+    1) return 2 ;;
+    0) ;;
+    *) echo "JIG_INSTALL_SOURCE must be 0 or 1." >&2; return 1 ;;
+  esac
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl unavailable; falling back to the pinned source release." >&2
+    return 2
+  fi
+  os="$(uname -s)" || return 2
+  arch="$(uname -m)" || return 2
+  case "$os:$arch" in
+    Linux:x86_64) target=x86_64-unknown-linux-gnu ;;
+    Linux:aarch64 | Linux:arm64) target=aarch64-unknown-linux-gnu ;;
+    Darwin:x86_64) target=x86_64-apple-darwin ;;
+    Darwin:arm64 | Darwin:aarch64) target=aarch64-apple-darwin ;;
+    *) echo "No prebuilt Jig for $os/$arch; using source." >&2; return 2 ;;
+  esac
+  if [[ "$os" == Linux ]]; then
+    libc_version="$(getconf GNU_LIBC_VERSION 2>/dev/null)" || return 2
+    if ! python3 -I -c 'import sys; raise SystemExit(tuple(map(int, sys.argv[1].split()[-1].split("."))) < (2, 35))' "$libc_version"; then
+      echo "Prebuilt Jig requires glibc 2.35 or newer; using source." >&2
+      return 2
+    fi
+  fi
+  asset="jig-$RUNTIME_VERSION-$target.tar.gz"
+  base="https://github.com/bpcakes/jig-sh/releases/download/v$RUNTIME_VERSION"
+  mkdir -p "$INSTALL_ROOT/bin" || return 1
+  temporary="$(mktemp -d "$INSTALL_ROOT/.jig-download.XXXXXX")" || return 1
+  echo "Downloading pinned Jig $RUNTIME_VERSION ($target)." >&2
+  for suffix in "" .sha256; do
+    if ! status="$(curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      --location --silent --show-error --connect-timeout 15 --max-time 120 \
+      --retry 2 --output "$temporary/$asset$suffix" --write-out '%{http_code}' \
+      "$base/$asset$suffix")"; then
+      rm -rf "$temporary"
+      echo "Jig release download failed; retry or set JIG_INSTALL_SOURCE=1 to build from source." >&2
+      return 1
+    fi
+    if [[ "$status" == 404 && -z "$suffix" ]]; then
+      rm -rf "$temporary"
+      echo "No binary asset for Jig $RUNTIME_VERSION/$target; using the pinned source release." >&2
+      return 2
+    fi
+    if [[ "$status" != 200 ]]; then
+      rm -rf "$temporary"
+      echo "Jig release download returned HTTP $status for $asset$suffix." >&2
+      return 1
+    fi
+  done
+  if ! python3 -I - "$temporary" "$asset" <<'PY_BINARY'
+import hashlib
+import pathlib
+import re
+import shutil
+import sys
+import tarfile
+
+root = pathlib.Path(sys.argv[1])
+asset = sys.argv[2]
+try:
+    checksum = (root / (asset + ".sha256")).read_text(encoding="ascii")
+    if not re.fullmatch(r"[0-9a-f]{64}  " + re.escape(asset) + r"\n?", checksum):
+        raise ValueError("invalid checksum file")
+    digest = hashlib.sha256()
+    with (root / asset).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != checksum[:64]:
+        raise ValueError("SHA-256 mismatch")
+    with tarfile.open(root / asset, "r:gz") as archive:
+        members = archive.getmembers()
+        if len(members) != 1 or members[0].name != "jig" or not members[0].isreg():
+            raise ValueError("expected a single regular jig executable")
+        if not 0 < members[0].size <= 512 * 1024 * 1024:
+            raise ValueError("invalid executable size")
+        with archive.extractfile(members[0]) as source, (root / "jig").open("wb") as dest:
+            shutil.copyfileobj(source, dest)
+except (OSError, ValueError, tarfile.TarError) as error:
+    print(f"Invalid Jig release asset: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY_BINARY
+  then
+    rm -rf "$temporary"
+    return 1
+  fi
+  if ! chmod 755 "$temporary/jig" \
+    || ! native_binary_header_is_supported "$temporary/jig" \
+    || ! native_binary_is_compatible "$temporary/jig" \
+    || ! released_binary_is_compatible "$temporary/jig"; then
+    rm -rf "$temporary"
+    echo "Downloaded Jig does not match release $RUNTIME_VERSION or cannot run contract $CONTRACT_VERSION with profile $INSTALL_PROFILE." >&2
+    return 1
+  fi
+  if ! mv -f "$temporary/jig" "$BIN_PATH"; then
+    rm -rf "$temporary"
+    return 1
+  fi
+  rm -rf "$temporary"
+}
+
 resolve_released_runtime() {
   local full_bin="$DEFAULT_INSTALL_BASE/release-$RUNTIME_VERSION-contract-$CONTRACT_VERSION/bin/jig"
   local path_bin temporary
@@ -1575,6 +1680,14 @@ resolve_released_runtime() {
   fi
   if [[ "$RESOLVE_ONLY" == "1" ]]; then
     return 1
+  fi
+  local binary_status
+  if install_released_binary; then
+    printf '%s\n' "$BIN_PATH"
+    return 0
+  else
+    binary_status=$?
+    [[ "$binary_status" == 2 ]] || return "$binary_status"
   fi
   local cargo_args=(install jig-sh --registry crates-io --version "=$RUNTIME_VERSION" --locked --root "$INSTALL_ROOT" --force)
   if [[ -n "$CARGO_INSTALL_FEATURE_ARG" ]]; then

@@ -168,7 +168,7 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
 - `scripts/jig info freshness` previews action input declarations (`inputs_policy` and `source_state`) without writing files.
 
-Checks record structured results in append-only run history under `.agent/state/runs.jsonl`. A reviewer can inspect the exact target and run, the contract and input digests, the conclusion and exit code, findings, and the tail of a failed target's output. Every check run executes its targets; earlier results are never reused in place of execution.
+Checks record structured results in local, Git-ignored, append-only run history under `.agent/state/runs.jsonl`. Local inspection shows the exact target and run, the contract and input digests, the conclusion and exit code, findings, and the tail of a failed target's output. This history is not shared through commits. Every check run executes its targets; earlier results are never reused in place of execution.
 
 ### Repository targets and check plans
 

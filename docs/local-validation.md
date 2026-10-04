@@ -142,3 +142,17 @@ reuse that success only for the same version, commit, GitHub job, run and attemp
 with a clean working tree except for the existing explicit run-journal allowance.
 A failed recheck removes prior evidence. Standalone release commands without this
 override still perform full validation.
+
+The Release binaries workflow builds native archives on Linux and macOS for both
+x86-64 and ARM64. Changes to binary distribution tooling also run that matrix on
+pull requests. The `test_jig_binary_distribution.py` unittest module exercises
+cold installs without Cargo, checksums, host selection, fallback, publication
+retries, and cache preservation. `test_jig_standalone_install.py` covers first-time
+installation, latest-release selection, host requirements, and safe replacement. On stable tags,
+`scripts/smoke-release-binary.py` also installs the actual compiled executable
+with local asset transport and no Cargo on PATH. Development builds run both
+native profile probes; stable pins deliberately reject development versions.
+When testing a binary built from another tag, pass `--release-source PATH` to
+use that checkout's contract. `test_jig_release_smoke.py` covers older contracts,
+failed probes, and the standalone-only historical `v0.1.0` exception (which
+predates repository compatibility probes).

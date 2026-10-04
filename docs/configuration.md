@@ -1223,10 +1223,23 @@ template-source runtime selection.
 
 The installer requires the exact version and a successful contract/profile
 compatibility probe. It first reuses a compatible cache or imports a matching
-native `jig` executable from `PATH`. Otherwise it runs
-`cargo install jig-sh --registry crates-io --version '=0.5.0' --locked` into the
-repository cache, adding `--no-default-features` for the runtime profile. A missing,
-unavailable, or incompatible release fails visibly; it never falls back to Git.
+native `jig` executable from `PATH`. Otherwise it downloads the exact version's
+`jig-VERSION-TARGET.tar.gz` and `.tar.gz.sha256` from the official GitHub Release.
+It verifies SHA-256, extracts only a single regular `jig` executable, checks the
+version and compatibility, then atomically publishes it under the cache lock.
+Linux x86-64/ARM64 binaries require glibc 2.35 or newer; macOS x86-64/ARM64
+binaries target macOS 13 or newer. Each asset includes all default features and
+can serve either installation profile.
+
+Older releases without the requested archive (HTTP 404), unsupported targets,
+older/non-glibc Linux hosts, and hosts without `curl` retain the source fallback:
+`cargo install jig-sh --registry crates-io --version '=0.5.0' --locked`, adding
+`--no-default-features` for the runtime profile. Set `JIG_INSTALL_SOURCE=1` to
+explicitly choose source installation; add `--refresh` to rebuild an existing
+cache. Transport errors, missing checksums, checksum mismatches, malformed
+archives, and incompatible downloaded executables fail visibly without invoking
+Cargo or replacing an existing cache. Retry the download or explicitly select
+source installation. It never falls back to Git.
 An empty or malformed pin is an error. Remove the file to return to template-source
 installation, or use the explicit `JIG_DEV_BIN` override for development.
 
@@ -1241,8 +1254,8 @@ release; `--refresh` or `JIG_INSTALL_REFRESH=1` reinstalls the same pinned versi
 
 Generated workflows that invoke Jig cache the runtime profile executable by
 operating system, architecture, profile, pin content, and launcher/installer
-content. Feature profiles use separate installation paths; lock files are not cached. A cold cache still
-compiles the published crate. Restoring the executable avoids compilation on later
+content. Feature profiles use separate installation paths; lock files are not cached. A cold cache
+downloads a verified release binary when available. Restoring the executable avoids downloading on later
 runs; crates.io does not distribute precompiled Jig binaries.
 
 ### Generated runtime files
@@ -1288,7 +1301,9 @@ inspect run history. Jig no longer reads plans, sessions, or decisions, so plans
 that were open at upgrade are not listed anywhere.
 
 Checks and runs on contract v6 and later append run history to
-`.agent/state/runs.jsonl`. Jig no longer writes receipts or returns
+`.agent/state/runs.jsonl`. This is local execution history, ignored by Git in
+generated repositories. It supports run inspection, state summaries, and the UI;
+it does not need to be committed. Jig no longer writes receipts or returns
 `receipt_id`: loop occurrences record their evidence under Git metadata instead
 (see [Loop evidence](public-contract.md#loop-evidence)). Read-only inspection
 commands such as `state summary`, `status`, and `loop show` write nothing. The
@@ -1302,6 +1317,14 @@ before selecting validation commands for a worker prompt.
 A target that times out, is cancelled, or fails records its conclusion in run
 history along with the final 4,000 bytes of its stdout and stderr as
 `output_tail`.
+
+For an existing repository that tracks the journal, add
+`.agent/state/runs.jsonl` to `.gitignore`, then run
+`git rm --cached -- .agent/state/runs.jsonl` and commit the tracking change.
+This leaves the current checkout's history on disk. Preserve any needed history
+in other clones before they pull that deletion commit. `jig update` refreshes
+managed ignore rules but does not remove files from the Git index. Previously
+committed journals remain in Git history.
 
 Use `scripts/jig state diagnose` for a read-only size and integrity report.
 `ok` only means the command ran; the `integrity` object and `recommendations`

@@ -38,7 +38,8 @@ build/
 .contract-stage-*/
 .contract-client-stage-*/
 
-# Jig local runtime data. Keep durable agent memory tracked.
+# Jig local runtime data and execution history.
+.agent/state/runs.jsonl
 .agent/.cache/*
 !.agent/.cache/.gitignore
 .agent/runtime/
