@@ -1,5 +1,84 @@
 # Changelog
 
+## v0.7.1 - 2026-10-04
+
+### Added
+- Distribute verified Jig release binaries
+- Add standalone binary installer
+
+### Fixed
+- Make passphrase errors safe for agents
+- Accept jig:// references in vault run mappings
+- Keep operator-only vault setup out of next steps
+- Withhold the vault passphrase from non-vault commands
+- Share the main checkout's vault with linked git worktrees
+- Explain unsupported harness stubs when repo context fails
+- Route --home and vault-directory recovery to the operator
+- Offer withheld-passphrase wrapping only for check and run
+- Forbid wrapping Jig runners in vault exec or vault run
+- Keep existing worktree-local vaults instead of failing closed
+- Never let worktree-local guidance block a kept vault
+- Require SQLx-specific evidence before enabling SQLx
+- Honor implied SQLx when filling migration defaults
+- Require established ownership for SQLx migration dirs
+- Treat unowned migration dirs as ambiguous for SQLx
+- Keep competing SQLx migration owners ambiguous
+- Show install guidance when an older Jig shadows the binary
+
+### Changed
+- Move Git helpers into policy/git.rs
+- Share the no-follow Git pointer reader across runtime
+- Record vault guidance review validation
+- Record branch validation runs
+- Run vault-named doctor tests when doctor sources change
+- Record vault review-fix validation runs
+- Record final branch validation runs
+- Record guidance fix validation runs
+- Record worktree-local vault validation runs
+- Trial Ubicloud for the Linux test suite
+- Move all Linux workflows to Ubicloud
+- Fix proxy shutdown and reuse release and fixture work
+- Reject release reuse when Git status cannot be read
+- Isolate fresh Cargo home builds from the fixture cache
+- Consolidate validation jobs and reduce fixture optimization
+- Reuse the built Jig binary across fixture checks
+- Reuse test builds and streamline frontend and policy checks
+- Right-size short jobs and focus minimal-feature PR tests
+- Include test orchestration in affected-check inputs
+- Retain optimizations on GitHub-hosted runners
+- Claim jig-sh-so4.2
+- Record SQLx evidence validation runs
+- Record SQLx evidence repair validation runs
+- Close jig-sh-so4.2
+- Record SQLx ownership fix validation runs
+- Record unowned migration fix validation runs
+- Record SQLx owner ambiguity fix validation runs
+- Retain binary distribution validation records
+- Record jig-sh-so4.2 follow-up fixes and decisions
+
+### Documentation
+- Reflow vault exec help after jig:// wording
+- Say a null vault_main_checkout_root does not rule out a worktree
+- Add operator-owned vault guidance to generated repos
+- Mark linked-worktree vault sharing as a compatibility break
+- State that passphrase withholding is process hygiene
+
+### Tests
+- Prove policy Git helpers withhold the passphrase from Git
+- Assert the human summary names the shared main checkout
+
+### Other
+- Begin v0.7.1-dev development
+- Rustfmt the operator-only doctor assertion
+- Repair round 1: Recommended outer vault wrapper can persist concealed values in run history
+- Repair round 1: Unproved requirement: distribution
+- Repair round 2: Unproved requirement: distribution
+- Keep Jig run history local and untracked
+- Diagnose tracked run journals in downstream repositories
+- Repair round 1: Include other-clone history preservation in migration guidance
+- Repair round 2: Include other-clone history preservation in migration guidance
+- Preserve ignored run history during release development bump
+
 ## v0.7.0 - 2026-10-03
 
 ### Added
