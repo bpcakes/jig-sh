@@ -19,7 +19,8 @@ mod sqlx_syntax;
 
 fn infer_sqlx(root: &Path, warnings: &mut Vec<String>) -> super::rust_sqlx::SqlxInference {
     let scan = RepoScan::collect(root, warnings);
-    super::rust_sqlx::infer_sqlx(root, &scan, warnings)
+    let repository_has_go = super::rust_sqlx::repository_has_go_module(&scan);
+    super::rust_sqlx::infer_sqlx(root, &scan, repository_has_go, warnings)
 }
 
 fn infer_package_manager(root: &Path, warnings: &mut Vec<String>) -> Option<String> {

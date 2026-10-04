@@ -3,7 +3,8 @@
 //! Numbered SQL files are shared by many migration tools, so they never enable
 //! SQLx. Once SQLx is established, a candidate is usable only when it belongs
 //! to a Rust owner and carries no other tool's markers; anything else is either
-//! attributed elsewhere or reported as ambiguous.
+//! attributed elsewhere or reported as ambiguous. In a repository with Go
+//! modules, a Cargo ancestor alone does not establish SQLx ownership.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -21,12 +22,21 @@ enum MigrationOwner {
     Unowned,
 }
 
+/// The migration tool identified from a candidate's representative SQL file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SqlTool {
+    Unidentified,
+    Goose,
+    /// The file could not be read, so another tool's markers cannot be ruled out.
+    Unknown,
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::bootstrap::adopt_infer) struct MigrationCandidate {
     pub(in crate::bootstrap::adopt_infer) dir: String,
     pub(in crate::bootstrap::adopt_infer) source: String,
     owner: MigrationOwner,
-    goose: bool,
+    tool: SqlTool,
     owner_declares_sqlx: bool,
 }
 
@@ -56,35 +66,39 @@ enum Role {
 
 impl MigrationCandidate {
     fn role(&self, repository_has_go: bool) -> Role {
-        if self.goose {
-            return Role::Excluded;
-        }
-        match self.owner {
-            MigrationOwner::Rust(_) => Role::Eligible,
-            MigrationOwner::Go(_) => Role::Excluded,
-            MigrationOwner::RustAndGo(_) => Role::Unresolved,
-            MigrationOwner::Unowned if repository_has_go => Role::Unresolved,
-            MigrationOwner::Unowned => Role::Eligible,
+        match (self.tool, &self.owner) {
+            (SqlTool::Goose, _) | (_, MigrationOwner::Go(_)) => Role::Excluded,
+            (SqlTool::Unknown, _) => Role::Unresolved,
+            // Go code may also use migrations under a Cargo ancestor, so in a
+            // repository with Go modules only a sqlx-declaring owner counts.
+            (_, MigrationOwner::Rust(_)) if self.owner_declares_sqlx || !repository_has_go => {
+                Role::Eligible
+            }
+            (_, MigrationOwner::Unowned) if !repository_has_go => Role::Eligible,
+            _ => Role::Unresolved,
         }
     }
 
     pub(in crate::bootstrap::adopt_infer) fn describe(&self) -> String {
-        let owner = if self.goose {
-            "contains Goose migration annotations".to_string()
-        } else {
-            match &self.owner {
-                MigrationOwner::Rust(root) if self.owner_declares_sqlx => {
-                    format!("Cargo manifest at {root} declares sqlx")
-                }
-                MigrationOwner::Rust(root) => format!("inside Cargo manifest at {root}"),
-                MigrationOwner::Go(root) => format!("inside Go module {root}"),
-                MigrationOwner::RustAndGo(root) => {
-                    format!("{root} has both Cargo.toml and go.mod")
-                }
-                MigrationOwner::Unowned => "no owning Cargo or Go manifest".to_string(),
+        let reason = match (self.tool, &self.owner) {
+            (SqlTool::Goose, _) => "contains Goose migration annotations".to_string(),
+            (SqlTool::Unknown, _) => format!(
+                "could not read {} to identify its migration tool",
+                self.source
+            ),
+            (_, MigrationOwner::Rust(root)) if self.owner_declares_sqlx => {
+                format!("Cargo manifest at {root} declares sqlx")
             }
+            (_, MigrationOwner::Rust(root)) => {
+                format!("inside Cargo manifest at {root}, which does not declare sqlx")
+            }
+            (_, MigrationOwner::Go(root)) => format!("inside Go module {root}"),
+            (_, MigrationOwner::RustAndGo(root)) => {
+                format!("{root} has both Cargo.toml and go.mod")
+            }
+            (_, MigrationOwner::Unowned) => "no owning Cargo or Go manifest".to_string(),
         };
-        format!("{} ({owner})", self.dir)
+        format!("{} ({reason})", self.dir)
     }
 }
 
@@ -111,12 +125,20 @@ impl MigrationChoice {
     }
 }
 
+/// Whether the scan contains any Go module. Callers pass the answer for the
+/// whole repository, since a component-restricted scan can omit Go modules
+/// whose code still uses shared migrations.
+pub(in crate::bootstrap::adopt_infer) fn repository_has_go_module(scan: &RepoScan) -> bool {
+    scan.named_files("go.mod").next().is_some()
+}
+
 /// `sqlx_manifest_dirs` are repository-relative directories (`.` for the
 /// root) whose Cargo.toml declares a sqlx dependency.
 pub(super) fn survey_migration_dirs(
     root: &Path,
     scan: &RepoScan,
     sqlx_manifest_dirs: &BTreeSet<String>,
+    repository_has_go: bool,
 ) -> MigrationSurvey {
     let rust_dirs = manifest_dirs(root, scan, "Cargo.toml");
     let go_dirs = manifest_dirs(root, scan, "go.mod");
@@ -139,10 +161,10 @@ pub(super) fn survey_migration_dirs(
             dir,
             source: relative_path_string(source_path.strip_prefix(root).unwrap_or(source_path)),
             owner,
-            goose: sql_declares_goose(source_path),
+            tool: sql_tool(source_path),
             owner_declares_sqlx,
         };
-        match candidate.role(!go_dirs.is_empty()) {
+        match candidate.role(repository_has_go || !go_dirs.is_empty()) {
             Role::Eligible => sqlx_candidates.push(candidate),
             Role::Unresolved => {
                 unresolved = true;
@@ -230,15 +252,21 @@ pub(super) fn relative_dir(root: &Path, path: &Path) -> String {
     }
 }
 
-fn sql_declares_goose(path: &Path) -> bool {
+fn sql_tool(path: &Path) -> SqlTool {
     // Goose requires `-- +goose Up` style annotations in every SQL migration.
-    read_limited_text(path).is_ok_and(|text| {
-        text.lines().any(|line| {
-            line.trim_start()
-                .strip_prefix("--")
-                .is_some_and(|rest| rest.trim_start().starts_with("+goose"))
-        })
-    })
+    let Ok(text) = read_limited_text(path) else {
+        return SqlTool::Unknown;
+    };
+    let goose = text.lines().any(|line| {
+        line.trim_start()
+            .strip_prefix("--")
+            .is_some_and(|rest| rest.trim_start().starts_with("+goose"))
+    });
+    if goose {
+        SqlTool::Goose
+    } else {
+        SqlTool::Unidentified
+    }
 }
 
 fn migration_dir_sql_source<'a>(path: &'a Path, scan: &'a RepoScan) -> Option<&'a Path> {

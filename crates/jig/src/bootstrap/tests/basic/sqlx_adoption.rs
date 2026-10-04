@@ -183,12 +183,23 @@ fn explicit_sqlx_enable_never_guesses_a_goose_migration_dir() {
         ("backend/migrations/00001_init.sql", GOOSE_SQL),
     ];
 
+    // A Cargo ancestor that does not declare sqlx cannot claim migrations that
+    // Go code may also use, so the path must be chosen explicitly.
     let temp = tempdir().unwrap();
     let mut files = go_files.to_vec();
     files.push(("db/migrations/0001_init.sql", GENERIC_SQL));
     let repo = fixture(temp.path(), &files);
     let mut opts = adopt_opts(&repo, template.path(), enabled());
     opts.components.include = vec!["backend".into()];
+    let error = run_adopt(opts.clone()).unwrap_err().to_string();
+    assert!(
+        error.contains(
+            "cannot infer the SQLx migration directory from db/migrations (inside Cargo manifest at ., which does not declare sqlx)"
+        ),
+        "{error}"
+    );
+    assert!(!error.contains("backend/migrations"), "{error}");
+    opts.answers.rust_migration_dir = Some("db/migrations".into());
     let output = run_adopt(opts).unwrap();
     assert_eq!(output["detection_report"]["sqlx_enabled"], false);
     assert_eq!(
@@ -230,6 +241,7 @@ fn authored_sqlx_answers_survive_update_recopy_and_readoption() {
         template.path(),
         AnswerOpts {
             sqlx_enabled: Some(true),
+            rust_migration_dir: Some("db/migrations".into()),
             ..AnswerOpts::default()
         },
     );

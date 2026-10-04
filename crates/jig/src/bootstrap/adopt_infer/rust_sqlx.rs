@@ -9,8 +9,8 @@ use crate::bootstrap::crate_classification::non_production_crate_reason;
 mod migrate;
 mod migrations;
 
-pub(super) use migrations::MigrationChoice;
 use migrations::MigrationSurvey;
+pub(super) use migrations::{MigrationChoice, repository_has_go_module};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum RustCrateRootSourceKind {
@@ -218,14 +218,18 @@ pub(super) fn crate_root_from_workspace_member(member: &str) -> String {
     if root.is_empty() { ".".into() } else { root }
 }
 
+/// `repository_has_go` describes the whole repository even when `scan` is
+/// restricted to selected components.
 pub(super) fn infer_sqlx(
     root: &Path,
     scan: &RepoScan,
+    repository_has_go: bool,
     warnings: &mut Vec<String>,
 ) -> SqlxInference {
     let mut out = SqlxInference::default();
     let sqlx_manifest_dirs = record_sqlx_evidence(root, scan, warnings, &mut out);
-    let survey = migrations::survey_migration_dirs(root, scan, &sqlx_manifest_dirs);
+    let survey =
+        migrations::survey_migration_dirs(root, scan, &sqlx_manifest_dirs, repository_has_go);
     if out.enabled.value {
         record_migration_survey(root, &survey, warnings, &mut out);
         let synthesize_migration_dir = matches!(survey.choice, MigrationChoice::NoCandidates);

@@ -365,8 +365,6 @@ fn explicit_sqlx_answers_control_migration_defaults() {
     let generic = repo(&[
         ("Cargo.toml", PLAIN_PACKAGE),
         ("migrations/0001_init.sql", GENERIC_SQL),
-        ("backend/go.mod", GO_MODULE),
-        ("backend/migrations/00001_init.sql", GOOSE_SQL),
     ]);
     let inference = infer_adopt_answers(generic.path());
     let mut answers = AnswerOpts {
@@ -377,18 +375,29 @@ fn explicit_sqlx_answers_control_migration_defaults() {
     assert_eq!(answers.rust_migration_dir.as_deref(), Some("migrations"));
     assert_eq!(answers.sqlx_check_command, None);
 
-    let goose = repo(&[
-        ("Cargo.toml", PLAIN_PACKAGE),
-        ("backend/go.mod", GO_MODULE),
-        ("backend/migrations/00001_init.sql", GOOSE_SQL),
-    ]);
-    let inference = infer_adopt_answers(goose.path());
-    let mut answers = AnswerOpts {
-        sqlx_enabled: Some(true),
-        ..AnswerOpts::default()
-    };
-    inference.apply_to_answers(&mut answers, &shape);
-    assert_eq!(answers.rust_migration_dir, None);
+    // With Go code present, neither a Goose directory nor a directory under a
+    // Cargo manifest that does not declare sqlx supplies the path.
+    for files in [
+        vec![
+            ("Cargo.toml", PLAIN_PACKAGE),
+            ("backend/go.mod", GO_MODULE),
+            ("backend/migrations/00001_init.sql", GOOSE_SQL),
+        ],
+        vec![
+            ("Cargo.toml", PLAIN_PACKAGE),
+            ("migrations/0001_init.sql", GENERIC_SQL),
+            ("backend/go.mod", GO_MODULE),
+        ],
+    ] {
+        let mixed = repo(&files);
+        let inference = infer_adopt_answers(mixed.path());
+        let mut answers = AnswerOpts {
+            sqlx_enabled: Some(true),
+            ..AnswerOpts::default()
+        };
+        inference.apply_to_answers(&mut answers, &shape);
+        assert_eq!(answers.rust_migration_dir, None, "{files:?}");
+    }
 
     // SQLx-shaped answers and schema dumps imply SQLx without sqlx_enabled.
     let inference = infer_adopt_answers(generic.path());
@@ -479,4 +488,99 @@ fn ambiguous_sqlx_migrations_require_an_explicit_answer() {
     inference
         .require_sqlx_migration_answer(&EffectiveSqlx::default())
         .unwrap();
+}
+
+#[test]
+fn unreadable_migration_sql_requires_an_explicit_path() {
+    let oversized = format!(
+        "-- +goose Up\n{}",
+        "-- padding\n".repeat(MAX_SCAN_FILE_BYTES as usize / 10)
+    );
+    let mut non_utf8 = vec![0xff, 0xfe];
+    non_utf8.extend_from_slice(GOOSE_SQL.as_bytes());
+    for contents in [oversized.into_bytes(), non_utf8] {
+        let temp = repo(&[("Cargo.toml", SQLX_PACKAGE)]);
+        write(temp.path(), "migrations/00001_init.sql", "");
+        fs::write(temp.path().join("migrations/00001_init.sql"), contents).unwrap();
+        let mut warnings = Vec::new();
+        let sqlx = infer_sqlx(temp.path(), &mut warnings);
+
+        assert!(sqlx.enabled.value);
+        assert_eq!(migration_dir(&sqlx), None);
+        assert!(
+            warnings.iter().any(|warning| warning.contains(
+                "cannot infer the SQLx migration directory from migrations (could not read migrations/00001_init.sql to identify its migration tool)"
+            )),
+            "{warnings:?}"
+        );
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.contains("default migrations/")),
+            "{warnings:?}"
+        );
+    }
+}
+
+#[test]
+fn cargo_ancestor_without_sqlx_does_not_claim_migrations_in_go_repositories() {
+    let workspace = "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n";
+    let layout = |root_manifest: &'static str, with_go: bool| {
+        let mut files = vec![
+            ("Cargo.toml", root_manifest),
+            ("crates/db/Cargo.toml", SQLX_PACKAGE),
+            ("crates/db/src/lib.rs", ""),
+            ("migrations/0001_init.sql", GENERIC_SQL),
+        ];
+        if with_go {
+            files.push(("backend/go.mod", GO_MODULE));
+            files.push(("backend/main.go", "package main\n"));
+        }
+        repo(&files)
+    };
+    let selected = |temp: &tempfile::TempDir| {
+        let mut inference = infer_adopt_answers(temp.path());
+        inference
+            .select_components(temp.path(), &ComponentSelectionOpts::default())
+            .unwrap();
+        inference
+    };
+
+    // The nested Go module stays review-required, so final selection's scan
+    // omits it; ownership must still account for the repository's Go code.
+    let mixed = layout(workspace, true);
+    let inference = selected(&mixed);
+    assert_eq!(inference.sqlx_enabled, Some(true));
+    assert_eq!(inference.rust_migration_dir, None);
+    assert_eq!(
+        inference
+            .warnings
+            .iter()
+            .filter(|warning| warning.contains(
+                "cannot infer the SQLx migration directory from migrations (inside Cargo manifest at ., which does not declare sqlx)"
+            ))
+            .count(),
+        1,
+        "{:?}",
+        inference.warnings
+    );
+
+    // A sqlx-declaring owner, or a repository without Go, still justifies it.
+    let declared = layout(
+        "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\nsqlx = \"0.9\"\n",
+        true,
+    );
+    let rust_only = layout(workspace, false);
+    for temp in [&declared, &rust_only] {
+        let inference = selected(temp);
+        assert_eq!(inference.rust_migration_dir.as_deref(), Some("migrations"));
+        assert!(
+            !inference
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("cannot infer")),
+            "{:?}",
+            inference.warnings
+        );
+    }
 }

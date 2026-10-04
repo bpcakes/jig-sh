@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use serde_json::json;
 
 use super::metadata::Confidence;
-use super::rust_sqlx::{MigrationChoice, infer_sqlx};
+use super::rust_sqlx::{MigrationChoice, infer_sqlx, repository_has_go_module};
 use super::scan::RepoScan;
 use super::{AdoptInference, apply_sqlx_inference, fill_string};
 use crate::bootstrap::AnswerOpts;
@@ -15,11 +15,18 @@ use crate::bootstrap::answers::{AnswerInputShape, EffectiveSqlx};
 
 impl AdoptInference {
     /// Replaces SQLx inference from any earlier pass, including the warnings it
-    /// raised, with inference over `scan`.
-    pub(super) fn infer_and_apply_sqlx(&mut self, root: &Path, scan: &RepoScan) {
+    /// raised, with inference over `scan`. `repository_scan` covers the whole
+    /// repository; it equals `scan` before component selection.
+    pub(super) fn infer_and_apply_sqlx(
+        &mut self,
+        root: &Path,
+        scan: &RepoScan,
+        repository_scan: &RepoScan,
+    ) {
         self.retract_sqlx_warnings();
         let start = self.warnings.len();
-        let sqlx = infer_sqlx(root, scan, &mut self.warnings);
+        let repository_has_go = repository_has_go_module(repository_scan);
+        let sqlx = infer_sqlx(root, scan, repository_has_go, &mut self.warnings);
         self.sqlx_warnings = self.warnings[start..].to_vec();
         apply_sqlx_inference(self, &sqlx);
     }

@@ -43,15 +43,17 @@ impl AdoptInference {
             self.metadata.remove(key);
         }
         if self.components.has_root_backend(Ecosystem::Rust) {
-            let scan = self
+            let repository_scan = self
                 .scan
-                .get_or_insert_with(|| RepoScan::collect(root, &mut self.warnings))
-                .for_selected_components(root, &self.components);
+                .take()
+                .unwrap_or_else(|| RepoScan::collect(root, &mut self.warnings));
+            let scan = repository_scan.for_selected_components(root, &self.components);
             self.sqlx_enabled = None;
             self.rust_migration_dir = None;
             self.rust_sqlx_metadata_dir = None;
             self.sqlx_check_command = None;
-            self.infer_and_apply_sqlx(root, &scan);
+            self.infer_and_apply_sqlx(root, &scan, &repository_scan);
+            self.scan = Some(repository_scan);
         } else {
             self.clear_sqlx_inference("no accepted root Rust component");
         }
