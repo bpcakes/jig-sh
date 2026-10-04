@@ -229,3 +229,53 @@ fn a_crate_entrypoint_declared_as_a_test_module_stays_non_test() {
     assert!(non_test.contains("`src/runner.rs:1`"), "{non_test}");
     assert!(test.contains("_None_"), "{test}");
 }
+
+/// Cargo compiles an explicitly configured target path as its own crate root,
+/// so declaring that file as a test module cannot hide its queries.
+#[test]
+fn a_manifest_configured_target_declared_as_a_test_module_stays_non_test() {
+    let temp = inventory(&[
+        (
+            "Cargo.toml",
+            "[package]\nname = \"example-project\"\nversion = \"0.1.0\"\n\
+             [[bin]]\nname = \"server\"\npath = \"src/server.rs\"\n",
+        ),
+        ("src/lib.rs", "#[cfg(test)]\nmod server;\n"),
+        ("src/server.rs", &format!("mod handler;\n{CALL}")),
+        ("src/handler.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/server.rs:2`"), "{non_test}");
+    assert!(non_test.contains("`src/handler.rs:1`"), "{non_test}");
+    assert!(test.contains("_None_"), "{test}");
+}
+
+/// A manifest the inventory cannot parse would silently drop the targets it
+/// configures, so it fails the inventory instead and preserves the report.
+#[test]
+fn an_unparseable_manifest_fails_the_inventory() {
+    let temp = inventory(&[
+        ("Cargo.toml", "[package\nname = \"example-project\"\n"),
+        ("src/lib.rs", CALL),
+    ]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = check_non_test(&ctx).unwrap_err().to_string();
+
+    assert!(
+        error.contains("cannot parse SQLx inventory manifest Cargo.toml"),
+        "{error}"
+    );
+    assert!(
+        generate_todo(&ctx, &SqlxTodoInput { output: None }).is_err(),
+        "a failed manifest parse must not write a report"
+    );
+    assert!(
+        !temp
+            .path()
+            .join("docs/sqlx-unchecked-queries-todo.md")
+            .exists()
+    );
+}

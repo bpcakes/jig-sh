@@ -166,14 +166,17 @@ struct Claims<'a> {
     claimed: BTreeSet<&'a str>,
 }
 
-fn resolve_claims<'a>(files: &'a BTreeMap<String, FileModules>) -> Claims<'a> {
+fn resolve_claims<'a>(
+    files: &'a BTreeMap<String, FileModules>,
+    targets: &BTreeSet<String>,
+) -> Claims<'a> {
     let mut claims = Claims::default();
     let mut directories: BTreeMap<&str, BTreeSet<Dir>> = BTreeMap::new();
     let mut queue: VecDeque<(&str, Dir)> = VecDeque::new();
     // Cargo compiles a crate entrypoint wherever it sits, so start from each
     // one; a file no declaration reaches is seeded below instead.
     for path in files.keys() {
-        if let Some(dir) = crate_entrypoint_dir(path) {
+        if let Some(dir) = cargo_target_dir(path, targets) {
             seed(path, dir, &mut directories, &mut queue);
         }
     }
@@ -213,6 +216,37 @@ fn resolve_claims<'a>(files: &'a BTreeMap<String, FileModules>) -> Claims<'a> {
     }
 }
 
+/// Target paths a Cargo manifest configures explicitly, resolved relative to
+/// the manifest. Cargo compiles each as its own crate root, so a module
+/// declaration elsewhere cannot make one test code. Conventional target
+/// locations need no manifest and are recognized by `cargo_target_dir`.
+pub(super) fn collect_target_paths(
+    manifest: &str,
+    value: &toml::Value,
+    out: &mut BTreeSet<String>,
+) {
+    let dir = parent_dir(manifest);
+    let mut record = |configured: Option<&toml::Value>| {
+        if let Some(path) = configured.and_then(toml::Value::as_str)
+            && let Some(target) = join_relative(&dir, path)
+        {
+            out.insert(target);
+        }
+    };
+    record(
+        value
+            .get("package")
+            .and_then(|package| package.get("build")),
+    );
+    record(value.get("lib").and_then(|library| library.get("path")));
+    for kind in ["bin", "example", "bench", "test"] {
+        let configured = value.get(kind).and_then(toml::Value::as_array);
+        for target in configured.into_iter().flatten() {
+            record(target.get("path"));
+        }
+    }
+}
+
 /// Records a directory a file can be loaded with, queueing it when it is new.
 fn seed<'a>(
     path: &'a str,
@@ -227,27 +261,30 @@ fn seed<'a>(
 
 /// Returns the scanned files that only `#[cfg(test)]` module declarations
 /// reach, so every call site they contain belongs to the test inventory.
-pub(super) fn test_only_files(files: &BTreeMap<String, FileModules>) -> BTreeSet<String> {
-    let mut claims = resolve_claims(files);
+pub(super) fn test_only_files(
+    files: &BTreeMap<String, FileModules>,
+    targets: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut claims = resolve_claims(files, targets);
     // A file is test-only when it says so itself, or when every declaration
-    // claiming it is under `#[cfg(test)]` or made by a test-only file. A crate
-    // entrypoint, a file production code still reaches, one no declaration
-    // claims, and one in a declaration cycle no entrypoint enters keep their
-    // own classification, so no production call site is quietly lost.
+    // claiming it is under `#[cfg(test)]` or made by a test-only file. A Cargo
+    // target, a file production code still reaches, one no declaration claims,
+    // and one in a declaration cycle no target enters keep their own
+    // classification, so no production call site is quietly lost.
     let mut test_only: BTreeSet<&str> = BTreeSet::new();
     let mut pending: VecDeque<&str> = VecDeque::new();
     for (path, modules) in files {
         let path = path.as_str();
         let test_claimed = claims.claimed.contains(path)
             && !claims.production_claims.contains_key(path)
-            && crate_entrypoint_dir(path).is_none();
+            && cargo_target_dir(path, targets).is_none();
         if (modules.self_test || test_claimed) && test_only.insert(path) {
             pending.push_back(path);
         }
     }
     while let Some(path) = pending.pop_front() {
         for child in claims.production_children.get(path).into_iter().flatten() {
-            if crate_entrypoint_dir(child).is_some() {
+            if cargo_target_dir(child, targets).is_some() {
                 continue;
             }
             // Each file leaves the queue once, so a declaration is shed once.
@@ -263,17 +300,19 @@ pub(super) fn test_only_files(files: &BTreeMap<String, FileModules>) -> BTreeSet
     test_only.into_iter().map(str::to_string).collect()
 }
 
-/// The directory a crate entrypoint resolves its declarations against, when
-/// the file is one. Cargo compiles these as crate roots, so production code
-/// reaches them whatever else also declares them as a module.
-fn crate_entrypoint_dir(path: &str) -> Option<Dir> {
+/// The directory a Cargo target resolves its declarations against, when the
+/// file is one: a conventional entrypoint location, or a path a manifest
+/// configures explicitly. Cargo compiles each as a crate root, so production
+/// code reaches it whatever else also declares it as a module.
+fn cargo_target_dir(path: &str, targets: &BTreeSet<String>) -> Option<Dir> {
     let (parent, basename) = split_path(path);
     let standalone = basename != "mod.rs"
         && matches!(
             split_path(parent).1,
             "bin" | "benches" | "examples" | "tests"
         );
-    (matches!(basename, "lib.rs" | "main.rs") || standalone).then(|| Dir::owned(parent.to_string()))
+    let target = matches!(basename, "lib.rs" | "main.rs") || standalone || targets.contains(path);
+    target.then(|| Dir::owned(parent.to_string()))
 }
 
 /// The directory a file resolves its declarations against when no resolved

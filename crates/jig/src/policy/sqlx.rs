@@ -76,7 +76,7 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     }
     // A file that only a `#[cfg(test)]` module declaration reaches is test
     // code, exactly as the equivalent inline module already is.
-    let test_only = modules::test_only_files(&modules);
+    let test_only = modules::test_only_files(&modules, &cargo_target_paths(ctx)?);
     for call in &mut calls {
         call.is_test |= test_only.contains(&call.path);
     }
@@ -109,7 +109,7 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     let mut body = String::new();
     body.push_str("# SQLx Unchecked Queries TODO\n\n");
     body.push_str("This checklist tracks detected `sqlx::query*` call sites under the configured Rust crate roots that are not yet using compile-time checked SQLx macros.\n\n");
-    body.push_str("Coverage is a source AST inventory, not complete Rust syntax coverage or compiler analysis. Sources are parsed as complete Rust files or expression fragments, as accepted by `include!`. Parsing, AST traversal, and destruction use a controlled stack and a conservative limit of 2,048 tokens along enclosing semicolon-separated regions (including delimiter groups and expression/type chains); sibling semicolon-separated declarations and statements do not accumulate toward that limit. Sources beyond that limit fail the inventory with a path-specific error; simplify nested syntax or split long expressions/declarations. It detects direct SQLx function calls and checked macro invocations. It does not resolve aliases or shadowing, expand macros, or evaluate arbitrary cfg expressions; macro input is read only for a fixed set of standard expression macros such as `vec!` and `assert!`. Test classification uses conventional test paths and exact `#[cfg(test)]` attributes on files and inline modules, and extends to a file that only `#[cfg(test)]` module declarations reach, following `mod` items and their `#[path]` attributes under Rust's module directory rules; a crate entrypoint, a file production code still reaches, and a file whose declaration cannot be resolved to an inventoried file stay classified by their own path and attributes, and `include!` relationships are not resolved. Paths Git lists that are absent from the worktree are skipped; other unreadable or unparseable Rust sources fail the inventory.\n\n");
+    body.push_str("Coverage is a source AST inventory, not complete Rust syntax coverage or compiler analysis. Sources are parsed as complete Rust files or expression fragments, as accepted by `include!`. Parsing, AST traversal, and destruction use a controlled stack and a conservative limit of 2,048 tokens along enclosing semicolon-separated regions (including delimiter groups and expression/type chains); sibling semicolon-separated declarations and statements do not accumulate toward that limit. Sources beyond that limit fail the inventory with a path-specific error; simplify nested syntax or split long expressions/declarations. It detects direct SQLx function calls and checked macro invocations. It does not resolve aliases or shadowing, expand macros, or evaluate arbitrary cfg expressions; macro input is read only for a fixed set of standard expression macros such as `vec!` and `assert!`. Test classification uses conventional test paths and exact `#[cfg(test)]` attributes on files and inline modules, and extends to a file that only `#[cfg(test)]` module declarations reach, following `mod` items and their `#[path]` attributes under Rust's module directory rules; a Cargo target, whether at a conventional location or at a path a manifest configures, a file production code still reaches, and a file whose declaration cannot be resolved to an inventoried file stay classified by their own path and attributes, and `include!` relationships are not resolved. Paths Git lists that are absent from the worktree are skipped; other unreadable or unparseable Rust sources and Cargo manifests fail the inventory.\n\n");
     body.push_str("- Generated on: native jig\n");
     let _ = writeln!(body, "- Unchecked call sites: {}", unchecked.len());
     let _ = writeln!(
@@ -139,18 +139,54 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     })
 }
 
+/// The source paths Cargo manifests configure as targets explicitly. Cargo
+/// compiles each as its own crate root, so production code reaches it however
+/// else it is declared. Conventional target locations need no manifest.
+fn cargo_target_paths(ctx: &RepoContext) -> Result<BTreeSet<String>> {
+    let mut targets = BTreeSet::new();
+    for manifest in sqlx_inventory_files(ctx, &[String::from(".")], is_cargo_manifest)? {
+        let text = match fs::read_to_string(ctx.root().join(&manifest)) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("cannot read SQLx inventory manifest {manifest}"));
+            }
+        };
+        let value = toml::from_str::<toml::Value>(&text)
+            .with_context(|| format!("cannot parse SQLx inventory manifest {manifest}"))?;
+        modules::collect_target_paths(&manifest, &value, &mut targets);
+    }
+    Ok(targets)
+}
+
 fn sqlx_rust_files(ctx: &RepoContext) -> Result<Vec<String>> {
+    sqlx_inventory_files(ctx, ctx.rust_crate_roots(), |file| file.ends_with(".rs"))
+}
+
+fn is_cargo_manifest(file: &str) -> bool {
+    file == "Cargo.toml" || file.ends_with("/Cargo.toml")
+}
+
+/// Repository files under `roots` that `keep` accepts. Manifests are listed
+/// repository-wide, because a manifest configuring a crate root need not sit
+/// under a configured crate root itself.
+fn sqlx_inventory_files(
+    ctx: &RepoContext,
+    roots: &[String],
+    keep: impl Fn(&str) -> bool,
+) -> Result<Vec<String>> {
     let mut files = BTreeSet::new();
     // SQLx reports are a development TODO surface, so include both committed
-    // files and non-ignored new Rust files under the configured crate roots.
-    for file in super::git_list_files(ctx.root(), ctx.rust_crate_roots())? {
-        if file.ends_with(".rs") {
+    // files and non-ignored new files.
+    for file in super::git_list_files(ctx.root(), roots)? {
+        if keep(&file) {
             files.insert(file);
         }
     }
     if super::git_success(ctx.root(), &["rev-parse", "--is-inside-work-tree"])? {
-        for file in git_untracked_files(ctx.root(), ctx.rust_crate_roots())? {
-            if file.ends_with(".rs") {
+        for file in git_untracked_files(ctx.root(), roots)? {
+            if keep(&file) {
                 files.insert(file);
             }
         }
