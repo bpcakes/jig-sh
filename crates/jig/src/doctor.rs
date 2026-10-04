@@ -32,6 +32,7 @@ use crate::context::{
 #[cfg(test)]
 use crate::tool_defs::tool;
 
+mod run_history;
 mod runtime;
 
 #[cfg(test)]

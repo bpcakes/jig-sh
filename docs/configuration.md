@@ -1325,6 +1325,9 @@ This leaves the current checkout's history on disk. Preserve any needed history
 in other clones before they pull that deletion commit. `jig update` refreshes
 managed ignore rules but does not remove files from the Git index. Previously
 committed journals remain in Git history.
+`scripts/jig doctor` reports an optional `run_history` check in Git repositories.
+It warns when the journal is tracked or not ignored and gives the migration
+steps above. The check does not edit the journal, ignore rules, or Git index.
 
 Use `scripts/jig state diagnose` for a read-only size and integrity report.
 `ok` only means the command ran; the `integrity` object and `recommendations`

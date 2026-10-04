@@ -163,6 +163,9 @@ fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Resul
             .as_ref()
             .map_err(std::string::ToString::to_string),
     ));
+    if let Some(history) = run_history::check_local_history(&root, cancelled) {
+        checks.push(history);
+    }
 
     Ok(output(
         Some(json!({
