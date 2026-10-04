@@ -39,9 +39,9 @@ mkdir -p "$package_manager_probe_dir"
 printf '%s\n' '#!/bin/sh' 'exit 0' >"$package_manager_probe_dir/bun"
 chmod +x "$package_manager_probe_dir/bun"
 
-# Share dependency artifacts across the generated repositories while keeping
-# them outside every repository fingerprint and cleaning them with the fixture.
-export CARGO_TARGET_DIR="$fixture_root/cargo-target"
+# Share artifacts outside the generated repositories. CI can retain this
+# directory; ordinary local invocations clean it with the temporary fixtures.
+export CARGO_TARGET_DIR="${JIG_GENERATED_RUST_TARGET_DIR:-$fixture_root/cargo-target}"
 
 rust_only_toolchain="${JIG_GENERATED_RUST_ONLY_TOOLCHAIN:-}"
 rust_react_toolchain="${JIG_GENERATED_RUST_REACT_TOOLCHAIN:-}"

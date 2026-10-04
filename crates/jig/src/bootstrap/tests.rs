@@ -828,34 +828,12 @@ impl GeneratedWebCheckScripts {
 }
 
 #[cfg(unix)]
-fn generated_web_check_scripts()
--> &'static std::collections::BTreeMap<&'static str, GeneratedWebCheckScripts> {
-    use std::collections::BTreeMap;
-    use std::sync::OnceLock;
-
-    static SCRIPTS: OnceLock<BTreeMap<&'static str, GeneratedWebCheckScripts>> = OnceLock::new();
-    SCRIPTS.get_or_init(|| {
-        let fixture_root = tempdir().unwrap();
-        let template = materialize_template_worktree();
-        BTreeMap::from([
-            (
-                "bun",
-                GeneratedWebCheckScripts::render(template.path(), fixture_root.path(), "bun"),
-            ),
-            (
-                "npm",
-                GeneratedWebCheckScripts::render(template.path(), fixture_root.path(), "npm"),
-            ),
-            (
-                "pnpm",
-                GeneratedWebCheckScripts::render(template.path(), fixture_root.path(), "pnpm"),
-            ),
-            (
-                "yarn",
-                GeneratedWebCheckScripts::render(template.path(), fixture_root.path(), "yarn"),
-            ),
-        ])
-    })
+fn generated_web_check_scripts(package_manager: &str) -> GeneratedWebCheckScripts {
+    // Nextest runs each test in a separate process: an all-manager OnceLock
+    // eagerly rendered four repositories even when a test needed only one.
+    let fixture_root = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    GeneratedWebCheckScripts::render(template.path(), fixture_root.path(), package_manager)
 }
 
 fn materialize_template_git_worktree() -> TempDir {
