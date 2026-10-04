@@ -18,6 +18,7 @@ mod path_and_git;
 mod rendering;
 mod scaffold_generation;
 mod scaffold_runtime;
+mod sqlx_adoption;
 
 const WEB_HARNESS_PATHS: &[&str] = &[
     ".github/workflows/webapp-checks.yml",

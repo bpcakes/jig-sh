@@ -318,7 +318,8 @@ edition = "2024"
             .adoption_review(
                 &AnswerOpts::default(),
                 &AnswerOpts::default(),
-                &AnswerInputShape::default()
+                &AnswerInputShape::default(),
+                &EffectiveSqlx::default()
             )
             .items
             .iter()
@@ -515,6 +516,7 @@ edition = "2024"
         &AnswerOpts::default(),
         &AnswerOpts::default(),
         &AnswerInputShape::default(),
+        &EffectiveSqlx::default(),
     );
 
     assert_eq!(inference.rust_test_command.as_deref(), Some("make test"));

@@ -349,7 +349,7 @@ fn default_branch_ignores_malformed_origin_head() {
 }
 
 #[test]
-fn sqlx_detection_reports_nested_and_multiple_migration_dirs() {
+fn sqlx_detection_ignores_migration_dirs_without_sqlx_evidence() {
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir_all(temp.path().join("crates/api/migrations/20240101_init")).unwrap();
     fs::create_dir_all(temp.path().join("services/billing/migrations")).unwrap();
@@ -368,28 +368,13 @@ fn sqlx_detection_reports_nested_and_multiple_migration_dirs() {
     let mut warnings = Vec::new();
     let sqlx = infer_sqlx(temp.path(), &mut warnings);
 
-    assert!(sqlx.enabled.value);
-    assert_eq!(
-        sqlx.migration_dirs.value,
-        vec![
-            "crates/api/migrations".to_string(),
-            "services/billing/migrations".to_string(),
-        ]
-    );
-    assert_eq!(
-        sqlx.migration_dir
-            .as_ref()
-            .map(|value| value.value.as_str()),
-        Some("crates/api/migrations")
-    );
-    assert!(sqlx.signals.iter().any(|signal| {
-        signal
-            == "migration directories detected: crates/api/migrations, services/billing/migrations"
-    }));
-    assert!(warnings.iter().any(|warning| {
-        warning.contains("multiple migration directories detected")
-            && warning.contains("crates/api/migrations")
-    }));
+    assert!(!sqlx.enabled.value);
+    assert!(sqlx.migration_dirs.value.is_empty());
+    assert!(sqlx.migration_dir.is_none());
+    assert!(sqlx.metadata_dir.is_none());
+    assert!(sqlx.check_command.is_none());
+    assert_eq!(sqlx.signals, vec!["no SQLx signals detected".to_string()]);
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
 
 #[test]

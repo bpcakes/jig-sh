@@ -601,10 +601,13 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
     }
     inference.apply_to_answers(&mut answers, &answer_shape);
     inference.apply_component_decisions(&mut answers);
-    let review = inference.adoption_review(&answers, &opts.answers, &answer_shape);
+    let effective_sqlx = answer_input.effective_sqlx(&answers, opts.defaults);
+    let review =
+        inference.adoption_review(&answers, &opts.answers, &answer_shape, &effective_sqlx);
     for item in &review.items {
         progress.info("review", item);
     }
+    progress.log_blocked_on_err(inference.require_sqlx_migration_answer(&effective_sqlx))?;
     let mut runtime_warnings = Vec::new();
     if opts.write {
         confirm_adopt_write(&opts)?;
