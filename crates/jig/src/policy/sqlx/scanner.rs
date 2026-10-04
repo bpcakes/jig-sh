@@ -70,7 +70,7 @@ fn scan_bounded_sqlx_file(path: &str, text: &str) -> Result<FileScan> {
     match syn::parse_file(text) {
         Ok(file) => {
             scanner.is_test |= has_cfg_test(&file.attrs);
-            declarations = collect_declarations(path, &file.items);
+            declarations = collect_declarations(&file.items);
             scanner.visit_file(&file);
         }
         Err(error) => {

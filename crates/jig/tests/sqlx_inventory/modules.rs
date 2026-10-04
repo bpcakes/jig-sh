@@ -37,14 +37,14 @@ fn external_cfg_test_modules_match_their_inline_equivalent() {
         root,
         "src/unit_cases.rs",
         "mod fixture;\n#[path = \"support/helper.rs\"]\nmod helper;\n\
-         #[path = \"../shared/dual.rs\"]\nmod dual;\n",
+         #[path = \"shared/dual.rs\"]\nmod dual;\n",
     );
     write(root, "src/unit_cases/fixture.rs", &call("SELECT 1"));
-    write(root, "src/unit_cases/support/helper.rs", &call("SELECT 2"));
+    write(root, "src/support/helper.rs", &call("SELECT 2"));
     write(
         root,
         "src/production.rs",
-        "#[path = \"../shared/dual.rs\"]\nmod dual;\n",
+        "#[path = \"shared/dual.rs\"]\nmod dual;\n",
     );
     write(root, "src/shared/dual.rs", &call("SELECT 3"));
 
@@ -55,10 +55,7 @@ fn external_cfg_test_modules_match_their_inline_equivalent() {
         test.contains("- [ ] `src/unit_cases/fixture.rs:1`"),
         "{test}"
     );
-    assert!(
-        test.contains("- [ ] `src/unit_cases/support/helper.rs:1`"),
-        "{test}"
-    );
+    assert!(test.contains("- [ ] `src/support/helper.rs:1`"), "{test}");
     assert!(
         non_test.contains("- [ ] `src/shared/dual.rs:1`"),
         "{non_test}"
@@ -68,7 +65,7 @@ fn external_cfg_test_modules_match_their_inline_equivalent() {
     for path in [
         "src/unit_cases.rs",
         "src/unit_cases/fixture.rs",
-        "src/unit_cases/support/helper.rs",
+        "src/support/helper.rs",
         "src/production.rs",
         "src/shared/dual.rs",
     ] {

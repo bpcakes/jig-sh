@@ -62,12 +62,12 @@ fn nested_descendants_of_a_cfg_test_module_are_test_code() {
 }
 
 #[test]
-fn path_attributes_resolve_against_the_declaring_module_directory() {
+fn path_attributes_resolve_against_the_source_directory() {
     let temp = inventory(&[
         ("src/lib.rs", "#[cfg(test)]\nmod unit_cases;\n"),
         (
             "src/unit_cases.rs",
-            "#[path = \"../support/helper.rs\"]\nmod helper;\n",
+            "#[path = \"support/helper.rs\"]\nmod helper;\n",
         ),
         ("src/support/helper.rs", CALL),
     ]);
@@ -118,11 +118,11 @@ fn a_helper_reachable_from_production_stays_non_test() {
         ),
         (
             "src/unit_cases.rs",
-            "#[path = \"../shared/dual.rs\"]\nmod dual;\n",
+            "#[path = \"shared/dual.rs\"]\nmod dual;\n",
         ),
         (
             "src/production.rs",
-            "#[path = \"../shared/dual.rs\"]\nmod dual;\n",
+            "#[path = \"shared/dual.rs\"]\nmod dual;\n",
         ),
         ("src/shared/dual.rs", CALL),
     ]);
@@ -180,13 +180,52 @@ fn a_declaration_cycle_keeps_its_own_classification() {
     let temp = inventory(&[
         (
             "src/first.rs",
-            "#[path = \"../second.rs\"]\nmod second;\nfn example() { let _ = sqlx::query(\"SELECT 1\"); }\n",
+            "#[path = \"second.rs\"]\nmod second;\nfn example() { let _ = sqlx::query(\"SELECT 1\"); }\n",
         ),
-        ("src/second.rs", "#[path = \"../first.rs\"]\nmod first;\n"),
+        ("src/second.rs", "#[path = \"first.rs\"]\nmod first;\n"),
     ]);
 
     let (non_test, test) = sections(temp.path());
 
     assert!(non_test.contains("`src/first.rs:3`"), "{non_test}");
+    assert!(test.contains("_None_"), "{test}");
+}
+
+/// A `#[path]` declaration loads a file that owns the directory it sits in,
+/// so its own children resolve beside it and not under its name.
+#[test]
+fn a_path_loaded_module_resolves_its_children_beside_itself() {
+    let temp = inventory(&[
+        (
+            "src/lib.rs",
+            "#[path = \"loader.rs\"]\nmod production;\n#[cfg(test)]\nmod shared;\n",
+        ),
+        ("src/loader.rs", "mod shared;\n"),
+        ("src/shared.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/shared.rs:1`"), "{non_test}");
+    assert!(test.contains("_None_"), "{test}");
+}
+
+/// Cargo compiles a crate entrypoint whatever else declares it as a module,
+/// so a test module loading one cannot turn its queries into test code.
+#[test]
+fn a_crate_entrypoint_declared_as_a_test_module_stays_non_test() {
+    let temp = inventory(&[
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"main.rs\"]\nmod binary_cases;\n",
+        ),
+        ("src/main.rs", &format!("mod runner;\n{CALL}")),
+        ("src/runner.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/main.rs:2`"), "{non_test}");
+    assert!(non_test.contains("`src/runner.rs:1`"), "{non_test}");
     assert!(test.contains("_None_"), "{test}");
 }
