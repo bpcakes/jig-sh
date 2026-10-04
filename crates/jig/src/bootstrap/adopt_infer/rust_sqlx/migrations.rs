@@ -208,16 +208,10 @@ fn choose(
             }
         }
         [candidate] => MigrationChoice::Selected(candidate.clone()),
-        candidates => {
-            let justified = candidates
-                .iter()
-                .filter(|candidate| candidate.owner_declares_sqlx)
-                .collect::<Vec<_>>();
-            match justified.as_slice() {
-                [candidate] => MigrationChoice::Selected((*candidate).clone()),
-                _ => MigrationChoice::Ambiguous(candidates.to_vec()),
-            }
-        }
+        // SQLx ownership can come from evidence a manifest does not show
+        // (renamed or target-specific dependencies, `sqlx::migrate!`), so a
+        // missing sqlx declaration never rules out another candidate.
+        candidates => MigrationChoice::Ambiguous(candidates.to_vec()),
     }
 }
 

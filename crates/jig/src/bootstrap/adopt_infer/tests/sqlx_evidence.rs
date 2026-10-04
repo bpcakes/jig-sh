@@ -224,27 +224,37 @@ fn unjustified_multiple_migration_dirs_are_ambiguous() {
 }
 
 #[test]
-fn an_owner_declaring_sqlx_justifies_its_migration_dir() {
-    let temp = repo(&[
-        (
-            "Cargo.toml",
-            "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n",
-        ),
-        ("crates/db/Cargo.toml", SQLX_PACKAGE),
-        ("crates/db/migrations/0001_init.sql", GENERIC_SQL),
-        ("crates/legacy/Cargo.toml", PLAIN_PACKAGE),
-        ("crates/legacy/migrations/0001_init.sql", GENERIC_SQL),
-    ]);
-    let mut warnings = Vec::new();
-    let sqlx = infer_sqlx(temp.path(), &mut warnings);
+fn a_declared_sqlx_owner_does_not_outrank_other_rust_owners() {
+    // crates/jobs uses SQLx through a target-specific dependency and
+    // sqlx::migrate!, which the manifest declaration check does not see.
+    let jobs_manifest = "[package]\nname = \"example-jobs\"\nversion = \"0.1.0\"\n\n[target.'cfg(unix)'.dependencies]\nsqlx = \"0.9\"\n";
+    for (other_manifest, other_source) in [
+        (jobs_manifest, "fn run() { sqlx::migrate!(); }\n"),
+        (PLAIN_PACKAGE, ""),
+    ] {
+        let temp = repo(&[
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n",
+            ),
+            ("crates/api/Cargo.toml", SQLX_PACKAGE),
+            ("crates/api/migrations/0001_init.sql", GENERIC_SQL),
+            ("crates/jobs/Cargo.toml", other_manifest),
+            ("crates/jobs/src/lib.rs", other_source),
+            ("crates/jobs/migrations/0001_init.sql", GENERIC_SQL),
+        ]);
+        let mut warnings = Vec::new();
+        let sqlx = infer_sqlx(temp.path(), &mut warnings);
 
-    assert_eq!(migration_dir(&sqlx), Some("crates/db/migrations"));
-    assert_eq!(sqlx.migration_dirs.value.len(), 2);
-    assert!(
-        !warnings
-            .iter()
-            .any(|warning| warning.contains("cannot infer"))
-    );
+        assert!(sqlx.enabled.value);
+        assert_eq!(migration_dir(&sqlx), None, "{other_manifest}");
+        assert!(
+            warnings.iter().any(|warning| warning.contains(
+                "cannot infer the SQLx migration directory from crates/api/migrations (Cargo manifest at crates/api declares sqlx), crates/jobs/migrations (inside Cargo manifest at crates/jobs, which does not declare sqlx)"
+            )),
+            "{warnings:?}"
+        );
+    }
 }
 
 #[test]
