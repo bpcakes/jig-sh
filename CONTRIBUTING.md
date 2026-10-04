@@ -44,7 +44,11 @@ succeed before any assets are attached to the existing GitHub Release.
 The binary workflow can also be dispatched for an existing stable `version` to
 backfill assets or retry failed builds. It defaults to `dry_run: true`, which
 keeps build artifacts for inspection without publishing. Set `dry_run: false`
-to attach them. Existing complete asset pairs are downloaded and checksum-verified,
+to attach them. Compatibility probes use the contract from the selected release's
+source checkout. The original `v0.1.0` predates repository compatibility probes,
+so its smoke test covers standalone installation only; newer releases must also
+pass repository installation and both cached profile checks.
+Existing complete asset pairs are downloaded and checksum-verified,
 then preserved; an incomplete pair fails with repair guidance. Published assets
 are never overwritten automatically. The main Release workflow's dry run still
 performs its existing local validation; use the separate binary dry run against

@@ -152,3 +152,7 @@ installation, latest-release selection, host requirements, and safe replacement.
 `scripts/smoke-release-binary.py` also installs the actual compiled executable
 with local asset transport and no Cargo on PATH. Development builds run both
 native profile probes; stable pins deliberately reject development versions.
+When testing a binary built from another tag, pass `--release-source PATH` to
+use that checkout's contract. `test_jig_release_smoke.py` covers older contracts,
+failed probes, and the standalone-only historical `v0.1.0` exception (which
+predates repository compatibility probes).

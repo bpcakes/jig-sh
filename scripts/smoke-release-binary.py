@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise release packaging and the real installer with a local asset transport."""
 
+import argparse
 import importlib.util
 import json
 import os
@@ -17,12 +18,18 @@ PACKAGE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PACKAGE)
 
 
-def smoke(binary, target):
+def smoke(binary, target, release_source=ROOT):
     version = subprocess.check_output([str(binary), "--version"], text=True).strip().removeprefix("jig ")
-    contract = json.loads((ROOT / ".agent/jig-contract.json").read_text())["contract_version"]
-    for profile in ["default", "runtime"]:
-        subprocess.run([str(binary), "__runtime-compatible", "--capability-only",
-                        "--contract-version", str(contract), "--profile", profile, str(ROOT)], check=True)
+    # The tooling checkout can be newer than a backfilled release. Probe the
+    # contract shipped with that release, not the tooling's current contract.
+    # v0.1.0 predates the probe entirely; it supports standalone installation.
+    repository_install = version != "0.1.0"
+    if repository_install:
+        contract = json.loads((release_source / ".agent/jig-contract.json").read_text())["contract_version"]
+        for profile in ["default", "runtime"]:
+            subprocess.run([str(binary), "__runtime-compatible", "--capability-only",
+                            "--contract-version", str(contract), "--profile", profile,
+                            str(release_source)], check=True)
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         print("Development binary passed both profile probes; stable-release installation is tested on tagged builds.")
         return
@@ -33,7 +40,8 @@ def smoke(binary, target):
         shutil.copy2(ROOT / "scripts/install-jig.sh", root / "scripts/install-jig.sh")
         (root / ".jig/runtime-version").write_text(version + "\n")
         (root / ".jig.toml").write_text('_src_path = "embedded:jig-sh"\n')
-        (root / ".agent/jig-contract.json").write_text(json.dumps({"contract_version": contract}))
+        if repository_install:
+            (root / ".agent/jig-contract.json").write_text(json.dumps({"contract_version": contract}))
         PACKAGE.package(binary, version, target, root / "assets")
         # Restrict PATH to the installer's utilities: there is no Cargo or
         # ambient Jig available. Only transport is replaced; archive validation,
@@ -54,12 +62,13 @@ print("200", end="")
         curl.chmod(0o755)
         env = {key: value for key, value in os.environ.items() if not key.startswith("JIG_")}
         env.update(PATH=str(root / "tools"), EXAMPLE_ASSETS=str(root / "assets"))
-        installer = [str(root / "scripts/install-jig.sh")]
-        installed = subprocess.check_output(installer, env=env, text=True).strip()
-        assert Path(installed).read_bytes() == binary.read_bytes()
-        for profile in ["default", "runtime"]:
-            cached = subprocess.check_output(installer + ["--resolve-only", "--profile", profile], env=env, text=True).strip()
-            assert cached == installed
+        if repository_install:
+            installer = [str(root / "scripts/install-jig.sh")]
+            installed = subprocess.check_output(installer, env=env, text=True).strip()
+            assert Path(installed).read_bytes() == binary.read_bytes()
+            for profile in ["default", "runtime"]:
+                cached = subprocess.check_output(installer + ["--resolve-only", "--profile", profile], env=env, text=True).strip()
+                assert cached == installed
         # Exercise the first-time installer against the same actual release
         # executable, including host selection and atomic publication.
         import types
@@ -79,8 +88,19 @@ print("200", end="")
         finally:
             os.environ["PATH"] = previous_path
         assert installed_global.read_bytes() == binary.read_bytes()
-        print(f"Verified {version}/{target}: standalone install, repo cold install, and both cached profiles without Cargo")
+        checks = "standalone install"
+        if repository_install:
+            checks += ", repo cold install, and both cached profiles"
+        else:
+            checks += " (v0.1.0 predates repository compatibility probes)"
+        print(f"Verified {version}/{target}: {checks} without Cargo")
 
 
 if __name__ == "__main__":
-    smoke(Path(sys.argv[1]).resolve(), sys.argv[2])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", type=Path)
+    parser.add_argument("target")
+    parser.add_argument("--release-source", type=Path, default=ROOT,
+                        help="Source checkout used to build the binary (defaults to this checkout)")
+    args = parser.parse_args()
+    smoke(args.binary.resolve(), args.target, args.release_source.resolve())
