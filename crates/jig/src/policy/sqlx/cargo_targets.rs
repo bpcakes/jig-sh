@@ -80,11 +80,13 @@ fn is_discovered_target(relative: &str) -> bool {
         return false;
     };
     // `src/bin/tool.rs` and `src/bin/tool/main.rs`, and the same two shapes
-    // under `benches`, `examples` and `tests`.
-    let directory = if basename == "main.rs" {
-        split_path(parent).0
-    } else {
-        parent
-    };
+    // under `benches`, `examples` and `tests`. A target directly in one of
+    // those directories counts whatever it is named, including `main.rs`,
+    // before the nested shape is considered.
+    is_target_directory(parent)
+        || (basename == "main.rs" && is_target_directory(split_path(parent).0))
+}
+
+fn is_target_directory(directory: &str) -> bool {
     matches!(directory, "src/bin" | "benches" | "examples" | "tests")
 }

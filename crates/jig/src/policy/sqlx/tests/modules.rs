@@ -330,3 +330,24 @@ fn a_nested_module_named_like_an_entrypoint_is_not_a_cargo_target() {
     assert!(test.contains("`src/unit_cases/main.rs:1`"), "{test}");
     assert!(test.contains("`src/unit_cases/lib.rs:1`"), "{test}");
 }
+
+/// Cargo discovers every `src/bin/<name>.rs` as a binary, including one named
+/// `main.rs`, which is not the nested `<name>/main.rs` shape.
+#[test]
+fn a_directly_discovered_binary_named_main_stays_non_test() {
+    let temp = inventory(&[
+        ("Cargo.toml", MANIFEST),
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"bin/main.rs\"]\nmod binary_cases;\n",
+        ),
+        ("src/bin/main.rs", &format!("mod support;\n{CALL}")),
+        ("src/bin/support.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/bin/main.rs:2`"), "{non_test}");
+    assert!(non_test.contains("`src/bin/support.rs:1`"), "{non_test}");
+    assert!(test.contains("_None_"), "{test}");
+}
