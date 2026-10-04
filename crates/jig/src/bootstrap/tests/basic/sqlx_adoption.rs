@@ -347,3 +347,47 @@ fn implied_sqlx_enablement_uses_the_owned_migration_dir() {
     );
     assert!(generates_sqlx_check(&output), "{output}");
 }
+
+#[test]
+fn accepted_rust_root_requires_a_path_for_unowned_migrations() {
+    let _guard = lock_env();
+    let template = materialize_template_worktree();
+    let temp = tempdir().unwrap();
+    // No root Cargo.toml: the explicit answer accepts the Rust root, but no
+    // manifest owns migrations/, so SQLx evidence cannot claim it.
+    let repo = fixture(
+        temp.path(),
+        &[
+            (".sqlx/query-example.json", "{}\n"),
+            ("migrations/0001_init.sql", GENERIC_SQL),
+        ],
+    );
+    let accepted = |rust_migration_dir: Option<&str>| AnswerOpts {
+        backend_language: Some(crate::backend::BackendLanguage::Rust),
+        rust_migration_dir: rust_migration_dir.map(Into::into),
+        ..AnswerOpts::default()
+    };
+
+    let error = run_adopt(adopt_opts(&repo, template.path(), accepted(None)))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(
+            "cannot infer the SQLx migration directory from migrations (no owning Cargo or Go manifest)"
+        ),
+        "{error}"
+    );
+
+    let output = run_adopt(adopt_opts(
+        &repo,
+        template.path(),
+        accepted(Some("migrations")),
+    ))
+    .unwrap();
+    assert_eq!(output["detection_report"]["sqlx_enabled"], true);
+    assert_eq!(
+        sqlx_review(&output),
+        vec!["SQLx: enabled with migrations at migrations"]
+    );
+    assert!(generates_sqlx_check(&output), "{output}");
+}

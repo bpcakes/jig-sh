@@ -278,14 +278,20 @@ fn unattributable_migration_dirs_are_ambiguous() {
         );
     }
 
-    // Without Go modules, an unowned directory is the only SQLx candidate.
+    // Without Go modules an unowned directory is still not owned by SQLx:
+    // other migration tools share the layout.
     let temp = repo(&[
         ("services/api/Cargo.toml", SQLX_PACKAGE),
         ("db/migrations/0001_init.sql", GENERIC_SQL),
     ]);
     let mut warnings = Vec::new();
     let sqlx = infer_sqlx(temp.path(), &mut warnings);
-    assert_eq!(migration_dir(&sqlx), Some("db/migrations"));
+    assert_eq!(migration_dir(&sqlx), None);
+    assert!(
+        warnings.iter().any(|warning| warning
+            .contains("cannot infer the SQLx migration directory from db/migrations (no owning Cargo or Go manifest)")),
+        "{warnings:?}"
+    );
 }
 
 #[test]

@@ -3,8 +3,9 @@
 //! Numbered SQL files are shared by many migration tools, so they never enable
 //! SQLx. Once SQLx is established, a candidate is usable only when it belongs
 //! to a Rust owner and carries no other tool's markers; anything else is either
-//! attributed elsewhere or reported as ambiguous. In a repository with Go
-//! modules, a Cargo ancestor alone does not establish SQLx ownership.
+//! attributed elsewhere or reported as ambiguous. A directory outside every
+//! Cargo manifest has no established owner, and in a repository with Go
+//! modules a Cargo ancestor alone does not establish SQLx ownership.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -74,7 +75,7 @@ impl MigrationCandidate {
             (_, MigrationOwner::Rust(_)) if self.owner_declares_sqlx || !repository_has_go => {
                 Role::Eligible
             }
-            (_, MigrationOwner::Unowned) if !repository_has_go => Role::Eligible,
+            // Unowned directories and shared Rust/Go roots lack an owner.
             _ => Role::Unresolved,
         }
     }
