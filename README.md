@@ -64,10 +64,33 @@ This README describes the 0.5.0 line on current `master`. Upgrading from 0.3.0 r
 
 ## Install
 
-Install the bootstrap CLI from crates.io:
+Install the latest prebuilt CLI on Linux or macOS (requires curl and Python 3,
+not Rust):
 
 ```sh
-cargo install jig-sh
+curl -fsSL https://raw.githubusercontent.com/bpcakes/jig-sh/master/scripts/install.sh | bash
+```
+
+The installer selects your architecture, verifies SHA-256 and the executable's
+version, and installs `jig` to `~/.local/bin`. It prints the PATH command if needed.
+To choose an exact release or installation directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/bpcakes/jig-sh/master/scripts/install.sh | bash -s -- --version 0.7.0 --bin-dir "$HOME/.local/bin"
+```
+
+Run the same command again to upgrade. Existing executables are replaced only
+after verification succeeds. Linux binaries require glibc 2.35 or newer; macOS
+binaries require macOS 13 or newer. Both x86-64 and ARM64 are available. If a
+release's assets have not been published yet, the installer reports that and
+leaves any existing installation intact. You can also download and inspect the
+script before running it, or unpack a verified archive from
+[GitHub Releases](https://github.com/bpcakes/jig-sh/releases) yourself.
+
+Source installation remains available for other hosts:
+
+```sh
+cargo install jig-sh --locked
 ```
 
 The Jig workspace MSRV is Rust 1.88. Generated application requirements vary by preset; use the table above instead of treating every supported toolchain as a universal prerequisite. The checked-in `rust-toolchain.toml` pins contributor and default CI tooling to Rust 1.98.0.

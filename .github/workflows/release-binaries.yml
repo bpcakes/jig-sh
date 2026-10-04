@@ -24,6 +24,8 @@ on:
       - "scripts/publish-release-binaries.py"
       - "scripts/smoke-release-binary.py"
       - "scripts/install-jig.sh"
+      - "scripts/install.sh"
+      - "scripts/tests/test_jig_standalone_install.py"
       - "scripts/tests/test_jig_binary_distribution.py"
 
 permissions:
@@ -31,7 +33,7 @@ permissions:
 
 concurrency:
   group: release-binaries-${{ inputs.version || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -92,6 +94,7 @@ jobs:
           fi
           python3 scripts/package-release-binary.py "release-source/target/$TARGET/release/jig" "$VERSION" "$TARGET" dist
           python3 -m unittest discover -s scripts/tests -p 'test_jig_binary_distribution.py'
+          python3 -m unittest discover -s scripts/tests -p 'test_jig_standalone_install.py'
           python3 scripts/smoke-release-binary.py "release-source/target/$TARGET/release/jig" "$TARGET"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

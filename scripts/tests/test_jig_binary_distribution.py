@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import subprocess
 from pathlib import Path
 import tarfile
 import unittest
@@ -64,6 +65,15 @@ print(status, end="")
     def checksum(self):
         self.asset.with_suffix(".gz.sha256").write_text(
             f"{hashlib.sha256(self.asset.read_bytes()).hexdigest()}  {self.asset.name}\n")
+
+    def test_development_build_display_versions_can_be_packaged_for_ci(self):
+        archive = PACKAGE.package(self.binaries / "development", "0.5.1-dev.3+gabcdef.dirty", self.target, self.downloads)
+        self.assertTrue(archive.is_file())
+        result = subprocess.run(["python3", str(REPO / "scripts/smoke-release-binary.py"),
+                                 str(self.binaries / "development"), self.target],
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Development binary passed both profile probes", result.stdout)
 
     def test_cold_launcher_download_and_warm_cache_never_invoke_cargo(self):
         (self.tools / "cargo").unlink()

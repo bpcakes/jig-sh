@@ -26,6 +26,7 @@ class ReleaseRuntimeTests(unittest.TestCase):
         source.write_text(NATIVE_FIXTURE)
         for name, version, contract in [("0.5.0", "0.5.0", "8"),
                                         ("0.5.1", "0.5.1", "8"),
+                                        ("development", "0.5.1-dev.3+gabcdef.dirty", "8"),
                                         ("incompatible", "0.5.0", "7")]:
             subprocess.run(["cc", str(source), "-o", str(cls.binaries / name),
                             f'-DVERSION="{version}"', f'-DCONTRACT="{contract}"',

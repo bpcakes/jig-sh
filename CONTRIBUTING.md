@@ -50,6 +50,12 @@ are never overwritten automatically. The main Release workflow's dry run still
 performs its existing local validation; use the separate binary dry run against
 an existing tag to validate the platform matrix.
 
+First-time users run the standalone `scripts/install.sh` from the README. It
+resolves the latest GitHub Release by default, accepts `--version` and `--bin-dir`,
+and atomically installs a verified native executable without Cargo. It deliberately
+fails if binary assets are unavailable. The generated repository installer retains
+its source fallback for compatibility with older release pins.
+
 Consumers need the updated `scripts/install-jig.sh` and an explicit
 `.jig/runtime-version` pin to a release containing assets. Keep template/source
 selection unchanged for unpinned checkouts. Use `JIG_INSTALL_SOURCE=1` for an

@@ -15,7 +15,7 @@ TARGETS = {
 
 
 def package(binary, version, target, output):
-    if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev)?", version):
+    if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", version):
         raise ValueError("expected an exact Jig version")
     if target not in TARGETS:
         raise ValueError(f"unsupported release target: {target}")

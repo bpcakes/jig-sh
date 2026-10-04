@@ -147,7 +147,8 @@ The Release binaries workflow builds native archives on Linux and macOS for both
 x86-64 and ARM64. Changes to binary distribution tooling also run that matrix on
 pull requests. The `test_jig_binary_distribution.py` unittest module exercises
 cold installs without Cargo, checksums, host selection, fallback, publication
-retries, and cache preservation. On stable tags,
+retries, and cache preservation. `test_jig_standalone_install.py` covers first-time
+installation, latest-release selection, host requirements, and safe replacement. On stable tags,
 `scripts/smoke-release-binary.py` also installs the actual compiled executable
 with local asset transport and no Cargo on PATH. Development builds run both
 native profile probes; stable pins deliberately reject development versions.

@@ -4,6 +4,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -22,7 +23,7 @@ def smoke(binary, target):
     for profile in ["default", "runtime"]:
         subprocess.run([str(binary), "__runtime-compatible", "--capability-only",
                         "--contract-version", str(contract), "--profile", profile, str(ROOT)], check=True)
-    if version.endswith("-dev"):
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         print("Development binary passed both profile probes; stable-release installation is tested on tagged builds.")
         return
     with tempfile.TemporaryDirectory(prefix="ExampleBinarySmoke-") as temporary:
@@ -59,7 +60,26 @@ print("200", end="")
         for profile in ["default", "runtime"]:
             cached = subprocess.check_output(installer + ["--resolve-only", "--profile", profile], env=env, text=True).strip()
             assert cached == installed
-        print(f"Verified {version}/{target}: cold install and both cached profiles without Cargo")
+        # Exercise the first-time installer against the same actual release
+        # executable, including host selection and atomic publication.
+        import types
+        standalone = types.ModuleType("standalone_installer")
+        script = (ROOT / "scripts/install.sh").read_text()
+        code = script.split("<<'PY'\n", 1)[1].rsplit("\nPY\n", 1)[0]
+        exec(compile(code, "scripts/install.sh", "exec"), standalone.__dict__)
+
+        def local_download(url, destination, limit):
+            shutil.copyfile(root / "assets" / url.rsplit("/", 1)[1], destination)
+
+        standalone.download = local_download
+        previous_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = str(root / "tools")
+        try:
+            installed_global = standalone.install(version, root / "standalone-bin")
+        finally:
+            os.environ["PATH"] = previous_path
+        assert installed_global.read_bytes() == binary.read_bytes()
+        print(f"Verified {version}/{target}: standalone install, repo cold install, and both cached profiles without Cargo")
 
 
 if __name__ == "__main__":
