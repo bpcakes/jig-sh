@@ -1399,7 +1399,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jig-codex-tui"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "jig-contract"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "schemars",
  "serde",
@@ -1419,14 +1419,14 @@ dependencies = [
 
 [[package]]
 name = "jig-core"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "jig-contract",
 ]
 
 [[package]]
 name = "jig-dev-proxy"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "jig-features"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "jig-contract",
  "jig-core",
@@ -1475,7 +1475,7 @@ dependencies = [
 
 [[package]]
 name = "jig-file-budget"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "globset",
  "serde",
@@ -1486,14 +1486,14 @@ dependencies = [
 
 [[package]]
 name = "jig-go"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "jig-contract",
 ]
 
 [[package]]
 name = "jig-owned-process"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "anyhow",
  "libc",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "jig-rust"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "jig-contract",
  "serde",
@@ -1512,7 +1512,7 @@ dependencies = [
 
 [[package]]
 name = "jig-sh"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "anyhow",
  "cap-fs-ext",
@@ -1566,14 +1566,14 @@ dependencies = [
 
 [[package]]
 name = "jig-sqlx"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "jig-contract",
 ]
 
 [[package]]
 name = "jig-tui"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -1583,14 +1583,14 @@ dependencies = [
 
 [[package]]
 name = "jig-typescript"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "jig-contract",
 ]
 
 [[package]]
 name = "jig-ui"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "jig-vault"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1634,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "jig-vault-tui"
-version = "0.7.1"
+version = "0.7.2-dev"
 dependencies = [
  "anyhow",
  "crossterm",
