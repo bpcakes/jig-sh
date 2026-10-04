@@ -17,10 +17,15 @@ pub(super) fn assert_inferred_detection(output: &serde_json::Value) {
             .iter()
             .any(|source| source.as_str().unwrap().contains("workspace.dependencies"))
     );
+    // Migration files locate SQLx migrations; they are not SQLx evidence.
     assert!(
-        sources
+        !sources
             .iter()
             .any(|source| source.as_str() == Some("migrations/0001_init.sql"))
+    );
+    assert_eq!(
+        report["metadata"]["rust_migration_dir"]["sources"][0],
+        "migrations/0001_init.sql"
     );
 }
 
