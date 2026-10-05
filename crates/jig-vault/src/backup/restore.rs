@@ -9,6 +9,7 @@ use anyhow::{Context, Result as AnyResult, bail};
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
+use crate::acl;
 use crate::error::{classified, classify_source};
 use crate::store::VaultStore;
 use crate::{VaultError, VaultErrorKind};
@@ -779,6 +780,5 @@ fn vault_error_as_classified(error: VaultError) -> anyhow::Error {
     classified(error.kind(), error.to_string())
 }
 
-mod acl;
 #[cfg(test)]
 mod tests;

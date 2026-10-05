@@ -271,43 +271,16 @@ fn darwin_enotsup_is_classified_as_an_unsupported_noreplace_rename() {
 }
 
 #[cfg(target_os = "macos")]
-fn add_acl_entry(path: &Path, entry: &str) {
-    let status = std::process::Command::new("/bin/chmod")
-        .arg("+a")
-        .arg(entry)
-        .arg(path)
-        .status()
-        .unwrap();
-    assert!(status.success(), "chmod +a {entry:?} failed");
-}
-
-/// Uses `ls -le` as an oracle independent of the restore ACL module.
-#[cfg(target_os = "macos")]
-fn has_acl_entries(path: &Path) -> bool {
-    let output = std::process::Command::new("/bin/ls")
-        .arg("-led")
-        .arg(path)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    String::from_utf8(output.stdout).unwrap().lines().count() > 1
-}
-
-#[cfg(target_os = "macos")]
-const INHERITED_READ_ACL: &str =
-    "everyone allow read,readattr,readextattr,readsecurity,file_inherit,directory_inherit";
+use crate::acl::test_support::{
+    UNSAFE_DIRECTORY_ACLS, UNSAFE_DIRECTORY_REFUSAL, acl_fixture_directory, add_acl_entry,
+    has_acl_entries, inheriting_read_directory, sticky_shared_tempdir,
+};
 
 #[cfg(target_os = "macos")]
 #[test]
 fn restore_clears_inherited_acls_before_writing_or_installing() {
     let temp = private_tempdir();
-    let shared = temp.path().join("shared-read");
-    fs::create_dir(&shared).unwrap();
-    fs::set_permissions(&shared, fs::Permissions::from_mode(0o700)).unwrap();
-    add_acl_entry(&shared, INHERITED_READ_ACL);
-    let control = shared.join("control");
-    fs::create_dir(&control).unwrap();
-    assert!(has_acl_entries(&control), "fixture ACL was not inherited");
+    let shared = inheriting_read_directory(temp.path());
 
     let chained = preflight_target(shared.join("vault-base/scopes/repo-scope")).unwrap();
     assert!(!has_acl_entries(&shared.join("vault-base")));
@@ -330,43 +303,18 @@ fn restore_clears_inherited_acls_before_writing_or_installing() {
 }
 
 #[cfg(target_os = "macos")]
-fn acl_fixture_directory(root: &Path, name: &str, entry: &str) -> PathBuf {
-    let directory = root.join(name);
-    fs::create_dir(&directory).unwrap();
-    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
-    add_acl_entry(&directory, entry);
-    directory
-}
-
-#[cfg(target_os = "macos")]
 #[test]
 fn preflight_refuses_parents_whose_acl_allows_write_or_delete() {
-    // Place fixtures below the sticky shared /private/tmp: an allowed
-    // `delete` still lets another user rename a parent away from there.
-    let temp = tempfile::Builder::new()
-        .prefix("jig-vault-restore-acl-")
-        .tempdir_in("/private/tmp")
-        .unwrap();
-    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let temp = sticky_shared_tempdir("jig-vault-restore-acl-");
 
-    for (name, entry) in [
-        ("allow-add-file", "everyone allow add_file"),
-        ("allow-add-subdirectory", "everyone allow add_subdirectory"),
-        ("allow-delete", "everyone allow delete"),
-        ("allow-delete-child", "everyone allow delete_child"),
-        ("allow-writesecurity", "everyone allow writesecurity"),
-        ("allow-chown", "everyone allow chown"),
-    ] {
+    for (name, entry) in UNSAFE_DIRECTORY_ACLS {
         let parent = acl_fixture_directory(temp.path(), name, entry);
         for home in [
             parent.join("restored-home"),
             parent.join("vault-base/scopes/repo-scope"),
         ] {
             let error = preflight_target(home).unwrap_err().to_string();
-            assert!(
-                error.contains("lets other users write to, delete, or re-permission it"),
-                "{entry}: {error}"
-            );
+            assert!(error.contains(UNSAFE_DIRECTORY_REFUSAL), "{entry}: {error}");
         }
         assert!(!parent.join("vault-base").exists(), "{entry}");
     }
@@ -599,11 +547,7 @@ fn preflight_accepts_a_traversable_but_unlistable_higher_ancestor() {
 #[cfg(target_os = "macos")]
 #[test]
 fn preflight_and_revalidation_refuse_an_unsafe_acl_on_a_higher_ancestor() {
-    let temp = tempfile::Builder::new()
-        .prefix("jig-vault-restore-acl-ancestor-")
-        .tempdir_in("/private/tmp")
-        .unwrap();
-    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let temp = sticky_shared_tempdir("jig-vault-restore-acl-ancestor-");
     let upper = acl_fixture_directory(temp.path(), "upper", "everyone allow delete");
     let private = upper.join("private");
     fs::create_dir(&private).unwrap();
@@ -615,10 +559,7 @@ fn preflight_and_revalidation_refuse_an_unsafe_acl_on_a_higher_ancestor() {
         private.join("vault-base/scopes/repo-scope"),
     ] {
         let error = preflight_target(home).unwrap_err().to_string();
-        assert!(
-            error.contains("lets other users write to, delete, or re-permission it"),
-            "{error}"
-        );
+        assert!(error.contains(UNSAFE_DIRECTORY_REFUSAL), "{error}");
     }
     assert!(!private.join("vault-base").exists());
 
@@ -631,10 +572,7 @@ fn preflight_and_revalidation_refuse_an_unsafe_acl_on_a_higher_ancestor() {
     add_acl_entry(&later, "everyone allow delete");
 
     let error = revalidate_target(&target).unwrap_err().to_string();
-    assert!(
-        error.contains("lets other users write to, delete, or re-permission it"),
-        "{error}"
-    );
+    assert!(error.contains(UNSAFE_DIRECTORY_REFUSAL), "{error}");
     assert!(!target.home.exists());
 }
 

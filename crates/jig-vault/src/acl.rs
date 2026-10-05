@@ -1,18 +1,21 @@
-//! Extended access control list checks for restore.
+//! Extended access control list handling for private vault paths.
 //!
 //! Darwin evaluates ACL entries independently of POSIX mode bits, so an
 //! inherited allow entry survives `chmod 0700`/`0600` and can still grant
-//! other principals access. Restore therefore clears every entry from the
-//! directories and files it creates before writing contents into them, and
-//! refuses any existing directory on the restore path whose ACL grants other
-//! principals write, delete, or permission-change access. Linux POSIX
+//! other principals access. Callers therefore clear every entry from the
+//! private directories and files they create or reuse before writing
+//! contents into them, and refuse a directory they rely on whose ACL grants
+//! other principals write, delete, or permission-change access. Linux POSIX
 //! ACLs need no counterpart: the explicit mode change also narrows their mask.
 
 #[cfg(target_os = "macos")]
-pub(super) use darwin::{clear_directory, clear_file, reject_shared_write, require_none};
+pub(crate) use darwin::{clear_directory, clear_file, reject_shared_write, require_none};
 
 #[cfg(not(target_os = "macos"))]
-pub(super) use portable::{clear_directory, clear_file, reject_shared_write, require_none};
+pub(crate) use portable::{clear_directory, clear_file, reject_shared_write, require_none};
+
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) mod test_support;
 
 #[cfg(target_os = "macos")]
 mod darwin {
@@ -39,7 +42,7 @@ mod darwin {
 
     /// Directory permissions that let another principal disturb a protected
     /// parent: adding, removing, or renaming its entries (the group/other
-    /// write bits restore already refuses), deleting or renaming the
+    /// write bits callers already refuse), deleting or renaming the
     /// directory itself, or changing its permissions or owner. XNU honors an
     /// allowed `delete` before sticky-directory protection, so even a parent
     /// inside a sticky shared directory can be moved away when it grants it.
@@ -94,8 +97,7 @@ mod darwin {
         /// Reads without opening or following `path`, so a directory the
         /// current user may traverse but not list can still be inspected.
         fn read_link(path: &Path) -> AnyResult<Option<Self>> {
-            let c_path =
-                CString::new(path.as_os_str().as_bytes()).context("restore path contains NUL")?;
+            let c_path = CString::new(path.as_os_str().as_bytes()).context("path contains NUL")?;
             // SAFETY: `c_path` is NUL-terminated and outlives the call.
             Self::from_result(
                 unsafe { acl_get_link_np(c_path.as_ptr(), ACL_TYPE_EXTENDED) },
@@ -181,7 +183,7 @@ mod darwin {
 
     /// Removes every extended ACL entry, including inherited ones, and
     /// verifies that none remain.
-    pub(in crate::backup::restore) fn clear_file(file: &File, path: &Path) -> AnyResult<()> {
+    pub(crate) fn clear_file(file: &File, path: &Path) -> AnyResult<()> {
         if !has_entries(file, path)? {
             return Ok(());
         }
@@ -210,27 +212,28 @@ mod darwin {
         Ok(())
     }
 
-    pub(in crate::backup::restore) fn clear_directory(path: &Path) -> AnyResult<()> {
+    pub(crate) fn clear_directory(path: &Path) -> AnyResult<()> {
         clear_file(&open_nofollow(path)?, path)
     }
 
-    /// Refuses any extended ACL entry on a restore-owned path.
-    pub(in crate::backup::restore) fn require_none(path: &Path) -> AnyResult<()> {
+    /// Refuses any extended ACL entry on a path the caller owns and keeps
+    /// private.
+    pub(crate) fn require_none(path: &Path) -> AnyResult<()> {
         if has_entries(&open_nofollow(path)?, path)? {
             bail!(
-                "protected restore path has an access control list that can bypass owner-only permissions: {}",
+                "protected path has an access control list that can bypass owner-only permissions: {}",
                 path.display()
             );
         }
         Ok(())
     }
 
-    /// Refuses an existing directory on the restore path whose ACL grants
-    /// another principal write, delete, or permission-change access.
+    /// Refuses an existing directory whose ACL grants another principal
+    /// write, delete, or permission-change access.
     ///
     /// Deny entries, such as the "everyone deny delete" entries macOS places
     /// on home folders, only narrow access and are accepted.
-    pub(in crate::backup::restore) fn reject_shared_write(path: &Path) -> AnyResult<()> {
+    pub(crate) fn reject_shared_write(path: &Path) -> AnyResult<()> {
         let Some(acl) = Acl::read_link(path)? else {
             return Ok(());
         };
@@ -240,7 +243,7 @@ mod darwin {
             .any(|entry| entry.allows && entry.grants_unsafe_parent_access)
         {
             bail!(
-                "restore path directory has an access control list that lets other users write to, delete, or re-permission it: {}",
+                "directory has an access control list that lets other users write to, delete, or re-permission it: {}",
                 path.display()
             );
         }
@@ -255,19 +258,19 @@ mod portable {
 
     use anyhow::Result as AnyResult;
 
-    pub(in crate::backup::restore) fn clear_file(_file: &File, _path: &Path) -> AnyResult<()> {
+    pub(crate) fn clear_file(_file: &File, _path: &Path) -> AnyResult<()> {
         Ok(())
     }
 
-    pub(in crate::backup::restore) fn clear_directory(_path: &Path) -> AnyResult<()> {
+    pub(crate) fn clear_directory(_path: &Path) -> AnyResult<()> {
         Ok(())
     }
 
-    pub(in crate::backup::restore) fn require_none(_path: &Path) -> AnyResult<()> {
+    pub(crate) fn require_none(_path: &Path) -> AnyResult<()> {
         Ok(())
     }
 
-    pub(in crate::backup::restore) fn reject_shared_write(_path: &Path) -> AnyResult<()> {
+    pub(crate) fn reject_shared_write(_path: &Path) -> AnyResult<()> {
         Ok(())
     }
 }
