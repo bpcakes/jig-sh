@@ -25,6 +25,10 @@ struct Node<'a> {
     production_claims: usize,
     /// Whether any declaration loads this node at all.
     claimed: bool,
+    /// Whether this is the loading Cargo itself compiles. Only that one is
+    /// production code whatever else declares the file: loading the same file
+    /// as a module elsewhere resolves its children somewhere else entirely.
+    cargo_root: bool,
 }
 
 struct Graph<'a> {
@@ -49,16 +53,15 @@ pub(super) fn test_only_files(
     };
     // A loading is test-only when an attribute compiles the whole file for
     // tests alone, or when every declaration reaching it is under
-    // `#[cfg(test)]` or comes from a test-only loading. A Cargo target, a
-    // loading production code still reaches, and one no declaration reaches
-    // keep their own classification, so no production call site is lost.
+    // `#[cfg(test)]` or comes from a test-only loading. The loading Cargo
+    // compiles, one production code still reaches, and one no declaration
+    // reaches keep their own classification, so no production call site is
+    // lost.
     let mut test_only = vec![false; graph.nodes.len()];
     let mut pending: VecDeque<usize> = VecDeque::new();
     for (index, node) in graph.nodes.iter().enumerate() {
         let attributed = files[node.file].cfg_test;
-        let claimed_for_test = node.claimed
-            && node.production_claims == 0
-            && cargo_target_dir(node.file, targets).is_none();
+        let claimed_for_test = node.claimed && node.production_claims == 0 && !node.cargo_root;
         if attributed || claimed_for_test {
             test_only[index] = true;
             pending.push_back(index);
@@ -67,7 +70,7 @@ pub(super) fn test_only_files(
     while let Some(index) = pending.pop_front() {
         for child in std::mem::take(&mut graph.nodes[index].production_children) {
             let node = &mut graph.nodes[child];
-            if test_only[child] || cargo_target_dir(node.file, targets).is_some() {
+            if test_only[child] || node.cargo_root {
                 continue;
             }
             // Each node leaves the queue once, so a declaration is shed once.
@@ -147,12 +150,13 @@ fn resolve_pass<'a>(
     let mut queue: VecDeque<(&'a str, Dir, usize)> = VecDeque::new();
     // Cargo compiles a crate root wherever it sits, so start from each one;
     // a file no declaration reaches is seeded as its own root.
-    for (path, dir) in files
+    for (path, dir, cargo_root) in files
         .keys()
-        .filter_map(|path| cargo_target_dir(path, targets).map(|dir| (path.as_str(), dir)))
-        .chain(roots.iter().map(|path| (*path, root_dir(path))))
+        .filter_map(|path| cargo_target_dir(path, targets).map(|dir| (path.as_str(), dir, true)))
+        .chain(roots.iter().map(|path| (*path, root_dir(path), false)))
     {
-        graph.seed(path, dir, &mut indices, &mut queue);
+        let index = graph.seed(path, dir, &mut indices, &mut queue);
+        graph.nodes[index].cargo_root |= cargo_root;
     }
     while let Some((path, dir, index)) = queue.pop_front() {
         for declaration in &files[path].declarations {
@@ -200,6 +204,7 @@ impl<'a> Graph<'a> {
             production_children: Vec::new(),
             production_claims: 0,
             claimed: false,
+            cargo_root: false,
         });
         self.by_file.entry(path).or_default().push(index);
         indices.insert((path, dir.clone()), index);

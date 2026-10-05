@@ -298,3 +298,25 @@ fn a_nested_manifest_does_not_hide_an_enclosing_package_target() {
     assert!(non_test.contains("`src/bin/tool/main.rs:1`"), "{non_test}");
     assert!(test.contains("_None_"), "{test}");
 }
+
+/// Only the loading Cargo compiles is production code. The same file loaded
+/// as a test module resolves its children somewhere else, and those are test
+/// code.
+#[test]
+fn only_the_cargo_loading_of_a_target_is_production() {
+    let temp = inventory(&[
+        (
+            "Cargo.toml",
+            &format!("{MANIFEST}[[bin]]\nname = \"server\"\npath = \"src/server.rs\"\n"),
+        ),
+        ("src/lib.rs", "#[cfg(test)]\nmod server;\n"),
+        ("src/server.rs", "mod helper;\n"),
+        ("src/helper.rs", CALL),
+        ("src/server/helper.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/helper.rs:1`"), "{non_test}");
+    assert!(test.contains("`src/server/helper.rs:1`"), "{test}");
+}
