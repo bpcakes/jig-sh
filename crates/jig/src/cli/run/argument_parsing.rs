@@ -225,4 +225,24 @@ mod argument_normalization_tests {
             args(&["jig", "check", "--profile", "--json"])
         );
     }
+
+    #[test]
+    fn external_check_places_help_after_check_when_json_moves_to_the_front() {
+        for prefix in [
+            &[][..],
+            &["--__launcher-repo-root", "/tmp/ExampleProject"][..],
+            &["--__launcher-repo-root=/tmp/ExampleProject"][..],
+        ] {
+            for flags in [["--json", "--help"], ["--help", "--json"]] {
+                let mut original = vec!["jig"];
+                original.extend_from_slice(prefix);
+                original.extend(["check", "api:test"]);
+                original.extend(flags);
+                let mut expected = vec!["jig", "--json"];
+                expected.extend_from_slice(prefix);
+                expected.extend(["check", "--help", "api:test"]);
+                assert_eq!(normalize_args(args(&original)), args(&expected));
+            }
+        }
+    }
 }

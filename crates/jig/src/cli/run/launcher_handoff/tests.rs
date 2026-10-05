@@ -233,6 +233,56 @@ fn generated_launcher_keeps_bare_check_and_target_selectors_repository_scoped() 
     }
 }
 
+#[test]
+fn contract_comparison_options_keep_launcher_and_runtime_repository_scoped() {
+    let _env = lock_env();
+    let temp = tempdir().unwrap();
+    write_compatible_runtime_repo(temp.path(), 4);
+    let bare = Cli::try_parse_from(["jig", "check", "contract"]).unwrap();
+    assert!(launcher_capability_only_command(&bare.command));
+    assert!(generated_launcher_classifies_as_capability_only(&[
+        "check", "contract"
+    ]));
+
+    for comparison in [
+        &["--comparison-base", "master"][..],
+        &["--comparison-staged"][..],
+        &["--comparison-strict-inventory"][..],
+        &[
+            "--comparison-exact-tree",
+            "abcd",
+            "--comparison-provenance",
+            "explicit",
+        ][..],
+    ] {
+        let mut args = vec!["check", "contract"];
+        args.extend_from_slice(comparison);
+        assert!(
+            !generated_launcher_classifies_as_capability_only(&args),
+            "generated launcher must keep {args:?} repository-scoped"
+        );
+        let cli = Cli::try_parse_from(
+            [
+                "jig",
+                "--__launcher-contract-version",
+                "4",
+                "--__launcher-profile",
+                "runtime",
+                "--__launcher-repo-root",
+                temp.path().to_str().unwrap(),
+            ]
+            .into_iter()
+            .chain(args),
+        )
+        .unwrap();
+        assert!(
+            !launcher_capability_only_command(&cli.command),
+            "runtime must keep {comparison:?} repository-scoped"
+        );
+        validate_launcher_repository_scope(&cli).unwrap();
+    }
+}
+
 fn write_compatible_runtime_repo(root: &std::path::Path, contract_version: u32) {
     TestRepoBuilder::new(root)
         .contract_version(contract_version)
