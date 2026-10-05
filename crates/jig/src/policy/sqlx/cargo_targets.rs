@@ -6,49 +6,90 @@
 //! elsewhere. Manifests are read as source, like everything else the SQLx
 //! inventory looks at; Cargo itself is never invoked.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::modules::{join_relative, parent_dir, split_path};
 
-/// The crate roots Cargo compiles. Each is production code however else a
-/// module declaration describes it, so neither its own calls nor those of its
-/// descendants can be reclassified by a `#[cfg(test)]` claim elsewhere.
+/// The directory each kind of target table is discovered and named under.
+const TARGET_DIRECTORIES: [(&str, &str); 4] = [
+    ("bin", "src/bin"),
+    ("example", "examples"),
+    ("bench", "benches"),
+    ("test", "tests"),
+];
+
 #[derive(Default)]
 pub(super) struct CargoTargets {
-    /// Paths a manifest configures explicitly.
-    configured: BTreeSet<String>,
-    /// Directories of manifests that define a package, which is where Cargo
-    /// discovers the conventional target locations.
-    packages: BTreeSet<String>,
+    /// Paths a manifest names, either directly or through a target's name.
+    named: BTreeSet<String>,
+    /// Package directories and what each discovers automatically.
+    packages: BTreeMap<String, Discovery>,
+}
+
+/// What a manifest says about Cargo's automatic target discovery. Each kind
+/// is discovered unless the package turns it off.
+#[derive(Clone, Copy)]
+struct Discovery {
+    library: bool,
+    binaries: bool,
+    examples: bool,
+    benches: bool,
+    tests: bool,
+    /// A build script is discovered at `build.rs` only when `package.build`
+    /// neither disables it nor names a different file.
+    build: bool,
 }
 
 impl CargoTargets {
-    /// Reads one manifest's target paths, resolved relative to the manifest.
     pub(super) fn add_manifest(&mut self, manifest: &str, value: &toml::Value) {
         let dir = parent_dir(manifest);
-        let mut record = |configured: Option<&toml::Value>| {
-            if let Some(path) = configured.and_then(toml::Value::as_str)
+        let mut named = |path: Option<&str>| {
+            if let Some(path) = path
                 && let Some(target) = join_relative(&dir, path)
             {
-                self.configured.insert(target);
+                self.named.insert(target);
             }
         };
-        let package = value.get("package");
-        record(package.and_then(|package| package.get("build")));
-        record(value.get("lib").and_then(|library| library.get("path")));
-        for kind in ["bin", "example", "bench", "test"] {
-            let configured = value.get(kind).and_then(toml::Value::as_array);
-            for target in configured.into_iter().flatten() {
-                record(target.get("path"));
+        let build = value
+            .get("package")
+            .and_then(|package| package.get("build"));
+        named(build.and_then(toml::Value::as_str));
+        // A target table without a path is found at the conventional
+        // locations for its name, which auto-discovery settings do not
+        // govern. Both shapes are recorded: only one of them exists.
+        if let Some(library) = value.get("lib") {
+            named(configured_path(Some(library)).or(Some("src/lib.rs")));
+        }
+        let package_name = value
+            .get("package")
+            .and_then(|package| package.get("name"))
+            .and_then(toml::Value::as_str);
+        for (kind, directory) in TARGET_DIRECTORIES {
+            let tables = value.get(kind).and_then(toml::Value::as_array);
+            for table in tables.into_iter().flatten() {
+                if let Some(path) = configured_path(Some(table)) {
+                    named(Some(path));
+                    continue;
+                }
+                let Some(name) = table.get("name").and_then(toml::Value::as_str) else {
+                    continue;
+                };
+                named(Some(&format!("{directory}/{name}.rs")));
+                named(Some(&format!("{directory}/{name}/main.rs")));
+                // A binary carrying the package's own name is also found at
+                // the package's default entrypoint.
+                if kind == "bin" && package_name == Some(name) {
+                    named(Some("src/main.rs"));
+                }
             }
         }
-        if package.is_some() {
-            self.packages.insert(dir);
+        if value.get("package").is_some() {
+            self.packages.insert(dir, Discovery::read(value, build));
         }
     }
 
     pub(super) fn contains(&self, path: &str) -> bool {
-        self.configured.contains(path) || self.discovers(path)
+        self.named.contains(path) || self.discovers(path)
     }
 
     /// Whether a file sits where Cargo discovers a target of the package that
@@ -57,9 +98,9 @@ impl CargoTargets {
     fn discovers(&self, path: &str) -> bool {
         let mut dir = split_path(path).0;
         loop {
-            if self.packages.contains(dir) {
+            if let Some(discovery) = self.packages.get(dir) {
                 let relative = path.strip_prefix(dir).unwrap_or(path);
-                return is_discovered_target(relative.trim_start_matches('/'));
+                return discovery.discovers(relative.trim_start_matches('/'));
             }
             if dir.is_empty() {
                 return false;
@@ -69,24 +110,56 @@ impl CargoTargets {
     }
 }
 
-/// The package-relative locations Cargo discovers a target at. A build script
-/// counts whether or not `package.build` names it, since treating one as a
-/// crate root can only keep production calls visible.
-fn is_discovered_target(relative: &str) -> bool {
-    if matches!(relative, "src/lib.rs" | "src/main.rs" | "build.rs") {
-        return true;
+impl Discovery {
+    fn read(value: &toml::Value, build: Option<&toml::Value>) -> Self {
+        let enabled = |key: &str| {
+            value
+                .get("package")
+                .and_then(|package| package.get(key))
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true)
+        };
+        Self {
+            library: enabled("autolib"),
+            binaries: enabled("autobins"),
+            examples: enabled("autoexamples"),
+            benches: enabled("autobenches"),
+            tests: enabled("autotests"),
+            build: build.is_none(),
+        }
     }
-    let Some((parent, basename)) = relative.rsplit_once('/') else {
-        return false;
-    };
-    // `src/bin/tool.rs` and `src/bin/tool/main.rs`, and the same two shapes
-    // under `benches`, `examples` and `tests`. A target directly in one of
-    // those directories counts whatever it is named, including `main.rs`,
-    // before the nested shape is considered.
-    is_target_directory(parent)
-        || (basename == "main.rs" && is_target_directory(split_path(parent).0))
+
+    /// The package-relative locations this package discovers a target at.
+    fn discovers(self, relative: &str) -> bool {
+        match relative {
+            "src/lib.rs" => return self.library,
+            "src/main.rs" => return self.binaries,
+            "build.rs" => return self.build,
+            _ => {}
+        }
+        let Some((parent, basename)) = relative.rsplit_once('/') else {
+            return false;
+        };
+        // `src/bin/tool.rs` and `src/bin/tool/main.rs`, and the same two
+        // shapes under `benches`, `examples` and `tests`. A target directly in
+        // one of those directories counts whatever it is named, including
+        // `main.rs`, before the nested shape is considered.
+        self.enabled(parent) || (basename == "main.rs" && self.enabled(split_path(parent).0))
+    }
+
+    fn enabled(self, directory: &str) -> bool {
+        match directory {
+            "src/bin" => self.binaries,
+            "examples" => self.examples,
+            "benches" => self.benches,
+            "tests" => self.tests,
+            _ => false,
+        }
+    }
 }
 
-fn is_target_directory(directory: &str) -> bool {
-    matches!(directory, "src/bin" | "benches" | "examples" | "tests")
+fn configured_path(table: Option<&toml::Value>) -> Option<&str> {
+    table
+        .and_then(|table| table.get("path"))
+        .and_then(toml::Value::as_str)
 }

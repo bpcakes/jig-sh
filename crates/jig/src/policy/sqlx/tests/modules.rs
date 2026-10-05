@@ -351,3 +351,44 @@ fn a_directly_discovered_binary_named_main_stays_non_test() {
     assert!(non_test.contains("`src/bin/support.rs:1`"), "{non_test}");
     assert!(test.contains("_None_"), "{test}");
 }
+
+/// A package that turns automatic binary discovery off has no target at
+/// `src/bin`, so a helper only a test module declares there is test code.
+#[test]
+fn disabled_auto_discovery_leaves_no_conventional_target() {
+    let temp = inventory(&[
+        ("Cargo.toml", &format!("{MANIFEST}autobins = false\n")),
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"bin/helper.rs\"]\nmod helper;\n",
+        ),
+        ("src/bin/helper.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("_None_"), "{non_test}");
+    assert!(test.contains("`src/bin/helper.rs:1`"), "{test}");
+}
+
+/// A target table names its own file even where auto-discovery is off, so a
+/// binary declared only by name keeps its production classification.
+#[test]
+fn a_target_named_without_a_path_stays_non_test() {
+    let temp = inventory(&[
+        (
+            "Cargo.toml",
+            &format!("{MANIFEST}autobins = false\n[[bin]]\nname = \"tool\"\n"),
+        ),
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"bin/tool.rs\"]\nmod tool_cases;\n",
+        ),
+        ("src/bin/tool.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/bin/tool.rs:1`"), "{non_test}");
+    assert!(test.contains("_None_"), "{test}");
+}
