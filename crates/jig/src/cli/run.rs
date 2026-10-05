@@ -1,14 +1,10 @@
-use std::io::Write;
+use anyhow::Result;
 
-use anyhow::{Context, Result, bail};
-
-#[cfg(test)]
-use super::VaultCommand;
 use super::bootstrap_run::{
     run_adopt_command, run_init_command, run_presets_command, run_update_command,
 };
 use super::codex_run::run_codex_command;
-use super::output::{HumanOutput, emit, print_json};
+use super::output::{self, emit, print_json};
 use super::setup_run::run_setup_command;
 use super::structured_error::{
     is_json_output_already_emitted, is_structured_json_failure, json_error_payload,
@@ -16,14 +12,10 @@ use super::structured_error::{
 };
 use super::ui_run::{name_ui_error, run_ui_command};
 use super::vault_run::run_vault_command;
-use super::{
-    AgentCommand, Cli, CommandKind, DevOpts, DevSubcommand, InfoCommand, LoopCommand,
-    MigrationAddOpts, MigrationCommand, RuntimeCompatibilityProfile, RuntimeCompatibleOpts,
-    SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand, StateCommand, StatusCommand,
-};
-use crate::context::RepoContext;
-use crate::root_commands::{self, LauncherCommand, LauncherScope};
-use crate::{doctor, info, runtime, status, ui};
+use super::{Cli, CommandKind};
+use crate::cli::runtime_dispatch::{RuntimeDispatch, dispatch_runtime};
+use crate::command::RuntimeCommand;
+use crate::doctor;
 
 pub(crate) fn run() -> Result<()> {
     let cli = parse_cli();
@@ -48,125 +40,6 @@ pub(crate) fn run() -> Result<()> {
     result
 }
 
-fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
-    if matches!(&cli.command, CommandKind::Dev(opts) if opts.is_contextless()) {
-        return Ok(());
-    }
-    let LauncherHandoff::Repository(request) = LauncherHandoff::from_cli(cli)? else {
-        return Ok(());
-    };
-    let command = cli.command.launcher_command();
-    if command.scope == LauncherScope::CapabilityOnly {
-        bail!(
-            "The generated launcher and this Jig runtime disagree about whether `{}` is repository-scoped. Repair the launcher/runtime pair with a current external Jig binary (`jig update <repo> --launcher-only --force`) before retrying `{}`.",
-            command.name,
-            command.name,
-        );
-    }
-    let ctx = validate_repository_runtime_compatibility(request).with_context(|| {
-        format!(
-            "The repository contract did not validate under Jig profile {}. Run scripts/jig check contract or scripts/jig doctor for repair guidance.",
-            request.profile.as_str()
-        )
-    })?;
-    if let Some(configured_root) = std::env::var_os(crate::context::JIG_REPO_ROOT_ENV) {
-        let configured_root = std::path::PathBuf::from(configured_root);
-        if !configured_root.as_os_str().is_empty()
-            && std::fs::canonicalize(&configured_root).ok().as_deref() != Some(ctx.root())
-        {
-            eprintln!(
-                "jig ignored {}={} because the generated launcher root {} is authoritative",
-                crate::context::JIG_REPO_ROOT_ENV,
-                configured_root.display(),
-                ctx.root().display()
-            );
-        }
-    }
-    let authoritative_root = ctx.root().to_path_buf();
-    ctx.remember_prevalidated_launcher_context()?;
-    // SAFETY: launcher validation runs at CLI startup, before command dispatch
-    // can create worker threads. Descendants must inherit the same canonical
-    // root that this process has already validated as launcher-authoritative.
-    unsafe {
-        std::env::set_var(crate::context::JIG_REPO_ROOT_ENV, authoritative_root);
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug)]
-enum LauncherHandoff<'a> {
-    Direct,
-    Repository(RuntimeCompatibilityRequest<'a>),
-}
-
-impl<'a> LauncherHandoff<'a> {
-    fn from_cli(cli: &'a Cli) -> Result<Self> {
-        match (
-            cli.launcher_contract_version,
-            cli.launcher_profile,
-            cli.launcher_repo_root.as_deref(),
-        ) {
-            (None, None, None) => Ok(Self::Direct),
-            (Some(contract_version), Some(profile), Some(repo_root)) => {
-                Ok(Self::Repository(RuntimeCompatibilityRequest {
-                    repo_root,
-                    contract_version: Some(contract_version),
-                    profile,
-                }))
-            }
-            _ => bail!("Incomplete generated-launcher repository validation handoff"),
-        }
-    }
-}
-
-#[cfg(test)]
-fn launcher_capability_only_command(command: &CommandKind) -> bool {
-    command.launcher_command().scope == LauncherScope::CapabilityOnly
-}
-
-impl CommandKind {
-    /// Ties every top-level command to its registry entry. Keep this match
-    /// exhaustive: a new command cannot dispatch until the registry declares
-    /// its generated-launcher scope.
-    fn launcher_command(&self) -> LauncherCommand {
-        match self {
-            Self::Init(_) => root_commands::INIT.launcher(),
-            Self::Presets => root_commands::PRESETS.launcher(),
-            Self::Adopt(_) => root_commands::ADOPT.launcher(),
-            Self::Update(_) => root_commands::UPDATE.launcher(),
-            Self::Bootstrap => root_commands::BOOTSTRAP.launcher(),
-            Self::Setup => root_commands::SETUP.launcher(),
-            Self::Doctor => root_commands::DOCTOR.launcher(),
-            Self::Info(_) => root_commands::INFO.launcher(),
-            Self::Dev(_) => root_commands::DEV.launcher(),
-            Self::Check(opts) if opts.is_contract_only() => {
-                root_commands::CHECK.launcher().capability_only()
-            }
-            Self::Check(_) => root_commands::CHECK.launcher(),
-            Self::Run(_) => root_commands::RUN.launcher(),
-            Self::FileBudget(_) => root_commands::FILE_BUDGET.launcher(),
-            Self::Status(_) => root_commands::STATUS.launcher(),
-            Self::Ui(_) => root_commands::UI.launcher(),
-            Self::Loop(_) => root_commands::LOOP.launcher(),
-            Self::Migration(_) => root_commands::MIGRATION.launcher(),
-            Self::Sqlx(_) => root_commands::SQLX.launcher(),
-            Self::MigrationAdd(_) => root_commands::MIGRATION_ADD,
-            Self::SchemaDump => root_commands::SCHEMA_DUMP,
-            Self::Vault(_) => root_commands::VAULT.launcher(),
-            Self::GenerateSqlxUncheckedQueriesTodo(_) => {
-                root_commands::GENERATE_SQLX_UNCHECKED_QUERIES_TODO
-            }
-            Self::Proxy(_) => root_commands::PROXY.launcher(),
-            Self::Agent(_) => root_commands::AGENT.launcher(),
-            Self::Claude(_) => root_commands::CLAUDE.launcher(),
-            Self::Codex(_) => root_commands::CODEX.launcher(),
-            Self::AgentMap(_) => root_commands::AGENT_MAP.launcher(),
-            Self::State(_) => root_commands::STATE.launcher(),
-            Self::RuntimeCompatible(_) => root_commands::RUNTIME_COMPATIBLE,
-        }
-    }
-}
-
 const fn should_report_json_command_errors(json_output: bool, command: &CommandKind) -> bool {
     // The hidden runtime probe is a machine protocol, so its failures use stderr.
     json_output && !matches!(command, CommandKind::RuntimeCompatible(_))
@@ -183,306 +56,41 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Ui(opts) => run_ui_command(opts, json_output),
         CommandKind::Doctor => {
             let output = doctor::run()?;
-            emit(json_output, HumanOutput::Doctor, &output)?;
+            emit(json_output, output::format_doctor_summary, &output)?;
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
-        CommandKind::Info(opts) => {
-            opts.validate_projection()?;
-            if let Some(InfoCommand::Freshness(freshness)) = opts.subject.as_ref() {
-                if opts.commands {
-                    bail!("--commands cannot be combined with an info subject");
-                }
-                return freshness::run(freshness, json_output);
-            }
-            if matches!(opts.subject.as_ref(), Some(InfoCommand::GoVersion)) {
-                if opts.commands {
-                    bail!("--commands cannot be combined with an info subject");
-                }
-                let ctx = RepoContext::load()?;
-                let selector = doctor::go_version_selector(&ctx)?;
-                if json_output {
-                    print_json(&serde_json::json!({
-                        "ok": true,
-                        "command": "info go-version",
-                        "version": selector,
-                    }))?;
-                } else {
-                    writeln!(std::io::stdout().lock(), "{selector}")?;
-                }
-                return Ok(());
-            }
-            let request = opts.subject.map(|subject| match subject {
-                InfoCommand::GoVersion | InfoCommand::Freshness(_) => {
-                    unreachable!("handled above")
-                }
-                InfoCommand::Workspace => crate::repository::InspectRequest::Workspace,
-                InfoCommand::Components => crate::repository::InspectRequest::Components,
-                InfoCommand::Component { id } => crate::repository::InspectRequest::Component(id),
-                InfoCommand::Targets => crate::repository::InspectRequest::Targets,
-                InfoCommand::Target { id } => crate::repository::InspectRequest::Target(id),
-                InfoCommand::Profiles => crate::repository::InspectRequest::Profiles,
-                InfoCommand::Profile { id } => crate::repository::InspectRequest::Profile(id),
-            });
-            let output = info::run(opts.commands, json_output, request, opts.projection)?;
-            emit(json_output, HumanOutput::Info, &output)?;
-            finish_after_json_output(require_json_ok(true, &output), json_output)
-        }
-        CommandKind::Status(opts) => {
-            let ctx = RepoContext::load()?;
-            if let Some(StatusCommand::Run { run_id }) = &opts.command {
-                let output = status_run_output(&ctx, run_id)?;
-                return emit(json_output, HumanOutput::RunStatus, &output);
-            }
-            if opts.tui {
-                return ui::run_status(
-                    ctx,
-                    std::time::Duration::from_secs(opts.effective_refresh_seconds()),
-                );
-            }
-            #[cfg(all(unix, not(test)))]
-            let signal_session =
-                crate::signal_supervision::SignalSession::start().map_err(|_| {
-                    anyhow::anyhow!(
-                        "Status was not started because signal supervision is unavailable"
-                    )
-                })?;
-            #[cfg(all(unix, not(test)))]
-            let cancellation = signal_session.cancellation();
-            #[cfg(all(unix, not(test)))]
-            let outcome = status::snapshot_with_cancellation(&ctx, &|| cancellation.cancelled());
-            #[cfg(all(unix, not(test)))]
-            let outcome = crate::signal_supervision::finish(
-                outcome,
-                signal_session.finish(),
-                "Status signal supervision could not retire safely",
-            );
-            #[cfg(any(not(unix), test))]
-            let outcome = status::snapshot_with_cancellation(&ctx, &|| false);
-            let output = outcome?;
-            emit(json_output, HumanOutput::Status, &output)
-        }
+        CommandKind::Info(opts) => super::info_run::run_info_command(opts, json_output),
+        CommandKind::Status(opts) => super::status_run::run_status_command(opts, json_output),
         CommandKind::Dev(opts) => run_dev_command(opts, json_output),
         CommandKind::Proxy(command) => run_proxy_command(command, json_output),
-        CommandKind::Bootstrap => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Bootstrap,
-            false,
+        CommandKind::Bootstrap => dispatch_runtime(
+            RuntimeDispatch::tool(RuntimeCommand::Bootstrap),
             json_output,
-            HumanOutput::ToolExecution,
         ),
         CommandKind::Setup => run_setup_command(json_output),
-        CommandKind::Check(command) => {
-            let command: crate::command::CheckCommand = command.try_into()?;
-            dispatch_runtime_command(
-                crate::command::RuntimeCommand::Check(command),
-                true,
-                json_output,
-                HumanOutput::Check,
-            )
-        }
-        CommandKind::Run(opts) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Run(opts.try_into()?),
-            true,
-            json_output,
-            HumanOutput::RepositoryRun,
-        ),
+        CommandKind::Check(opts) => dispatch_runtime(opts.into_dispatch()?, json_output),
+        CommandKind::Run(opts) => dispatch_runtime(opts.into_dispatch()?, json_output),
         CommandKind::FileBudget(command) => {
             super::file_budget::run_file_budget_command(command, json_output)
         }
-        CommandKind::Migration(MigrationCommand::Add(opts)) => run_migration_add(opts, json_output),
-        CommandKind::Sqlx(command) => run_sqlx_command(command, json_output),
-        CommandKind::SchemaDump => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump),
-            false,
-            json_output,
-            HumanOutput::ToolExecution,
-        ),
-        CommandKind::MigrationAdd(opts) => run_migration_add(opts, json_output),
-        CommandKind::AgentMap(command) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::AgentMap(command.into()),
-            false,
-            json_output,
-            HumanOutput::AgentMapGenerate,
-        ),
-        CommandKind::GenerateSqlxUncheckedQueriesTodo(opts) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::GenerateSqlxUncheckedQueriesTodo(opts.into()),
-            false,
-            json_output,
-            HumanOutput::ToolExecution,
-        ),
-        CommandKind::Vault(command) => run_vault_command(command, json_output),
-        CommandKind::Agent(command) => {
-            let require_ok = agent_command_reports_failure_with_ok(&command);
-            let human_output = agent_human_output(&command);
-            dispatch_runtime_command(
-                crate::command::RuntimeCommand::Agent(command.into()),
-                require_ok,
-                json_output,
-                human_output,
-            )
+        CommandKind::Migration(command) => dispatch_runtime(command.into_dispatch(), json_output),
+        CommandKind::MigrationAdd(opts) => dispatch_runtime(opts.into_dispatch(), json_output),
+        CommandKind::Sqlx(command) => dispatch_runtime(command.into_dispatch(), json_output),
+        CommandKind::SchemaDump => {
+            dispatch_runtime(super::sqlx::schema_dump_dispatch(), json_output)
         }
+        CommandKind::AgentMap(command) => dispatch_runtime(command.into_dispatch(), json_output),
+        CommandKind::GenerateSqlxUncheckedQueriesTodo(opts) => {
+            dispatch_runtime(opts.into_dispatch(), json_output)
+        }
+        CommandKind::Vault(command) => run_vault_command(command, json_output),
+        CommandKind::Agent(command) => dispatch_runtime(command.into_dispatch(), json_output),
         CommandKind::Claude(command) => super::claude_run::run_claude_command(command, json_output),
         CommandKind::Codex(command) => run_codex_command(command, json_output),
         // Argument parsing rejects the retired namespace before dispatch.
-        CommandKind::Loop(command) => {
-            let require_ok = loop_command_reports_failure_with_ok(&command);
-            let human_output = loop_human_output(&command);
-            dispatch_runtime_command(
-                crate::command::RuntimeCommand::Loop(command.into()),
-                require_ok,
-                json_output,
-                human_output,
-            )
-        }
-        CommandKind::State(command) => {
-            let human_output = state_human_output(&command);
-            dispatch_runtime_command(
-                crate::command::RuntimeCommand::State(command.into()),
-                false,
-                json_output,
-                human_output,
-            )
-        }
+        CommandKind::Loop(command) => dispatch_runtime(command.into_dispatch(), json_output),
+        CommandKind::State(command) => dispatch_runtime(command.into_dispatch(), json_output),
     }
-}
-
-fn status_run_output(ctx: &RepoContext, run_id: &str) -> Result<serde_json::Value> {
-    let run = crate::state::reconcile_run_for_inspection(ctx, run_id)?;
-    let mut output = serde_json::to_value(run)?;
-    output["ok"] = serde_json::json!(true);
-    output["command"] = serde_json::json!("status run");
-    Ok(output)
-}
-
-fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {
-    match command {
-        SqlxCommand::Migration(SqlxMigrationCommand::Add(opts)) => {
-            run_migration_add(opts, json_output)
-        }
-        SqlxCommand::Schema(SqlxSchemaCommand::Dump) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump),
-            false,
-            json_output,
-            HumanOutput::ToolExecution,
-        ),
-    }
-}
-
-fn run_migration_add(opts: MigrationAddOpts, json_output: bool) -> Result<()> {
-    dispatch_runtime_command(
-        crate::command::RuntimeCommand::MigrationAdd(opts.into()),
-        false,
-        json_output,
-        HumanOutput::MigrationAdd,
-    )
-}
-
-fn run_runtime_compatible(opts: RuntimeCompatibleOpts) -> Result<()> {
-    RuntimeCompatibilityProbe::from_opts(&opts).validate()
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RuntimeCompatibilityRequest<'a> {
-    repo_root: &'a std::path::Path,
-    contract_version: Option<u32>,
-    profile: RuntimeCompatibilityProfile,
-}
-
-impl RuntimeCompatibilityRequest<'_> {
-    fn validate_active_contract_version(self, contract_version: u32) -> Result<()> {
-        if !crate::context::is_active_contract_version(contract_version) {
-            bail!(
-                "Inactive Jig contract version {contract_version}; this runtime cache supports active versions {}",
-                crate::context::active_contract_versions_label()
-            );
-        }
-        Ok(())
-    }
-
-    fn canonical_repo_root(self) -> Result<std::path::PathBuf> {
-        let repo_root = std::fs::canonicalize(self.repo_root).with_context(|| {
-            format!(
-                "Failed to resolve Jig repository root {}",
-                self.repo_root.display()
-            )
-        })?;
-        if let Some(contract_version) = self.contract_version {
-            self.validate_active_contract_version(contract_version)?;
-        }
-        Ok(repo_root)
-    }
-
-    fn validate_profile(self) -> Result<()> {
-        if self.profile == RuntimeCompatibilityProfile::Default && !cfg!(feature = "dev-proxy") {
-            bail!(
-                "This Jig binary is incompatible with the default runtime profile because it was built without the dev-proxy feature"
-            );
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum RuntimeCompatibilityProbe<'a> {
-    Capability(RuntimeCompatibilityRequest<'a>),
-    Repository(RuntimeCompatibilityRequest<'a>),
-}
-
-impl<'a> RuntimeCompatibilityProbe<'a> {
-    fn from_opts(opts: &'a RuntimeCompatibleOpts) -> Self {
-        let request = RuntimeCompatibilityRequest {
-            repo_root: &opts.repo_root,
-            contract_version: opts.contract_version,
-            profile: opts.profile,
-        };
-        if opts.capability_only {
-            Self::Capability(request)
-        } else {
-            Self::Repository(request)
-        }
-    }
-
-    fn validate(self) -> Result<()> {
-        match self {
-            Self::Capability(request) => validate_capability_runtime_compatibility(request),
-            Self::Repository(request) => {
-                validate_repository_runtime_compatibility(request).map(|_| ())
-            }
-        }
-    }
-}
-
-fn validate_capability_runtime_compatibility(
-    request: RuntimeCompatibilityRequest<'_>,
-) -> Result<()> {
-    let repo_root = request.canonical_repo_root()?;
-    if request.contract_version.is_none() {
-        // Keep direct/manual uses of the private probe useful. Generated
-        // launchers and installers pass their rendered epoch explicitly so
-        // repair paths do not depend on a readable manifest.
-        let contract_version = RepoContext::supported_contract_version_from_root(&repo_root)?;
-        request.validate_active_contract_version(contract_version)?;
-    }
-    request.validate_profile()
-}
-
-fn validate_repository_runtime_compatibility(
-    request: RuntimeCompatibilityRequest<'_>,
-) -> Result<RepoContext> {
-    let repo_root = request.canonical_repo_root()?;
-    if let Some(launcher_contract_version) = request.contract_version {
-        let repository_contract_version =
-            RepoContext::declared_contract_version_from_root(&repo_root)?;
-        if launcher_contract_version != repository_contract_version {
-            bail!(
-                "Launcher contract version {launcher_contract_version} does not match repository contract version {repository_contract_version}"
-            );
-        }
-    }
-    let ctx = RepoContext::load_from_root(repo_root)?;
-    request.validate_active_contract_version(ctx.contract_version())?;
-    crate::policy::validate_contract(&ctx)?;
-    request.validate_profile()?;
-    Ok(ctx)
 }
 
 fn report_json_command_error(result: Result<()>) -> Result<()> {
@@ -519,117 +127,14 @@ pub(super) fn finish_after_json_output(result: Result<()>, json_output: bool) ->
     }
 }
 
-const fn dev_human_output(opts: &DevOpts) -> HumanOutput {
-    match &opts.command {
-        None => HumanOutput::Dev,
-        Some(DevSubcommand::Status(_)) => HumanOutput::DevStatus,
-        Some(DevSubcommand::Recover(_)) => HumanOutput::DevRecover,
-        Some(DevSubcommand::Stop(_)) => HumanOutput::DevStop,
-    }
-}
-
-#[cfg(test)]
-pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) -> bool {
-    // Proxy commands expose host-cleanup/status operations that can complete
-    // with `ok: false` in their JSON payload. Multi-app `jig dev` also uses
-    // `ok: false` when the first child exits unsuccessfully. Agent doctor is a
-    // readiness report and returns `ok: false` when required local tooling is
-    // missing or unregistered.
-    match command {
-        CommandKind::Doctor | CommandKind::Dev(_) | CommandKind::Proxy(_) => true,
-        CommandKind::Vault(command) => matches!(command, VaultCommand::Run(_)),
-        CommandKind::Agent(command) => agent_command_reports_failure_with_ok(command),
-        CommandKind::Loop(command) => loop_command_reports_failure_with_ok(command),
-        CommandKind::Check(_) | CommandKind::Run(_) => true,
-        _ => false,
-    }
-}
-
-const fn agent_command_reports_failure_with_ok(command: &AgentCommand) -> bool {
-    matches!(command, AgentCommand::Doctor)
-}
-
-const fn loop_command_reports_failure_with_ok(command: &LoopCommand) -> bool {
-    matches!(
-        command,
-        LoopCommand::Tick(_) | LoopCommand::Dispatch(_) | LoopCommand::Run(_)
-    )
-}
-
-const fn agent_human_output(command: &AgentCommand) -> HumanOutput {
-    match command {
-        AgentCommand::Doctor => HumanOutput::AgentDoctor,
-        AgentCommand::Bootstrap(_) => HumanOutput::AgentBootstrap,
-    }
-}
-
-const fn loop_human_output(command: &LoopCommand) -> HumanOutput {
-    match command {
-        LoopCommand::Tick(_) => HumanOutput::LoopTick,
-        LoopCommand::Dispatch(_) => HumanOutput::LoopDispatch,
-        LoopCommand::Status(_) => HumanOutput::LoopStatus,
-        LoopCommand::Show(_) => HumanOutput::LoopShow,
-        LoopCommand::Run(_) => HumanOutput::LoopRun,
-        LoopCommand::ClearAttempt(_) => HumanOutput::LoopClearAttempt,
-        LoopCommand::AcknowledgeOccurrence(_) => HumanOutput::LoopAcknowledgeOccurrence,
-    }
-}
-
-const fn state_human_output(command: &StateCommand) -> HumanOutput {
-    match command {
-        StateCommand::Summary => HumanOutput::StateSummary,
-        StateCommand::Diagnose => HumanOutput::StateDiagnose,
-        StateCommand::Restore(_) => HumanOutput::StateRestore,
-        StateCommand::Archive(_) => HumanOutput::StateArchive,
-    }
-}
-
-fn dispatch_runtime_command(
-    command: crate::command::RuntimeCommand,
-    require_ok: bool,
-    json_output: bool,
-    human_output: HumanOutput,
-) -> Result<()> {
-    let ctx = RepoContext::load()?;
-    #[cfg(all(unix, not(test)))]
-    if command.signal_policy() == crate::command::RuntimeSignalPolicy::Native {
-        let output = runtime::dispatch(&ctx, command)?;
-        emit(json_output, human_output, &output)?;
-        return finish_after_json_output(require_json_ok(require_ok, &output), json_output);
-    }
-    #[cfg(all(unix, not(test)))]
-    let signal_session = crate::signal_supervision::SignalSession::start().map_err(|_| {
-        anyhow::anyhow!("Command was not started because signal supervision is unavailable")
-    })?;
-    #[cfg(all(unix, not(test)))]
-    let cancellation = signal_session.cancellation();
-    #[cfg(all(unix, not(test)))]
-    let mut observer =
-        crate::progress::CliExecutionObserver::with_cancellation(json_output, move || {
-            cancellation.cancelled()
-        });
-    #[cfg(any(not(unix), test))]
-    let mut observer = crate::progress::CliExecutionObserver::for_human_output(json_output);
-    let outcome = runtime::dispatch_with_observer(&ctx, command, &mut observer);
-    let outcome = observer.finish_with(outcome);
-    #[cfg(all(unix, not(test)))]
-    let outcome = crate::signal_supervision::finish(
-        outcome,
-        signal_session.finish(),
-        "Command signal supervision could not retire safely",
-    );
-    let output = outcome?;
-    emit(json_output, human_output, &output)?;
-    finish_after_json_output(require_json_ok(require_ok, &output), json_output)
-}
-
 mod argument_parsing;
-mod freshness;
+mod launcher_handoff;
 mod vault_environment;
 mod workflow_recovery;
 use argument_parsing::parse_cli;
 #[cfg(test)]
 pub(super) use argument_parsing::post_parse_usage_error;
+use launcher_handoff::{run_runtime_compatible, validate_launcher_repository_scope};
 use vault_environment::enforce_vault_passphrase_startup_boundary;
 // `jig dev` and `jig proxy` have one implementation per build: the real one,
 // or a stub reporting that the `dev-proxy` feature is not built.

@@ -30,6 +30,18 @@ pub(crate) enum StatusCommand {
 }
 
 impl StatusOpts {
+    /// Option combinations Clap cannot reject because they involve the
+    /// global `--json` flag or the optional subject.
+    pub(crate) const fn usage_conflict(&self, json: bool) -> Option<&'static str> {
+        if json && self.tui {
+            Some("`--tui` cannot be combined with `--json`")
+        } else if self.command.is_some() && self.tui {
+            Some("a status subject cannot be combined with `--tui`")
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn effective_refresh_seconds(&self) -> u64 {
         self.refresh_seconds
             .unwrap_or(DEFAULT_STATUS_REFRESH_SECONDS)

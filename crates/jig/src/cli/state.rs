@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
+use super::output;
+use super::runtime_dispatch::RuntimeDispatch;
+use crate::command::RuntimeCommand;
 use crate::tool_defs;
 
 pub(super) const STATE_ARCHIVE_AFTER_HELP: &str = "\
@@ -65,4 +68,16 @@ pub(crate) struct StateArchiveOpts {
 
     #[arg(long, help = "Report what would be archived without rewriting state")]
     pub(crate) dry_run: bool,
+}
+
+impl StateCommand {
+    pub(super) fn into_dispatch(self) -> RuntimeDispatch {
+        let render: output::Render = match &self {
+            Self::Summary => output::format_state_summary,
+            Self::Diagnose => output::format_state_diagnose_summary,
+            Self::Restore(_) => output::format_state_restore_summary,
+            Self::Archive(_) => output::format_state_archive_summary,
+        };
+        RuntimeDispatch::new(RuntimeCommand::State(self.into()), render)
+    }
 }

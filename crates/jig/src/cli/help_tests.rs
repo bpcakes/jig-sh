@@ -502,7 +502,7 @@ fn init_help_explains_defaults_and_the_complete_strict_preset_family() {
 
 #[test]
 fn template_error_hint_uses_prompt_free_harness_only_init() {
-    assert!(TEMPLATE_ERROR_HINT.contains(
+    assert!(super::bootstrap_hints::TEMPLATE_ERROR_HINT.contains(
         "jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault"
     ));
 }

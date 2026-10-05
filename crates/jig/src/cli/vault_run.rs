@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::output::{HumanOutput, emit};
+use super::output::{self, emit};
 use super::run::finish_after_json_output;
 use super::structured_error::require_json_ok;
 use super::vault::VaultCommand;
@@ -45,7 +45,7 @@ fn run_vault_command_with_terminal_state(
             stdout_is_terminal,
         )?;
     }
-    let human_output = vault_human_output(&command);
+    let render = vault_renderer(&command);
     let mut runtime_command: crate::command::VaultCommand = command.into();
     let is_raw = vault_command_uses_raw_output(&runtime_command);
     validate_raw_vault_command(&runtime_command, json_output, stdout_is_terminal)?;
@@ -87,7 +87,7 @@ fn run_vault_command_with_terminal_state(
         };
     }
     let output = runtime::dispatch_vault(runtime_command)?;
-    emit(json_output, human_output, &output)?;
+    emit(json_output, render, &output)?;
     if is_run {
         // `vault run` mirrors the child process status. Its JSON `ok` field is
         // derived from that same status, so avoid reporting a second generic
@@ -248,10 +248,10 @@ fn normalize_absolute_path(path: &Path) -> Result<std::path::PathBuf> {
     Ok(normalized)
 }
 
-const fn vault_human_output(command: &VaultCommand) -> HumanOutput {
+const fn vault_renderer(command: &VaultCommand) -> output::Render {
     match command {
-        VaultCommand::Run(_) => HumanOutput::VaultRun,
-        _ => HumanOutput::VaultGeneric,
+        VaultCommand::Run(_) => output::format_vault_run_summary,
+        _ => output::format_vault_generic_summary,
     }
 }
 

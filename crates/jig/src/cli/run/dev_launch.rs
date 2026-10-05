@@ -5,8 +5,8 @@ use std::process;
 
 use anyhow::Result;
 
-use super::{dev_human_output, finish_after_json_output};
-use crate::cli::output::{HumanOutput, emit, print_json};
+use super::finish_after_json_output;
+use crate::cli::output::{self, emit, print_json};
 use crate::cli::structured_error::{
     json_error_payload, json_reported_error, require_foreground_status,
 };
@@ -17,10 +17,10 @@ use crate::dev_proxy::commands::{can_run_without_context, dev_contextless, proxy
 use crate::{root_commands, runtime};
 
 pub(super) fn run_dev_command(opts: DevOpts, json_output: bool) -> Result<()> {
-    let human_output = dev_human_output(&opts);
+    let render = opts.renderer();
     if opts.is_contextless() {
         let output = dev_contextless(opts.into())?;
-        emit(json_output, human_output, &output)?;
+        emit(json_output, render, &output)?;
         return finish_after_json_output(require_foreground_status(&output), json_output);
     }
     let Some(ctx) = RepoContext::load_optional()? else {
@@ -45,7 +45,7 @@ pub(super) fn run_dev_command(opts: DevOpts, json_output: bool) -> Result<()> {
         None
     };
     let output = runtime::dispatch(&ctx, RuntimeCommand::Dev(opts.into()))?;
-    emit(json_output, human_output, &output)?;
+    emit(json_output, render, &output)?;
     finish_after_json_output(require_foreground_status(&output), json_output)
 }
 
@@ -61,7 +61,7 @@ pub(super) fn run_proxy_command(command: ProxyCommand, json_output: bool) -> Res
         let ctx = RepoContext::load()?;
         runtime::dispatch(&ctx, RuntimeCommand::Proxy(runtime_command))?
     };
-    emit(json_output, HumanOutput::Proxy, &output)?;
+    emit(json_output, output::format_proxy_summary, &output)?;
     finish_after_json_output(require_foreground_status(&output), json_output)
 }
 

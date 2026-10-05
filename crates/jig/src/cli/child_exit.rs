@@ -66,6 +66,16 @@ fn json_request_detection_ignores_child_arguments_after_separator() {
 
 #[test]
 fn dev_management_actions_do_not_request_launch_process_identity() {
+    // Each dev action renders with its own summary; the probe makes the three
+    // summaries distinct.
+    let probe = serde_json::json!({ "ok": true, "sessions": [] });
+    let launch_summary = output::format_dev_summary(&probe);
+    let status_summary = output::format_dev_status_summary(&probe);
+    let stop_summary = output::format_dev_stop_summary(&probe);
+    assert_ne!(launch_summary, status_summary);
+    assert_ne!(launch_summary, stop_summary);
+    assert_ne!(status_summary, stop_summary);
+
     let launch = DevOpts {
         command: None,
         launch: DevLaunchOpts {
@@ -75,7 +85,7 @@ fn dev_management_actions_do_not_request_launch_process_identity() {
     };
     #[cfg(feature = "dev-proxy")]
     assert_eq!(dev_launch_identity_present(&launch), Some(true));
-    assert!(matches!(dev_human_output(&launch), HumanOutput::Dev));
+    assert_eq!(launch.renderer()(&probe), launch_summary);
 
     let status = DevOpts {
         command: Some(DevSubcommand::Status(DevStatusOpts::default())),
@@ -83,7 +93,7 @@ fn dev_management_actions_do_not_request_launch_process_identity() {
     };
     #[cfg(feature = "dev-proxy")]
     assert_eq!(dev_launch_identity_present(&status), None);
-    assert!(matches!(dev_human_output(&status), HumanOutput::DevStatus));
+    assert_eq!(status.renderer()(&probe), status_summary);
 
     let stop = DevOpts {
         command: Some(DevSubcommand::Stop(DevStopOpts::default())),
@@ -91,7 +101,7 @@ fn dev_management_actions_do_not_request_launch_process_identity() {
     };
     #[cfg(feature = "dev-proxy")]
     assert_eq!(dev_launch_identity_present(&stop), None);
-    assert!(matches!(dev_human_output(&stop), HumanOutput::DevStop));
+    assert_eq!(stop.renderer()(&probe), stop_summary);
 }
 
 #[test]

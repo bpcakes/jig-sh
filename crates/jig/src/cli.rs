@@ -2,10 +2,13 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::command::RuntimeCommand;
 use crate::{bootstrap, root_commands, tool_defs};
+use runtime_dispatch::RuntimeDispatch;
 
 mod agent;
 mod agent_run;
+mod bootstrap_hints;
 mod bootstrap_run;
 mod check;
 mod claude;
@@ -15,15 +18,18 @@ mod codex_run;
 mod comparison;
 mod file_budget;
 mod home_picker;
+mod info_run;
 mod init_wizard;
 mod loops;
 mod migration;
 mod proxy;
 mod repository_run;
+mod runtime_dispatch;
 mod setup_run;
 mod sqlx;
 mod state;
 mod status_opts;
+mod status_run;
 mod ui_run;
 mod vault;
 
@@ -31,8 +37,7 @@ pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 #[cfg(test)]
 pub(crate) use check::NamedCheckCommand;
 pub(crate) use check::{
-    CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckComparisonOpts, CheckMigrationImmutabilityOpts,
-    CheckOpts, CheckTargetOpts,
+    CheckCommand, CheckComparisonOpts, CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts,
 };
 pub(crate) use claude::ClaudeCommand;
 pub(crate) use codex::CodexCommand;
@@ -50,7 +55,9 @@ pub(crate) use proxy::{
     ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
     ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts,
 };
-pub(crate) use sqlx::{SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
+pub(crate) use sqlx::SqlxCommand;
+#[cfg(test)]
+pub(crate) use sqlx::{SqlxMigrationCommand, SqlxSchemaCommand};
 pub(crate) use state::{StateArchiveOpts, StateCommand, StateRestoreOpts};
 pub(crate) use status_opts::{StatusCommand, StatusOpts};
 pub(crate) use vault::{
@@ -106,24 +113,6 @@ fn root_after_help() -> String {
         root_commands::categorized_help()
     )
 }
-
-const TEMPLATE_ERROR_HINT: &str = "\
-Templates:
-  Omit --template to use the default jig-sh harness template.
-  Release builds use the official template:
-  https://github.com/bpcakes/jig-sh.git
-  Unreleased local builds use templates embedded in the jig binary.
-
-If you passed --template without a value, either omit it to use the default
-or provide a path/URL.
-
-Use one of:
-  jig adopt .
-  jig adopt . --write
-  jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
-  jig adopt . --write --template /path/to/jig-sh
-
-Pass --template only for a local checkout, fork, or private template.";
 
 const DOCTOR_AFTER_HELP: &str = "\
 Runs the read-only readiness checks that are otherwise split across bootstrap,
@@ -443,6 +432,15 @@ pub(crate) enum AgentMapCommand {
     Generate(AgentMapOpts),
 }
 
+impl AgentMapCommand {
+    fn into_dispatch(self) -> RuntimeDispatch {
+        RuntimeDispatch::new(
+            RuntimeCommand::AgentMap(self.into()),
+            output::format_agent_map_generate_summary,
+        )
+    }
+}
+
 #[derive(Args, Debug)]
 pub(crate) struct AgentMapOpts {
     #[arg(
@@ -541,6 +539,14 @@ pub(crate) struct GenerateSqlxUncheckedQueriesTodoOpts {
     pub(crate) output: Option<PathBuf>,
 }
 
+impl GenerateSqlxUncheckedQueriesTodoOpts {
+    fn into_dispatch(self) -> RuntimeDispatch {
+        RuntimeDispatch::tool(RuntimeCommand::GenerateSqlxUncheckedQueriesTodo(
+            self.into(),
+        ))
+    }
+}
+
 #[derive(Args, Debug)]
 pub(crate) struct UiOpts {
     #[arg(
@@ -562,6 +568,20 @@ pub(crate) struct UiOpts {
 }
 
 impl UiOpts {
+    /// Option combinations Clap cannot reject because they involve the
+    /// global `--json` flag or a retired option that still parses.
+    pub(crate) const fn usage_conflict(&self, json: bool) -> Option<&'static str> {
+        if self.retired_port.is_some() {
+            Some(
+                "the `jig ui` browser server and `--port` option were removed in 0.3.0; use `jig ui` for the terminal dashboard or `jig ui --json` for one-shot data (`--port` will stop parsing in 0.4.0)",
+            )
+        } else if json && self.refresh_seconds.is_some() {
+            Some("`--refresh-seconds` cannot be combined with `--json`")
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn effective_refresh_seconds(&self) -> u64 {
         self.refresh_seconds.unwrap_or(10)
     }

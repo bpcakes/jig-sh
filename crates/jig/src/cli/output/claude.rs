@@ -6,7 +6,7 @@ use crate::claude::provider::Claude;
 
 use super::command_display::CommandDisplay;
 
-pub(super) fn homes_summary(value: &Value) -> String {
+pub(in crate::cli) fn homes_summary(value: &Value) -> String {
     let mut lines = vec!["Claude homes".to_owned()];
     if let Some(homes) = value["homes"].as_array() {
         for home in homes {
@@ -55,7 +55,7 @@ pub(super) fn homes_summary(value: &Value) -> String {
     lines.join("\n")
 }
 
-pub(super) fn launch_summary(value: &Value) -> String {
+pub(in crate::cli) fn launch_summary(value: &Value) -> String {
     let mut display = CommandDisplay::default();
     let args = value["args"]
         .as_array()

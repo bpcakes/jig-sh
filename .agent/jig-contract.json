@@ -613,6 +613,7 @@
       "crates/jig/src/cli/proxy.rs",
       "crates/jig/src/cli/run.rs",
       "crates/jig/src/cli/run/**",
+      "crates/jig/src/cli/runtime_dispatch.rs",
       "crates/jig/src/signal_supervision/**",
       "crates/jig/tests/claude_launcher.rs",
       "crates/jig/tests/codex_launcher.rs",

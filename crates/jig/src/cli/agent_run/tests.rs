@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::agent_provider::{Choice, Metadata};
+use crate::cli::output;
 
 #[derive(Debug, Eq, PartialEq)]
 enum ExampleConfig {
@@ -106,7 +107,7 @@ fn third_provider_dry_run_resolves_and_prepares_without_discovery_or_execution()
         &args,
         true,
         true,
-        HumanOutput::ClaudeLaunch,
+        output::format_claude_launch_summary,
     )
     .unwrap();
     assert_eq!(*provider.calls.borrow(), ["resolve", "prepare"]);
@@ -116,7 +117,7 @@ fn third_provider_dry_run_resolves_and_prepares_without_discovery_or_execution()
 fn capabilities_and_json_preflight_prevent_provider_work() {
     let provider = ExampleProvider::default();
     assert!(
-        homes(&provider, true, true, HumanOutput::ClaudeHomes)
+        homes(&provider, true, true, output::format_claude_homes_summary)
             .unwrap_err()
             .to_string()
             .contains("does not support")
@@ -128,18 +129,25 @@ fn capabilities_and_json_preflight_prevent_provider_work() {
             &[],
             false,
             true,
-            HumanOutput::ClaudeLaunch
+            output::format_claude_launch_summary
         )
         .is_err()
     );
     assert!(
-        launch(&provider, None, &[], true, true, HumanOutput::ClaudeLaunch)
-            .unwrap_err()
-            .to_string()
-            .contains("Pass a Example Agent HOME")
+        launch(
+            &provider,
+            None,
+            &[],
+            true,
+            true,
+            output::format_claude_launch_summary
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("Pass a Example Agent HOME")
     );
     assert!(provider.calls.borrow().is_empty());
-    homes(&provider, false, true, HumanOutput::ClaudeHomes).unwrap();
+    homes(&provider, false, true, output::format_claude_homes_summary).unwrap();
     assert_eq!(*provider.calls.borrow(), ["report"]);
 }
 

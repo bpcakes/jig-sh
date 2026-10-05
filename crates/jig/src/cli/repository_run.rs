@@ -1,4 +1,7 @@
 use super::CheckComparisonOpts;
+use super::output;
+use super::runtime_dispatch::RuntimeDispatch;
+use crate::command::RuntimeCommand;
 use clap::{Args, ValueEnum};
 use jig_contract::ActionEffect;
 
@@ -45,6 +48,16 @@ pub(crate) struct RepositoryRunOpts {
 enum ApprovedEffect {
     Worktree,
     External,
+}
+
+impl RepositoryRunOpts {
+    pub(super) fn into_dispatch(self) -> anyhow::Result<RuntimeDispatch> {
+        Ok(RuntimeDispatch::new(
+            RuntimeCommand::Run(self.try_into()?),
+            output::format_repository_run_summary,
+        )
+        .failing_on_ok_false())
+    }
 }
 
 impl TryFrom<RepositoryRunOpts> for crate::command::RepositoryRunRequest {

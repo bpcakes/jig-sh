@@ -1,5 +1,8 @@
 use clap::{Args, Subcommand};
 
+use super::output;
+use super::runtime_dispatch::RuntimeDispatch;
+use crate::command::RuntimeCommand;
 use crate::{command, tool_defs};
 
 const MIGRATION_ADD_AFTER_HELP: &str = "\
@@ -31,5 +34,24 @@ pub(crate) struct MigrationAddOpts {
 impl From<MigrationAddOpts> for command::MigrationAddRequest {
     fn from(opts: MigrationAddOpts) -> Self {
         Self { name: opts.name }
+    }
+}
+
+impl MigrationCommand {
+    pub(super) fn into_dispatch(self) -> RuntimeDispatch {
+        match self {
+            Self::Add(opts) => opts.into_dispatch(),
+        }
+    }
+}
+
+impl MigrationAddOpts {
+    /// Shared by `migration add`, `sqlx migration add`, and the retained
+    /// `migration-add` spelling.
+    pub(super) fn into_dispatch(self) -> RuntimeDispatch {
+        RuntimeDispatch::new(
+            RuntimeCommand::MigrationAdd(self.into()),
+            output::format_migration_add_summary,
+        )
     }
 }

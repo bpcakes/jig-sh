@@ -2,22 +2,30 @@ use std::io::Write;
 
 use anyhow::Result;
 
-use self::agent::{format_agent_bootstrap_summary, format_agent_doctor_summary};
-use self::codex::{
+pub(super) use self::agent::{format_agent_bootstrap_summary, format_agent_doctor_summary};
+pub(super) use self::claude::{
+    homes_summary as format_claude_homes_summary, launch_summary as format_claude_launch_summary,
+};
+pub(super) use self::codex::{
     format_codex_homes_summary, format_codex_launch_summary, format_codex_resume_summary,
+};
+pub(super) use self::dev::{
+    format_dev_recover_summary, format_dev_status_summary, format_dev_stop_summary,
+    format_dev_summary,
 };
 pub(super) use self::doctor::format_doctor_summary;
 pub(super) use self::info::format_info_summary;
-use self::loops::{
+pub(super) use self::loops::{
     format_loop_acknowledge_occurrence_summary, format_loop_clear_attempt_summary,
     format_loop_dispatch_summary, format_loop_run_summary, format_loop_show_summary,
     format_loop_status_summary, format_loop_tick_summary,
 };
-use self::state::{
+pub(super) use self::state::{
     format_state_archive_summary, format_state_diagnose_summary, format_state_restore_summary,
     format_state_summary,
 };
-use self::vault::{format_vault_generic_summary, format_vault_run_summary};
+pub(super) use self::status::format_summary as format_status_summary;
+pub(super) use self::vault::{format_vault_generic_summary, format_vault_run_summary};
 
 mod agent;
 mod claude;
@@ -32,96 +40,18 @@ mod status;
 mod usage;
 mod vault;
 
-pub(super) enum HumanOutput {
-    Doctor,
-    Setup,
-    Info,
-    Status,
-    RunStatus,
-    VaultRun,
-    VaultGeneric,
-    AgentDoctor,
-    AgentBootstrap,
-    ClaudeHomes,
-    ClaudeLaunch,
-    CodexHomes,
-    CodexLaunch,
-    CodexResume,
-    Check,
-    RepositoryRun,
-    ToolExecution,
-    AgentMapGenerate,
-    MigrationAdd,
-    LoopTick,
-    LoopDispatch,
-    LoopStatus,
-    LoopShow,
-    LoopRun,
-    LoopClearAttempt,
-    LoopAcknowledgeOccurrence,
-    StateSummary,
-    StateDiagnose,
-    StateRestore,
-    StateArchive,
-    Dev,
-    DevStatus,
-    DevRecover,
-    DevStop,
-    Proxy,
-}
+/// Renders a command's JSON result for people. Each command passes its own
+/// renderer to [`emit`]; there is no central table of outputs to extend.
+pub(super) type Render = fn(&serde_json::Value) -> String;
 
-pub(super) fn emit(
-    json_output: bool,
-    human_output: HumanOutput,
-    value: &serde_json::Value,
-) -> Result<()> {
+pub(super) fn emit(json_output: bool, render: Render, value: &serde_json::Value) -> Result<()> {
     if json_output {
         return print_json(value);
     }
-    print_text(&render_human(human_output, value)?)
+    print_text(&render(value))
 }
 
-fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<String> {
-    Ok(match human_output {
-        HumanOutput::Doctor => format_doctor_summary(value),
-        HumanOutput::Setup => format_setup_summary(value),
-        HumanOutput::Info => format_info_summary(value),
-        HumanOutput::Status => status::format_summary(value),
-        HumanOutput::RunStatus => format_run_status_summary(value),
-        HumanOutput::VaultRun => format_vault_run_summary(value),
-        HumanOutput::VaultGeneric => format_vault_generic_summary(value),
-        HumanOutput::AgentDoctor => format_agent_doctor_summary(value),
-        HumanOutput::AgentBootstrap => format_agent_bootstrap_summary(value),
-        HumanOutput::ClaudeHomes => claude::homes_summary(value),
-        HumanOutput::ClaudeLaunch => claude::launch_summary(value),
-        HumanOutput::CodexHomes => format_codex_homes_summary(value),
-        HumanOutput::CodexLaunch => format_codex_launch_summary(value),
-        HumanOutput::CodexResume => format_codex_resume_summary(value),
-        HumanOutput::Check => format_check_output(value),
-        HumanOutput::RepositoryRun => format_repository_execution_summary(value, "Run", "run"),
-        HumanOutput::ToolExecution => format_tool_execution_summary(value),
-        HumanOutput::AgentMapGenerate => format_agent_map_generate_summary(value),
-        HumanOutput::MigrationAdd => format_migration_add_summary(value),
-        HumanOutput::LoopTick => format_loop_tick_summary(value),
-        HumanOutput::LoopDispatch => format_loop_dispatch_summary(value),
-        HumanOutput::LoopStatus => format_loop_status_summary(value),
-        HumanOutput::LoopShow => format_loop_show_summary(value),
-        HumanOutput::LoopRun => format_loop_run_summary(value),
-        HumanOutput::LoopClearAttempt => format_loop_clear_attempt_summary(value),
-        HumanOutput::LoopAcknowledgeOccurrence => format_loop_acknowledge_occurrence_summary(value),
-        HumanOutput::StateSummary => format_state_summary(value),
-        HumanOutput::StateDiagnose => format_state_diagnose_summary(value),
-        HumanOutput::StateRestore => format_state_restore_summary(value),
-        HumanOutput::StateArchive => format_state_archive_summary(value),
-        HumanOutput::Dev => format_dev_summary(value),
-        HumanOutput::DevStatus => format_dev_status_summary(value),
-        HumanOutput::DevRecover => format_dev_recover_summary(value),
-        HumanOutput::DevStop => format_dev_stop_summary(value),
-        HumanOutput::Proxy => format_proxy_summary(value),
-    })
-}
-
-fn format_check_output(value: &serde_json::Value) -> String {
+pub(super) fn format_check_output(value: &serde_json::Value) -> String {
     if value.get("plan").is_some() {
         format_check_summary(value)
     } else {
@@ -131,6 +61,10 @@ fn format_check_output(value: &serde_json::Value) -> String {
 
 fn format_check_summary(value: &serde_json::Value) -> String {
     format_repository_execution_summary(value, "Check", "check")
+}
+
+pub(super) fn format_repository_run_summary(value: &serde_json::Value) -> String {
+    format_repository_execution_summary(value, "Run", "run")
 }
 
 fn format_repository_execution_summary(
@@ -288,7 +222,7 @@ fn structured_target_text(value: &serde_json::Value) -> String {
     format!("{component}:{action}")
 }
 
-fn format_run_status_summary(value: &serde_json::Value) -> String {
+pub(super) fn format_run_status_summary(value: &serde_json::Value) -> String {
     let result = &value["result"];
     let run_id = result["run_id"].as_str().unwrap_or("<unknown>");
     let plan_id = result["plan_id"].as_str().unwrap_or("<unknown>");
@@ -535,22 +469,6 @@ pub(super) fn format_migration_add_summary(value: &serde_json::Value) -> String 
     }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
-}
-
-pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
-    dev::format_dev_summary(value)
-}
-
-pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
-    dev::format_dev_status_summary(value)
-}
-
-pub(super) fn format_dev_recover_summary(value: &serde_json::Value) -> String {
-    dev::format_dev_recover_summary(value)
-}
-
-pub(super) fn format_dev_stop_summary(value: &serde_json::Value) -> String {
-    dev::format_dev_stop_summary(value)
 }
 
 pub(super) fn format_proxy_summary(value: &serde_json::Value) -> String {

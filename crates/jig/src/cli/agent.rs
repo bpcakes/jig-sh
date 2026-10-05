@@ -1,5 +1,8 @@
 use clap::{Args, Subcommand};
 
+use super::output;
+use super::runtime_dispatch::RuntimeDispatch;
+use crate::command::RuntimeCommand;
 use crate::tool_defs;
 
 pub(super) const AGENT_AFTER_HELP: &str = "\
@@ -37,4 +40,22 @@ pub(crate) struct AgentBootstrapOpts {
         help = "Marketplace source to register; defaults to the single configured source"
     )]
     pub(crate) marketplace: Option<String>,
+}
+
+impl AgentCommand {
+    pub(super) fn into_dispatch(self) -> RuntimeDispatch {
+        match self {
+            // A readiness report: `ok: false` means required local tooling is
+            // missing or unregistered, which fails the command.
+            Self::Doctor => RuntimeDispatch::new(
+                RuntimeCommand::Agent(self.into()),
+                output::format_agent_doctor_summary,
+            )
+            .failing_on_ok_false(),
+            Self::Bootstrap(_) => RuntimeDispatch::new(
+                RuntimeCommand::Agent(self.into()),
+                output::format_agent_bootstrap_summary,
+            ),
+        }
+    }
 }

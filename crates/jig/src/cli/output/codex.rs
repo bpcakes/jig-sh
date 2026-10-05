@@ -10,7 +10,7 @@ use crate::codex::provider::Codex;
 use super::command_display::CommandDisplay;
 use super::{value_bool, value_str};
 
-pub(super) fn format_codex_homes_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_codex_homes_summary(value: &serde_json::Value) -> String {
     format_codex_homes(value)
 }
 
@@ -98,11 +98,11 @@ fn format_codex_account(account: &serde_json::Value) -> String {
     )
 }
 
-pub(super) fn format_codex_launch_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_codex_launch_summary(value: &serde_json::Value) -> String {
     format_codex_command_summary(value, "Codex launch")
 }
 
-pub(super) fn format_codex_resume_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_codex_resume_summary(value: &serde_json::Value) -> String {
     format_codex_command_summary(value, "Codex resume")
 }
 
