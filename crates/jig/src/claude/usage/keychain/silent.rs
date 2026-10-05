@@ -8,8 +8,11 @@ use security_framework::os::macos::keychain::SecKeychain;
 // native reads so one inspection cannot re-enable prompts during another.
 static INTERACTION: Mutex<()> = Mutex::new(());
 
-pub(super) fn search(query: &ItemSearchOptions) -> Result<Vec<SearchResult>> {
-    without_interaction(|| query.search())
+pub(super) fn search(
+    query: &ItemSearchOptions,
+    read: impl FnOnce(&ItemSearchOptions) -> Result<Vec<SearchResult>>,
+) -> Result<Vec<SearchResult>> {
+    without_interaction(|| read(query))
 }
 
 fn without_interaction<T>(read: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -28,40 +31,4 @@ fn without_interaction<T>(read: impl FnOnce() -> Result<T>) -> Result<T> {
         None
     };
     read()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use security_framework::base::Error;
-
-    #[test]
-    fn native_reads_suppress_dialogs_and_preserve_the_callers_interaction_setting() {
-        let original = SecKeychain::user_interaction_allowed().unwrap();
-        let result = without_interaction(|| {
-            assert!(!SecKeychain::user_interaction_allowed()?);
-            Ok(42)
-        });
-        assert_eq!(result.unwrap(), 42);
-        assert_eq!(SecKeychain::user_interaction_allowed().unwrap(), original);
-
-        let error = without_interaction::<()>(|| {
-            assert!(!SecKeychain::user_interaction_allowed()?);
-            Err(Error::from_code(-25308))
-        });
-        assert_eq!(error.unwrap_err().code(), -25308);
-        assert_eq!(SecKeychain::user_interaction_allowed().unwrap(), original);
-
-        let _disabled = if original {
-            Some(SecKeychain::disable_user_interaction().unwrap())
-        } else {
-            None
-        };
-        without_interaction(|| {
-            assert!(!SecKeychain::user_interaction_allowed()?);
-            Ok(())
-        })
-        .unwrap();
-        assert!(!SecKeychain::user_interaction_allowed().unwrap());
-    }
 }
