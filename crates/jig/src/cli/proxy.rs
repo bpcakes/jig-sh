@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
+use super::output::HumanOutput;
 use crate::tool_defs;
 
 pub(super) const PROXY_RUN_AFTER_HELP: &str = "\
@@ -157,6 +158,15 @@ pub(crate) struct DevOpts {
 }
 
 impl DevOpts {
+    pub(super) const fn human_output(&self) -> HumanOutput {
+        match &self.command {
+            None => HumanOutput::Dev,
+            Some(DevSubcommand::Status(_)) => HumanOutput::DevStatus,
+            Some(DevSubcommand::Recover(_)) => HumanOutput::DevRecover,
+            Some(DevSubcommand::Stop(_)) => HumanOutput::DevStop,
+        }
+    }
+
     pub(crate) fn is_contextless(&self) -> bool {
         match &self.command {
             Some(DevSubcommand::Status(opts)) => opts.all || opts.session.is_some(),

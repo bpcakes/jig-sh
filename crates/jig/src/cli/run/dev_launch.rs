@@ -5,7 +5,7 @@ use std::process;
 
 use anyhow::Result;
 
-use super::{dev_human_output, finish_after_json_output};
+use super::finish_after_json_output;
 use crate::cli::output::{HumanOutput, emit, print_json};
 use crate::cli::structured_error::{
     json_error_payload, json_reported_error, require_foreground_status,
@@ -17,7 +17,7 @@ use crate::dev_proxy::commands::{can_run_without_context, dev_contextless, proxy
 use crate::{root_commands, runtime};
 
 pub(super) fn run_dev_command(opts: DevOpts, json_output: bool) -> Result<()> {
-    let human_output = dev_human_output(&opts);
+    let human_output = opts.human_output();
     if opts.is_contextless() {
         let output = dev_contextless(opts.into())?;
         emit(json_output, human_output, &output)?;

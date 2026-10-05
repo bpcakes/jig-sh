@@ -3,14 +3,14 @@
 
 use anyhow::Result;
 
-use super::{dev_human_output, finish_after_json_output};
+use super::finish_after_json_output;
 use crate::cli::output::{HumanOutput, emit};
 use crate::cli::structured_error::require_foreground_status;
 use crate::cli::{DevOpts, ProxyCommand};
 use crate::dev_proxy::commands::{dev_without_context, proxy_without_context};
 
 pub(super) fn run_dev_command(opts: DevOpts, json_output: bool) -> Result<()> {
-    let human_output = dev_human_output(&opts);
+    let human_output = opts.human_output();
     let output = dev_without_context(opts.into())?;
     emit(json_output, human_output, &output)?;
     finish_after_json_output(require_foreground_status(&output), json_output)

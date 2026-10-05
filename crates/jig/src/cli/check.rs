@@ -4,11 +4,13 @@ use anyhow::Result;
 use clap::{ArgGroup, Args, Subcommand};
 use jig_contract::ComparisonRequestV1;
 
-use crate::command::NamedCheck;
+use crate::command::{NamedCheck, RuntimeCommand};
 use crate::{root_commands, tool_defs};
 
 use super::AgentMapOpts;
 use super::comparison::{CliExactTreeProvenance, comparison_request};
+use super::output::HumanOutput;
+use super::runtime_dispatch::RuntimeDispatch;
 
 pub(super) const CHECK_AFTER_HELP: &str = "\
 Run configured project checks or Jig-owned repository policy checks.
@@ -204,6 +206,13 @@ pub(crate) struct CheckOpts {
 }
 
 impl CheckOpts {
+    pub(super) fn into_dispatch(self) -> Result<RuntimeDispatch> {
+        Ok(
+            RuntimeDispatch::new(RuntimeCommand::Check(self.try_into()?), HumanOutput::Check)
+                .failing_on_ok_false(),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn with_command(command: CheckCommand) -> Self {
         Self {
