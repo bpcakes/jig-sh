@@ -11,10 +11,9 @@ use super::codex_run::run_codex_command;
 use super::output::{HumanOutput, emit, print_json};
 use super::setup_run::run_setup_command;
 use super::structured_error::{
-    is_json_output_already_emitted, json_error_payload, json_output_already_emitted,
-    json_reported_error, require_json_ok,
+    is_json_output_already_emitted, is_structured_json_failure, json_error_payload,
+    json_output_already_emitted, json_reported_error, require_json_ok,
 };
-pub(crate) use super::structured_error::{is_structured_json_failure, structured_error_exit_code};
 use super::ui_run::{name_ui_error, run_ui_command};
 use super::vault_run::run_vault_command;
 use super::{

@@ -666,3 +666,26 @@ fn malformed_run_mapping_refusal_precedes_passphrase_capture() {
         assert!(!vault_home.exists());
     }
 }
+
+#[test]
+fn transparent_vault_child_exit_is_silent_and_preserves_status() {
+    let error = vault_exec_child_exit(37);
+    let exit = CliExit::of(&error).unwrap();
+
+    assert!(exit.is_reported());
+    assert_eq!(exit.code(), 37);
+}
+
+#[test]
+fn vault_run_mirrors_a_non_zero_child_status_as_a_reported_exit() {
+    let error = require_vault_child_status_ok(&serde_json::json!({
+        "ok": false,
+        "result": { "exit_status": 9 },
+    }))
+    .unwrap_err();
+    let exit = CliExit::of(&error).unwrap();
+
+    assert!(exit.is_reported());
+    assert_eq!(exit.code(), 9);
+    require_vault_child_status_ok(&serde_json::json!({ "result": { "exit_status": 0 } })).unwrap();
+}
