@@ -350,8 +350,12 @@ fn preflight_refuses_parents_whose_acl_allows_write_or_delete() {
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
 
     for (name, entry) in [
-        ("allow-write", "everyone allow add_file,add_subdirectory"),
+        ("allow-add-file", "everyone allow add_file"),
+        ("allow-add-subdirectory", "everyone allow add_subdirectory"),
         ("allow-delete", "everyone allow delete"),
+        ("allow-delete-child", "everyone allow delete_child"),
+        ("allow-writesecurity", "everyone allow writesecurity"),
+        ("allow-chown", "everyone allow chown"),
     ] {
         let parent = acl_fixture_directory(temp.path(), name, entry);
         for home in [
