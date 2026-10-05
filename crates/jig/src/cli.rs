@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::command::RuntimeCommand;
 use crate::{bootstrap, root_commands, tool_defs};
+use runtime_dispatch::RuntimeDispatch;
 
 mod agent;
 mod agent_run;
@@ -16,15 +18,18 @@ mod codex_run;
 mod comparison;
 mod file_budget;
 mod home_picker;
+mod info_run;
 mod init_wizard;
 mod loops;
 mod migration;
 mod proxy;
 mod repository_run;
+mod runtime_dispatch;
 mod setup_run;
 mod sqlx;
 mod state;
 mod status_opts;
+mod status_run;
 mod ui_run;
 mod vault;
 
@@ -50,7 +55,9 @@ pub(crate) use proxy::{
     ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
     ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts,
 };
-pub(crate) use sqlx::{SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
+pub(crate) use sqlx::SqlxCommand;
+#[cfg(test)]
+pub(crate) use sqlx::{SqlxMigrationCommand, SqlxSchemaCommand};
 pub(crate) use state::{StateArchiveOpts, StateCommand, StateRestoreOpts};
 pub(crate) use status_opts::{StatusCommand, StatusOpts};
 pub(crate) use vault::{
@@ -425,6 +432,15 @@ pub(crate) enum AgentMapCommand {
     Generate(AgentMapOpts),
 }
 
+impl AgentMapCommand {
+    fn into_dispatch(self) -> RuntimeDispatch {
+        RuntimeDispatch::new(
+            RuntimeCommand::AgentMap(self.into()),
+            output::HumanOutput::AgentMapGenerate,
+        )
+    }
+}
+
 #[derive(Args, Debug)]
 pub(crate) struct AgentMapOpts {
     #[arg(
@@ -521,6 +537,14 @@ pub(crate) struct FreshnessOpts {
 pub(crate) struct GenerateSqlxUncheckedQueriesTodoOpts {
     /// Optional output path for the generated TODO report.
     pub(crate) output: Option<PathBuf>,
+}
+
+impl GenerateSqlxUncheckedQueriesTodoOpts {
+    fn into_dispatch(self) -> RuntimeDispatch {
+        RuntimeDispatch::tool(RuntimeCommand::GenerateSqlxUncheckedQueriesTodo(
+            self.into(),
+        ))
+    }
 }
 
 #[derive(Args, Debug)]

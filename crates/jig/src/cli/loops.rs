@@ -1,5 +1,8 @@
 use clap::{Args, Subcommand};
 
+use super::output::HumanOutput;
+use super::runtime_dispatch::RuntimeDispatch;
+use crate::command::RuntimeCommand;
 use crate::tool_defs;
 
 pub(super) const LOOP_AFTER_HELP: &str = "\
@@ -181,4 +184,28 @@ pub(crate) struct LoopTuningOpts {
         help = "Override attempt backoff in seconds for workflows that record attempts"
     )]
     pub(crate) backoff_seconds: Option<u64>,
+}
+
+impl LoopCommand {
+    pub(super) fn into_dispatch(self) -> RuntimeDispatch {
+        let human_output = match &self {
+            Self::Tick(_) => HumanOutput::LoopTick,
+            Self::Dispatch(_) => HumanOutput::LoopDispatch,
+            Self::Status(_) => HumanOutput::LoopStatus,
+            Self::Show(_) => HumanOutput::LoopShow,
+            Self::Run(_) => HumanOutput::LoopRun,
+            Self::ClearAttempt(_) => HumanOutput::LoopClearAttempt,
+            Self::AcknowledgeOccurrence(_) => HumanOutput::LoopAcknowledgeOccurrence,
+        };
+        // Tick, dispatch and run do work, so `ok: false` fails them. The
+        // others are diagnostic reports: their JSON may carry `ok: false`, but
+        // the command stays inspectable instead of becoming a CLI error.
+        let executes = matches!(self, Self::Tick(_) | Self::Dispatch(_) | Self::Run(_));
+        let dispatch = RuntimeDispatch::new(RuntimeCommand::Loop(self.into()), human_output);
+        if executes {
+            dispatch.failing_on_ok_false()
+        } else {
+            dispatch
+        }
+    }
 }
