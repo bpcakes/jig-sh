@@ -1,9 +1,11 @@
+use std::ffi::OsString;
+
 use anyhow::Result;
 use clap::{ArgGroup, Args, Subcommand};
 use jig_contract::ComparisonRequestV1;
 
 use crate::command::NamedCheck;
-use crate::tool_defs;
+use crate::{root_commands, tool_defs};
 
 use super::AgentMapOpts;
 use super::comparison::{CliExactTreeProvenance, comparison_request};
@@ -39,6 +41,133 @@ pub(crate) const CHECK_SUBCOMMAND_NAMES: &[&str] = &[
     tool_defs::cli_command::CHECK_MIGRATION_IMMUTABILITY,
     tool_defs::cli_command::CHECK_SQLX_UNCHECKED_NON_TEST,
 ];
+
+/// `jig check` options that take a value, so a value is never read as a
+/// selector.
+pub(in crate::cli) const CHECK_VALUE_OPTIONS: &[&str] = &[
+    "--profile",
+    "--affected",
+    "--comparison-base",
+    "--comparison-exact-tree",
+    "--comparison-provenance",
+];
+
+/// Retired top-level spellings and the `jig check` command that replaced each.
+const MOVED_COMMANDS: &[(&str, &str)] = &[
+    ("fmt-check", "jig check fmt"),
+    ("clippy", "jig check clippy"),
+    ("test", "jig check test"),
+    ("test-locked", "jig check test-locked"),
+    ("sqlx-check", "jig check sqlx"),
+    ("schema-check", "jig check schema"),
+    ("contract-check", "jig check contract"),
+    ("check-agent-guides", "jig check agent-guides"),
+    (
+        "check-migration-immutability",
+        "jig check migration-immutability",
+    ),
+    (
+        "check-sqlx-unchecked-non-test",
+        "jig check sqlx-unchecked-non-test",
+    ),
+];
+
+/// Moves global flags that follow the `check` command at `check_index` ahead
+/// of its selectors.
+///
+/// Clap gives everything after an external selector such as `api:test` to the
+/// selector list, so a trailing `--json` would never reach the root parser,
+/// and `--help` after an external selector would be read as a selector.
+pub(in crate::cli) fn normalize_external_global_flags(
+    mut args: Vec<OsString>,
+    check_index: usize,
+) -> Vec<OsString> {
+    let separator_index = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    if check_index >= separator_index {
+        return args;
+    }
+
+    let external_selector = names_external_selector(&args[check_index + 1..separator_index]);
+    let mut moved_json = Vec::new();
+    let mut moved_help = Vec::new();
+    let mut index = check_index + 1;
+    let mut option_value = false;
+    while index < args.len() && args[index] != "--" {
+        if option_value {
+            option_value = false;
+            index += 1;
+        } else if args[index]
+            .to_str()
+            .is_some_and(|arg| CHECK_VALUE_OPTIONS.contains(&arg))
+        {
+            option_value = true;
+            index += 1;
+        } else if args[index] == "--json" {
+            moved_json.push(args.remove(index));
+        } else if external_selector && matches!(args[index].to_str(), Some("--help" | "-h")) {
+            moved_help.push(args.remove(index));
+        } else {
+            index += 1;
+        }
+    }
+    // Each `--json` moves to the front, which shifts `check` right by one.
+    let check_index = check_index + moved_json.len();
+    for flag in moved_json.into_iter().rev() {
+        args.insert(1, flag);
+    }
+    for flag in moved_help.into_iter().rev() {
+        args.insert(check_index + 1, flag);
+    }
+    args
+}
+
+/// Whether the first positional after `check` is a target selector rather than
+/// a named subcommand.
+fn names_external_selector(args: &[OsString]) -> bool {
+    let mut skip_value = false;
+    for arg in args {
+        let arg = arg.to_string_lossy();
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if CHECK_VALUE_OPTIONS.contains(&arg.as_ref()) {
+            skip_value = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        return !CHECK_SUBCOMMAND_NAMES.contains(&arg.as_ref());
+    }
+    false
+}
+
+/// Points a retired check spelling at its `jig check` replacement.
+///
+/// `root_command` is the first command token and `invalid_subcommand` is the
+/// name Clap rejected; they are equal when the root command itself is unknown.
+pub(in crate::cli) fn moved_command_hint(
+    root_command: &str,
+    invalid_subcommand: &str,
+) -> Option<String> {
+    let replacement = if root_command == invalid_subcommand {
+        MOVED_COMMANDS
+            .iter()
+            .find(|(retired, _)| *retired == invalid_subcommand)?
+            .1
+    } else if root_command == root_commands::AGENT_MAP.name
+        && invalid_subcommand == root_commands::CHECK.name
+    {
+        "jig check agent-map"
+    } else {
+        return None;
+    };
+    Some(format!("This check command moved. Use:\n  {replacement}"))
+}
 
 #[derive(Args, Debug, Default)]
 pub(crate) struct CheckOpts {

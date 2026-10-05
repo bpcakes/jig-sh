@@ -26,6 +26,7 @@
 ## Edit here for X
 
 - Change CLI flags or nested subcommands: the command family's module under `src/cli/`; `src/cli.rs` wires the top-level commands.
+- Change a command's argument rules (argv normalization, conflicts with global flags, usage hints): that command's module under `src/cli/`. `src/cli/run/argument_parsing.rs` is the generic pipeline that asks each owner; hints read Clap's structured error context, never its rendered text.
 - Add a top-level command, in this order; the compiler or a test enforces each step:
   1. Declare it once in the `root_commands!` table in `src/root_commands.rs`.
   2. Add its `CommandKind` variant in `src/cli.rs`, taking `name` and `display_order` from the registry.
