@@ -307,3 +307,68 @@ fn a_cfg_test_file_attribute_reclassifies_what_it_declares() {
     assert!(non_test.contains("_None_"), "{non_test}");
     assert!(test.contains("`src/queries.rs:1`"), "{test}");
 }
+
+/// The same file can be loaded twice, and `mod helper;` inside it then names
+/// a different file under each loading. Only the one the test loading reaches
+/// is test code.
+#[test]
+fn each_loading_of_a_file_carries_its_own_test_ancestry() {
+    let temp = inventory(&[
+        (
+            "src/lib.rs",
+            "mod shared;\n#[cfg(test)]\n#[path = \"shared.rs\"]\nmod cases;\n",
+        ),
+        ("src/shared.rs", "mod helper;\n"),
+        ("src/shared/helper.rs", CALL),
+        ("src/helper.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/shared/helper.rs:1`"), "{non_test}");
+    assert!(test.contains("`src/helper.rs:1`"), "{test}");
+}
+
+/// A declaration that only loads its own file leaves that file a root, so an
+/// unreferenced cycle cannot unsettle the classification of anything else.
+#[test]
+fn a_self_loading_declaration_does_not_disturb_other_files() {
+    let temp = inventory(&[
+        ("src/cycle.rs", "#[path = \"cycle.rs\"]\nmod again;\n"),
+        ("src/lib.rs", "#[cfg(test)]\nmod unit_cases;\n"),
+        ("src/unit_cases.rs", "mod fixture;\n"),
+        ("src/unit_cases/fixture.rs", CALL),
+        ("src/standalone.rs", "#[path = \"keep.rs\"]\nmod keep;\n"),
+        ("src/keep.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/keep.rs:1`"), "{non_test}");
+    assert!(test.contains("`src/unit_cases/fixture.rs:1`"), "{test}");
+}
+
+/// Declarations that load one another cannot compile, so the root set never
+/// settles. The inventory then reclassifies nothing rather than guessing,
+/// leaving every call site exactly where it already was.
+#[test]
+fn declarations_that_load_one_another_reclassify_nothing() {
+    let temp = inventory(&[
+        ("src/a.rs", "#[path = \"b.rs\"]\nmod b;\n"),
+        ("src/b.rs", "#[path = \"a.rs\"]\nmod a;\n"),
+        ("src/lib.rs", "#[cfg(test)]\nmod unit_cases;\n"),
+        ("src/unit_cases.rs", "mod fixture;\n"),
+        ("src/unit_cases/fixture.rs", CALL),
+        ("src/standalone.rs", "#[path = \"keep.rs\"]\nmod keep;\n"),
+        ("src/keep.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/keep.rs:1`"), "{non_test}");
+    assert!(
+        non_test.contains("`src/unit_cases/fixture.rs:1`"),
+        "{non_test}"
+    );
+    assert!(test.contains("_None_"), "{test}");
+}

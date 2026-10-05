@@ -11,14 +11,8 @@
 //! loaded it, so the loading context travels with each file rather than being
 //! recomputed from its name.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
 use super::cargo_targets::CargoTargets;
 use super::scanner::{has_cfg_test, unraw};
-
-/// How many times the set of files treated as roots of their own is revised
-/// before the inventory settles for the crate roots Cargo grounds.
-const MAX_ROOT_REVISIONS: usize = 16;
 
 /// How a `mod` item names what it loads. A `#[path]` value extends the
 /// directory itself and leaves any pending module name unused, so the two
@@ -35,7 +29,7 @@ pub(super) struct ModuleDecl {
     name: ModuleName,
     /// Whether an exact `#[cfg(test)]` attribute covers this declaration,
     /// either on the declaration itself or on an enclosing inline module.
-    cfg_test: bool,
+    pub(super) cfg_test: bool,
 }
 
 /// What one scanned file contributes to the module graph.
@@ -54,7 +48,7 @@ pub(super) struct FileModules {
 /// is why `src/a/b.rs` loads `mod c;` from `src/a/b/` but `#[path = "c.rs"]`
 /// from `src/a/`.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Dir {
+pub(super) struct Dir {
     path: String,
     pending: Option<String>,
 }
@@ -128,7 +122,7 @@ fn collect_items(
 
 /// Every file one declaration can load from a file loaded with `dir`, with the
 /// directory each candidate would itself be loaded with.
-fn resolve(declaration: &ModuleDecl, dir: &Dir) -> Option<Vec<(String, Dir)>> {
+pub(super) fn resolve(declaration: &ModuleDecl, dir: &Dir) -> Option<Vec<(String, Dir)>> {
     let mut dir = dir.clone();
     for step in &declaration.inline {
         dir = Dir::owned(step.directory(&dir)?);
@@ -161,172 +155,9 @@ fn resolve(declaration: &ModuleDecl, dir: &Dir) -> Option<Vec<(String, Dir)>> {
     }
 }
 
-/// Which files declare which, after resolving every declaration the inventory
-/// can follow.
-#[derive(Default)]
-struct Claims<'a> {
-    /// Files each file loads through a declaration not under `#[cfg(test)]`.
-    production_children: BTreeMap<&'a str, Vec<&'a str>>,
-    /// Outstanding such declarations per claimed file.
-    production_claims: BTreeMap<&'a str, usize>,
-    /// Every file some resolved declaration loads.
-    claimed: BTreeSet<&'a str>,
-}
-
-/// Resolves the module graph, revising which files are roots of their own
-/// until the answer agrees with itself. A file's module directory depends on
-/// the declaration that loaded it, so the directory its own name implies is
-/// only a guess: a file some declaration turns out to load stops being a
-/// root, and a file left unloaded becomes one, each of which changes what the
-/// next pass resolves.
-fn resolve_claims<'a>(
-    files: &'a BTreeMap<String, FileModules>,
-    targets: &CargoTargets,
-) -> Claims<'a> {
-    let mut roots: BTreeSet<&'a str> = BTreeSet::new();
-    for _ in 0..MAX_ROOT_REVISIONS {
-        let claims = resolve_pass(files, targets, &roots);
-        // A file some declaration loads is not a root of its own, and the
-        // directory its name implied is replaced by the resolved one.
-        let loaded = roots
-            .iter()
-            .copied()
-            .filter(|path| claims.claimed.contains(path))
-            .collect::<Vec<_>>();
-        if !loaded.is_empty() {
-            for path in loaded {
-                roots.remove(path);
-            }
-            continue;
-        }
-        // A file no declaration loads still resolves declarations of its own,
-        // against the conventional directory its name implies.
-        let unloaded = files
-            .keys()
-            .map(String::as_str)
-            .filter(|path| {
-                !claims.claimed.contains(path)
-                    && !roots.contains(path)
-                    && cargo_target_dir(path, targets).is_none()
-            })
-            .collect::<Vec<_>>();
-        if unloaded.is_empty() {
-            return claims;
-        }
-        roots.extend(unloaded);
-    }
-    // Declarations that only load one another cannot compile, so a root set
-    // that will not settle is pathological. Keeping just what Cargo grounds
-    // can only leave call sites in the non-test inventory.
-    resolve_pass(files, targets, &BTreeSet::new())
-}
-
-/// One resolution pass, seeding Cargo's own crate roots and each file in
-/// `roots` with the directory its name implies.
-fn resolve_pass<'a>(
-    files: &'a BTreeMap<String, FileModules>,
-    targets: &CargoTargets,
-    roots: &BTreeSet<&'a str>,
-) -> Claims<'a> {
-    let mut claims = Claims::default();
-    let mut directories: BTreeMap<&str, BTreeSet<Dir>> = BTreeMap::new();
-    let mut queue: VecDeque<(&str, Dir)> = VecDeque::new();
-    // Cargo compiles a crate entrypoint wherever it sits, so start from each
-    // one; a file no declaration reaches is seeded as its own root.
-    for path in files.keys() {
-        if let Some(dir) = cargo_target_dir(path, targets) {
-            seed(path, dir, &mut directories, &mut queue);
-        }
-    }
-    for path in roots {
-        seed(path, root_dir(path), &mut directories, &mut queue);
-    }
-    while let Some((path, dir)) = queue.pop_front() {
-        for declaration in &files[path].declarations {
-            let Some(candidates) = resolve(declaration, &dir) else {
-                continue;
-            };
-            for (target, child_dir) in candidates {
-                // A declaration naming no inventoried file resolves
-                // nothing, so that file keeps its own classification.
-                let Some((child, _)) = files.get_key_value(target.as_str()) else {
-                    continue;
-                };
-                let child = child.as_str();
-                claims.claimed.insert(child);
-                if !declaration.cfg_test {
-                    claims
-                        .production_children
-                        .entry(path)
-                        .or_default()
-                        .push(child);
-                    *claims.production_claims.entry(child).or_default() += 1;
-                }
-                seed(child, child_dir, &mut directories, &mut queue);
-            }
-        }
-    }
-    claims
-}
-
-/// Records a directory a file can be loaded with, queueing it when it is new.
-fn seed<'a>(
-    path: &'a str,
-    dir: Dir,
-    directories: &mut BTreeMap<&'a str, BTreeSet<Dir>>,
-    queue: &mut VecDeque<(&'a str, Dir)>,
-) {
-    if directories.entry(path).or_default().insert(dir.clone()) {
-        queue.push_back((path, dir));
-    }
-}
-
-/// Returns the scanned files that only `#[cfg(test)]` module declarations
-/// reach, so every call site they contain belongs to the test inventory.
-pub(super) fn test_only_files(
-    files: &BTreeMap<String, FileModules>,
-    targets: &CargoTargets,
-) -> BTreeSet<String> {
-    let mut claims = resolve_claims(files, targets);
-    // A file is test-only when an attribute compiles it for tests alone, or
-    // when every declaration claiming it is under `#[cfg(test)]` or made by a
-    // test-only file. A Cargo target, a file production code still reaches,
-    // one no declaration claims, and one in a declaration cycle no target
-    // enters keep their own classification, so no production call site is
-    // quietly lost. Only these answers propagate to what a file declares: a
-    // conventional test path names the file, not the modules it loads.
-    let mut test_only: BTreeSet<&str> = BTreeSet::new();
-    let mut pending: VecDeque<&str> = VecDeque::new();
-    for (path, modules) in files {
-        let path = path.as_str();
-        let test_claimed = claims.claimed.contains(path)
-            && !claims.production_claims.contains_key(path)
-            && cargo_target_dir(path, targets).is_none();
-        if (modules.cfg_test || test_claimed) && test_only.insert(path) {
-            pending.push_back(path);
-        }
-    }
-    while let Some(path) = pending.pop_front() {
-        for child in claims.production_children.get(path).into_iter().flatten() {
-            if cargo_target_dir(child, targets).is_some() {
-                continue;
-            }
-            // Each file leaves the queue once, so a declaration is shed once.
-            let Some(remaining) = claims.production_claims.get_mut(child) else {
-                continue;
-            };
-            *remaining -= 1;
-            if *remaining == 0 && test_only.insert(child) {
-                pending.push_back(child);
-            }
-        }
-    }
-    test_only.into_iter().map(str::to_string).collect()
-}
-
 /// The directory a Cargo target resolves its declarations against, when the
 /// file is one. A crate root resolves its children beside itself.
-fn cargo_target_dir(path: &str, targets: &CargoTargets) -> Option<Dir> {
+pub(super) fn cargo_target_dir(path: &str, targets: &CargoTargets) -> Option<Dir> {
     targets.contains(path).then(|| Dir::owned(parent_dir(path)))
 }
 
@@ -334,7 +165,7 @@ fn cargo_target_dir(path: &str, targets: &CargoTargets) -> Option<Dir> {
 /// of its own: the conventional layout its name implies. A crate root and a
 /// `mod.rs` share their directory with their children; any other module file
 /// owns a directory named after it.
-fn root_dir(path: &str) -> Dir {
+pub(super) fn root_dir(path: &str) -> Dir {
     let (parent, basename) = split_path(path);
     match basename.strip_suffix(".rs") {
         Some(stem) if !matches!(basename, "mod.rs" | "lib.rs" | "main.rs") => Dir {
