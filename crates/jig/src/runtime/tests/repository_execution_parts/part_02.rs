@@ -445,7 +445,7 @@ rust_test_command = "printf 'live stdout'; printf 'live stderr' >&2"
 
     let output = dispatch_with_observer(
         &ctx,
-        RuntimeCommand::Check(crate::command::CheckCommand::Test),
+        RuntimeCommand::Check(crate::command::CheckCommand::Named(crate::command::NamedCheck::TEST)),
         &mut observer,
     )
     .unwrap();
@@ -497,7 +497,7 @@ fn plain_v6_named_test_routes_through_repository_planning_for_every_component() 
 
     let output = dispatch_with_observer(
         &ctx,
-        RuntimeCommand::Check(crate::command::CheckCommand::Test),
+        RuntimeCommand::Check(crate::command::CheckCommand::Named(crate::command::NamedCheck::TEST)),
         &mut observer,
     )
     .unwrap();
@@ -562,7 +562,7 @@ command_output_limit_bytes = {OUTPUT_BYTES}
 
     let output = crate::runtime::dispatch(
         &ctx,
-        RuntimeCommand::Check(crate::command::CheckCommand::Test),
+        RuntimeCommand::Check(crate::command::CheckCommand::Named(crate::command::NamedCheck::TEST)),
     )
     .unwrap();
 
@@ -599,9 +599,9 @@ command_timeout_seconds = 1
     let error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
+            crate::cli::CheckCommand::Named(crate::cli::NamedCheckCommand::Test(crate::cli::CheckTargetOpts {
                 selectors: Vec::new(),
-            }),
+            })),
         )),
     )
     .unwrap_err()
@@ -646,9 +646,9 @@ rust_test_locked_command = "printf 'test locked\n'"
     let output = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Contract(crate::cli::CheckTargetOpts {
+            crate::cli::CheckCommand::Named(crate::cli::NamedCheckCommand::Contract(crate::cli::CheckTargetOpts {
                 selectors: Vec::new(),
-            }),
+            })),
         )),
     )
     .unwrap();
@@ -688,9 +688,9 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
     let error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
+            crate::cli::CheckCommand::Named(crate::cli::NamedCheckCommand::Test(crate::cli::CheckTargetOpts {
                 selectors: Vec::new(),
-            }),
+            })),
         )),
     )
     .unwrap_err()

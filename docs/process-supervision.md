@@ -1,10 +1,10 @@
 # Runtime process supervision
 
-Read this reference before changing [doctor signal sessions](../crates/jig/src/doctor/signal_session.rs), [shared signal supervision](../crates/jig/src/signal_supervision.rs), or [Jig-owned Bash probes](../crates/jig/src/shell.rs). Generic process-tree execution belongs to [jig-owned-process](../crates/jig-owned-process/AGENTS.md).
+Read this reference before changing [signal sessions](../crates/jig/src/signal_supervision/session.rs), [shared signal supervision](../crates/jig/src/signal_supervision.rs), or [Jig-owned Bash probes](../crates/jig/src/shell.rs). Generic process-tree execution belongs to [jig-owned-process](../crates/jig-owned-process/AGENTS.md).
 
-## Doctor signal sessions
+## Signal sessions
 
-Unix doctor signal sessions are serialized and reusable only after clean retirement: hold the session guard through handler restoration and restored-signal redelivery, and publish permanent poison before snapshotting signals on an unsafe retirement.
+Unix signal sessions, shared by doctor probes and every supervised command, are serialized and reusable only after clean retirement: hold the session guard through handler restoration and restored-signal redelivery, and publish permanent poison before snapshotting signals on an unsafe retirement.
 
 ## Bash probe environment
 

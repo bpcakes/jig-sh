@@ -3,7 +3,9 @@ use serde_json::{Value, json};
 
 use super::output::{HumanOutput, emit};
 use super::structured_error::require_json_ok;
-use crate::command::{AgentBootstrapRequest, AgentCommand, CheckCommand, RuntimeCommand};
+use crate::command::{
+    AgentBootstrapRequest, AgentCommand, CheckCommand, NamedCheck, RuntimeCommand,
+};
 use crate::{context::RepoContext, doctor, runtime};
 
 pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
@@ -11,7 +13,7 @@ pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     let progress = crate::progress::CliProgress::for_human_output("setup", json_output);
     progress.header("prepare repository and agent tooling");
     #[cfg(all(unix, not(test)))]
-    let signal_session = doctor::DoctorSignalSession::start().map_err(|_| {
+    let signal_session = crate::signal_supervision::SignalSession::start().map_err(|_| {
         anyhow::anyhow!("Setup was not started because signal supervision is unavailable")
     })?;
     #[cfg(all(unix, not(test)))]
@@ -97,7 +99,9 @@ fn run_setup_with_progress(
     next_phase("agent verification");
     let agent_after = dispatch(RuntimeCommand::Agent(AgentCommand::Doctor))?;
     next_phase("contract verification");
-    let contract = dispatch(RuntimeCommand::Check(CheckCommand::Contract))?;
+    let contract = dispatch(RuntimeCommand::Check(CheckCommand::Named(
+        NamedCheck::CONTRACT,
+    )))?;
     next_phase("doctor after");
     let doctor_after = run_doctor()?;
     let ok = bootstrap["ok"].as_bool().unwrap_or(false)
@@ -186,7 +190,7 @@ mod tests {
                         *dispatch_agent_ready.borrow_mut() = true;
                         json!({ "ok": true })
                     }
-                    RuntimeCommand::Check(CheckCommand::Contract) => {
+                    RuntimeCommand::Check(CheckCommand::Named(NamedCheck::CONTRACT)) => {
                         calls.push("check contract");
                         json!({ "ok": true })
                     }
@@ -259,7 +263,9 @@ mod tests {
                         registered.push(request.marketplace.unwrap());
                         json!({ "ok": true })
                     }
-                    RuntimeCommand::Check(CheckCommand::Contract) => json!({ "ok": true }),
+                    RuntimeCommand::Check(CheckCommand::Named(NamedCheck::CONTRACT)) => {
+                        json!({ "ok": true })
+                    }
                     _ => panic!("unexpected setup command"),
                 })
             },

@@ -1,5 +1,16 @@
 //! Usage recovery only: validate a suggested argv, never dispatch it.
-use super::*;
+
+use std::ffi::OsString;
+
+use clap::{
+    Parser,
+    error::{ContextKind, ContextValue, ErrorKind},
+};
+
+use super::argument_parsing::{
+    ROOT_FLAG_OPTIONS, ROOT_VALUE_OPTIONS, post_parse_usage_error, root_subcommand_index,
+};
+use crate::cli::{Cli, CommandKind};
 
 pub(super) fn hint(args: &[OsString], error: &clap::Error) -> Option<String> {
     let executable = recovery_executable(args)?;

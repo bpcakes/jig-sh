@@ -1,4 +1,9 @@
-use super::*;
+use crate::command;
+
+use super::super::{
+    LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts,
+    LoopRunOpts, LoopStatusOpts, LoopTickOpts,
+};
 
 impl From<LoopCommand> for command::LoopCommand {
     fn from(command: LoopCommand) -> Self {

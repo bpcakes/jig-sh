@@ -2,9 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use crate::{
-    bootstrap, context::RepoContext, doctor, info, root_commands, runtime, status, tool_defs, ui,
-};
+use crate::{bootstrap, root_commands, tool_defs};
 
 mod agent;
 mod agent_run;
@@ -26,9 +24,12 @@ mod setup_run;
 mod sqlx;
 mod state;
 mod status_opts;
+mod ui_run;
 mod vault;
 
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
+#[cfg(test)]
+pub(crate) use check::NamedCheckCommand;
 pub(crate) use check::{
     CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckComparisonOpts, CheckMigrationImmutabilityOpts,
     CheckOpts, CheckTargetOpts,
@@ -88,10 +89,6 @@ struct Cli {
 
 #[cfg(test)]
 const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
-#[cfg(test)]
-const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,claude,codex,doctor,init,presets,update";
-#[cfg(test)]
-const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault";
 #[cfg(test)]
 const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test";
 
@@ -347,10 +344,10 @@ pub(crate) enum CommandKind {
     )]
     Sqlx(SqlxCommand),
     /// Add a forward-only migration through the legacy flattened command.
-    #[command(name = tool_defs::cli_command::MIGRATION_ADD, hide = true)]
+    #[command(name = root_commands::MIGRATION_ADD.name, hide = true)]
     MigrationAdd(MigrationAddOpts),
     /// Regenerate schema documentation when schema dumps are enabled.
-    #[command(name = tool_defs::cli_command::SCHEMA_DUMP, hide = true)]
+    #[command(name = root_commands::SCHEMA_DUMP.name, hide = true)]
     SchemaDump,
     /// Manage the local encrypted Jig vault.
     #[command(
@@ -362,7 +359,7 @@ pub(crate) enum CommandKind {
     Vault(VaultCommand),
     /// Generate a TODO report for unchecked SQLx queries.
     #[command(
-        name = tool_defs::cli_command::GENERATE_SQLX_UNCHECKED_QUERIES_TODO,
+        name = root_commands::GENERATE_SQLX_UNCHECKED_QUERIES_TODO.name,
         hide = true
     )]
     GenerateSqlxUncheckedQueriesTodo(GenerateSqlxUncheckedQueriesTodoOpts),
@@ -407,7 +404,7 @@ pub(crate) enum CommandKind {
     )]
     State(StateCommand),
     /// Validate this binary against a generated repository launcher contract.
-    #[command(name = "__runtime-compatible", hide = true)]
+    #[command(name = root_commands::RUNTIME_COMPATIBLE.name, hide = true)]
     RuntimeCompatible(RuntimeCompatibleOpts),
 }
 
@@ -592,10 +589,6 @@ pub(crate) fn format_info_summary_for_test(value: &serde_json::Value) -> String 
 }
 
 pub(crate) use run::{is_structured_json_failure, run, structured_error_exit_code};
-#[cfg(test)]
-pub(crate) use structured_error::is_json_output_already_emitted;
-pub(crate) use structured_error::json_command_error;
-pub(crate) use structured_error::json_output_already_emitted;
 
 #[cfg(test)]
 mod dev_tests;

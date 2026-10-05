@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::time::Duration;
 
-use crate::command::{AgentMapCommand, CheckCommand, RuntimeCommand, StateCommand};
+use crate::command::{AgentMapCommand, CheckCommand, NamedCheck, RuntimeCommand, StateCommand};
 use crate::context::RepoContext;
 use crate::execution::{ExecutionControl, NoopExecutionObserver};
 use crate::policy::{
@@ -264,37 +264,7 @@ fn dispatch_check_with_observer(
 ) -> Result<Value> {
     match command {
         CheckCommand::Repository(request) => dispatch_repository_check(ctx, request, observer),
-        CheckCommand::Fmt => dispatch_named_check(ctx, "fmt", tool::FMT_CHECK, observer),
-        CheckCommand::Lint => dispatch_named_check(ctx, "lint", tool::LINT, observer),
-        CheckCommand::Clippy => dispatch_named_check(ctx, "clippy", tool::CLIPPY, observer),
-        CheckCommand::Test => dispatch_named_check(ctx, "test", tool::TEST, observer),
-        CheckCommand::TestLocked => {
-            dispatch_named_check(ctx, "test-locked", tool::TEST_LOCKED, observer)
-        }
-        CheckCommand::TypeScriptLint => {
-            dispatch_named_check(ctx, "typescript-lint", tool::TYPESCRIPT_LINT, observer)
-        }
-        CheckCommand::TypeScriptTypecheck => dispatch_named_check(
-            ctx,
-            "typescript-typecheck",
-            tool::TYPESCRIPT_TYPECHECK,
-            observer,
-        ),
-        CheckCommand::TypeScriptBuild => {
-            dispatch_named_check(ctx, "typescript-build", tool::TYPESCRIPT_BUILD, observer)
-        }
-        CheckCommand::TypeScriptCoverage => dispatch_named_check(
-            ctx,
-            "typescript-coverage",
-            tool::TYPESCRIPT_COVERAGE,
-            observer,
-        ),
-        CheckCommand::Sqlx => dispatch_named_check(ctx, "sqlx", tool::SQLX_CHECK, observer),
-        CheckCommand::Sqlc => dispatch_named_check(ctx, "sqlc", tool::SQLC_CHECK, observer),
-        CheckCommand::Schema => dispatch_named_check(ctx, "schema", tool::SCHEMA_CHECK, observer),
-        CheckCommand::Contract => {
-            dispatch_named_check(ctx, "contract", tool::CONTRACT_CHECK, observer)
-        }
+        CheckCommand::Named(check) => dispatch_named_check(ctx, check, observer),
         CheckCommand::AgentMap(opts) => crate::policy::run_check(
             ctx,
             PolicyCheckCommand::AgentMap(AgentMapInput {
@@ -316,8 +286,7 @@ fn dispatch_check_with_observer(
 
 fn dispatch_named_check(
     ctx: &RepoContext,
-    selector: &str,
-    legacy_tool: &str,
+    check: NamedCheck,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     if ctx.contract_version() >= 6 {
@@ -326,7 +295,7 @@ fn dispatch_named_check(
             ctx,
             &catalog,
             crate::command::RepositoryCheckRequest {
-                selectors: vec![selector.into()],
+                selectors: vec![check.selector.into()],
                 profile: None,
                 affected_base: None,
                 comparison: None,
@@ -336,7 +305,12 @@ fn dispatch_named_check(
             observer,
         )
     } else {
-        tool_execution::execute_manifest_tool_with_observer(ctx, legacy_tool, json!({}), observer)
+        tool_execution::execute_manifest_tool_with_observer(
+            ctx,
+            check.legacy_tool,
+            json!({}),
+            observer,
+        )
     }
 }
 
@@ -400,23 +374,10 @@ fn preserve_named_check_availability_diagnostic(
     {
         return Ok(());
     }
-    let legacy_tool = match selector.as_str() {
-        "fmt" => tool::FMT_CHECK,
-        "lint" => tool::LINT,
-        "clippy" => tool::CLIPPY,
-        "test" => tool::TEST,
-        "test-locked" => tool::TEST_LOCKED,
-        "typescript-lint" => tool::TYPESCRIPT_LINT,
-        "typescript-typecheck" => tool::TYPESCRIPT_TYPECHECK,
-        "typescript-build" => tool::TYPESCRIPT_BUILD,
-        "typescript-coverage" => tool::TYPESCRIPT_COVERAGE,
-        "sqlx" => tool::SQLX_CHECK,
-        "sqlc" => tool::SQLC_CHECK,
-        "schema" => tool::SCHEMA_CHECK,
-        "contract" => tool::CONTRACT_CHECK,
-        _ => return Ok(()),
+    let Some(check) = NamedCheck::from_selector(selector) else {
+        return Ok(());
     };
-    if let Some(message) = jig_features::unavailable_tool_message(ctx, legacy_tool) {
+    if let Some(message) = jig_features::unavailable_tool_message(ctx, check.legacy_tool) {
         bail!(message);
     }
     Ok(())

@@ -141,11 +141,11 @@ pub(super) fn json_reported_error(exit_status: i32) -> anyhow::Error {
     JsonReportedError(exit_status).into()
 }
 
-pub(crate) fn json_output_already_emitted(error: anyhow::Error) -> anyhow::Error {
+pub(super) fn json_output_already_emitted(error: anyhow::Error) -> anyhow::Error {
     JsonOutputAlreadyEmitted(error).into()
 }
 
-pub(crate) fn json_command_error(command: &'static str, error: anyhow::Error) -> anyhow::Error {
+pub(super) fn json_command_error(command: &'static str, error: anyhow::Error) -> anyhow::Error {
     JsonCommandError {
         command,
         message: format!("{error:#}"),
@@ -153,7 +153,7 @@ pub(crate) fn json_command_error(command: &'static str, error: anyhow::Error) ->
     .into()
 }
 
-pub(crate) fn is_json_output_already_emitted(error: &anyhow::Error) -> bool {
+pub(super) fn is_json_output_already_emitted(error: &anyhow::Error) -> bool {
     error.is::<JsonOutputAlreadyEmitted>()
 }
 

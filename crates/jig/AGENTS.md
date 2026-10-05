@@ -8,8 +8,10 @@
 
 - `src/main.rs`: binary entrypoint.
 - `src/lib.rs`: library entrypoint and module wiring.
-- `src/cli.rs`: clap command definitions and top-level command dispatch.
-- `src/cli/run/dev_launch.rs`: private dev-worker CLI handoff; its worker owns the existing dev lifecycle and output.
+- `src/root_commands.rs`: the single registry of top-level commands: name, help placement, and generated-launcher scope.
+- `src/cli.rs`: clap command definitions.
+- `src/cli/run.rs`: CLI startup boundaries and top-level command dispatch.
+- `src/cli/run/dev_launch.rs`: `jig dev` and `jig proxy` dispatch, including the private dev-worker handoff whose worker owns the existing dev lifecycle and output; `src/cli/run/dev_unavailable.rs` replaces it in builds without the `dev-proxy` feature.
 - `src/cli/run/vault_environment.rs`: CLI-startup boundary that withholds the reserved vault passphrase variables from commands that cannot capture them.
 - `src/runtime.rs`: command-backed tool execution.
 - `src/state.rs`: run history under `.agent/state`, with its diagnosis, archive, and restore maintenance.
@@ -23,12 +25,18 @@
 
 ## Edit here for X
 
-- Change CLI flags or subcommands: `src/cli.rs`.
+- Change CLI flags or nested subcommands: the command family's module under `src/cli/`; `src/cli.rs` wires the top-level commands.
+- Add a top-level command, in this order; the compiler or a test enforces each step:
+  1. Declare it once in the `root_commands!` table in `src/root_commands.rs`.
+  2. Add its `CommandKind` variant in `src/cli.rs`, taking `name` and `display_order` from the registry.
+  3. Add the arms the compiler now requires: `launcher_command` and `run_command` in `src/cli/run.rs`, `may_capture_vault_passphrase` in `src/cli/run/vault_environment.rs`, and both availability matches in `src/info/commands.rs`.
+  4. Regenerate the launcher's command lists with `JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launcher_command_lists`.
+- Add a named `jig check` subcommand: `NamedCheck` in `src/command/check.rs` ties its selector to its legacy manifest tool, and `NamedCheckCommand` in `src/cli/check.rs` is its clap variant.
 - Change which commands may keep the reserved vault passphrase variables past startup: `src/cli/run/vault_environment.rs` (read the vault runtime guide first).
 - Add an agent provider: `src/agent_provider.rs` defines the internal contract; `src/claude/provider.rs` and `src/codex/provider.rs` are implementations. Keep home identity and credential policy provider-owned; `src/cli/agent_run.rs` owns common homes/launch orchestration. See [agent providers](../../docs/agent-providers.md).
 - Change shared Claude/Codex path primitives: `src/home_paths.rs`; keep discovery and default-home policy in the provider modules.
 - Change Claude credential lookup and read-only subscription usage: `src/claude/usage/`; keep secrets, HTTP, and platform storage out of the TUI and output renderers.
-- Change shared operation signal supervision: `src/signal_supervision.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
+- Change shared operation signal supervision: `src/signal_supervision.rs`, with the process-wide signal session in `src/signal_supervision/session.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
 - Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
 - Change manifest-tool behavior around command execution: `src/runtime.rs`.
@@ -53,6 +61,8 @@
 - Before changing bootstrap entrypoints, toolchain checks, or templates, read the [bootstrap guide](src/bootstrap/AGENTS.md).
 - Before changing vault entrypoints or dispatch, read the [vault runtime guide](src/runtime/vault/AGENTS.md).
 - New top-level commands must choose a branch in the exhaustive `CommandKind::may_capture_vault_passphrase` match; commands that never unlock the vault withhold the passphrase. Do not add per-spawn passphrase plumbing.
+- A top-level command's name and generated-launcher scope are declared only in `src/root_commands.rs`. Never repeat a root command name as a string elsewhere, and regenerate rather than hand-edit the launcher's command-list markers and `case` arms.
+- Modules outside `src/cli/` do not depend on `crate::cli`: they take their own request types and return errors the CLI maps to its output protocol.
 - Before changing process supervision or Bash probes, read the [process reference](../../docs/process-supervision.md) and [owned-process guide](../jig-owned-process/AGENTS.md).
 - Use `scripts/jig` with the repository's selected release for routine checks. Validate edited runtime behavior with `scripts/jig-dev ...`, which incrementally builds the current source before invoking the launcher. `repo:source-runtime-check` is available for current-source contract validation; select checks for the affected behavior.
 

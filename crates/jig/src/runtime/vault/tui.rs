@@ -26,7 +26,7 @@ pub(crate) fn run(request: VaultTuiRequest, initial_passphrase: Option<SecretByt
     let backend = VaultTuiBackend::new(request)?;
     #[cfg(all(unix, not(test)))]
     {
-        let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
+        let signal_session = crate::signal_supervision::SignalSession::start().map_err(|_| {
             anyhow!(
                 "Vault TUI was not started because the process-wide signal session is unavailable"
             )

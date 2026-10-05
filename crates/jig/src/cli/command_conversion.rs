@@ -7,13 +7,11 @@ use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
     CheckComparisonOpts, CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts,
     CliExactTreeProvenance, DevLaunchOpts, DevOpts, DevRecoverOpts, DevStatusOpts, DevStopOpts,
-    DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts, LoopAcknowledgeOccurrenceOpts,
-    LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
-    ProxyAliasOpts, ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts,
-    ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts,
-    ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
-    ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand,
-    StateRestoreOpts,
+    DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts, ProxyAliasOpts, ProxyCertCommand,
+    ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts,
+    ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts,
+    ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
+    ProxyStopOpts, StateArchiveOpts, StateCommand, StateRestoreOpts,
 };
 
 impl From<AgentMapCommand> for command::AgentMapCommand {
@@ -113,19 +111,7 @@ include!("command_conversion/external_check.rs");
 
 fn direct_check_command(command: CheckCommand) -> command::CheckCommand {
     match command {
-        CheckCommand::Fmt(_) => command::CheckCommand::Fmt,
-        CheckCommand::Lint(_) => command::CheckCommand::Lint,
-        CheckCommand::Clippy(_) => command::CheckCommand::Clippy,
-        CheckCommand::Test(_) => command::CheckCommand::Test,
-        CheckCommand::TestLocked(_) => command::CheckCommand::TestLocked,
-        CheckCommand::TypeScriptLint(_) => command::CheckCommand::TypeScriptLint,
-        CheckCommand::TypeScriptTypecheck(_) => command::CheckCommand::TypeScriptTypecheck,
-        CheckCommand::TypeScriptBuild(_) => command::CheckCommand::TypeScriptBuild,
-        CheckCommand::TypeScriptCoverage(_) => command::CheckCommand::TypeScriptCoverage,
-        CheckCommand::Sqlx(_) => command::CheckCommand::Sqlx,
-        CheckCommand::Sqlc(_) => command::CheckCommand::Sqlc,
-        CheckCommand::Schema(_) => command::CheckCommand::Schema,
-        CheckCommand::Contract(_) => command::CheckCommand::Contract,
+        CheckCommand::Named(named) => command::CheckCommand::Named(named.into_parts().0),
         CheckCommand::AgentMap(opts) => command::CheckCommand::AgentMap(opts.into()),
         CheckCommand::AgentGuides => command::CheckCommand::AgentGuides,
         CheckCommand::MigrationImmutability(opts) => {
@@ -140,19 +126,10 @@ fn direct_check_command(command: CheckCommand) -> command::CheckCommand {
 
 fn repository_selector(command: CheckCommand) -> Result<(&'static str, CheckTargetOpts)> {
     match command {
-        CheckCommand::Fmt(opts) => Ok(("fmt", opts)),
-        CheckCommand::Lint(opts) => Ok(("lint", opts)),
-        CheckCommand::Clippy(opts) => Ok(("clippy", opts)),
-        CheckCommand::Test(opts) => Ok(("test", opts)),
-        CheckCommand::TestLocked(opts) => Ok(("test-locked", opts)),
-        CheckCommand::TypeScriptLint(opts) => Ok(("typescript-lint", opts)),
-        CheckCommand::TypeScriptTypecheck(opts) => Ok(("typescript-typecheck", opts)),
-        CheckCommand::TypeScriptBuild(opts) => Ok(("typescript-build", opts)),
-        CheckCommand::TypeScriptCoverage(opts) => Ok(("typescript-coverage", opts)),
-        CheckCommand::Sqlx(opts) => Ok(("sqlx", opts)),
-        CheckCommand::Sqlc(opts) => Ok(("sqlc", opts)),
-        CheckCommand::Schema(opts) => Ok(("schema", opts)),
-        CheckCommand::Contract(opts) => Ok(("contract", opts)),
+        CheckCommand::Named(named) => {
+            let (check, opts) = named.into_parts();
+            Ok((check.selector, opts))
+        }
         CheckCommand::AgentMap(_)
         | CheckCommand::AgentGuides
         | CheckCommand::MigrationImmutability(_)

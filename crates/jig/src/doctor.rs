@@ -53,25 +53,21 @@ const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROXY_LIST_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(120);
 const PROXY_LIST_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 
-#[cfg(unix)]
-mod signal_session;
-#[cfg(unix)]
-pub(crate) use signal_session::DoctorSignalSession;
-#[cfg(unix)]
-use signal_session::finish_doctor_signal_session;
 #[cfg(all(test, unix))]
-use signal_session::{
-    DOCTOR_ACTIVE_GENERATION, DOCTOR_SIGNAL_GENERATION, DOCTOR_SIGNAL_SESSION,
-    DoctorSignalFinishAction, DoctorSignals, SQLX_PROBE_TEST_HANDLER_PAUSED,
-    SQLX_PROBE_TEST_HANDLER_PAUSED_AFTER_RECORD, SQLX_PROBE_TEST_HANDLER_PAUSED_BEFORE_CLAIM,
-    SQLX_PROBE_TEST_PAUSE_HANDLER, SQLX_PROBE_TEST_PAUSE_HANDLER_AFTER_RECORD,
-    SQLX_PROBE_TEST_PAUSE_HANDLER_BEFORE_CLAIM, SQLX_PROBE_TEST_PAUSE_QUIESCENCE_TIMEOUT,
-    SQLX_PROBE_TEST_QUIESCENCE_TIMED_OUT, SQLX_PROBE_TEST_REDELIVERED_SIGNAL_COUNT,
-    SQLX_PROBE_TEST_REDELIVERED_SIGNAL_ORDER, SQLX_PROBE_TEST_RELEASE_HANDLER,
-    SQLX_PROBE_TEST_RELEASE_HANDLER_AFTER_RECORD, SQLX_PROBE_TEST_RELEASE_HANDLER_BEFORE_CLAIM,
-    SQLX_PROBE_TEST_RELEASE_QUIESCENCE_TIMEOUT, doctor_signal_bit, doctor_signal_finish_action,
-    install_default_doctor_signal_handler, record_doctor_signal, record_sqlx_probe_test_redelivery,
+use crate::signal_supervision::session::{
+    ACTIVE_SIGNAL_GENERATION, RecordedSignals, SIGNAL_GENERATION, SIGNAL_SESSION,
+    SQLX_PROBE_TEST_HANDLER_PAUSED, SQLX_PROBE_TEST_HANDLER_PAUSED_AFTER_RECORD,
+    SQLX_PROBE_TEST_HANDLER_PAUSED_BEFORE_CLAIM, SQLX_PROBE_TEST_PAUSE_HANDLER,
+    SQLX_PROBE_TEST_PAUSE_HANDLER_AFTER_RECORD, SQLX_PROBE_TEST_PAUSE_HANDLER_BEFORE_CLAIM,
+    SQLX_PROBE_TEST_PAUSE_QUIESCENCE_TIMEOUT, SQLX_PROBE_TEST_QUIESCENCE_TIMED_OUT,
+    SQLX_PROBE_TEST_REDELIVERED_SIGNAL_COUNT, SQLX_PROBE_TEST_REDELIVERED_SIGNAL_ORDER,
+    SQLX_PROBE_TEST_RELEASE_HANDLER, SQLX_PROBE_TEST_RELEASE_HANDLER_AFTER_RECORD,
+    SQLX_PROBE_TEST_RELEASE_HANDLER_BEFORE_CLAIM, SQLX_PROBE_TEST_RELEASE_QUIESCENCE_TIMEOUT,
+    SignalFinishAction, install_default_signal_handler, record_signal,
+    record_sqlx_probe_test_redelivery, signal_bit, signal_finish_action,
 };
+#[cfg(unix)]
+use crate::signal_supervision::{SignalSession, session::finish_signal_session};
 
 include!("doctor_parts/part_01.rs");
 include!("doctor_parts/part_02.rs");

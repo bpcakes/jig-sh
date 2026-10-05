@@ -91,7 +91,7 @@ pub fn scaffold_presets_report() -> Value {
         .collect::<Vec<_>>();
     json!({
         "ok": true,
-        "command": crate::tool_defs::cli_command::PRESETS,
+        "command": crate::root_commands::PRESETS.name,
         "presets": presets
     })
 }

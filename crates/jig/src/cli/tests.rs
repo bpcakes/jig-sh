@@ -42,7 +42,7 @@ fn parses_check_namespace_commands() {
     assert!(matches!(
         fmt.command,
         CommandKind::Check(CheckOpts {
-            command: Some(CheckCommand::Fmt(_)),
+            command: Some(CheckCommand::Named(NamedCheckCommand::Fmt(_))),
             ..
         })
     ));
@@ -51,7 +51,9 @@ fn parses_check_namespace_commands() {
     assert!(matches!(
         ts_typecheck.command,
         CommandKind::Check(CheckOpts {
-            command: Some(CheckCommand::TypeScriptTypecheck(_)),
+            command: Some(CheckCommand::Named(NamedCheckCommand::TypeScriptTypecheck(
+                _
+            ))),
             ..
         })
     ));
@@ -65,21 +67,21 @@ fn parses_check_namespace_commands() {
         match (parsed.command, expected) {
             (
                 CommandKind::Check(CheckOpts {
-                    command: Some(CheckCommand::TypeScriptLint(_)),
+                    command: Some(CheckCommand::Named(NamedCheckCommand::TypeScriptLint(_))),
                     ..
                 }),
                 "lint",
             )
             | (
                 CommandKind::Check(CheckOpts {
-                    command: Some(CheckCommand::TypeScriptBuild(_)),
+                    command: Some(CheckCommand::Named(NamedCheckCommand::TypeScriptBuild(_))),
                     ..
                 }),
                 "build",
             )
             | (
                 CommandKind::Check(CheckOpts {
-                    command: Some(CheckCommand::TypeScriptCoverage(_)),
+                    command: Some(CheckCommand::Named(NamedCheckCommand::TypeScriptCoverage(_))),
                     ..
                 }),
                 "coverage",
@@ -125,7 +127,7 @@ fn parses_agent_native_check_selections() {
         explained.command,
         CommandKind::Check(CheckOpts {
             explain: true,
-            command: Some(CheckCommand::Test(_)),
+            command: Some(CheckCommand::Named(NamedCheckCommand::Test(_))),
             ..
         })
     ));
@@ -134,7 +136,7 @@ fn parses_agent_native_check_selections() {
     match mixed.command {
         CommandKind::Check(CheckOpts {
             explain: true,
-            command: Some(CheckCommand::Test(opts)),
+            command: Some(CheckCommand::Named(NamedCheckCommand::Test(opts))),
             ..
         }) => assert_eq!(opts.selectors, ["api:lint"]),
         other => panic!("expected built-in plus target selectors, got {other:?}"),

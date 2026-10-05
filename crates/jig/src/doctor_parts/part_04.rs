@@ -379,12 +379,12 @@ fn standalone_codex_support_probe_with_signal_session(
     codex_bin: &std::ffi::OsStr,
     timeout: Duration,
 ) -> crate::runtime::CodexSupportProbeResult {
-    let signal_session = DoctorSignalSession::start().map_err(|_| {
+    let signal_session = SignalSession::start().map_err(|_| {
         "Codex marketplace support probe was not started because the process-wide signal session is unavailable".to_string()
     })?;
     let cancelled = || signal_session.cancelled();
     let probe = crate::runtime::probe_codex_marketplace_support(codex_bin, timeout, &cancelled);
-    finish_doctor_signal_session(signal_session).map_err(|_| {
+    finish_signal_session(signal_session).map_err(|_| {
         "Codex marketplace support probe supervision could not retire safely".to_string()
     })?;
     probe

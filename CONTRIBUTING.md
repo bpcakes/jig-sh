@@ -23,6 +23,12 @@ When editing `templates/project`, refresh the checked-in embedded-template snaps
 JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 ```
 
+Top-level commands are declared once in `crates/jig/src/root_commands.rs`. After adding one or changing its launcher scope, regenerate the command lists in every launcher copy (the template, its embedded snapshot, and `scripts/jig`):
+
+```sh
+JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launcher_command_lists
+```
+
 During a release, the remote `vVERSION` tag is pushed after the crates publish step succeeds. If you install a freshly published binary before the tag is visible on GitHub, use `--vcs-ref main` or a local `--template` path for the first render, then retry the default release template after the tag is pushed.
 
 ## Release

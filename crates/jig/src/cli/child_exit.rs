@@ -79,6 +79,7 @@ fn dev_management_actions_do_not_request_launch_process_identity() {
             ..Default::default()
         },
     };
+    #[cfg(feature = "dev-proxy")]
     assert_eq!(dev_launch_identity_present(&launch), Some(true));
     assert!(matches!(dev_human_output(&launch), HumanOutput::Dev));
 
@@ -86,6 +87,7 @@ fn dev_management_actions_do_not_request_launch_process_identity() {
         command: Some(DevSubcommand::Status(DevStatusOpts::default())),
         launch: DevLaunchOpts::default(),
     };
+    #[cfg(feature = "dev-proxy")]
     assert_eq!(dev_launch_identity_present(&status), None);
     assert!(matches!(dev_human_output(&status), HumanOutput::DevStatus));
 
@@ -93,6 +95,7 @@ fn dev_management_actions_do_not_request_launch_process_identity() {
         command: Some(DevSubcommand::Stop(DevStopOpts::default())),
         launch: DevLaunchOpts::default(),
     };
+    #[cfg(feature = "dev-proxy")]
     assert_eq!(dev_launch_identity_present(&stop), None);
     assert!(matches!(dev_human_output(&stop), HumanOutput::DevStop));
 }
