@@ -217,12 +217,12 @@ fn json_and_terminal_refusals_precede_passphrase_capture_and_vault_access() {
             u8::from(json_output),
             u8::from(stdout_is_terminal)
         ));
-        let command = VaultCommand::Read(super::super::vault::VaultReadOpts {
+        let command = VaultCommand::Read(super::super::VaultReadOpts {
             reference: "jig://Production/PASSWORD".parse().unwrap(),
             reveal: false,
             out_file: None,
             overwrite: false,
-            vault: super::super::vault::VaultRuntimeOpts {
+            vault: super::super::VaultRuntimeOpts {
                 home: Some(vault_home.clone()),
                 global: false,
             },
@@ -252,9 +252,9 @@ fn exec_json_refusal_precedes_env_file_and_passphrase_access() {
     let vault_home = temp.path().join("absent-vault");
     let passphrase = "correct horse battery staple";
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
-    let command = VaultCommand::Exec(super::super::vault::VaultExecOpts {
+    let command = VaultCommand::Exec(super::super::VaultExecOpts {
         env_file: temp.path().join("missing.env"),
-        vault: super::super::vault::VaultRuntimeOpts {
+        vault: super::super::VaultRuntimeOpts {
             home: Some(vault_home.clone()),
             global: false,
         },
@@ -380,12 +380,12 @@ fn invalid_injection_input_fails_before_passphrase_capture_or_vault_creation() {
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
 
     for input in [missing, malformed, oversized] {
-        let command = VaultCommand::Inject(super::super::vault::VaultInjectOpts {
+        let command = VaultCommand::Inject(super::super::VaultInjectOpts {
             input,
             reveal: false,
             out_file: Some(output.clone()),
             overwrite: false,
-            vault: super::super::vault::VaultRuntimeOpts {
+            vault: super::super::VaultRuntimeOpts {
                 home: Some(vault_home.clone()),
                 global: false,
             },
@@ -413,9 +413,9 @@ fn invalid_exec_env_fails_before_passphrase_capture_or_vault_creation() {
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
 
     for env_file in [invalid, std::path::PathBuf::from("-")] {
-        let command = VaultCommand::Exec(super::super::vault::VaultExecOpts {
+        let command = VaultCommand::Exec(super::super::VaultExecOpts {
             env_file,
-            vault: super::super::vault::VaultRuntimeOpts {
+            vault: super::super::VaultRuntimeOpts {
                 home: Some(vault_home.clone()),
                 global: false,
             },
@@ -455,15 +455,15 @@ fn invalid_import_input_and_destination_fail_before_passphrase_capture_or_vault_
         (std::path::PathBuf::from("-"), temp.path().join("stdin.out")),
         (valid, missing_parent_destination),
     ] {
-        let command = VaultCommand::Import(super::super::vault::VaultImportCommand::OnePassword(
-            super::super::vault::VaultImportOnePasswordOpts {
+        let command = VaultCommand::Import(super::super::VaultImportCommand::OnePassword(
+            super::super::VaultImportOnePasswordOpts {
                 env_file,
                 item: jig_vault::VaultItem::parse("jig://Production").unwrap(),
                 out_env,
                 replace: false,
                 overwrite: false,
                 dry_run: false,
-                vault: super::super::vault::VaultRuntimeOpts {
+                vault: super::super::VaultRuntimeOpts {
                     home: Some(vault_home.clone()),
                     global: false,
                 },
@@ -494,47 +494,47 @@ fn invalid_lifecycle_paths_fail_before_passphrase_capture_or_vault_creation() {
     let _new = EnvVarGuard::set("JIG_VAULT_NEW_PASSPHRASE", new);
 
     let commands = [
-        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Create(
-            super::super::vault::VaultBackupCreateOpts {
+        VaultCommand::Backup(super::super::VaultBackupCommand::Create(
+            super::super::VaultBackupCreateOpts {
                 out: std::path::PathBuf::from("-"),
                 overwrite: false,
-                vault: super::super::vault::VaultRuntimeOpts {
+                vault: super::super::VaultRuntimeOpts {
                     home: Some(vault_home.clone()),
                     global: false,
                 },
             },
         )),
-        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Create(
-            super::super::vault::VaultBackupCreateOpts {
+        VaultCommand::Backup(super::super::VaultBackupCommand::Create(
+            super::super::VaultBackupCreateOpts {
                 out: backup_output.clone(),
                 overwrite: false,
-                vault: super::super::vault::VaultRuntimeOpts {
+                vault: super::super::VaultRuntimeOpts {
                     home: Some(vault_home.clone()),
                     global: false,
                 },
             },
         )),
-        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Restore(
-            super::super::vault::VaultBackupRestoreOpts {
+        VaultCommand::Backup(super::super::VaultBackupCommand::Restore(
+            super::super::VaultBackupRestoreOpts {
                 input: std::path::PathBuf::from("-"),
-                vault: super::super::vault::VaultRuntimeOpts {
+                vault: super::super::VaultRuntimeOpts {
                     home: Some(vault_home.clone()),
                     global: false,
                 },
             },
         )),
-        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Restore(
-            super::super::vault::VaultBackupRestoreOpts {
+        VaultCommand::Backup(super::super::VaultBackupCommand::Restore(
+            super::super::VaultBackupRestoreOpts {
                 input: malformed_backup,
-                vault: super::super::vault::VaultRuntimeOpts {
+                vault: super::super::VaultRuntimeOpts {
                     home: Some(vault_home.clone()),
                     global: false,
                 },
             },
         )),
-        VaultCommand::Passphrase(super::super::vault::VaultPassphraseCommand::Change(
-            super::super::vault::VaultPassphraseChangeOpts {
-                vault: super::super::vault::VaultRuntimeOpts {
+        VaultCommand::Passphrase(super::super::VaultPassphraseCommand::Change(
+            super::super::VaultPassphraseChangeOpts {
+                vault: super::super::VaultRuntimeOpts {
                     home: Some(vault_home.clone()),
                     global: false,
                 },
@@ -572,8 +572,8 @@ fn passphrase_free_vault_invocations_strip_both_reserved_environment_values() {
     );
 
     run_vault_command(
-        VaultCommand::Status(super::super::vault::VaultStatusOpts {
-            vault: super::super::vault::VaultRuntimeOpts {
+        VaultCommand::Status(super::super::VaultStatusOpts {
+            vault: super::super::VaultRuntimeOpts {
                 home: Some(vault_home.clone()),
                 global: false,
             },
@@ -596,8 +596,8 @@ fn vault_tui_rejects_json_and_redirected_streams_before_scope_or_environment_cap
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
 
     let command = || {
-        VaultCommand::Tui(super::super::vault::VaultTuiOpts {
-            vault: super::super::vault::VaultRuntimeOpts {
+        VaultCommand::Tui(super::super::VaultTuiOpts {
+            vault: super::super::VaultRuntimeOpts {
                 home: Some(vault_home.clone()),
                 global: false,
             },
@@ -639,10 +639,10 @@ fn malformed_run_mapping_refusal_precedes_passphrase_capture() {
             Some(value) => EnvVarGuard::set("JIG_VAULT_PASSPHRASE", value),
             None => EnvVarGuard::remove("JIG_VAULT_PASSPHRASE"),
         };
-        let command = VaultCommand::Run(super::super::vault::VaultRunOpts {
+        let command = VaultCommand::Run(super::super::VaultRunOpts {
             env: vec!["TOKEN=jig://Production".into()],
             files: Vec::new(),
-            vault: super::super::vault::VaultRuntimeOpts {
+            vault: super::super::VaultRuntimeOpts {
                 home: Some(vault_home.clone()),
                 global: false,
             },

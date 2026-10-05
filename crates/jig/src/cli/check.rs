@@ -12,6 +12,8 @@ use super::comparison::{CliExactTreeProvenance, comparison_request};
 use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
 
+mod convert;
+
 pub(super) const CHECK_AFTER_HELP: &str = "\
 Run configured project checks or Jig-owned repository policy checks.
 

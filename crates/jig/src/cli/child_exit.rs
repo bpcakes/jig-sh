@@ -75,9 +75,9 @@ fn dev_management_actions_do_not_request_launch_process_identity() {
     // Each dev action renders with its own summary; the probe makes the three
     // summaries distinct.
     let probe = serde_json::json!({ "ok": true, "sessions": [] });
-    let launch_summary = output::format_dev_summary(&probe);
-    let status_summary = output::format_dev_status_summary(&probe);
-    let stop_summary = output::format_dev_stop_summary(&probe);
+    let launch_summary = crate::cli::proxy::render::format_dev_summary(&probe);
+    let status_summary = crate::cli::proxy::render::format_dev_status_summary(&probe);
+    let stop_summary = crate::cli::proxy::render::format_dev_stop_summary(&probe);
     assert_ne!(launch_summary, status_summary);
     assert_ne!(launch_summary, stop_summary);
     assert_ne!(status_summary, stop_summary);

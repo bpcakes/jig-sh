@@ -1,6 +1,6 @@
 use crate::command;
 
-use super::super::{
+use super::{
     LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts,
     LoopRunOpts, LoopStatusOpts, LoopTickOpts,
 };

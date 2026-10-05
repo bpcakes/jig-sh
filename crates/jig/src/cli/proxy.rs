@@ -6,6 +6,16 @@ use clap::{Args, Subcommand};
 use super::output;
 use crate::tool_defs;
 
+mod convert;
+pub(super) mod render;
+// One runner per build: the real one, or a stand-in reporting that the
+// `dev-proxy` feature is not built.
+#[cfg(feature = "dev-proxy")]
+pub(super) mod run;
+#[cfg(not(feature = "dev-proxy"))]
+#[path = "proxy/run_unavailable.rs"]
+pub(super) mod run;
+
 pub(super) const PROXY_RUN_AFTER_HELP: &str = "\
 The app command must come after --. Ad-hoc proxy runs bind the app to 127.0.0.1; use [[dev.apps]].host for configured loopback IP targets.
 
@@ -161,10 +171,10 @@ impl DevOpts {
     /// The renderer for this dev action's result.
     pub(super) const fn renderer(&self) -> output::Render {
         match &self.command {
-            None => output::format_dev_summary,
-            Some(DevSubcommand::Status(_)) => output::format_dev_status_summary,
-            Some(DevSubcommand::Recover(_)) => output::format_dev_recover_summary,
-            Some(DevSubcommand::Stop(_)) => output::format_dev_stop_summary,
+            None => render::format_dev_summary,
+            Some(DevSubcommand::Status(_)) => render::format_dev_status_summary,
+            Some(DevSubcommand::Recover(_)) => render::format_dev_recover_summary,
+            Some(DevSubcommand::Stop(_)) => render::format_dev_stop_summary,
         }
     }
 

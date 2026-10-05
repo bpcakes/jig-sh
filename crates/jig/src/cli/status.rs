@@ -1,5 +1,8 @@
 use clap::{Args, Subcommand};
 
+pub(super) mod render;
+pub(super) mod run;
+
 /// Default interval between completed interactive status collections.
 pub(crate) const DEFAULT_STATUS_REFRESH_SECONDS: u64 = 30;
 

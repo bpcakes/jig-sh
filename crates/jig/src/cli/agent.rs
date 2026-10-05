@@ -1,9 +1,10 @@
 use clap::{Args, Subcommand};
 
-use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
-use crate::command::RuntimeCommand;
+use crate::command::{self, RuntimeCommand};
 use crate::tool_defs;
+
+pub(super) mod render;
 
 pub(super) const AGENT_AFTER_HELP: &str = "\
 Human-readable output is the default. Pass --json for structured automation output.
@@ -49,13 +50,30 @@ impl AgentCommand {
             // missing or unregistered, which fails the command.
             Self::Doctor => RuntimeDispatch::new(
                 RuntimeCommand::Agent(self.into()),
-                output::format_agent_doctor_summary,
+                render::format_agent_doctor_summary,
             )
             .failing_on_ok_false(),
             Self::Bootstrap(_) => RuntimeDispatch::new(
                 RuntimeCommand::Agent(self.into()),
-                output::format_agent_bootstrap_summary,
+                render::format_agent_bootstrap_summary,
             ),
+        }
+    }
+}
+
+impl From<AgentCommand> for command::AgentCommand {
+    fn from(command: AgentCommand) -> Self {
+        match command {
+            AgentCommand::Doctor => Self::Doctor,
+            AgentCommand::Bootstrap(opts) => Self::Bootstrap(opts.into()),
+        }
+    }
+}
+
+impl From<AgentBootstrapOpts> for command::AgentBootstrapRequest {
+    fn from(opts: AgentBootstrapOpts) -> Self {
+        Self {
+            marketplace: opts.marketplace,
         }
     }
 }

@@ -1,11 +1,10 @@
 use std::ffi::OsString;
 
 use super::argument_parsing::{args_request_json, usage_hint};
-#[cfg(feature = "dev-proxy")]
-use super::dev_launch::dev_launch_identity_present;
 use super::*;
 use crate::cli::bootstrap_hints::TEMPLATE_ERROR_HINT;
-use crate::cli::output;
+#[cfg(feature = "dev-proxy")]
+use crate::cli::proxy::run::dev_launch_identity_present;
 use crate::cli::runtime_dispatch::FailurePolicy;
 use crate::cli::structured_error::require_foreground_status;
 use crate::cli::{DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand, InfoOpts};

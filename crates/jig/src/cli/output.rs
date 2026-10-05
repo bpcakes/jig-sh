@@ -2,46 +2,15 @@ use std::io::Write;
 
 use anyhow::Result;
 
-pub(super) use self::agent::{format_agent_bootstrap_summary, format_agent_doctor_summary};
-pub(super) use self::claude::{
-    homes_summary as format_claude_homes_summary, launch_summary as format_claude_launch_summary,
-};
-pub(super) use self::codex::{
-    format_codex_homes_summary, format_codex_launch_summary, format_codex_resume_summary,
-};
-pub(super) use self::dev::{
-    format_dev_recover_summary, format_dev_status_summary, format_dev_stop_summary,
-    format_dev_summary,
-};
 pub(super) use self::doctor::format_doctor_summary;
-pub(super) use self::info::format_info_summary;
-pub(super) use self::loops::{
-    format_loop_acknowledge_occurrence_summary, format_loop_clear_attempt_summary,
-    format_loop_dispatch_summary, format_loop_run_summary, format_loop_show_summary,
-    format_loop_status_summary, format_loop_tick_summary,
-};
-pub(super) use self::state::{
-    format_state_archive_summary, format_state_diagnose_summary, format_state_restore_summary,
-    format_state_summary,
-};
-pub(super) use self::status::format_summary as format_status_summary;
-pub(super) use self::vault::{format_vault_generic_summary, format_vault_run_summary};
 
-mod agent;
-mod claude;
-mod codex;
-mod command_display;
-mod dev;
+pub(super) mod command_display;
 mod doctor;
-mod info;
-mod loops;
-mod state;
-mod status;
-mod usage;
-mod vault;
+pub(super) mod usage;
 
 /// Renders a command's JSON result for people. Each command passes its own
-/// renderer to [`emit`]; there is no central table of outputs to extend.
+/// renderer to [`emit`]; family renderers live in `cli/<family>/render.rs`,
+/// and this module keeps only the formatting several commands share.
 pub(super) type Render = fn(&serde_json::Value) -> String;
 
 pub(super) fn emit(json_output: bool, render: Render, value: &serde_json::Value) -> Result<()> {
@@ -216,35 +185,10 @@ fn append_cargo_impact_summary(lines: &mut Vec<String>, plan: &serde_json::Value
     }
 }
 
-fn structured_target_text(value: &serde_json::Value) -> String {
+pub(super) fn structured_target_text(value: &serde_json::Value) -> String {
     let component = value["component"].as_str().unwrap_or("?");
     let action = value["action"].as_str().unwrap_or("?");
     format!("{component}:{action}")
-}
-
-pub(super) fn format_run_status_summary(value: &serde_json::Value) -> String {
-    let result = &value["result"];
-    let run_id = result["run_id"].as_str().unwrap_or("<unknown>");
-    let plan_id = result["plan_id"].as_str().unwrap_or("<unknown>");
-    let status = result["status"].as_str().unwrap_or("unknown");
-    let conclusion = result["conclusion"].as_str();
-    let state = conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
-    let mut lines = vec![
-        format!("Run {run_id}: {state}"),
-        format!("  Plan: {plan_id}"),
-    ];
-    if let Some(targets) = result["targets"].as_array() {
-        for target in targets {
-            let address = structured_target_text(&target["target"]);
-            let status = target["status"].as_str().unwrap_or("unknown");
-            let conclusion = target["conclusion"].as_str();
-            let state =
-                conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
-            lines.push(format!("  - {address}: {state}"));
-        }
-    }
-    lines.push("  full report: rerun with --json".into());
-    lines.join("\n")
 }
 
 pub(super) fn print_json(value: &serde_json::Value) -> Result<()> {
@@ -471,61 +415,11 @@ pub(super) fn format_migration_add_summary(value: &serde_json::Value) -> String 
     lines.join("\n")
 }
 
-pub(super) fn format_proxy_summary(value: &serde_json::Value) -> String {
-    if value_bool(value, "interrupted").unwrap_or(false) {
-        let signal = value_str(value, "termination_signal").unwrap_or("signal");
-        let mut lines = vec![format!("Proxy: stopped ({signal})")];
-        if let Some(app) = value_str(value, "app") {
-            lines.push(format!("  App: {app}"));
-        }
-        lines.push("  full report: rerun with --json".into());
-        return lines.join("\n");
-    }
-
-    let ok = value_bool(value, "ok").unwrap_or(false);
-    let mut lines = vec![format!("Proxy: {}", if ok { "ok" } else { "failed" })];
-    if let Some(running) = value_bool(value, "running") {
-        lines.push(format!("  Running: {}", if running { "yes" } else { "no" }));
-    }
-    if let Some(pid) = value_i64(value, "pid") {
-        lines.push(format!("  PID: {pid}"));
-    }
-    if let Some(http) = value_u64(value, "http_port") {
-        lines.push(format!("  HTTP port: {http}"));
-    }
-    if let Some(https) = value_u64(value, "https_port") {
-        lines.push(format!("  HTTPS port: {https}"));
-    }
-    if let Some(hostname) = value_str(value, "hostname") {
-        lines.push(format!("  Hostname: {hostname}"));
-    }
-    if let Some(app) = value_str(value, "app") {
-        lines.push(format!("  App: {app}"));
-    }
-    if let Some(routes) = value["routes"].as_array() {
-        lines.push(format!("  Routes: {}", routes.len()));
-    }
-    if let Some(path) = value_str(value, "path") {
-        lines.push(format!("  Path: {path}"));
-    }
-    if let Some(state_dir) = value_str(value, "state_dir") {
-        lines.push(format!("  State: {state_dir}"));
-    }
-    if let Some(warning) = value_str(value, "warning")
-        .or_else(|| value_str(value, "trust_warning"))
-        .or_else(|| value_str(value, "note"))
-    {
-        lines.push(format!("  Note: {warning}"));
-    }
-    lines.push("  full report: rerun with --json".into());
-    lines.join("\n")
-}
-
-fn concise_preview(preview: &str, max_chars: usize) -> String {
+pub(super) fn concise_preview(preview: &str, max_chars: usize) -> String {
     concise_preview_with_truncation(preview, max_chars).0
 }
 
-fn concise_preview_with_truncation(preview: &str, max_chars: usize) -> (String, bool) {
+pub(super) fn concise_preview_with_truncation(preview: &str, max_chars: usize) -> (String, bool) {
     let trimmed = preview.trim();
     if trimmed.chars().count() <= max_chars {
         return (trimmed.to_string(), false);
@@ -546,19 +440,19 @@ fn concise_preview_with_truncation(preview: &str, max_chars: usize) -> (String, 
     (truncated, true)
 }
 
-fn value_str<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+pub(super) fn value_str<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(serde_json::Value::as_str)
 }
 
-fn value_bool(value: &serde_json::Value, key: &str) -> Option<bool> {
+pub(super) fn value_bool(value: &serde_json::Value, key: &str) -> Option<bool> {
     value.get(key).and_then(serde_json::Value::as_bool)
 }
 
-fn value_i64(value: &serde_json::Value, key: &str) -> Option<i64> {
+pub(super) fn value_i64(value: &serde_json::Value, key: &str) -> Option<i64> {
     value.get(key).and_then(serde_json::Value::as_i64)
 }
 
-fn value_u64(value: &serde_json::Value, key: &str) -> Option<u64> {
+pub(super) fn value_u64(value: &serde_json::Value, key: &str) -> Option<u64> {
     value.get(key).and_then(serde_json::Value::as_u64)
 }
 

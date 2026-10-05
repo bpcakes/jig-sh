@@ -4,8 +4,10 @@ use clap::{Args, Subcommand};
 
 use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
-use crate::command::RuntimeCommand;
+use crate::command::{self, RuntimeCommand};
 use crate::tool_defs;
+
+pub(super) mod render;
 
 pub(super) const STATE_ARCHIVE_AFTER_HELP: &str = "\
 Archive completed run histories that ended before --before.
@@ -73,11 +75,80 @@ pub(crate) struct StateArchiveOpts {
 impl StateCommand {
     pub(super) fn into_dispatch(self) -> RuntimeDispatch {
         let render: output::Render = match &self {
-            Self::Summary => output::format_state_summary,
-            Self::Diagnose => output::format_state_diagnose_summary,
-            Self::Restore(_) => output::format_state_restore_summary,
-            Self::Archive(_) => output::format_state_archive_summary,
+            Self::Summary => render::format_state_summary,
+            Self::Diagnose => render::format_state_diagnose_summary,
+            Self::Restore(_) => render::format_state_restore_summary,
+            Self::Archive(_) => render::format_state_archive_summary,
         };
         RuntimeDispatch::new(RuntimeCommand::State(self.into()), render)
+    }
+}
+
+impl From<StateCommand> for command::StateCommand {
+    fn from(command: StateCommand) -> Self {
+        match command {
+            StateCommand::Summary => Self::Summary,
+            StateCommand::Diagnose => Self::Diagnose,
+            StateCommand::Restore(opts) => Self::Restore(opts.into()),
+            StateCommand::Archive(opts) => Self::Archive(opts.into()),
+        }
+    }
+}
+
+impl From<StateRestoreOpts> for command::StateRestoreRequest {
+    fn from(opts: StateRestoreOpts) -> Self {
+        Self {
+            backup: opts.backup,
+        }
+    }
+}
+
+impl From<StateArchiveOpts> for command::StateArchiveRequest {
+    fn from(opts: StateArchiveOpts) -> Self {
+        Self {
+            before: opts.before,
+            dry_run: opts.dry_run,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_archive_conversion_preserves_cutoff_and_dry_run() {
+        let request: command::StateCommand = StateCommand::Archive(StateArchiveOpts {
+            before: "2026-01-01".into(),
+            include_runs: true,
+            dry_run: true,
+        })
+        .into();
+
+        match request {
+            command::StateCommand::Archive(request) => {
+                assert_eq!(request.before, "2026-01-01");
+                assert!(request.dry_run);
+            }
+            other => panic!("expected state archive request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn state_maintenance_conversion_preserves_arguments() {
+        let request: command::StateCommand = StateCommand::Diagnose.into();
+        assert!(matches!(request, command::StateCommand::Diagnose));
+
+        let backup = std::path::PathBuf::from("backup/manifest.json");
+        let request: command::StateCommand = StateCommand::Restore(StateRestoreOpts {
+            backup: backup.clone(),
+        })
+        .into();
+        match request {
+            command::StateCommand::Restore(request) => {
+                assert_eq!(request.backup, backup);
+            }
+            other => panic!("expected state restore request, got {other:?}"),
+        }
     }
 }

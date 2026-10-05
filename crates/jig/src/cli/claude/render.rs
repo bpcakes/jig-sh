@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::agent_provider::AgentProvider;
 use crate::claude::provider::Claude;
 
-use super::command_display::CommandDisplay;
+use crate::cli::output::command_display::CommandDisplay;
 
 pub(in crate::cli) fn homes_summary(value: &Value) -> String {
     let mut lines = vec!["Claude homes".to_owned()];
@@ -33,7 +33,7 @@ pub(in crate::cli) fn homes_summary(value: &Value) -> String {
                 } else {
                     lines.push(format!(
                         "      {}",
-                        super::usage::format_limits(
+                        crate::cli::output::usage::format_limits(
                             &home["rate_limits"],
                             Claude::METADATA.subscription_bucket
                         )
