@@ -275,3 +275,26 @@ fn a_declared_target_name_is_not_also_discovered() {
     assert!(non_test.contains("`src/tool.rs:1`"), "{non_test}");
     assert!(test.contains("`src/bin/tool.rs:1`"), "{test}");
 }
+
+/// A nested manifest does not stop the package around it from discovering a
+/// binary, so an enclosing package's target keeps its classification.
+#[test]
+fn a_nested_manifest_does_not_hide_an_enclosing_package_target() {
+    let temp = inventory(&[
+        ("Cargo.toml", &format!("{MANIFEST}edition = \"2021\"\n")),
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"bin/tool/main.rs\"]\nmod tool_cases;\n",
+        ),
+        (
+            "src/bin/tool/Cargo.toml",
+            "[package]\nname = \"nested\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("src/bin/tool/main.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/bin/tool/main.rs:1`"), "{non_test}");
+    assert!(test.contains("_None_"), "{test}");
+}

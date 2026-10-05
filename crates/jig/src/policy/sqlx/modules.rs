@@ -16,6 +16,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use super::cargo_targets::CargoTargets;
 use super::scanner::{has_cfg_test, unraw};
 
+/// How many times the set of files treated as roots of their own is revised
+/// before the inventory settles for the crate roots Cargo grounds.
+const MAX_ROOT_REVISIONS: usize = 16;
+
 /// How a `mod` item names what it loads. A `#[path]` value extends the
 /// directory itself and leaves any pending module name unused, so the two
 /// spellings cannot be collapsed.
@@ -167,31 +171,60 @@ struct Claims<'a> {
     claimed: BTreeSet<&'a str>,
 }
 
-/// Resolves the module graph twice. The first pass learns which files no
-/// declaration reaches, because a file's directory depends on the declaration
-/// that loaded it and is only a guess until then. The second pass guesses for
-/// exactly those files, so a guessed directory never leaves behind a claim
-/// that the resolved one replaces.
+/// Resolves the module graph, revising which files are roots of their own
+/// until the answer agrees with itself. A file's module directory depends on
+/// the declaration that loaded it, so the directory its own name implies is
+/// only a guess: a file some declaration turns out to load stops being a
+/// root, and a file left unloaded becomes one, each of which changes what the
+/// next pass resolves.
 fn resolve_claims<'a>(
     files: &'a BTreeMap<String, FileModules>,
     targets: &CargoTargets,
 ) -> Claims<'a> {
-    let discovered = resolve_pass(files, targets, None);
-    let unreached = files
-        .keys()
-        .map(String::as_str)
-        .filter(|path| !discovered.claimed.contains(path))
-        .collect();
-    resolve_pass(files, targets, Some(&unreached))
+    let mut roots: BTreeSet<&'a str> = BTreeSet::new();
+    for _ in 0..MAX_ROOT_REVISIONS {
+        let claims = resolve_pass(files, targets, &roots);
+        // A file some declaration loads is not a root of its own, and the
+        // directory its name implied is replaced by the resolved one.
+        let loaded = roots
+            .iter()
+            .copied()
+            .filter(|path| claims.claimed.contains(path))
+            .collect::<Vec<_>>();
+        if !loaded.is_empty() {
+            for path in loaded {
+                roots.remove(path);
+            }
+            continue;
+        }
+        // A file no declaration loads still resolves declarations of its own,
+        // against the conventional directory its name implies.
+        let unloaded = files
+            .keys()
+            .map(String::as_str)
+            .filter(|path| {
+                !claims.claimed.contains(path)
+                    && !roots.contains(path)
+                    && cargo_target_dir(path, targets).is_none()
+            })
+            .collect::<Vec<_>>();
+        if unloaded.is_empty() {
+            return claims;
+        }
+        roots.extend(unloaded);
+    }
+    // Declarations that only load one another cannot compile, so a root set
+    // that will not settle is pathological. Keeping just what Cargo grounds
+    // can only leave call sites in the non-test inventory.
+    resolve_pass(files, targets, &BTreeSet::new())
 }
 
-/// One resolution pass. With `unreached`, exactly those files are seeded with
-/// the directory their own name implies; without it, any file nothing has
-/// reached yet is seeded that way as the pass goes along.
+/// One resolution pass, seeding Cargo's own crate roots and each file in
+/// `roots` with the directory its name implies.
 fn resolve_pass<'a>(
     files: &'a BTreeMap<String, FileModules>,
     targets: &CargoTargets,
-    unreached: Option<&BTreeSet<&'a str>>,
+    roots: &BTreeSet<&'a str>,
 ) -> Claims<'a> {
     let mut claims = Claims::default();
     let mut directories: BTreeMap<&str, BTreeSet<Dir>> = BTreeMap::new();
@@ -203,47 +236,35 @@ fn resolve_pass<'a>(
             seed(path, dir, &mut directories, &mut queue);
         }
     }
-    for path in unreached.into_iter().flatten() {
-        seed(path, unreached_dir(path), &mut directories, &mut queue);
+    for path in roots {
+        seed(path, root_dir(path), &mut directories, &mut queue);
     }
-    let mut undiscovered = files.keys();
-    loop {
-        while let Some((path, dir)) = queue.pop_front() {
-            for declaration in &files[path].declarations {
-                let Some(candidates) = resolve(declaration, &dir) else {
+    while let Some((path, dir)) = queue.pop_front() {
+        for declaration in &files[path].declarations {
+            let Some(candidates) = resolve(declaration, &dir) else {
+                continue;
+            };
+            for (target, child_dir) in candidates {
+                // A declaration naming no inventoried file resolves
+                // nothing, so that file keeps its own classification.
+                let Some((child, _)) = files.get_key_value(target.as_str()) else {
                     continue;
                 };
-                for (target, child_dir) in candidates {
-                    // A declaration naming no inventoried file resolves
-                    // nothing, so that file keeps its own classification.
-                    let Some((child, _)) = files.get_key_value(target.as_str()) else {
-                        continue;
-                    };
-                    let child = child.as_str();
-                    claims.claimed.insert(child);
-                    if !declaration.cfg_test {
-                        claims
-                            .production_children
-                            .entry(path)
-                            .or_default()
-                            .push(child);
-                        *claims.production_claims.entry(child).or_default() += 1;
-                    }
-                    seed(child, child_dir, &mut directories, &mut queue);
+                let child = child.as_str();
+                claims.claimed.insert(child);
+                if !declaration.cfg_test {
+                    claims
+                        .production_children
+                        .entry(path)
+                        .or_default()
+                        .push(child);
+                    *claims.production_claims.entry(child).or_default() += 1;
                 }
+                seed(child, child_dir, &mut directories, &mut queue);
             }
         }
-        // In the first pass, a file nothing has reached yet still resolves
-        // declarations of its own, against the directory its name implies.
-        // In the second, the seeds are already fixed.
-        if unreached.is_some() {
-            return claims;
-        }
-        let Some(path) = undiscovered.find(|path| !directories.contains_key(path.as_str())) else {
-            return claims;
-        };
-        seed(path, unreached_dir(path), &mut directories, &mut queue);
     }
+    claims
 }
 
 /// Records a directory a file can be loaded with, queueing it when it is new.
@@ -305,11 +326,11 @@ fn cargo_target_dir(path: &str, targets: &CargoTargets) -> Option<Dir> {
     targets.contains(path).then(|| Dir::owned(parent_dir(path)))
 }
 
-/// The directory a file resolves its declarations against when no resolved
-/// declaration loads it: the conventional layout its own name implies. A
-/// crate root and a `mod.rs` share their directory with their children; any
-/// other module file owns a directory named after it.
-fn unreached_dir(path: &str) -> Dir {
+/// The directory a file resolves its declarations against when it is a root
+/// of its own: the conventional layout its name implies. A crate root and a
+/// `mod.rs` share their directory with their children; any other module file
+/// owns a directory named after it.
+fn root_dir(path: &str) -> Dir {
     let (parent, basename) = split_path(path);
     match basename.strip_suffix(".rs") {
         Some(stem) if !matches!(basename, "mod.rs" | "lib.rs" | "main.rs") => Dir {

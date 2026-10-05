@@ -243,3 +243,28 @@ fn a_guessed_directory_leaves_no_claim_once_a_declaration_resolves_the_file() {
     assert!(!non_test.contains("`src/helper.rs:1`"), "{non_test}");
     assert!(test.contains("`src/helper.rs:1`"), "{test}");
 }
+
+/// Retracting a guessed directory can leave a file nothing loads after all,
+/// and such a file is a root of its own, so its declarations still resolve.
+#[test]
+fn a_file_left_unloaded_by_a_retracted_guess_becomes_a_root() {
+    let temp = inventory(&[
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"a.rs\"]\nmod cases;\n",
+        ),
+        ("src/a.rs", "mod helper;\n"),
+        ("src/helper.rs", CALL),
+        (
+            "src/a/helper.rs",
+            "#[cfg(test)]\n#[path = \"../only.rs\"]\nmod only;\n",
+        ),
+        ("src/only.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("_None_"), "{non_test}");
+    assert!(test.contains("`src/helper.rs:1`"), "{test}");
+    assert!(test.contains("`src/only.rs:1`"), "{test}");
+}

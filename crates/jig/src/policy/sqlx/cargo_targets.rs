@@ -111,15 +111,17 @@ impl CargoTargets {
         self.named.contains(path) || self.discovers(path)
     }
 
-    /// Whether a file sits where Cargo discovers a target of the package that
-    /// governs it, which is the nearest ancestor directory holding a manifest
-    /// that defines a package.
+    /// Whether a file sits where Cargo discovers a target of any package it
+    /// is under. A nested manifest does not stop an enclosing package from
+    /// discovering the file, so every ancestor package is considered.
     fn discovers(&self, path: &str) -> bool {
         let mut dir = split_path(path).0;
         loop {
             if let Some(package) = self.packages.get(dir) {
                 let relative = path.strip_prefix(dir).unwrap_or(path);
-                return package.discovers(relative.trim_start_matches('/'));
+                if package.discovers(relative.trim_start_matches('/')) {
+                    return true;
+                }
             }
             if dir.is_empty() {
                 return false;
