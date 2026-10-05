@@ -6,6 +6,7 @@ use crate::policy::sqlx::check_non_test;
 pub(super) const CALL: &str = "fn example() { let _ = sqlx::query(\"SELECT 1\"); }\n";
 pub(super) const MANIFEST: &str = "[package]\nname = \"example-project\"\nversion = \"0.1.0\"\n";
 
+mod blocks;
 mod cargo_targets;
 
 /// Builds a Git repository whose only crate root is `src` and writes each

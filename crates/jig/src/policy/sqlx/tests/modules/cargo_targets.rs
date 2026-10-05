@@ -320,3 +320,70 @@ fn only_the_cargo_loading_of_a_target_is_production() {
     assert!(non_test.contains("`src/helper.rs:1`"), "{non_test}");
     assert!(test.contains("`src/server/helper.rs:1`"), "{test}");
 }
+
+/// A Cargo target outside the configured crate roots still loads what it
+/// declares, so a helper it shares with a test module stays production code.
+#[test]
+fn a_target_outside_the_crate_roots_keeps_its_production_claims() {
+    let temp = inventory(&[
+        (
+            "Cargo.toml",
+            &format!("{MANIFEST}[[bin]]\nname = \"runner\"\npath = \"runner.rs\"\n"),
+        ),
+        ("runner.rs", "#[path = \"src/shared.rs\"]\nmod shared;\n"),
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"shared.rs\"]\nmod cases;\n",
+        ),
+        ("src/shared.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/shared.rs:1`"), "{non_test}");
+    assert!(test.contains("_None_"), "{test}");
+}
+
+/// Without that outside target the same helper is reached only through
+/// `#[cfg(test)]`, which is what makes the case above a production claim
+/// rather than an accident of the fixture.
+#[test]
+fn the_same_helper_is_test_code_without_the_outside_target() {
+    let temp = inventory(&[
+        ("Cargo.toml", MANIFEST),
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"shared.rs\"]\nmod cases;\n",
+        ),
+        ("src/shared.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("_None_"), "{non_test}");
+    assert!(test.contains("`src/shared.rs:1`"), "{test}");
+}
+
+/// A source outside the crate roots that cannot be parsed leaves the
+/// relationships incomplete, so nothing is reclassified rather than guessed.
+#[test]
+fn an_unparseable_outside_source_declines_reclassification() {
+    let temp = inventory(&[
+        (
+            "Cargo.toml",
+            &format!("{MANIFEST}[[bin]]\nname = \"runner\"\npath = \"runner.rs\"\n"),
+        ),
+        ("runner.rs", "fn broken(\n"),
+        ("src/lib.rs", "#[cfg(test)]\nmod unit_cases;\n"),
+        ("src/unit_cases.rs", "mod fixture;\n"),
+        ("src/unit_cases/fixture.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(
+        non_test.contains("`src/unit_cases/fixture.rs:1`"),
+        "{non_test}"
+    );
+    assert!(test.contains("_None_"), "{test}");
+}

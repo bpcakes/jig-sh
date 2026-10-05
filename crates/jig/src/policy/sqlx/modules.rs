@@ -11,6 +11,10 @@
 //! loaded it, so the loading context travels with each file rather than being
 //! recomputed from its name.
 
+use std::collections::BTreeSet;
+
+use syn::visit::{self, Visit};
+
 use super::cargo_targets::CargoTargets;
 use super::scanner::{has_cfg_test, unraw};
 
@@ -23,12 +27,23 @@ enum ModuleName {
     Path(String),
 }
 
-/// One external `mod` declaration, with the inline module blocks enclosing it.
+/// What encloses a declaration and so decides the directory it resolves
+/// against.
+#[derive(Clone)]
+enum Step {
+    /// An inline module block, which extends the directory by its own name.
+    Inline(ModuleName),
+    /// A block expression, which drops the module name the file keeps
+    /// pending without extending the directory.
+    Block,
+}
+
+/// One external `mod` declaration, with whatever encloses it.
 pub(super) struct ModuleDecl {
-    inline: Vec<ModuleName>,
+    steps: Vec<Step>,
     name: ModuleName,
     /// Whether an exact `#[cfg(test)]` attribute covers this declaration,
-    /// either on the declaration itself or on an enclosing inline module.
+    /// on the declaration itself or on anything enclosing it.
     pub(super) cfg_test: bool,
 }
 
@@ -80,43 +95,94 @@ impl ModuleName {
     }
 }
 
-/// Collects the external `mod` declarations of a parsed file. Only items are
-/// walked, so a `mod` inside a block expression is left unresolved along with
-/// the macro-generated and `include!`-introduced declarations the inventory
-/// already documents as out of reach.
+/// Collects the external `mod` declarations of a parsed file, including the
+/// ones inside a block, which Rust requires to carry a `#[path]`. Macro input
+/// is not expanded, so declarations a macro produces stay out of reach, as
+/// the inventory documents.
 pub(super) fn collect_declarations(items: &[syn::Item]) -> Vec<ModuleDecl> {
-    let mut declarations = Vec::new();
-    collect_items(items, &mut Vec::new(), false, &mut declarations);
-    declarations
+    let mut collector = Declarations {
+        steps: Vec::new(),
+        cfg_test: false,
+        out: Vec::new(),
+    };
+    for item in items {
+        visit::visit_item(&mut collector, item);
+    }
+    collector.out
 }
 
-fn collect_items(
-    items: &[syn::Item],
-    inline: &mut Vec<ModuleName>,
+struct Declarations {
+    steps: Vec<Step>,
     cfg_test: bool,
-    out: &mut Vec<ModuleDecl>,
-) {
-    for item in items {
-        let syn::Item::Mod(module) = item else {
-            continue;
-        };
-        let cfg_test = cfg_test || has_cfg_test(&module.attrs);
+    out: Vec<ModuleDecl>,
+}
+
+impl Declarations {
+    /// Collects with an exact `#[cfg(test)]` on these attributes in force, so
+    /// a declaration inside a test-only item inherits it.
+    fn within(&mut self, attrs: &[syn::Attribute], collect: impl FnOnce(&mut Self)) {
+        let enclosing = self.cfg_test;
+        self.cfg_test |= has_cfg_test(attrs);
+        collect(self);
+        self.cfg_test = enclosing;
+    }
+
+    fn in_block(&self) -> bool {
+        self.steps.iter().any(|step| matches!(step, Step::Block))
+    }
+}
+
+impl<'ast> Visit<'ast> for Declarations {
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
         let name = match path_attribute(&module.attrs) {
             Some(value) => ModuleName::Path(value),
             None => ModuleName::Named(unraw(&module.ident)),
         };
-        match &module.content {
-            Some((_, items)) => {
-                inline.push(name);
-                collect_items(items, inline, cfg_test, out);
-                inline.pop();
+        self.within(&module.attrs, |collector| match &module.content {
+            Some(_) => {
+                collector.steps.push(Step::Inline(name));
+                visit::visit_item_mod(collector, module);
+                collector.steps.pop();
             }
-            None => out.push(ModuleDecl {
-                inline: inline.clone(),
+            // Rust rejects a file module inside a block that carries no
+            // `#[path]`, so there is no such file to resolve.
+            None if collector.in_block() && matches!(&name, ModuleName::Named(_)) => {}
+            None => collector.out.push(ModuleDecl {
+                steps: collector.steps.clone(),
                 name,
-                cfg_test,
+                cfg_test: collector.cfg_test,
             }),
-        }
+        });
+    }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        self.steps.push(Step::Block);
+        visit::visit_block(self, block);
+        self.steps.pop();
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        self.within(&item.attrs, |collector| {
+            visit::visit_item_fn(collector, item)
+        });
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        self.within(&item.attrs, |collector| {
+            visit::visit_item_impl(collector, item);
+        });
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        self.within(&item.attrs, |collector| {
+            visit::visit_impl_item_fn(collector, item);
+        });
+    }
+
+    fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
+        self.within(&item.attrs, |collector| {
+            visit::visit_trait_item_fn(collector, item);
+        });
     }
 }
 
@@ -124,8 +190,11 @@ fn collect_items(
 /// directory each candidate would itself be loaded with.
 pub(super) fn resolve(declaration: &ModuleDecl, dir: &Dir) -> Option<Vec<(String, Dir)>> {
     let mut dir = dir.clone();
-    for step in &declaration.inline {
-        dir = Dir::owned(step.directory(&dir)?);
+    for step in &declaration.steps {
+        dir = match step {
+            Step::Inline(name) => Dir::owned(name.directory(&dir)?),
+            Step::Block => Dir::owned(dir.path.clone()),
+        };
     }
     match &declaration.name {
         // An explicit path names the file directly, and that file owns the
@@ -153,6 +222,32 @@ pub(super) fn resolve(declaration: &ModuleDecl, dir: &Dir) -> Option<Vec<(String
             ])
         }
     }
+}
+
+/// Every repository path a file's declarations could name, under any of the
+/// directories that file could be loaded with. This finds the sources whose
+/// relationships the graph needs even though their own call sites are out of
+/// the configured crate roots, so it deliberately over-approximates: the
+/// graph itself then resolves each declaration against one directory only.
+pub(super) fn candidate_targets(
+    path: &str,
+    modules: &FileModules,
+    targets: &CargoTargets,
+) -> BTreeSet<String> {
+    let loadings = [
+        Some(root_dir(path)),
+        Some(Dir::owned(parent_dir(path))),
+        cargo_target_dir(path, targets),
+    ];
+    let mut candidates = BTreeSet::new();
+    for dir in loadings.iter().flatten() {
+        for declaration in &modules.declarations {
+            for (target, _) in resolve(declaration, dir).into_iter().flatten() {
+                candidates.insert(target);
+            }
+        }
+    }
+    candidates
 }
 
 /// The directory a Cargo target resolves its declarations against, when the
