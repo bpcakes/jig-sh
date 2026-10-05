@@ -42,7 +42,7 @@
 - Change Claude credential lookup and read-only subscription usage: `src/claude/usage/`; keep secrets, HTTP, and platform storage out of the TUI and output renderers.
 - Change shared operation signal supervision: `src/signal_supervision.rs`, with the process-wide signal session in `src/signal_supervision/session.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
 - Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
-- Change how a command's result is shown to people: its formatter under `src/cli/output/`. The command passes that function to `emit` (or names it in its `RuntimeDispatch`); there is no central output table to extend.
+- Change how a command's result is shown to people: its formatter in `src/cli/output.rs` or under `src/cli/output/`. The command passes that function to `emit` (or names it in its `RuntimeDispatch`); there is no central output table to extend.
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
 - Change manifest-tool behavior around command execution: `src/runtime.rs`.
 - Change run history, state maintenance, or `jig state summary`: `src/state.rs` and `src/state/`.
