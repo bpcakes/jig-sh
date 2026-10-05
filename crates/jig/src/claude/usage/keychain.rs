@@ -4,6 +4,7 @@ use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
 mod prompt;
+mod silent;
 
 use crate::claude::Home;
 
@@ -45,7 +46,7 @@ pub(super) fn read(
         .account(&account)
         .load_data(true)
         .skip_authenticated_items(true);
-    match query.search() {
+    match silent::search(&query) {
         Ok(items) => {
             return Ok(items.into_iter().find_map(|item| match item {
                 SearchResult::Data(bytes) => Some(Zeroizing::new(bytes)),
@@ -56,7 +57,7 @@ pub(super) fn read(
             // A skipped protected item is also reported as not found. Inspect
             // attributes before falling back to a potentially stale file token.
             query.load_data(false).load_attributes(true);
-            match query.search() {
+            match silent::search(&query) {
                 Err(error) if error.code() == -25300 => return Ok(None),
                 Ok(items) if items.is_empty() => return Ok(None),
                 _ => {}
