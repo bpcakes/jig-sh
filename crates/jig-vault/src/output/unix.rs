@@ -191,7 +191,18 @@ fn preview(path: &Path) -> anyhow::Result<PrivateDestinationPrecondition> {
         _ => PathBuf::from("."),
     };
     reject_symlinked_ancestors(&parent)?;
-    let parent_metadata = fs::metadata(&parent)
+    validate_parent(&parent)?;
+    let state = destination_state(&path)?;
+
+    Ok(PrivateDestinationPrecondition {
+        destination: path,
+        parent,
+        state,
+    })
+}
+
+fn validate_parent(parent: &Path) -> anyhow::Result<()> {
+    let parent_metadata = fs::metadata(parent)
         .with_context(|| format!("failed to inspect output parent {}", parent.display()))?;
     if !parent_metadata.is_dir() {
         bail!(
@@ -206,13 +217,7 @@ fn preview(path: &Path) -> anyhow::Result<PrivateDestinationPrecondition> {
             parent.display()
         );
     }
-    let state = destination_state(&path)?;
-
-    Ok(PrivateDestinationPrecondition {
-        destination: path,
-        parent,
-        state,
-    })
+    crate::acl::reject_shared_write(parent)
 }
 
 fn prepared_path(precondition: &PrivateDestinationPrecondition) -> anyhow::Result<PreparedPath> {
@@ -261,6 +266,9 @@ fn write_temporary(prepared: &PreparedPath, bytes: &[u8]) -> anyhow::Result<File
                 prepared.destination.display()
             )
         })?;
+    // The temporary inode is what installation publishes, so entries
+    // inherited from the parent must be gone before any byte is written.
+    crate::acl::clear_file(&file, &prepared.temporary)?;
     file.write_all(bytes).with_context(|| {
         format!(
             "failed to write private vault output {}",
@@ -312,8 +320,10 @@ fn install(prepared: PreparedPath, policy: InstallPolicy) -> anyhow::Result<()> 
         // narrows same-user directory-entry races without claiming an OS
         // isolation boundary stronger than the containing directory.
         reject_symlinked_ancestors(&parent)?;
+        validate_parent(&parent)?;
         validate_install_policy(&destination, policy)?;
         validate_temporary_identity(&temporary, temporary_identity)?;
+        crate::acl::require_none(&temporary)?;
         if matches!(
             policy,
             InstallPolicy::Upsert | InstallPolicy::Exact(DestinationState::Existing(_))
@@ -476,6 +486,8 @@ fn sync_parent(parent: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("failed to sync output parent {}", parent.display()))
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod macos_acl_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_path_tests;
 
