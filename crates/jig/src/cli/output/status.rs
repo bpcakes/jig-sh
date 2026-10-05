@@ -1,6 +1,6 @@
 use super::{concise_preview, value_str, value_u64};
 
-pub(super) fn format_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_summary(value: &serde_json::Value) -> String {
     let outcome = value_str(value, "outcome").unwrap_or("unknown");
     let repository = &value["repository"];
     let repo_name = value_str(repository, "name").unwrap_or("<unknown>");

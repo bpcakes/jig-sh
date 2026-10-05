@@ -4,14 +4,14 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use jig_codex_tui::{ConfigurationHome, Home, HomeUpdate, InspectionSource};
 
-use super::output::{HumanOutput, emit};
+use super::output::{Render, emit};
 use crate::agent_provider::{AgentProvider, Discovery, HomeInspection, PreparedLaunch};
 
 pub(super) fn homes<P: AgentProvider>(
     provider: &P,
     usage: bool,
     json: bool,
-    output: HumanOutput,
+    output: Render,
 ) -> Result<()> {
     if usage && !P::METADATA.usage {
         bail!(
@@ -45,7 +45,7 @@ pub(super) fn launch<P: AgentProvider>(
     args: &[OsString],
     dry_run: bool,
     json: bool,
-    output: HumanOutput,
+    output: Render,
 ) -> Result<()> {
     validate_launch::<P>(dry_run, json)?;
     let home = match home {
@@ -79,7 +79,7 @@ pub(super) fn finish<P: AgentProvider>(
     mut prepared: PreparedLaunch,
     dry_run: bool,
     json: bool,
-    output: HumanOutput,
+    output: Render,
 ) -> Result<()> {
     if dry_run {
         return emit(json, output, &prepared.report);

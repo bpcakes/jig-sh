@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
-use super::output::HumanOutput;
+use super::output;
 use crate::tool_defs;
 
 pub(super) const PROXY_RUN_AFTER_HELP: &str = "\
@@ -158,12 +158,13 @@ pub(crate) struct DevOpts {
 }
 
 impl DevOpts {
-    pub(super) const fn human_output(&self) -> HumanOutput {
+    /// The renderer for this dev action's result.
+    pub(super) const fn renderer(&self) -> output::Render {
         match &self.command {
-            None => HumanOutput::Dev,
-            Some(DevSubcommand::Status(_)) => HumanOutput::DevStatus,
-            Some(DevSubcommand::Recover(_)) => HumanOutput::DevRecover,
-            Some(DevSubcommand::Stop(_)) => HumanOutput::DevStop,
+            None => output::format_dev_summary,
+            Some(DevSubcommand::Status(_)) => output::format_dev_status_summary,
+            Some(DevSubcommand::Recover(_)) => output::format_dev_recover_summary,
+            Some(DevSubcommand::Stop(_)) => output::format_dev_stop_summary,
         }
     }
 

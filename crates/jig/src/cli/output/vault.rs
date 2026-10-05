@@ -1,6 +1,6 @@
 use super::{concise_preview_with_truncation, value_bool, value_i64, value_str, value_u64};
 
-pub(super) fn format_vault_run_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_vault_run_summary(value: &serde_json::Value) -> String {
     let result = &value["result"];
     let exit_status = value_i64(result, "exit_status")
         .map(|status| status.to_string())
@@ -26,7 +26,7 @@ pub(super) fn format_vault_run_summary(value: &serde_json::Value) -> String {
     lines.join("\n")
 }
 
-pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_vault_generic_summary(value: &serde_json::Value) -> String {
     let command = value_str(value, "command").unwrap_or("vault");
     let ok = value_bool(value, "ok").unwrap_or(false);
     let scope = value_str(value, "vault_scope").unwrap_or("unknown");

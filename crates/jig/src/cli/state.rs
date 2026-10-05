@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
-use super::output::HumanOutput;
+use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
 use crate::command::RuntimeCommand;
 use crate::tool_defs;
@@ -72,12 +72,12 @@ pub(crate) struct StateArchiveOpts {
 
 impl StateCommand {
     pub(super) fn into_dispatch(self) -> RuntimeDispatch {
-        let human_output = match &self {
-            Self::Summary => HumanOutput::StateSummary,
-            Self::Diagnose => HumanOutput::StateDiagnose,
-            Self::Restore(_) => HumanOutput::StateRestore,
-            Self::Archive(_) => HumanOutput::StateArchive,
+        let render: output::Render = match &self {
+            Self::Summary => output::format_state_summary,
+            Self::Diagnose => output::format_state_diagnose_summary,
+            Self::Restore(_) => output::format_state_restore_summary,
+            Self::Archive(_) => output::format_state_archive_summary,
         };
-        RuntimeDispatch::new(RuntimeCommand::State(self.into()), human_output)
+        RuntimeDispatch::new(RuntimeCommand::State(self.into()), render)
     }
 }

@@ -34,7 +34,7 @@
   2. Add its `CommandKind` variant in `src/cli.rs`, taking `name` and `display_order` from the registry.
   3. Add the arms the compiler now requires: `launcher_command` in `src/cli/run/launcher_handoff.rs`, `run_command` in `src/cli/run.rs`, `may_capture_vault_passphrase` in `src/cli/run/vault_environment.rs`, and both availability matches in `src/info/commands.rs`.
   4. Regenerate the launcher's command lists with `JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launcher_command_lists`.
-- Run a command through the runtime: implement `into_dispatch` beside its clap type, returning a `RuntimeDispatch` that names its human output and whether `ok: false` fails the command. A command with its own flow gets a `run_<name>_command` in its own `src/cli/` module; keep `run_command` to one line per command.
+- Run a command through the runtime: implement `into_dispatch` beside its clap type, returning a `RuntimeDispatch` that names its renderer and whether `ok: false` fails the command. A command with its own flow gets a `run_<name>_command` in its own `src/cli/` module; keep `run_command` to one line per command.
 - Add a named `jig check` subcommand: `NamedCheck` in `src/command/check.rs` ties its selector to its legacy manifest tool, and `NamedCheckCommand` in `src/cli/check.rs` is its clap variant.
 - Change which commands may keep the reserved vault passphrase variables past startup: `src/cli/run/vault_environment.rs` (read the vault runtime guide first).
 - Add an agent provider: `src/agent_provider.rs` defines the internal contract; `src/claude/provider.rs` and `src/codex/provider.rs` are implementations. Keep home identity and credential policy provider-owned; `src/cli/agent_run.rs` owns common homes/launch orchestration. See [agent providers](../../docs/agent-providers.md).
@@ -42,6 +42,7 @@
 - Change Claude credential lookup and read-only subscription usage: `src/claude/usage/`; keep secrets, HTTP, and platform storage out of the TUI and output renderers.
 - Change shared operation signal supervision: `src/signal_supervision.rs`, with the process-wide signal session in `src/signal_supervision/session.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
 - Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
+- Change how a command's result is shown to people: its formatter in `src/cli/output.rs` or under `src/cli/output/`. The command passes that function to `emit` (or names it in its `RuntimeDispatch`); there is no central output table to extend.
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
 - Change manifest-tool behavior around command execution: `src/runtime.rs`.
 - Change run history, state maintenance, or `jig state summary`: `src/state.rs` and `src/state/`.

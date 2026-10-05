@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-use super::output::HumanOutput;
+use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
 use crate::command::RuntimeCommand;
 use crate::tool_defs;
@@ -47,13 +47,14 @@ impl AgentCommand {
         match self {
             // A readiness report: `ok: false` means required local tooling is
             // missing or unregistered, which fails the command.
-            Self::Doctor => {
-                RuntimeDispatch::new(RuntimeCommand::Agent(self.into()), HumanOutput::AgentDoctor)
-                    .failing_on_ok_false()
-            }
+            Self::Doctor => RuntimeDispatch::new(
+                RuntimeCommand::Agent(self.into()),
+                output::format_agent_doctor_summary,
+            )
+            .failing_on_ok_false(),
             Self::Bootstrap(_) => RuntimeDispatch::new(
                 RuntimeCommand::Agent(self.into()),
-                HumanOutput::AgentBootstrap,
+                output::format_agent_bootstrap_summary,
             ),
         }
     }

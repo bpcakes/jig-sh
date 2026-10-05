@@ -1,13 +1,13 @@
 //! The one path from a parsed command to `runtime::dispatch`.
 //!
-//! A command family describes its dispatch as data: the runtime command, how
-//! its result is rendered for people, and whether `ok: false` in the result
-//! fails the command. [`dispatch_runtime`] adds repository loading, signal
+//! A command family describes its dispatch as data: the runtime command, the
+//! function that renders its result for people, and whether `ok: false` in
+//! the result fails the command. [`dispatch_runtime`] adds repository loading, signal
 //! supervision, progress reporting, and output.
 
 use anyhow::Result;
 
-use super::output::{HumanOutput, emit};
+use super::output::{self, Render, emit};
 use super::run::finish_after_json_output;
 use super::structured_error::require_json_ok;
 use crate::command::RuntimeCommand;
@@ -27,23 +27,23 @@ pub(super) enum FailurePolicy {
 /// A runtime dispatch as described by the command family that owns it.
 pub(super) struct RuntimeDispatch {
     pub(super) command: RuntimeCommand,
-    pub(super) human_output: HumanOutput,
+    pub(super) render: Render,
     pub(super) failure: FailurePolicy,
 }
 
 impl RuntimeDispatch {
-    /// A report rendered with `human_output` that fails only on an error.
-    pub(super) const fn new(command: RuntimeCommand, human_output: HumanOutput) -> Self {
+    /// A report rendered with `render` that fails only on an error.
+    pub(super) const fn new(command: RuntimeCommand, render: Render) -> Self {
         Self {
             command,
-            human_output,
+            render,
             failure: FailurePolicy::ErrorsOnly,
         }
     }
 
     /// A manifest-tool execution with the shared tool summary.
     pub(super) const fn tool(command: RuntimeCommand) -> Self {
-        Self::new(command, HumanOutput::ToolExecution)
+        Self::new(command, output::format_tool_execution_summary)
     }
 
     /// Also fail the command when the result reports `ok: false`.
@@ -56,7 +56,7 @@ impl RuntimeDispatch {
 pub(super) fn dispatch_runtime(dispatch: RuntimeDispatch, json_output: bool) -> Result<()> {
     let RuntimeDispatch {
         command,
-        human_output,
+        render,
         failure,
     } = dispatch;
     let require_ok = failure == FailurePolicy::OkFalseFails;
@@ -64,7 +64,7 @@ pub(super) fn dispatch_runtime(dispatch: RuntimeDispatch, json_output: bool) -> 
     #[cfg(all(unix, not(test)))]
     if command.signal_policy() == crate::command::RuntimeSignalPolicy::Native {
         let output = runtime::dispatch(&ctx, command)?;
-        emit(json_output, human_output, &output)?;
+        emit(json_output, render, &output)?;
         return finish_after_json_output(require_json_ok(require_ok, &output), json_output);
     }
     #[cfg(all(unix, not(test)))]
@@ -89,6 +89,6 @@ pub(super) fn dispatch_runtime(dispatch: RuntimeDispatch, json_output: bool) -> 
         "Command signal supervision could not retire safely",
     );
     let output = outcome?;
-    emit(json_output, human_output, &output)?;
+    emit(json_output, render, &output)?;
     finish_after_json_output(require_json_ok(require_ok, &output), json_output)
 }

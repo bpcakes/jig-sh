@@ -1,5 +1,5 @@
 use super::CheckComparisonOpts;
-use super::output::HumanOutput;
+use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
 use crate::command::RuntimeCommand;
 use clap::{Args, ValueEnum};
@@ -54,7 +54,7 @@ impl RepositoryRunOpts {
     pub(super) fn into_dispatch(self) -> anyhow::Result<RuntimeDispatch> {
         Ok(RuntimeDispatch::new(
             RuntimeCommand::Run(self.try_into()?),
-            HumanOutput::RepositoryRun,
+            output::format_repository_run_summary,
         )
         .failing_on_ok_false())
     }

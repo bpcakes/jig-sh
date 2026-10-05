@@ -1,6 +1,6 @@
 use super::{value_bool, value_i64, value_str, value_u64};
 
-pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_dev_summary(value: &serde_json::Value) -> String {
     let routes = value["routes"].as_array().map(Vec::len).unwrap_or(0);
     if value_bool(value, "stopped").unwrap_or(false) {
         let reason = value_str(value, "stop_reason").unwrap_or("requested");
@@ -45,7 +45,7 @@ fn dev_error_message(value: &serde_json::Value) -> Option<&str> {
     value_str(value, "error").or_else(|| value_str(&value["error"], "message"))
 }
 
-pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_dev_status_summary(value: &serde_json::Value) -> String {
     let sessions = value["sessions"]
         .as_array()
         .map(Vec::as_slice)
@@ -121,7 +121,7 @@ pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
     lines.join("\n")
 }
 
-pub(super) fn format_dev_recover_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_dev_recover_summary(value: &serde_json::Value) -> String {
     let session_id = value_str(value, "session_id").unwrap_or("<unknown>");
     let state_dir = value_str(value, "state_dir").unwrap_or("<unknown>");
     let retired = value_u64(value, "retired_sessions").unwrap_or(0);
@@ -147,7 +147,7 @@ pub(super) fn format_dev_recover_summary(value: &serde_json::Value) -> String {
     lines.join("\n")
 }
 
-pub(super) fn format_dev_stop_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_dev_stop_summary(value: &serde_json::Value) -> String {
     let ok = value_bool(value, "ok").unwrap_or(false);
     let sessions = value["sessions"]
         .as_array()

@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use super::output::{HumanOutput, emit};
+use super::output::{self, emit};
 use super::structured_error::require_json_ok;
 use crate::command::{
     AgentBootstrapRequest, AgentCommand, CheckCommand, NamedCheck, RuntimeCommand,
@@ -44,7 +44,7 @@ pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     );
     let output = outcome?;
     progress.done("setup complete");
-    emit(json_output, HumanOutput::Setup, &output)?;
+    emit(json_output, output::format_setup_summary, &output)?;
     require_json_ok(true, &output)
 }
 
