@@ -219,3 +219,27 @@ fn a_path_loaded_module_resolves_its_children_beside_itself() {
     assert!(non_test.contains("`src/shared.rs:1`"), "{non_test}");
     assert!(test.contains("_None_"), "{test}");
 }
+
+/// A file's directory depends on the declaration that loaded it, so the
+/// directory its own name implies is only a guess. Once a declaration
+/// resolves the file, the guess must leave no claim behind: here `src/a.rs`
+/// is loaded through an explicit path and loads `src/helper.rs`, so the
+/// unrelated `src/a/helper.rs` the guess would have named stays production.
+#[test]
+fn a_guessed_directory_leaves_no_claim_once_a_declaration_resolves_the_file() {
+    let temp = inventory(&[
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"a.rs\"]\nmod cases;\n",
+        ),
+        ("src/a.rs", "mod helper;\n"),
+        ("src/helper.rs", CALL),
+        ("src/a/helper.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/a/helper.rs:1`"), "{non_test}");
+    assert!(!non_test.contains("`src/helper.rs:1`"), "{non_test}");
+    assert!(test.contains("`src/helper.rs:1`"), "{test}");
+}

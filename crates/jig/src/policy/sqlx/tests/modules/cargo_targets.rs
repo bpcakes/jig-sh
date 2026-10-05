@@ -248,3 +248,30 @@ fn edition_decides_whether_a_manual_target_disables_discovery() {
         }
     }
 }
+
+/// An explicit target table resolves its own name, so Cargo discovers no file
+/// for it and the conventional path that name would have taken is not a
+/// target.
+#[test]
+fn a_declared_target_name_is_not_also_discovered() {
+    let temp = inventory(&[
+        (
+            "Cargo.toml",
+            &format!(
+                "{MANIFEST}edition = \"2021\"\n\
+                 [[bin]]\nname = \"tool\"\npath = \"src/tool.rs\"\n"
+            ),
+        ),
+        (
+            "src/lib.rs",
+            "#[cfg(test)]\n#[path = \"bin/tool.rs\"]\nmod tool_cases;\n",
+        ),
+        ("src/tool.rs", CALL),
+        ("src/bin/tool.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/tool.rs:1`"), "{non_test}");
+    assert!(test.contains("`src/bin/tool.rs:1`"), "{test}");
+}

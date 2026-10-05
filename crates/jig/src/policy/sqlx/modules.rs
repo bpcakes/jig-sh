@@ -167,21 +167,46 @@ struct Claims<'a> {
     claimed: BTreeSet<&'a str>,
 }
 
+/// Resolves the module graph twice. The first pass learns which files no
+/// declaration reaches, because a file's directory depends on the declaration
+/// that loaded it and is only a guess until then. The second pass guesses for
+/// exactly those files, so a guessed directory never leaves behind a claim
+/// that the resolved one replaces.
 fn resolve_claims<'a>(
     files: &'a BTreeMap<String, FileModules>,
     targets: &CargoTargets,
+) -> Claims<'a> {
+    let discovered = resolve_pass(files, targets, None);
+    let unreached = files
+        .keys()
+        .map(String::as_str)
+        .filter(|path| !discovered.claimed.contains(path))
+        .collect();
+    resolve_pass(files, targets, Some(&unreached))
+}
+
+/// One resolution pass. With `unreached`, exactly those files are seeded with
+/// the directory their own name implies; without it, any file nothing has
+/// reached yet is seeded that way as the pass goes along.
+fn resolve_pass<'a>(
+    files: &'a BTreeMap<String, FileModules>,
+    targets: &CargoTargets,
+    unreached: Option<&BTreeSet<&'a str>>,
 ) -> Claims<'a> {
     let mut claims = Claims::default();
     let mut directories: BTreeMap<&str, BTreeSet<Dir>> = BTreeMap::new();
     let mut queue: VecDeque<(&str, Dir)> = VecDeque::new();
     // Cargo compiles a crate entrypoint wherever it sits, so start from each
-    // one; a file no declaration reaches is seeded below instead.
+    // one; a file no declaration reaches is seeded as its own root.
     for path in files.keys() {
         if let Some(dir) = cargo_target_dir(path, targets) {
             seed(path, dir, &mut directories, &mut queue);
         }
     }
-    let mut unreached = files.keys();
+    for path in unreached.into_iter().flatten() {
+        seed(path, unreached_dir(path), &mut directories, &mut queue);
+    }
+    let mut undiscovered = files.keys();
     loop {
         while let Some((path, dir)) = queue.pop_front() {
             for declaration in &files[path].declarations {
@@ -208,9 +233,13 @@ fn resolve_claims<'a>(
                 }
             }
         }
-        // A file no resolved declaration reaches still resolves declarations
-        // of its own, against the conventional directory its name implies.
-        let Some(path) = unreached.find(|path| !directories.contains_key(path.as_str())) else {
+        // In the first pass, a file nothing has reached yet still resolves
+        // declarations of its own, against the directory its name implies.
+        // In the second, the seeds are already fixed.
+        if unreached.is_some() {
+            return claims;
+        }
+        let Some(path) = undiscovered.find(|path| !directories.contains_key(path.as_str())) else {
             return claims;
         };
         seed(path, unreached_dir(path), &mut directories, &mut queue);
