@@ -14,6 +14,7 @@ mod check;
 mod claude;
 mod codex;
 mod comparison;
+mod doctor;
 mod file_budget;
 mod home_picker;
 mod info;
@@ -27,7 +28,7 @@ mod setup_run;
 mod sqlx;
 mod state;
 mod status;
-mod ui_run;
+mod ui;
 mod vault;
 
 pub(crate) use agent::AgentCommand;
@@ -112,16 +113,6 @@ fn root_after_help() -> String {
     )
 }
 
-const DOCTOR_AFTER_HELP: &str = "\
-Runs the read-only readiness checks that are otherwise split across bootstrap,
-agent doctor, check contract, proxy status, and vault status.
-
-Human-readable output is the default. Pass --json for structured automation output.
-
-Examples:
-  jig doctor
-  jig doctor --json";
-
 const STATUS_AFTER_HELP: &str = "\
 Collects local Git state and loop leases and attempts.
 The command is read-only and does not fetch remotes.
@@ -147,18 +138,6 @@ Examples:
   jig init ./my-cli --preset rust-cli --no-input --no-vault
   jig init ./my-app --preset rust-react
   jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin";
-
-const UI_AFTER_HELP: &str = "\
-Opens a read-only terminal dashboard over repository status and .agent/state:
-run history, loops, repository state, and activity.
-Interactive mode requires terminal stdin and stdout.
-
-Pass --json for one local recorder snapshot.
-
-Examples:
-  jig ui
-  jig ui --timeline-limit 120
-  jig ui --json";
 
 const VAULT_AFTER_HELP: &str = "\
 Jig Vault stores encrypted project fields outside the repository. References
@@ -235,7 +214,7 @@ pub(crate) enum CommandKind {
     #[command(
         name = root_commands::DOCTOR.name,
         display_order = root_commands::DOCTOR.display_order,
-        after_help = DOCTOR_AFTER_HELP
+        after_help = doctor::DOCTOR_AFTER_HELP
     )]
     Doctor,
     /// Summarize repo Jig configuration, capabilities, gates, and dev apps.
@@ -280,9 +259,9 @@ pub(crate) enum CommandKind {
     #[command(
         name = root_commands::UI.name,
         display_order = root_commands::UI.display_order,
-        after_help = UI_AFTER_HELP
+        after_help = ui::UI_AFTER_HELP
     )]
-    Ui(UiOpts),
+    Ui(ui::UiOpts),
     /// Run and inspect automated orchestration workflows.
     #[command(
         name = root_commands::LOOP.name,
@@ -464,57 +443,13 @@ impl GenerateSqlxUncheckedQueriesTodoOpts {
     }
 }
 
-#[derive(Args, Debug)]
-pub(crate) struct UiOpts {
-    #[arg(
-        long,
-        value_name = "SECONDS",
-        value_parser = clap::value_parser!(u64).range(1..=3600),
-        help = "Read-only dashboard refresh interval; defaults to 10 seconds"
-    )]
-    pub(crate) refresh_seconds: Option<u64>,
-    #[arg(
-        long,
-        value_name = "ROWS",
-        value_parser = clap::value_parser!(u64).range(1..=1000),
-        help = "Initial activity rows for the TUI or recorder JSON; defaults to 120"
-    )]
-    pub(crate) timeline_limit: Option<u64>,
-    #[arg(long = "port", hide = true)]
-    pub(crate) retired_port: Option<u16>,
-}
-
-impl UiOpts {
-    /// Option combinations Clap cannot reject because they involve the
-    /// global `--json` flag or a retired option that still parses.
-    pub(crate) const fn usage_conflict(&self, json: bool) -> Option<&'static str> {
-        if self.retired_port.is_some() {
-            Some(
-                "the `jig ui` browser server and `--port` option were removed in 0.3.0; use `jig ui` for the terminal dashboard or `jig ui --json` for one-shot data (`--port` will stop parsing in 0.4.0)",
-            )
-        } else if json && self.refresh_seconds.is_some() {
-            Some("`--refresh-seconds` cannot be combined with `--json`")
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn effective_refresh_seconds(&self) -> u64 {
-        self.refresh_seconds.unwrap_or(10)
-    }
-
-    pub(crate) fn effective_timeline_limit(&self) -> u64 {
-        self.timeline_limit.unwrap_or(120)
-    }
-}
-
 mod output;
 mod run;
 mod structured_error;
 
 #[cfg(test)]
 pub(crate) fn format_doctor_summary_for_test(value: &serde_json::Value) -> String {
-    output::format_doctor_summary(value)
+    doctor::render::format_doctor_summary(value)
 }
 
 #[cfg(test)]

@@ -4,18 +4,17 @@ use super::bootstrap_run::{
     run_adopt_command, run_init_command, run_presets_command, run_update_command,
 };
 use super::codex::run::run_codex_command;
-use super::output::{self, emit, print_json};
+use super::output::print_json;
 use super::setup_run::run_setup_command;
 use super::structured_error::{
     is_json_output_already_emitted, is_structured_json_failure, json_error_payload,
-    json_output_already_emitted, json_reported_error, require_json_ok,
+    json_output_already_emitted, json_reported_error,
 };
-use super::ui_run::{name_ui_error, run_ui_command};
+use super::ui::{name_ui_error, run_ui_command};
 use super::vault::run::run_vault_command;
 use super::{Cli, CommandKind};
 use crate::cli::runtime_dispatch::{RuntimeDispatch, dispatch_runtime};
 use crate::command::RuntimeCommand;
-use crate::doctor;
 
 pub(crate) fn run() -> Result<()> {
     let cli = parse_cli();
@@ -54,11 +53,7 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Adopt(opts) => run_adopt_command(opts, json_output),
         CommandKind::Update(opts) => run_update_command(opts, json_output),
         CommandKind::Ui(opts) => run_ui_command(opts, json_output),
-        CommandKind::Doctor => {
-            let output = doctor::run()?;
-            emit(json_output, output::format_doctor_summary, &output)?;
-            finish_after_json_output(require_json_ok(true, &output), json_output)
-        }
+        CommandKind::Doctor => super::doctor::run_doctor_command(json_output),
         CommandKind::Info(opts) => super::info::run_info_command(opts, json_output),
         CommandKind::Status(opts) => super::status::run::run_status_command(opts, json_output),
         CommandKind::Dev(opts) => super::proxy::run::run_dev_command(opts, json_output),

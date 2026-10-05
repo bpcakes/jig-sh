@@ -6,7 +6,7 @@ use crate::cli::bootstrap_hints::TEMPLATE_ERROR_HINT;
 #[cfg(feature = "dev-proxy")]
 use crate::cli::proxy::run::dev_launch_identity_present;
 use crate::cli::runtime_dispatch::FailurePolicy;
-use crate::cli::structured_error::require_foreground_status;
+use crate::cli::structured_error::{require_foreground_status, require_json_ok};
 use crate::cli::{DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand, InfoOpts};
 use clap::Parser;
 

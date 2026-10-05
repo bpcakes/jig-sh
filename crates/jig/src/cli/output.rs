@@ -2,10 +2,7 @@ use std::io::Write;
 
 use anyhow::Result;
 
-pub(super) use self::doctor::format_doctor_summary;
-
 pub(super) mod command_display;
-mod doctor;
 pub(super) mod usage;
 
 /// Renders a command's JSON result for people. Each command passes its own
