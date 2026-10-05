@@ -6,9 +6,8 @@ use anyhow::{Context, Result, bail};
 use super::{VaultCommand, render};
 use crate::cli::output::{self, emit};
 use crate::cli::run::finish_after_json_output;
-use crate::cli::structured_error::{
-    require_json_ok, require_vault_child_status_ok, vault_exec_child_exit,
-};
+use crate::cli::structured_error::require_json_ok;
+use crate::exit::CliExit;
 use crate::{context::RepoContext, runtime};
 
 pub(in crate::cli) fn run_vault_command(command: VaultCommand, json_output: bool) -> Result<()> {
@@ -96,6 +95,38 @@ fn run_vault_command_with_terminal_state(
         return finish_after_json_output(require_vault_child_status_ok(&output), json_output);
     }
     finish_after_json_output(require_json_ok(true, &output), json_output)
+}
+
+/// `vault run` mirrors its child: a non-zero child status becomes the exit.
+fn require_vault_child_status_ok(output: &serde_json::Value) -> Result<()> {
+    let status = output
+        .get("result")
+        .and_then(|value| value.get("exit_status"))
+        .and_then(serde_json::Value::as_i64);
+    if status.is_none() && output.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
+        anyhow::bail!("vault run returned ok=false without result.exit_status");
+    }
+    let Some(status) = status else {
+        return Ok(());
+    };
+    if status != 0 {
+        // The CLI process exit API is limited to shell-style status bytes.
+        // Preserve non-zero vault child failures while keeping output portable.
+        let status = status.clamp(1, 255) as i32;
+        return Err(
+            CliExit::reported(status, format!("Vault child exited with status {status}")).into(),
+        );
+    }
+    Ok(())
+}
+
+/// `vault exec` is transparent: the child already owned stdout and stderr.
+fn vault_exec_child_exit(status: i32) -> anyhow::Error {
+    CliExit::reported(
+        status,
+        format!("Transparent vault child exited with status {status}"),
+    )
+    .into()
 }
 
 const fn vault_command_needs_input_preparation(command: &crate::command::VaultCommand) -> bool {

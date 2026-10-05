@@ -16,6 +16,7 @@ mod context;
 mod dev_proxy;
 mod doctor;
 mod execution;
+mod exit;
 mod frontend_metadata;
 mod strict_json;
 #[cfg(not(feature = "dev-proxy"))]
@@ -101,12 +102,15 @@ pub fn run() -> anyhow::Result<()> {
     cli::run()
 }
 
+/// Returns whether the command already reported this failure in its own
+/// protocol. Callers must then exit without printing the error.
 pub fn error_is_structured_command_failure(error: &anyhow::Error) -> bool {
-    cli::is_structured_json_failure(error)
+    exit::CliExit::of(error).is_some_and(exit::CliExit::is_reported)
 }
 
+/// Returns the process exit status this failure decided, if it decided one.
 pub fn error_exit_code(error: &anyhow::Error) -> Option<i32> {
-    cli::structured_error_exit_code(error)
+    exit::CliExit::of(error).map(exit::CliExit::code)
 }
 
 /// Returns whether human stderr delivery was abandoned after its shutdown

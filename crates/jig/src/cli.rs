@@ -522,7 +522,7 @@ pub(crate) fn format_info_summary_for_test(value: &serde_json::Value) -> String 
     info::render::format_info_summary(value)
 }
 
-pub(crate) use run::{is_structured_json_failure, run, structured_error_exit_code};
+pub(crate) use run::run;
 
 #[cfg(test)]
 mod dev_tests;

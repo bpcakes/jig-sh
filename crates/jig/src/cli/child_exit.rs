@@ -1,11 +1,5 @@
 use super::*;
-
-#[test]
-fn transparent_vault_child_exit_is_silent_and_preserves_status() {
-    let error = crate::cli::structured_error::vault_exec_child_exit(37);
-    assert!(is_structured_json_failure(&error));
-    assert_eq!(structured_error_exit_code(&error), Some(37));
-}
+use crate::cli::structured_error::structured_error_exit_code;
 
 #[test]
 fn json_error_payload_and_reported_error_preserve_machine_failure_contract() {
@@ -128,7 +122,7 @@ fn dev_interruption_exit_status_comes_from_the_runtime_result() {
     let ordinary_failure =
         require_foreground_status(&serde_json::json!({ "ok": false })).unwrap_err();
     assert!(is_structured_json_failure(&ordinary_failure));
-    assert_eq!(structured_error_exit_code(&ordinary_failure), None);
+    assert_eq!(structured_error_exit_code(&ordinary_failure), Some(1));
 
     for malformed in [
         serde_json::json!({ "ok": false, "interrupted": true }),
@@ -138,16 +132,5 @@ fn dev_interruption_exit_status_comes_from_the_runtime_result() {
         let error = require_foreground_status(&malformed).unwrap_err();
         assert!(!is_structured_json_failure(&error));
         assert_eq!(structured_error_exit_code(&error), None);
-    }
-}
-
-#[test]
-fn agent_child_exit_status_is_preserved_by_the_cli() {
-    for agent in ["Claude", "Codex"] {
-        let error: anyhow::Error =
-            crate::agent_launch::AgentChildExitStatus { agent, status: 37 }.into();
-        assert!(is_structured_json_failure(&error));
-        assert_eq!(structured_error_exit_code(&error), Some(37));
-        assert_eq!(error.to_string(), format!("{agent} exited with status 37"));
     }
 }

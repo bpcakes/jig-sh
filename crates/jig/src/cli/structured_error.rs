@@ -1,82 +1,21 @@
+//! The CLI's `--json` error protocol and the output checks that turn a
+//! command result into a decided [`CliExit`].
+
 use anyhow::Result;
 
-#[derive(Debug)]
-struct JsonOkFalse;
+use crate::exit::CliExit;
 
-#[derive(Debug)]
-struct VaultChildExitStatus(i32);
-
-#[derive(Debug)]
-struct VaultExecChildExit(i32);
-
-#[derive(Debug)]
-struct ForegroundInterrupted(i32);
-
-#[derive(Debug)]
-struct JsonReportedError(i32);
-
+/// The command's JSON document is already on stdout; report the wrapped error
+/// on stderr only, never as a second document.
 #[derive(Debug)]
 struct JsonOutputAlreadyEmitted(anyhow::Error);
 
+/// A failure before any output that the JSON error document names by command.
 #[derive(Debug)]
 pub(super) struct JsonCommandError {
     pub(super) command: &'static str,
     message: String,
 }
-
-#[derive(Debug)]
-struct FileBudgetExitStatus(i32);
-
-#[derive(Debug)]
-struct FileBudgetInvocationError(String);
-
-impl std::fmt::Display for JsonOkFalse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Command reported ok=false")
-    }
-}
-
-impl std::error::Error for JsonOkFalse {}
-
-impl std::fmt::Display for VaultChildExitStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Vault child exited with status {}", self.0)
-    }
-}
-
-impl std::error::Error for VaultChildExitStatus {}
-
-impl std::fmt::Display for VaultExecChildExit {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "Transparent vault child exited with status {}",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for VaultExecChildExit {}
-
-impl std::fmt::Display for ForegroundInterrupted {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Foreground process interrupted with status {}", self.0)
-    }
-}
-
-impl std::error::Error for ForegroundInterrupted {}
-
-impl std::fmt::Display for JsonReportedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "JSON error response reported with exit status {}",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for JsonReportedError {}
 
 impl std::fmt::Display for JsonOutputAlreadyEmitted {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -94,34 +33,6 @@ impl std::fmt::Display for JsonCommandError {
 
 impl std::error::Error for JsonCommandError {}
 
-impl std::fmt::Display for FileBudgetExitStatus {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "file-budget diagnostic exited with status {}",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for FileBudgetExitStatus {}
-
-impl std::fmt::Display for FileBudgetInvocationError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for FileBudgetInvocationError {}
-
-pub(super) fn file_budget_exit(exit_status: i32) -> anyhow::Error {
-    FileBudgetExitStatus(exit_status).into()
-}
-
-pub(super) fn file_budget_invocation_error(message: String) -> anyhow::Error {
-    FileBudgetInvocationError(message).into()
-}
-
 pub(super) fn json_error_payload(
     kind: &'static str,
     message: &str,
@@ -137,8 +48,13 @@ pub(super) fn json_error_payload(
     })
 }
 
+/// The exit after a JSON error document has been printed.
 pub(super) fn json_reported_error(exit_status: i32) -> anyhow::Error {
-    JsonReportedError(exit_status).into()
+    CliExit::reported(
+        exit_status,
+        format!("JSON error response reported with exit status {exit_status}"),
+    )
+    .into()
 }
 
 pub(super) fn json_output_already_emitted(error: anyhow::Error) -> anyhow::Error {
@@ -159,7 +75,7 @@ pub(super) fn is_json_output_already_emitted(error: &anyhow::Error) -> bool {
 
 pub(super) fn require_json_ok(required: bool, output: &serde_json::Value) -> Result<()> {
     if required && output.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
-        return Err(JsonOkFalse.into());
+        return Err(CliExit::reported(1, "Command reported ok=false").into());
     }
     Ok(())
 }
@@ -179,72 +95,22 @@ pub(super) fn require_foreground_status(output: &serde_json::Value) -> Result<()
                     "interrupted foreground result is missing a valid shell exit_status"
                 )
             })?;
-        return Err(ForegroundInterrupted(exit_status as i32).into());
+        return Err(CliExit::reported(
+            exit_status as i32,
+            format!("Foreground process interrupted with status {exit_status}"),
+        )
+        .into());
     }
     require_json_ok(true, output)
 }
 
-pub(super) fn require_vault_child_status_ok(output: &serde_json::Value) -> Result<()> {
-    let status = output
-        .get("result")
-        .and_then(|value| value.get("exit_status"))
-        .and_then(serde_json::Value::as_i64);
-    if status.is_none() && output.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
-        anyhow::bail!("vault run returned ok=false without result.exit_status");
-    }
-    let Some(status) = status else {
-        return Ok(());
-    };
-    if status != 0 {
-        // The CLI process exit API is limited to shell-style status bytes.
-        // Preserve non-zero vault child failures while keeping output portable.
-        return Err(VaultChildExitStatus(status.clamp(1, 255) as i32).into());
-    }
-    Ok(())
+/// Whether the failure was already reported in the command's own protocol, so
+/// neither `main` nor the JSON error reporter may report it again.
+pub(super) fn is_structured_json_failure(error: &anyhow::Error) -> bool {
+    CliExit::of(error).is_some_and(CliExit::is_reported)
 }
 
-pub(super) fn vault_exec_child_exit(status: i32) -> anyhow::Error {
-    VaultExecChildExit(status).into()
-}
-
-pub(crate) fn is_structured_json_failure(error: &anyhow::Error) -> bool {
-    error.is::<JsonOkFalse>()
-        || error.is::<VaultChildExitStatus>()
-        || error.is::<VaultExecChildExit>()
-        || error.is::<ForegroundInterrupted>()
-        || error.is::<JsonReportedError>()
-        || error.is::<FileBudgetExitStatus>()
-        || error.is::<crate::agent_launch::AgentChildExitStatus>()
-}
-
-pub(crate) fn structured_error_exit_code(error: &anyhow::Error) -> Option<i32> {
-    error
-        .downcast_ref::<VaultChildExitStatus>()
-        .map(|error| error.0)
-        .or_else(|| {
-            error
-                .downcast_ref::<FileBudgetExitStatus>()
-                .map(|error| error.0)
-        })
-        .or_else(|| error.downcast_ref::<FileBudgetInvocationError>().map(|_| 2))
-        .or_else(|| {
-            error
-                .downcast_ref::<VaultExecChildExit>()
-                .map(|error| error.0)
-        })
-        .or_else(|| {
-            error
-                .downcast_ref::<ForegroundInterrupted>()
-                .map(|error| error.0)
-        })
-        .or_else(|| {
-            error
-                .downcast_ref::<JsonReportedError>()
-                .map(|error| error.0)
-        })
-        .or_else(|| {
-            error
-                .downcast_ref::<crate::agent_launch::AgentChildExitStatus>()
-                .map(|error| error.status)
-        })
+#[cfg(test)]
+pub(super) fn structured_error_exit_code(error: &anyhow::Error) -> Option<i32> {
+    CliExit::of(error).map(CliExit::code)
 }
