@@ -177,6 +177,7 @@ impl VaultStore {
             .read(true)
             .open(&path)
             .with_context(|| format!("failed to open vault audit log {}", path.display()))?;
+        crate::acl::clear_file(&file, &path)?;
         if file
             .metadata()
             .with_context(|| format!("failed to stat vault audit log {}", path.display()))?
@@ -226,6 +227,7 @@ impl VaultStore {
             .write(true)
             .open(&path)
             .with_context(|| format!("failed to open vault audit log {}", path.display()))?;
+        crate::acl::clear_file(&file, &path)?;
         file.set_len(len)
             .with_context(|| format!("failed to truncate vault audit log {}", path.display()))?;
         file.sync_all()
@@ -264,6 +266,7 @@ impl VaultStore {
             .write(true)
             .open(self.lock_path())
             .context("failed to open vault lock")?;
+        crate::acl::clear_file(&file, &self.lock_path())?;
         lock_file(&file)?;
         let result = f();
         let unlock = FileExt::unlock(&file);
@@ -353,6 +356,9 @@ fn prepare_private_dir(root: PathBuf, initialization_kdf: KdfParams) -> AnyResul
         .with_context(|| format!("failed to canonicalize vault home {}", root.display()))?;
     ensure_tree_has_no_symlinks(&root, &root)?;
     ensure_private_dir_permissions(&root)?;
+    // Darwin ACL entries, including inherited ones, bypass the owner-only
+    // mode; clear them before any state file here can inherit them.
+    crate::acl::clear_directory(&root)?;
     // Re-walk after chmod so a same-user directory-entry race cannot trade a
     // checked file for a symlink while permissions are being tightened.
     ensure_tree_has_no_symlinks(&root, &root)?;
@@ -494,6 +500,7 @@ fn write_atomic_text(path: &Path, contents: &str) -> AnyResult<()> {
         .open(&tmp_path)
         .with_context(|| format!("failed to create temp vault file {}", tmp_path.display()))?;
     let result = (|| -> AnyResult<()> {
+        crate::acl::clear_file(&file, &tmp_path)?;
         file.write_all(contents.as_bytes())
             .with_context(|| format!("failed to write temp vault file {}", tmp_path.display()))?;
         file.sync_all()
@@ -644,6 +651,7 @@ fn ensure_create_ancestor_is_not_shared_writable(path: &Path) -> AnyResult<()> {
                     ancestor.display()
                 );
             }
+            crate::acl::reject_shared_write(ancestor)?;
             break;
         }
     }
@@ -659,6 +667,8 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    #[cfg(target_os = "macos")]
+    mod acl;
     mod path_resolution;
 
     #[cfg(unix)]

@@ -12,6 +12,7 @@
 - `src/secret.rs`: public secret byte wrapper that hides zeroization storage details.
 - `src/types.rs`: validated domain names used across the public API.
 - `src/store.rs`: vault home resolution, filesystem hardening, locks, and atomic file operations.
+- `src/acl.rs`: macOS ACL clearing, recheck, and unsafe-directory refusal shared by the vault home, private outputs, and restore.
 - `src/crypto.rs`: Argon2id key derivation and XChaCha20-Poly1305 helpers.
 - `src/format.rs`: encrypted vault file format, serialized state, and AEAD associated data.
 - `src/vault.rs`: public vault facade, unlocked handle internals, and audited secret CRUD.
@@ -50,6 +51,7 @@
 - Secret names are operator metadata, not secret material. They may appear in audit details, may contain path-shaped labels like `/` and `.`, and must never be treated as filesystem-safe path components without a separate encoding/newtype.
 - New vault passphrases must remain at least 12 bytes; existing vault unlocks must not impose a stricter retroactive floor without migration.
 - Use private filesystem permissions, symlink refusal, locks, and atomic writes for local state.
+- Darwin ACLs bypass mode bits. Clear every ACL entry, including inherited ones, from the vault home before state files are created in it and from `vault.json` temporaries, `audit.jsonl`, and `vault.lock` before each write, and refuse a vault home whose first existing creation ancestor has an ACL allowing other principals write, delete, or permission-change access. Private outputs clear the staged file before writing contents, recheck it and the output parent before installation, and refuse such a parent. Deny-only entries remain acceptable, and Linux needs no counterpart because the explicit chmod narrows the POSIX ACL mask.
 - Filesystem hardening assumes the vault parent is controlled by the same local user; same-user directory-entry races are mitigated but not a full OS isolation boundary.
 - Treat redaction as a backup control, not as the core security boundary.
 - Verify the audit chain before appending new audit events.

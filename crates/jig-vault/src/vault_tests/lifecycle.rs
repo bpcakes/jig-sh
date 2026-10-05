@@ -293,6 +293,53 @@ fn vault_bound_private_output_precondition_rechecks_namespace_ownership() {
     assert_eq!(std::fs::read(destination).unwrap(), b"MODE=production\n");
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn private_outputs_below_an_inheriting_parent_carry_no_acl_entries() {
+    use crate::acl::test_support::{has_acl_entries, inheriting_read_directory};
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let shared = inheriting_read_directory(&std::fs::canonicalize(temp.path()).unwrap());
+    let vault = Vault::resolve_for_test(Some(shared.join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+    let reference = VaultReference::parse("jig://Production/TOKEN").unwrap();
+    vault
+        .set_field(
+            &passphrase(),
+            reference.clone(),
+            FieldKind::Concealed,
+            SecretBytes::new(b"acl-export-sentinel".to_vec()),
+        )
+        .unwrap();
+
+    let exported = shared.join("exported.bin");
+    vault
+        .read_field_to_file(&passphrase(), reference, &exported, false)
+        .unwrap();
+    let destination = shared.join("generated.env");
+    let precondition = vault.preview_private_output(&destination).unwrap();
+    crate::PreparedPrivateFile::prepare_if_unchanged(
+        precondition,
+        SecretBytes::new(b"TOKEN=jig://Production/TOKEN\n".to_vec()),
+        false,
+    )
+    .unwrap()
+    .install()
+    .unwrap();
+    let backup = shared.join("vault.backup");
+    let request =
+        Vault::preflight_backup_create(vault.root().to_path_buf(), &backup, false).unwrap();
+    Vault::create_backup(&passphrase(), request).unwrap();
+
+    assert_eq!(std::fs::read(&exported).unwrap(), b"acl-export-sentinel");
+    for path in [exported, destination, backup] {
+        assert!(path.is_file(), "{}", path.display());
+        assert!(!has_acl_entries(&path), "{}", path.display());
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn direct_file_output_cannot_replace_vault_owned_paths() {
