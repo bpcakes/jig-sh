@@ -659,3 +659,45 @@ fn whole_path_checks_refuse_an_ownership_ignoring_volume_above_the_parent() {
         "{error}"
     );
 }
+
+/// Run as root, because only root can give a directory to another user:
+/// `cargo test -p jig-vault --lib --no-run`, then run the printed test
+/// binary with `sudo <binary> --ignored --exact <this test's path>`.
+#[test]
+#[ignore = "requires root to give a directory to another non-root user"]
+fn preflight_and_revalidation_refuse_an_ancestor_owned_by_another_user() {
+    const OTHER_USER: u32 = 1;
+    assert_eq!(unsafe { libc::geteuid() }, 0, "run this test as root");
+    // A root-owned sticky root keeps every fixture ancestor trusted, unlike a
+    // TMPDIR inherited from the invoking user.
+    let temp = tempfile::Builder::new()
+        .prefix("jig-vault-restore-foreign-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let root = fs::canonicalize(temp.path()).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let foreign = root.join("foreign");
+    let private = foreign.join("private");
+    fs::create_dir_all(&private).unwrap();
+    fs::set_permissions(&foreign, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::chown(&foreign, Some(OTHER_USER), None).unwrap();
+
+    for home in [
+        private.join("restored-home"),
+        private.join("vault-base/scopes/repo-scope"),
+    ] {
+        let error = preflight_target(home).unwrap_err().to_string();
+        assert!(error.contains("owned by another user"), "{error}");
+        assert!(error.ends_with(&foreign.display().to_string()), "{error}");
+    }
+    assert!(!private.join("vault-base").exists());
+
+    std::os::unix::fs::chown(&foreign, Some(0), None).unwrap();
+    let target = preflight_target(private.join("restored-home")).unwrap();
+    std::os::unix::fs::chown(&foreign, Some(OTHER_USER), None).unwrap();
+
+    let error = revalidate_target(&target).unwrap_err().to_string();
+    assert!(error.contains("owned by another user"), "{error}");
+    assert!(!target.home.exists());
+}
