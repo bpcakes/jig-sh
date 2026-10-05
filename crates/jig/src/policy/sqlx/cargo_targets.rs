@@ -112,20 +112,37 @@ impl CargoTargets {
 
 impl Discovery {
     fn read(value: &toml::Value, build: Option<&toml::Value>) -> Self {
-        let enabled = |key: &str| {
-            value
-                .get("package")
+        let package = value.get("package");
+        let setting = |key: &str| {
+            package
                 .and_then(|package| package.get(key))
                 .and_then(toml::Value::as_bool)
-                .unwrap_or(true)
+        };
+        // A 2015-edition package stops discovering a kind of target once it
+        // declares one manually. An edition the manifest inherits from its
+        // workspace cannot be read here, and inheritance postdates that
+        // edition by years, so an edition that is present but not a plain
+        // string counts as a later one: keeping discovery on is what keeps
+        // production call sites visible.
+        let legacy_edition = match package.and_then(|package| package.get("edition")) {
+            None => true,
+            Some(edition) => edition.as_str() == Some("2015"),
+        };
+        let discovers = |key: &str, kind: &str| {
+            setting(key).unwrap_or(!(legacy_edition && value.get(kind).is_some()))
         };
         Self {
-            library: enabled("autolib"),
-            binaries: enabled("autobins"),
-            examples: enabled("autoexamples"),
-            benches: enabled("autobenches"),
-            tests: enabled("autotests"),
-            build: build.is_none(),
+            // An explicit `[lib]` table defines the library target itself,
+            // including the path it is read from, so `src/lib.rs` is only the
+            // default when no such table replaces it.
+            library: value.get("lib").is_none() && setting("autolib").unwrap_or(true),
+            binaries: discovers("autobins", "bin"),
+            examples: discovers("autoexamples", "example"),
+            benches: discovers("autobenches", "bench"),
+            tests: discovers("autotests", "test"),
+            // `build = true` asks for the default build script, a string names
+            // a different file, and `false` has none.
+            build: build.is_none_or(|build| build.as_bool() == Some(true)),
         }
     }
 
