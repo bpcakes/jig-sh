@@ -1,4 +1,5 @@
 use super::*;
+use crate::cli::structured_error::structured_error_exit_code;
 
 #[test]
 fn json_error_payload_and_reported_error_preserve_machine_failure_contract() {

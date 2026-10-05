@@ -7,7 +7,7 @@ use super::argument_parsing::{
 #[cfg(feature = "dev-proxy")]
 use super::dev_launch::dev_launch_identity_present;
 use super::*;
-use crate::cli::structured_error::{require_foreground_status, structured_error_exit_code};
+use crate::cli::structured_error::require_foreground_status;
 use crate::cli::{
     CHECK_SUBCOMMAND_NAMES, DevLaunchOpts, DevStatusOpts, DevStopOpts, InfoOpts,
     LAUNCHER_CHECK_SUBCOMMANDS, LAUNCHER_GLOBAL_FLAGS, VaultRunOpts, VaultRuntimeOpts,
