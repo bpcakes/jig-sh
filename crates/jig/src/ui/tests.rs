@@ -7,15 +7,11 @@ fn status_entrypoint_uses_requested_refresh_cadence() {
 }
 
 #[test]
-fn ui_options_start_on_timeline_with_cli_refresh_and_limit() {
-    let options = super::timeline_dashboard_options(
-        &crate::cli::UiOpts {
-            refresh_seconds: Some(11),
-            timeline_limit: Some(250),
-            retired_port: None,
-        },
-        jig_ui::dashboard::TimelineLimit::new(250).unwrap(),
-    )
+fn ui_options_start_on_timeline_with_requested_refresh_and_limit() {
+    let options = super::timeline_dashboard_options(super::DashboardRequest {
+        timeline_limit: 250,
+        refresh_interval: std::time::Duration::from_secs(11),
+    })
     .unwrap();
 
     assert_eq!(options.initial_tab, jig_ui::terminal::InitialTab::Timeline);
@@ -24,14 +20,15 @@ fn ui_options_start_on_timeline_with_cli_refresh_and_limit() {
 }
 
 #[test]
-fn errors_after_json_output_are_marked_as_already_emitted() {
-    let error =
-        super::finish_json_result(Err(anyhow::anyhow!("retirement failed")), true).unwrap_err();
-    assert!(crate::cli::is_json_output_already_emitted(&error));
+fn recorder_json_failures_report_whether_output_started() {
+    let after_output =
+        super::recorder_json_result(Err(anyhow::anyhow!("retirement failed")), true).unwrap_err();
+    assert!(after_output.output_started);
+    assert_eq!(after_output.error.to_string(), "retirement failed");
 
     let pre_output =
-        super::finish_json_result(Err(anyhow::anyhow!("collection failed")), false).unwrap_err();
-    assert!(!crate::cli::is_json_output_already_emitted(&pre_output));
+        super::recorder_json_result(Err(anyhow::anyhow!("collection failed")), false).unwrap_err();
+    assert!(!pre_output.output_started);
 }
 
 #[test]
@@ -56,6 +53,6 @@ fn a_partial_json_write_failure_is_never_followed_by_an_error_document() {
     }
 
     let write = super::write_json_to(&mut PartialWriter(false), b"{\"ok\":true}\n");
-    let error = super::finish_json_result(write, true).unwrap_err();
-    assert!(crate::cli::is_json_output_already_emitted(&error));
+    let failure = super::recorder_json_result(write, true).unwrap_err();
+    assert!(failure.output_started);
 }

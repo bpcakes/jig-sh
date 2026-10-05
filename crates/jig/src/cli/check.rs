@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{ArgGroup, Args, Subcommand};
 use jig_contract::ComparisonRequestV1;
 
+use crate::command::NamedCheck;
 use crate::tool_defs;
 
 use super::AgentMapOpts;
@@ -85,10 +86,10 @@ impl CheckOpts {
     pub(crate) fn is_contract_only(&self) -> bool {
         matches!(
             self.command,
-            Some(CheckCommand::Contract(CheckTargetOpts {
+            Some(CheckCommand::Named(NamedCheckCommand::Contract(CheckTargetOpts {
                 ref selectors,
                 ..
-            })) if selectors.is_empty()
+            }))) if selectors.is_empty()
         ) && self.profile.is_none()
             && self.affected.is_none()
             && !self.explain
@@ -162,22 +163,31 @@ pub(crate) struct CheckTargetOpts {
     pub(crate) selectors: Vec<String>,
 }
 
+#[derive(Debug, Subcommand)]
+pub(crate) enum CheckCommand {
+    #[command(flatten)]
+    Named(NamedCheckCommand),
+    /// Check agent-map.md coverage and links.
+    #[command(name = tool_defs::cli_command::CHECK_AGENT_MAP)]
+    AgentMap(AgentMapOpts),
+    /// Validate guide links and owner guides (v9+); check guide structure on older contracts.
+    #[command(name = tool_defs::cli_command::CHECK_AGENT_GUIDES)]
+    AgentGuides,
+    /// Verify existing migrations were not mutated.
+    #[command(name = tool_defs::cli_command::CHECK_MIGRATION_IMMUTABILITY)]
+    MigrationImmutability(CheckMigrationImmutabilityOpts),
+    /// Verify non-test SQLx queries use compile-time checked macros.
+    #[command(name = tool_defs::cli_command::CHECK_SQLX_UNCHECKED_NON_TEST)]
+    SqlxUncheckedNonTest,
+    /// Select one or more component actions using target syntax.
+    #[command(external_subcommand)]
+    Selectors(Vec<String>),
+}
+
 impl CheckCommand {
     pub(crate) fn has_additional_selectors(&self) -> bool {
         match self {
-            Self::Fmt(opts)
-            | Self::Lint(opts)
-            | Self::Clippy(opts)
-            | Self::Test(opts)
-            | Self::TestLocked(opts)
-            | Self::TypeScriptLint(opts)
-            | Self::TypeScriptTypecheck(opts)
-            | Self::TypeScriptBuild(opts)
-            | Self::TypeScriptCoverage(opts)
-            | Self::Sqlx(opts)
-            | Self::Sqlc(opts)
-            | Self::Schema(opts)
-            | Self::Contract(opts) => !opts.selectors.is_empty(),
+            Self::Named(named) => !named.target_opts().selectors.is_empty(),
             Self::AgentMap(_)
             | Self::AgentGuides
             | Self::MigrationImmutability(_)
@@ -187,8 +197,10 @@ impl CheckCommand {
     }
 }
 
+/// The checks that name a repository action. Each variant is tied to its
+/// selector and legacy manifest tool once, in [`Self::into_parts`].
 #[derive(Debug, Subcommand)]
-pub(crate) enum CheckCommand {
+pub(crate) enum NamedCheckCommand {
     /// Run the configured Rust format check.
     #[command(name = tool_defs::cli_command::CHECK_FMT)]
     Fmt(CheckTargetOpts),
@@ -228,21 +240,45 @@ pub(crate) enum CheckCommand {
     /// Validate the generated Jig command contract and runtime wiring.
     #[command(name = tool_defs::cli_command::CHECK_CONTRACT)]
     Contract(CheckTargetOpts),
-    /// Check agent-map.md coverage and links.
-    #[command(name = tool_defs::cli_command::CHECK_AGENT_MAP)]
-    AgentMap(AgentMapOpts),
-    /// Validate guide links and owner guides (v9+); check guide structure on older contracts.
-    #[command(name = tool_defs::cli_command::CHECK_AGENT_GUIDES)]
-    AgentGuides,
-    /// Verify existing migrations were not mutated.
-    #[command(name = tool_defs::cli_command::CHECK_MIGRATION_IMMUTABILITY)]
-    MigrationImmutability(CheckMigrationImmutabilityOpts),
-    /// Verify non-test SQLx queries use compile-time checked macros.
-    #[command(name = tool_defs::cli_command::CHECK_SQLX_UNCHECKED_NON_TEST)]
-    SqlxUncheckedNonTest,
-    /// Select one or more component actions using target syntax.
-    #[command(external_subcommand)]
-    Selectors(Vec<String>),
+}
+
+impl NamedCheckCommand {
+    /// The check this subcommand names and its additional selectors.
+    pub(crate) fn into_parts(self) -> (NamedCheck, CheckTargetOpts) {
+        match self {
+            Self::Fmt(opts) => (NamedCheck::FMT, opts),
+            Self::Lint(opts) => (NamedCheck::LINT, opts),
+            Self::Clippy(opts) => (NamedCheck::CLIPPY, opts),
+            Self::Test(opts) => (NamedCheck::TEST, opts),
+            Self::TestLocked(opts) => (NamedCheck::TEST_LOCKED, opts),
+            Self::TypeScriptLint(opts) => (NamedCheck::TYPESCRIPT_LINT, opts),
+            Self::TypeScriptTypecheck(opts) => (NamedCheck::TYPESCRIPT_TYPECHECK, opts),
+            Self::TypeScriptBuild(opts) => (NamedCheck::TYPESCRIPT_BUILD, opts),
+            Self::TypeScriptCoverage(opts) => (NamedCheck::TYPESCRIPT_COVERAGE, opts),
+            Self::Sqlx(opts) => (NamedCheck::SQLX, opts),
+            Self::Sqlc(opts) => (NamedCheck::SQLC, opts),
+            Self::Schema(opts) => (NamedCheck::SCHEMA, opts),
+            Self::Contract(opts) => (NamedCheck::CONTRACT, opts),
+        }
+    }
+
+    fn target_opts(&self) -> &CheckTargetOpts {
+        match self {
+            Self::Fmt(opts)
+            | Self::Lint(opts)
+            | Self::Clippy(opts)
+            | Self::Test(opts)
+            | Self::TestLocked(opts)
+            | Self::TypeScriptLint(opts)
+            | Self::TypeScriptTypecheck(opts)
+            | Self::TypeScriptBuild(opts)
+            | Self::TypeScriptCoverage(opts)
+            | Self::Sqlx(opts)
+            | Self::Sqlc(opts)
+            | Self::Schema(opts)
+            | Self::Contract(opts) => opts,
+        }
+    }
 }
 
 #[derive(Args, Debug)]

@@ -576,7 +576,7 @@ fn doctor_context_checks(ctx: &RepoContext) -> DoctorContextChecks {
                 DoctorProcessControl::allowed_without_signal_session(),
             );
         }
-        let Ok(signal_session) = DoctorSignalSession::start() else {
+        let Ok(signal_session) = SignalSession::start() else {
             return doctor_context_checks_with_process_control(
                 ctx,
                 &environment,
@@ -594,7 +594,7 @@ fn doctor_context_checks(ctx: &RepoContext) -> DoctorContextChecks {
                 unavailable_reason: None,
             },
         );
-        if finish_doctor_signal_session(signal_session).is_err() {
+        if finish_signal_session(signal_session).is_err() {
             mark_doctor_signal_retirement_failure(ctx, &mut checks);
         }
         checks

@@ -1,13 +1,9 @@
-use std::ffi::OsString;
 use std::io::Write;
-use std::process;
 
 use anyhow::{Context, Result, bail};
-use clap::{
-    Parser,
-    error::{ContextKind, ContextValue, ErrorKind},
-};
 
+#[cfg(test)]
+use super::VaultCommand;
 use super::bootstrap_run::{
     run_adopt_command, run_init_command, run_presets_command, run_update_command,
 };
@@ -16,11 +12,19 @@ use super::output::{HumanOutput, emit, print_json};
 use super::setup_run::run_setup_command;
 use super::structured_error::{
     is_json_output_already_emitted, json_error_payload, json_output_already_emitted,
-    json_reported_error, require_foreground_status, require_json_ok,
+    json_reported_error, require_json_ok,
 };
 pub(crate) use super::structured_error::{is_structured_json_failure, structured_error_exit_code};
+use super::ui_run::{name_ui_error, run_ui_command};
 use super::vault_run::run_vault_command;
-use super::*;
+use super::{
+    AgentCommand, Cli, CommandKind, DevOpts, DevSubcommand, InfoCommand, LoopCommand,
+    MigrationAddOpts, MigrationCommand, RuntimeCompatibilityProfile, RuntimeCompatibleOpts,
+    SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand, StateCommand, StatusCommand,
+};
+use crate::context::RepoContext;
+use crate::root_commands::{self, LauncherCommand, LauncherScope};
+use crate::{doctor, info, runtime, status, ui};
 
 pub(crate) fn run() -> Result<()> {
     let cli = parse_cli();
@@ -33,7 +37,7 @@ pub(crate) fn run() -> Result<()> {
     let result = validate_launcher_repository_scope(&cli)
         .map_err(|error| {
             if name_ui_errors {
-                super::json_command_error("ui", error)
+                name_ui_error(error)
             } else {
                 error
             }
@@ -52,12 +56,12 @@ fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
     let LauncherHandoff::Repository(request) = LauncherHandoff::from_cli(cli)? else {
         return Ok(());
     };
-    let descriptor = cli.command.launcher_descriptor();
-    if descriptor.scope == LauncherCommandScope::CapabilityOnly {
+    let command = cli.command.launcher_command();
+    if command.scope == LauncherScope::CapabilityOnly {
         bail!(
             "The generated launcher and this Jig runtime disagree about whether `{}` is repository-scoped. Repair the launcher/runtime pair with a current external Jig binary (`jig update <repo> --launcher-only --force`) before retrying `{}`.",
-            descriptor.name,
-            descriptor.name,
+            command.name,
+            command.name,
         );
     }
     let ctx = validate_repository_runtime_compatibility(request).with_context(|| {
@@ -118,82 +122,50 @@ impl<'a> LauncherHandoff<'a> {
 
 #[cfg(test)]
 fn launcher_capability_only_command(command: &CommandKind) -> bool {
-    command.launcher_descriptor().scope == LauncherCommandScope::CapabilityOnly
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LauncherCommandScope {
-    CapabilityOnly,
-    Repository,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct LauncherCommandDescriptor {
-    name: &'static str,
-    scope: LauncherCommandScope,
-}
-
-impl LauncherCommandDescriptor {
-    const fn new(name: &'static str, scope: LauncherCommandScope) -> Self {
-        Self { name, scope }
-    }
+    command.launcher_command().scope == LauncherScope::CapabilityOnly
 }
 
 impl CommandKind {
-    fn launcher_descriptor(&self) -> LauncherCommandDescriptor {
-        use LauncherCommandScope::{CapabilityOnly, Repository};
-
-        let (name, scope) = match self {
-            Self::Init(_) => (tool_defs::cli_command::INIT, CapabilityOnly),
-            Self::Presets => (tool_defs::cli_command::PRESETS, CapabilityOnly),
-            Self::Adopt(_) => (tool_defs::cli_command::ADOPT, CapabilityOnly),
-            Self::Update(_) => (tool_defs::cli_command::UPDATE, CapabilityOnly),
-            Self::Bootstrap => (tool_defs::cli_command::BOOTSTRAP, Repository),
-            Self::Setup => (tool_defs::cli_command::SETUP, Repository),
-            Self::Doctor => (tool_defs::cli_command::DOCTOR, CapabilityOnly),
-            Self::Info(_) => (tool_defs::cli_command::INFO, Repository),
-            Self::Dev(_) => (tool_defs::cli_command::DEV, Repository),
+    /// Ties every top-level command to its registry entry. Keep this match
+    /// exhaustive: a new command cannot dispatch until the registry declares
+    /// its generated-launcher scope.
+    fn launcher_command(&self) -> LauncherCommand {
+        match self {
+            Self::Init(_) => root_commands::INIT.launcher(),
+            Self::Presets => root_commands::PRESETS.launcher(),
+            Self::Adopt(_) => root_commands::ADOPT.launcher(),
+            Self::Update(_) => root_commands::UPDATE.launcher(),
+            Self::Bootstrap => root_commands::BOOTSTRAP.launcher(),
+            Self::Setup => root_commands::SETUP.launcher(),
+            Self::Doctor => root_commands::DOCTOR.launcher(),
+            Self::Info(_) => root_commands::INFO.launcher(),
+            Self::Dev(_) => root_commands::DEV.launcher(),
             Self::Check(opts) if opts.is_contract_only() => {
-                (tool_defs::cli_command::CHECK, CapabilityOnly)
+                root_commands::CHECK.launcher().capability_only()
             }
-            Self::Check(_) => (tool_defs::cli_command::CHECK, Repository),
-            Self::Run(_) => (tool_defs::cli_command::RUN, Repository),
-            Self::FileBudget(_) => (tool_defs::cli_command::FILE_BUDGET, Repository),
-            Self::Status(_) => (tool_defs::cli_command::STATUS, Repository),
-            Self::Ui(_) => (tool_defs::cli_command::UI, Repository),
-            Self::Loop(_) => (tool_defs::cli_command::LOOP, Repository),
-            Self::Migration(_) => (root_commands::MIGRATION.name, Repository),
-            Self::Sqlx(_) => (root_commands::SQLX.name, Repository),
-            Self::MigrationAdd(_) => (tool_defs::cli_command::MIGRATION_ADD, Repository),
-            Self::SchemaDump => (tool_defs::cli_command::SCHEMA_DUMP, Repository),
-            Self::Vault(_) => (tool_defs::cli_command::VAULT, Repository),
-            Self::GenerateSqlxUncheckedQueriesTodo(_) => (
-                tool_defs::cli_command::GENERATE_SQLX_UNCHECKED_QUERIES_TODO,
-                Repository,
-            ),
-            Self::Proxy(_) => (tool_defs::cli_command::PROXY, Repository),
-            Self::Agent(_) => (tool_defs::cli_command::AGENT, Repository),
-            Self::Claude(_) => (tool_defs::cli_command::CLAUDE, CapabilityOnly),
-            Self::Codex(_) => (tool_defs::cli_command::CODEX, CapabilityOnly),
-            Self::AgentMap(_) => (tool_defs::cli_command::AGENT_MAP, Repository),
-            Self::State(_) => (tool_defs::cli_command::STATE, Repository),
-            Self::RuntimeCompatible(_) => ("__runtime-compatible", CapabilityOnly),
-        };
-
-        // Repository-scoped commands must operate exclusively on the
-        // generated launcher's validated root. A command that accepts a
-        // caller-relative repository target belongs in CapabilityOnly instead;
-        // keeping this match exhaustive forces every new top-level command to
-        // make that choice explicitly.
-        LauncherCommandDescriptor::new(name, scope)
+            Self::Check(_) => root_commands::CHECK.launcher(),
+            Self::Run(_) => root_commands::RUN.launcher(),
+            Self::FileBudget(_) => root_commands::FILE_BUDGET.launcher(),
+            Self::Status(_) => root_commands::STATUS.launcher(),
+            Self::Ui(_) => root_commands::UI.launcher(),
+            Self::Loop(_) => root_commands::LOOP.launcher(),
+            Self::Migration(_) => root_commands::MIGRATION.launcher(),
+            Self::Sqlx(_) => root_commands::SQLX.launcher(),
+            Self::MigrationAdd(_) => root_commands::MIGRATION_ADD,
+            Self::SchemaDump => root_commands::SCHEMA_DUMP,
+            Self::Vault(_) => root_commands::VAULT.launcher(),
+            Self::GenerateSqlxUncheckedQueriesTodo(_) => {
+                root_commands::GENERATE_SQLX_UNCHECKED_QUERIES_TODO
+            }
+            Self::Proxy(_) => root_commands::PROXY.launcher(),
+            Self::Agent(_) => root_commands::AGENT.launcher(),
+            Self::Claude(_) => root_commands::CLAUDE.launcher(),
+            Self::Codex(_) => root_commands::CODEX.launcher(),
+            Self::AgentMap(_) => root_commands::AGENT_MAP.launcher(),
+            Self::State(_) => root_commands::STATE.launcher(),
+            Self::RuntimeCompatible(_) => root_commands::RUNTIME_COMPATIBLE,
+        }
     }
-}
-
-#[cfg(test)]
-fn launcher_capability_only_top_level_name(name: &str) -> bool {
-    LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS
-        .split(',')
-        .any(|capability| capability == name)
 }
 
 const fn should_report_json_command_errors(json_output: bool, command: &CommandKind) -> bool {
@@ -209,16 +181,7 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Presets => run_presets_command(json_output),
         CommandKind::Adopt(opts) => run_adopt_command(opts, json_output),
         CommandKind::Update(opts) => run_update_command(opts, json_output),
-        CommandKind::Ui(opts) => {
-            let ctx = RepoContext::load().map_err(|error| {
-                if json_output {
-                    super::json_command_error("ui", error)
-                } else {
-                    error
-                }
-            })?;
-            ui::run(ctx, opts, json_output)
-        }
+        CommandKind::Ui(opts) => run_ui_command(opts, json_output),
         CommandKind::Doctor => {
             let output = doctor::run()?;
             emit(json_output, HumanOutput::Doctor, &output)?;
@@ -226,13 +189,13 @@ fn run_command(cli: Cli) -> Result<()> {
         }
         CommandKind::Info(opts) => {
             opts.validate_projection()?;
-            if let Some(super::InfoCommand::Freshness(freshness)) = opts.subject.as_ref() {
+            if let Some(InfoCommand::Freshness(freshness)) = opts.subject.as_ref() {
                 if opts.commands {
                     bail!("--commands cannot be combined with an info subject");
                 }
                 return freshness::run(freshness, json_output);
             }
-            if matches!(opts.subject.as_ref(), Some(super::InfoCommand::GoVersion)) {
+            if matches!(opts.subject.as_ref(), Some(InfoCommand::GoVersion)) {
                 if opts.commands {
                     bail!("--commands cannot be combined with an info subject");
                 }
@@ -250,20 +213,16 @@ fn run_command(cli: Cli) -> Result<()> {
                 return Ok(());
             }
             let request = opts.subject.map(|subject| match subject {
-                super::InfoCommand::GoVersion | super::InfoCommand::Freshness(_) => {
+                InfoCommand::GoVersion | InfoCommand::Freshness(_) => {
                     unreachable!("handled above")
                 }
-                super::InfoCommand::Workspace => crate::repository::InspectRequest::Workspace,
-                super::InfoCommand::Components => crate::repository::InspectRequest::Components,
-                super::InfoCommand::Component { id } => {
-                    crate::repository::InspectRequest::Component(id)
-                }
-                super::InfoCommand::Targets => crate::repository::InspectRequest::Targets,
-                super::InfoCommand::Target { id } => crate::repository::InspectRequest::Target(id),
-                super::InfoCommand::Profiles => crate::repository::InspectRequest::Profiles,
-                super::InfoCommand::Profile { id } => {
-                    crate::repository::InspectRequest::Profile(id)
-                }
+                InfoCommand::Workspace => crate::repository::InspectRequest::Workspace,
+                InfoCommand::Components => crate::repository::InspectRequest::Components,
+                InfoCommand::Component { id } => crate::repository::InspectRequest::Component(id),
+                InfoCommand::Targets => crate::repository::InspectRequest::Targets,
+                InfoCommand::Target { id } => crate::repository::InspectRequest::Target(id),
+                InfoCommand::Profiles => crate::repository::InspectRequest::Profiles,
+                InfoCommand::Profile { id } => crate::repository::InspectRequest::Profile(id),
             });
             let output = info::run(opts.commands, json_output, request, opts.projection)?;
             emit(json_output, HumanOutput::Info, &output)?;
@@ -282,9 +241,12 @@ fn run_command(cli: Cli) -> Result<()> {
                 );
             }
             #[cfg(all(unix, not(test)))]
-            let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
-                anyhow::anyhow!("Status was not started because signal supervision is unavailable")
-            })?;
+            let signal_session =
+                crate::signal_supervision::SignalSession::start().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Status was not started because signal supervision is unavailable"
+                    )
+                })?;
             #[cfg(all(unix, not(test)))]
             let cancellation = signal_session.cancellation();
             #[cfg(all(unix, not(test)))]
@@ -300,68 +262,8 @@ fn run_command(cli: Cli) -> Result<()> {
             let output = outcome?;
             emit(json_output, HumanOutput::Status, &output)
         }
-        #[cfg(not(feature = "dev-proxy"))]
-        CommandKind::Dev(opts) => {
-            let human_output = dev_human_output(&opts);
-            let output = crate::dev_proxy::commands::dev_without_context(opts.into())?;
-            emit(json_output, human_output, &output)?;
-            finish_after_json_output(require_foreground_status(&output), json_output)
-        }
-        #[cfg(feature = "dev-proxy")]
-        CommandKind::Dev(opts) => {
-            let human_output = dev_human_output(&opts);
-            if opts.is_contextless() {
-                let output = crate::dev_proxy::commands::dev_contextless(opts.into())?;
-                emit(json_output, human_output, &output)?;
-                return finish_after_json_output(require_foreground_status(&output), json_output);
-            }
-            let Some(ctx) = RepoContext::load_optional()? else {
-                anyhow::bail!(
-                    "`scripts/jig dev` requires an adopted Jig repo with `.jig.toml`. Run it from a Jig repo, or preview adoption with `scripts/jig adopt .` and apply it with `scripts/jig adopt . --write`."
-                );
-            };
-            if let Some(identity_present) = dev_launch_identity_present(&opts) {
-                ensure_dev_process_identity(&ctx, identity_present);
-            }
-            #[cfg(unix)]
-            let _launcher_watch = if opts.command.is_none() {
-                match opts.launch.jig_worker_fd {
-                    Some(fd) => {
-                        // SAFETY: the private CLI worker protocol transfers its
-                        // inherited descriptor with no other Rust owner.
-                        Some(unsafe { jig_dev_proxy::DevLauncherWatch::from_inherited_fd(fd) }?)
-                    }
-                    None => return run_dev_worker(json_output),
-                }
-            } else {
-                None
-            };
-            let output = runtime::dispatch(&ctx, crate::command::RuntimeCommand::Dev(opts.into()))?;
-            emit(json_output, human_output, &output)?;
-            finish_after_json_output(require_foreground_status(&output), json_output)
-        }
-        #[cfg(not(feature = "dev-proxy"))]
-        CommandKind::Proxy(command) => {
-            let output = crate::dev_proxy::commands::proxy_without_context(command.into())?;
-            emit(json_output, HumanOutput::Proxy, &output)?;
-            finish_after_json_output(require_foreground_status(&output), json_output)
-        }
-        #[cfg(feature = "dev-proxy")]
-        CommandKind::Proxy(command) => {
-            let runtime_command: crate::command::ProxyCommand = command.into();
-            let output = if crate::dev_proxy::commands::can_run_without_context(&runtime_command) {
-                if let Some(ctx) = RepoContext::load_optional()? {
-                    runtime::dispatch(&ctx, crate::command::RuntimeCommand::Proxy(runtime_command))?
-                } else {
-                    crate::dev_proxy::commands::proxy_without_context(runtime_command)?
-                }
-            } else {
-                let ctx = RepoContext::load()?;
-                runtime::dispatch(&ctx, crate::command::RuntimeCommand::Proxy(runtime_command))?
-            };
-            emit(json_output, HumanOutput::Proxy, &output)?;
-            finish_after_json_output(require_foreground_status(&output), json_output)
-        }
+        CommandKind::Dev(opts) => run_dev_command(opts, json_output),
+        CommandKind::Proxy(command) => run_proxy_command(command, json_output),
         CommandKind::Bootstrap => dispatch_runtime_command(
             crate::command::RuntimeCommand::Bootstrap,
             false,
@@ -627,13 +529,6 @@ const fn dev_human_output(opts: &DevOpts) -> HumanOutput {
     }
 }
 
-#[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
-fn dev_launch_identity_present(opts: &DevOpts) -> Option<bool> {
-    opts.command
-        .is_none()
-        .then_some(opts.launch.jig_project.is_some())
-}
-
 #[cfg(test)]
 pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) -> bool {
     // Proxy commands expose host-cleanup/status operations that can complete
@@ -704,7 +599,7 @@ fn dispatch_runtime_command(
         return finish_after_json_output(require_json_ok(require_ok, &output), json_output);
     }
     #[cfg(all(unix, not(test)))]
-    let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
+    let signal_session = crate::signal_supervision::SignalSession::start().map_err(|_| {
         anyhow::anyhow!("Command was not started because signal supervision is unavailable")
     })?;
     #[cfg(all(unix, not(test)))]
@@ -733,12 +628,20 @@ mod argument_parsing;
 mod freshness;
 mod vault_environment;
 mod workflow_recovery;
-pub(super) use argument_parsing::*;
+use argument_parsing::parse_cli;
+#[cfg(test)]
+pub(super) use argument_parsing::post_parse_usage_error;
 use vault_environment::enforce_vault_passphrase_startup_boundary;
+// `jig dev` and `jig proxy` have one implementation per build: the real one,
+// or a stub reporting that the `dev-proxy` feature is not built.
 #[cfg(feature = "dev-proxy")]
 mod dev_launch;
 #[cfg(feature = "dev-proxy")]
-use dev_launch::*;
+use dev_launch::{run_dev_command, run_proxy_command};
+#[cfg(not(feature = "dev-proxy"))]
+mod dev_unavailable;
+#[cfg(not(feature = "dev-proxy"))]
+use dev_unavailable::{run_dev_command, run_proxy_command};
 
 #[cfg(test)]
 #[path = "run_tests.rs"]

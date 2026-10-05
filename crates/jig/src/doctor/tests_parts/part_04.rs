@@ -152,7 +152,7 @@ fn sqlx_driver_probe_sigint_helper() {
     let Some(executable) = std::env::var_os("JIG_SQLX_PROBE_SIGINT_HELPER") else {
         return;
     };
-    let signal_session = DoctorSignalSession::start().unwrap();
+    let signal_session = SignalSession::start().unwrap();
     let cancelled = || signal_session.cancelled();
     let result = probe_sqlx_driver_with_timeout_and_environment_and_cancellation(
         Path::new(&executable),
@@ -163,28 +163,28 @@ fn sqlx_driver_probe_sigint_helper() {
         &DoctorEnvironment::default(),
         Some(&cancelled),
     );
-    let _ = finish_doctor_signal_session(signal_session);
+    let _ = finish_signal_session(signal_session);
     panic!("SIGINT was not re-delivered after probe cleanup: {result:?}");
 }
 
 #[cfg(unix)]
 #[test]
 fn sqlx_probe_signal_finish_fails_closed_when_restoration_fails() {
-    let signals = DoctorSignals {
+    let signals = RecordedSignals {
         first: Some(libc::SIGINT),
-        mask: doctor_signal_bit(libc::SIGINT),
+        mask: signal_bit(libc::SIGINT),
     };
     assert_eq!(
-        doctor_signal_finish_action(signals, true),
-        DoctorSignalFinishAction::Redeliver(signals)
+        signal_finish_action(signals, true),
+        SignalFinishAction::Redeliver(signals)
     );
     assert_eq!(
-        doctor_signal_finish_action(signals, false),
-        DoctorSignalFinishAction::Exit(128 + libc::SIGINT)
+        signal_finish_action(signals, false),
+        SignalFinishAction::Exit(128 + libc::SIGINT)
     );
     assert_eq!(
-        doctor_signal_finish_action(DoctorSignals::default(), false),
-        DoctorSignalFinishAction::Continue
+        signal_finish_action(RecordedSignals::default(), false),
+        SignalFinishAction::Continue
     );
 }
 
@@ -226,7 +226,7 @@ fn sqlx_probe_signal_session_redelivers_distinct_signals_once_after_restoration(
         );
     }
 
-    let session = DoctorSignalSession::start().unwrap();
+    let session = SignalSession::start().unwrap();
     for signal in [
         libc::SIGINT,
         libc::SIGTERM,
@@ -244,7 +244,7 @@ fn sqlx_probe_signal_session_redelivers_distinct_signals_once_after_restoration(
         "a signal reached its prior disposition before session retirement",
     );
 
-    finish_doctor_signal_session(session).unwrap();
+    finish_signal_session(session).unwrap();
     assert_eq!(
         SQLX_PROBE_TEST_REDELIVERED_SIGNAL_COUNT.load(Ordering::SeqCst),
         3,
@@ -294,15 +294,15 @@ fn sqlx_probe_signal_session_does_not_swallow_later_default_termination() {
         unsafe { libc::sigaction(libc::SIGINT, &ignored, std::ptr::null_mut()) },
         0,
     );
-    install_default_doctor_signal_handler(libc::SIGTERM).unwrap();
+    install_default_signal_handler(libc::SIGTERM).unwrap();
 
-    let session = DoctorSignalSession::start().unwrap();
+    let session = SignalSession::start().unwrap();
     for signal in [libc::SIGINT, libc::SIGTERM] {
         // SAFETY: the active scoped session has installed a handler for
         // each supported signal in this isolated helper process.
         assert_eq!(unsafe { libc::raise(signal) }, 0);
     }
-    finish_doctor_signal_session(session).unwrap();
+    finish_signal_session(session).unwrap();
     panic!("the later default SIGTERM disposition was swallowed");
 }
 
@@ -339,7 +339,7 @@ fn sqlx_probe_signal_session_drop_restores_previous_handlers() {
     );
 
     {
-        let _session = DoctorSignalSession::start().unwrap();
+        let _session = SignalSession::start().unwrap();
     }
 
     // SAFETY: current points to writable storage and a null action requests
@@ -399,17 +399,17 @@ fn sqlx_probe_signal_session_serializes_then_reuses_a_fresh_generation() {
     let (finish_tx, finish_rx) = mpsc::channel();
     let (finished_tx, finished_rx) = mpsc::channel();
     let owner = std::thread::spawn(move || {
-        let session = DoctorSignalSession::start().unwrap();
+        let session = SignalSession::start().unwrap();
         ready_tx.send(session.generation()).unwrap();
         finish_rx.recv().unwrap();
         finished_tx
-            .send(finish_doctor_signal_session(session).is_ok())
+            .send(finish_signal_session(session).is_ok())
             .unwrap();
     });
     let first_generation = ready_rx.recv().unwrap();
 
     SQLX_PROBE_TEST_PAUSE_HANDLER.store(true, Ordering::SeqCst);
-    let handler = std::thread::spawn(|| record_doctor_signal(libc::SIGTERM));
+    let handler = std::thread::spawn(|| record_signal(libc::SIGTERM));
     let pause_deadline = Instant::now() + Duration::from_secs(1);
     while !SQLX_PROBE_TEST_HANDLER_PAUSED.load(Ordering::SeqCst) {
         assert!(Instant::now() < pause_deadline, "handler did not pause");
@@ -419,10 +419,10 @@ fn sqlx_probe_signal_session_serializes_then_reuses_a_fresh_generation() {
 
     let (next_tx, next_rx) = mpsc::channel();
     let next = std::thread::spawn(move || {
-        let session = DoctorSignalSession::start().unwrap();
+        let session = SignalSession::start().unwrap();
         let generation = session.generation();
         let redelivered = SQLX_PROBE_TEST_REDELIVERED_SIGNAL_COUNT.load(Ordering::SeqCst);
-        let finished = finish_doctor_signal_session(session).is_ok();
+        let finished = finish_signal_session(session).is_ok();
         next_tx.send((generation, redelivered, finished)).unwrap();
     });
     assert!(
@@ -488,9 +488,9 @@ fn sqlx_probe_signal_session_assigns_a_delayed_entry_to_the_current_generation()
         0
     );
 
-    let first = DoctorSignalSession::start().unwrap();
+    let first = SignalSession::start().unwrap();
     let first_generation = first.generation();
-    let delayed = std::thread::spawn(|| record_doctor_signal(libc::SIGTERM));
+    let delayed = std::thread::spawn(|| record_signal(libc::SIGTERM));
     let pause_deadline = Instant::now() + Duration::from_secs(1);
     while !SQLX_PROBE_TEST_HANDLER_PAUSED_BEFORE_CLAIM.load(Ordering::SeqCst) {
         assert!(
@@ -500,8 +500,8 @@ fn sqlx_probe_signal_session_assigns_a_delayed_entry_to_the_current_generation()
         std::thread::yield_now();
     }
 
-    finish_doctor_signal_session(first).unwrap();
-    let second = DoctorSignalSession::start().unwrap();
+    finish_signal_session(first).unwrap();
+    let second = SignalSession::start().unwrap();
     let second_generation = second.generation();
     assert!(second_generation > first_generation);
 
@@ -512,15 +512,15 @@ fn sqlx_probe_signal_session_assigns_a_delayed_entry_to_the_current_generation()
         "delayed callback did not join the active generation"
     );
     SQLX_PROBE_TEST_PAUSE_HANDLER_BEFORE_CLAIM.store(false, Ordering::SeqCst);
-    finish_doctor_signal_session(second).unwrap();
+    finish_signal_session(second).unwrap();
     assert_eq!(
         SQLX_PROBE_TEST_REDELIVERED_SIGNAL_COUNT.load(Ordering::SeqCst),
         1
     );
 
-    let third = DoctorSignalSession::start().unwrap();
+    let third = SignalSession::start().unwrap();
     assert!(third.generation() > second_generation);
-    finish_doctor_signal_session(third).unwrap();
+    finish_signal_session(third).unwrap();
 }
 
 #[cfg(unix)]
@@ -556,10 +556,10 @@ fn sqlx_probe_signal_session_timeout_fails_closed_for_a_recorded_signal() {
     SQLX_PROBE_TEST_QUIESCENCE_TIMED_OUT.store(false, Ordering::SeqCst);
     SQLX_PROBE_TEST_RELEASE_QUIESCENCE_TIMEOUT.store(false, Ordering::SeqCst);
 
-    let session = DoctorSignalSession::start().unwrap();
+    let session = SignalSession::start().unwrap();
     let (handler_done_tx, handler_done_rx) = mpsc::channel();
     let handler = std::thread::spawn(move || {
-        record_doctor_signal(libc::SIGTERM);
+        record_signal(libc::SIGTERM);
         handler_done_tx.send(()).unwrap();
     });
     let pause_deadline = Instant::now() + Duration::from_secs(1);
@@ -587,7 +587,7 @@ fn sqlx_probe_signal_session_timeout_fails_closed_for_a_recorded_signal() {
         SQLX_PROBE_TEST_RELEASE_QUIESCENCE_TIMEOUT.store(true, Ordering::SeqCst);
     });
 
-    let result = finish_doctor_signal_session(session);
+    let result = finish_signal_session(session);
     coordinator.join().unwrap();
     handler.join().unwrap();
     panic!("recorded signal was not claimed by fail-closed retirement: {result:?}");
@@ -598,9 +598,9 @@ fn sqlx_probe_signal_session_timeout_fails_closed_for_a_recorded_signal() {
 fn inactive_sqlx_probe_handler_exits_instead_of_swallowing_signal() {
     const HELPER: &str = "JIG_SQLX_PROBE_INACTIVE_HANDLER_HELPER";
     if std::env::var_os(HELPER).is_some() {
-        DOCTOR_ACTIVE_GENERATION.store(0, Ordering::SeqCst);
-        DOCTOR_SIGNAL_GENERATION.store(0, Ordering::SeqCst);
-        record_doctor_signal(libc::SIGTERM);
+        ACTIVE_SIGNAL_GENERATION.store(0, Ordering::SeqCst);
+        SIGNAL_GENERATION.store(0, Ordering::SeqCst);
+        record_signal(libc::SIGTERM);
         panic!("an inactive SQLx probe handler swallowed SIGTERM");
     }
 
@@ -622,11 +622,11 @@ fn poisoned_sqlx_probe_session_lock_blocks_future_sessions() {
     const HELPER: &str = "JIG_SQLX_PROBE_POISONED_LOCK_HELPER";
     if std::env::var_os(HELPER).is_some() {
         let poisoner = std::thread::spawn(|| {
-            let _guard = DOCTOR_SIGNAL_SESSION.lock().unwrap();
+            let _guard = SIGNAL_SESSION.lock().unwrap();
             panic!("poison the signal-session mutex");
         });
         assert!(poisoner.join().is_err());
-        let error = DoctorSignalSession::start()
+        let error = SignalSession::start()
             .err()
             .expect("poisoned mutex must reject a new signal session");
         assert!(error.to_string().contains("mutex is poisoned"));

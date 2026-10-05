@@ -67,8 +67,10 @@ if [[ -z "$launcher_global_flags" || -z "$rust_global_flags" \
   exit 1
 fi
 
+# The launcher's command lists are generated from the root command registry in
+# crates/jig/src/root_commands.rs; its unit tests compare that registry with
+# these markers. This check keeps each marker and its case arm in agreement.
 launcher_capability_subcommands="$(sed -n 's/^# jig-capability-only-subcommands://p' "$ROOT_DIR/scripts/jig")"
-rust_capability_subcommands="$(rust_string_const "$ROOT_DIR/crates/jig/src/cli.rs" LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS)"
 launcher_capability_case_subcommands="$(awk '
   /^[[:space:]]*# jig-capability-only-subcommands-begin$/ { capture = 1; next }
   capture {
@@ -82,15 +84,13 @@ launcher_capability_case_subcommands="$(awk '
     }
   }
 ' "$ROOT_DIR/scripts/jig")"
-if [[ -z "$launcher_capability_subcommands" || -z "$rust_capability_subcommands" \
-  || "$launcher_capability_subcommands" != "$rust_capability_subcommands" \
+if [[ -z "$launcher_capability_subcommands" \
   || "$launcher_capability_case_subcommands" != "$launcher_capability_subcommands" ]]; then
-  echo "Launcher capability-only subcommands '${launcher_capability_case_subcommands:-<unreadable>}' do not match its marker '${launcher_capability_subcommands:-<unreadable>}' and Clap's tested policy '${rust_capability_subcommands:-<unreadable>}' in crates/jig/src/cli.rs." >&2
+  echo "Launcher capability-only subcommands '${launcher_capability_case_subcommands:-<unreadable>}' do not match its marker '${launcher_capability_subcommands:-<unreadable>}'. Refresh both from the root command registry with JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launcher_command_lists." >&2
   exit 1
 fi
 
 launcher_repository_subcommands="$(sed -n 's/^# jig-repository-scope-subcommands://p' "$ROOT_DIR/scripts/jig")"
-rust_repository_subcommands="$(rust_string_const "$ROOT_DIR/crates/jig/src/cli.rs" LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS)"
 launcher_repository_case_subcommands="$(awk '
   /^[[:space:]]*# jig-repository-scope-subcommands-begin$/ { capture = 1; next }
   capture {
@@ -108,10 +108,9 @@ normalized_repository_marker="$(printf '%s\n' "$launcher_repository_subcommands"
 normalized_repository_case="$(
   printf '%s\n' "check,$launcher_repository_case_subcommands" | tr ',' '\n' | sort | paste -sd, -
 )"
-if [[ -z "$launcher_repository_subcommands" || -z "$rust_repository_subcommands" \
-  || "$launcher_repository_subcommands" != "$rust_repository_subcommands" \
+if [[ -z "$launcher_repository_subcommands" \
   || "$normalized_repository_case" != "$normalized_repository_marker" ]]; then
-  echo "Launcher repository-scoped subcommands '${launcher_repository_case_subcommands:-<unreadable>}' plus check do not match its marker '${launcher_repository_subcommands:-<unreadable>}' and Clap's tested policy '${rust_repository_subcommands:-<unreadable>}' in crates/jig/src/cli.rs." >&2
+  echo "Launcher repository-scoped subcommands '${launcher_repository_case_subcommands:-<unreadable>}' plus check do not match its marker '${launcher_repository_subcommands:-<unreadable>}'. Refresh both from the root command registry with JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launcher_command_lists." >&2
   exit 1
 fi
 

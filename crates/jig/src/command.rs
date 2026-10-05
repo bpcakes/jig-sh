@@ -1,10 +1,10 @@
 //! Runtime-facing command DTOs.
 //!
 //! CLI parsing stays in `cli`, and runtime execution stays in `runtime`.
-//! This module owns the neutral request shapes passed between them. Types that
-//! also back structured runtime requests derive `Deserialize` here so both
-//! paths reach runtime through the same request vocabulary. Command families
-//! live in sibling modules; this file is the public hub for runtime DTO imports.
+//! This module owns the neutral request shapes passed between them, so runtime
+//! code never depends on clap types. The CLI is the only producer of
+//! [`RuntimeCommand`]. Command families live in sibling modules; this file is
+//! the hub for runtime DTO imports.
 
 mod agent;
 mod check;
@@ -18,7 +18,7 @@ mod vault;
 
 pub(crate) use agent::{AgentBootstrapRequest, AgentCommand};
 pub(crate) use check::{
-    AgentMapCommand, AgentMapRequest, CheckCommand, MigrationImmutabilityRequest,
+    AgentMapCommand, AgentMapRequest, CheckCommand, MigrationImmutabilityRequest, NamedCheck,
     RepositoryCheckRequest, SqlxTodoRequest,
 };
 pub(crate) use loops::{
@@ -88,20 +88,7 @@ impl RuntimeCommand {
             | Self::Sqlx(_)
             | Self::Agent(_) => Cooperative,
             Self::Check(command) => match command {
-                CheckCommand::Repository(_)
-                | CheckCommand::Fmt
-                | CheckCommand::Lint
-                | CheckCommand::Clippy
-                | CheckCommand::Test
-                | CheckCommand::TestLocked
-                | CheckCommand::TypeScriptLint
-                | CheckCommand::TypeScriptTypecheck
-                | CheckCommand::TypeScriptBuild
-                | CheckCommand::TypeScriptCoverage
-                | CheckCommand::Sqlx
-                | CheckCommand::Sqlc
-                | CheckCommand::Schema
-                | CheckCommand::Contract => Cooperative,
+                CheckCommand::Repository(_) | CheckCommand::Named(_) => Cooperative,
                 CheckCommand::AgentMap(_)
                 | CheckCommand::AgentGuides
                 | CheckCommand::MigrationImmutability(_)
@@ -158,7 +145,7 @@ mod tests {
     #[test]
     fn command_backed_and_cancellable_scans_use_cooperative_signals() {
         let cooperative_commands = [
-            RuntimeCommand::Check(CheckCommand::Test),
+            RuntimeCommand::Check(CheckCommand::Named(NamedCheck::TEST)),
             RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
             RuntimeCommand::Loop(LoopCommand::ClearAttempt(LoopClearAttemptRequest {
                 workflow: "ExampleProject".into(),

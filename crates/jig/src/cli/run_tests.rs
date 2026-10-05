@@ -1,7 +1,21 @@
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+use super::argument_parsing::{
+    args_request_json, missing_init_path_hint, moved_check_command_hint, should_add_template_hint,
+};
+#[cfg(feature = "dev-proxy")]
+use super::dev_launch::dev_launch_identity_present;
 use super::*;
+use crate::cli::structured_error::require_foreground_status;
+use crate::cli::{
+    CHECK_SUBCOMMAND_NAMES, DevLaunchOpts, DevStatusOpts, DevStopOpts, InfoOpts,
+    LAUNCHER_CHECK_SUBCOMMANDS, LAUNCHER_GLOBAL_FLAGS, VaultRunOpts, VaultRuntimeOpts,
+    VaultStatusOpts,
+};
 use crate::test_env::{CurrentDirGuard, TestRepoBuilder, lock_env};
 use crate::tool_defs::{kind, tool};
-use clap::CommandFactory;
+use clap::{CommandFactory, Parser};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -170,54 +184,35 @@ fn launcher_capability_flag_allowlist_matches_clap_globals() {
         .get_subcommands()
         .map(|subcommand| subcommand.get_name())
         .collect::<std::collections::BTreeSet<_>>();
-    for subcommand in command.get_subcommands() {
-        let expected = LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS
-            .split(',')
-            .any(|capability| capability == subcommand.get_name());
-        assert_eq!(
-            launcher_capability_only_top_level_name(subcommand.get_name()),
-            expected,
-            "Rust launcher handoff policy disagrees for top-level command {}",
-            subcommand.get_name()
-        );
-    }
-    for capability_subcommand in LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS.split(',') {
-        assert!(
-            top_level_subcommands.contains(capability_subcommand),
-            "launcher capability-only policy names missing Clap subcommand {capability_subcommand}"
-        );
-    }
+    let capability_subcommands = root_commands::launcher_subcommands(LauncherScope::CapabilityOnly);
+    let repository_subcommands = root_commands::launcher_subcommands(LauncherScope::Repository);
+    let registered_subcommands = capability_subcommands
+        .iter()
+        .chain(&repository_subcommands)
+        .copied()
+        .chain([root_commands::RUNTIME_COMPATIBLE.name])
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        top_level_subcommands, registered_subcommands,
+        "every Clap top-level command must be declared in the root command registry"
+    );
     let capability_marker = CURRENT_GENERATED_LAUNCHER
         .lines()
         .find_map(|line| line.strip_prefix("# jig-capability-only-subcommands:"))
         .expect("generated launcher must declare its capability-only subcommands");
     assert_eq!(
-        capability_marker, LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS,
-        "update the launcher capability-only marker and parser when recovery commands change"
-    );
-    let repository_scope_subcommands = LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS
-        .split(',')
-        .collect::<std::collections::BTreeSet<_>>();
-    let expected_repository_scope_subcommands = top_level_subcommands
-        .difference(
-            &LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS
-                .split(',')
-                .collect::<std::collections::BTreeSet<_>>(),
-        )
-        .copied()
-        .filter(|name| *name != "__runtime-compatible")
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        repository_scope_subcommands, expected_repository_scope_subcommands,
-        "every public top-level command must explicitly choose capability-only or repository scope"
+        capability_marker,
+        capability_subcommands.join(","),
+        "refresh the launcher command lists when recovery commands change"
     );
     let repository_scope_marker = CURRENT_GENERATED_LAUNCHER
         .lines()
         .find_map(|line| line.strip_prefix("# jig-repository-scope-subcommands:"))
         .expect("generated launcher must declare its repository-scoped subcommands");
     assert_eq!(
-        repository_scope_marker, LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS,
-        "update the launcher repository-scope marker and parser when commands change"
+        repository_scope_marker,
+        repository_subcommands.join(","),
+        "refresh the launcher command lists when commands change"
     );
     let capability_invocations = [
         vec!["jig", "adopt", "."],
@@ -241,7 +236,7 @@ fn launcher_capability_flag_allowlist_matches_clap_globals() {
         })
         .collect::<Vec<_>>()
         .join(",");
-    assert_eq!(capability_commands, LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS);
+    assert_eq!(capability_commands, capability_subcommands.join(","));
     let contract_check = Cli::try_parse_from(["jig", "check", "contract"]).unwrap();
     assert!(launcher_capability_only_command(&contract_check.command));
     let setup = Cli::try_parse_from(["jig", "setup"]).unwrap();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::cli::NamedCheckCommand;
 
 #[test]
 fn external_check_selectors_accept_execution_flags_after_targets() {
@@ -133,9 +134,11 @@ fn built_in_action_names_compose_with_additional_selectors() {
         explain: false,
         fail_fast: false,
         comparison: CheckComparisonOpts::default(),
-        command: Some(CheckCommand::Test(CheckTargetOpts {
-            selectors: vec!["api:lint".into()],
-        })),
+        command: Some(CheckCommand::Named(NamedCheckCommand::Test(
+            CheckTargetOpts {
+                selectors: vec!["api:lint".into()],
+            },
+        ))),
     })
     .unwrap();
 

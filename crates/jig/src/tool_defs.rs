@@ -5,18 +5,12 @@ pub(crate) mod args {
     pub(crate) const NAME: &str = "name";
 }
 
+/// Nested subcommand names. Top-level command names live in
+/// [`crate::root_commands`].
 pub(crate) mod cli_command {
-    pub(crate) const ADOPT: &str = "adopt";
-    pub(crate) const AGENT: &str = "agent";
-    pub(crate) const AGENT_MAP: &str = "agent-map";
     pub(crate) const AGENT_MAP_GENERATE: &str = "generate";
     pub(crate) const AGENT_BOOTSTRAP: &str = "bootstrap";
     pub(crate) const AGENT_DOCTOR: &str = "doctor";
-    // Top-level `jig bootstrap` and nested `jig agent bootstrap` intentionally
-    // share the same parser label in different Clap command scopes.
-    pub(crate) const BOOTSTRAP: &str = "bootstrap";
-    pub(crate) const RUN: &str = "run";
-    pub(crate) const CHECK: &str = "check";
     pub(crate) const CHECK_AGENT_MAP: &str = "agent-map";
     pub(crate) const CHECK_AGENT_GUIDES: &str = "agent-guides";
     pub(crate) const CHECK_CLIPPY: &str = "clippy";
@@ -34,22 +28,12 @@ pub(crate) mod cli_command {
     pub(crate) const CHECK_TYPESCRIPT_COVERAGE: &str = "typescript-coverage";
     pub(crate) const CHECK_TYPESCRIPT_LINT: &str = "typescript-lint";
     pub(crate) const CHECK_TYPESCRIPT_TYPECHECK: &str = "typescript-typecheck";
-    pub(crate) const CLAUDE: &str = "claude";
-    pub(crate) const CODEX: &str = "codex";
     pub(crate) const CODEX_HOMES: &str = "homes";
     pub(crate) const CODEX_LAUNCH: &str = "launch";
     pub(crate) const CODEX_RESUME: &str = "resume";
-    pub(crate) const DEV: &str = "dev";
     pub(crate) const DEV_STATUS: &str = "status";
     pub(crate) const DEV_RECOVER: &str = "recover";
     pub(crate) const DEV_STOP: &str = "stop";
-    pub(crate) const DOCTOR: &str = "doctor";
-    pub(crate) const FILE_BUDGET: &str = "file-budget";
-    pub(crate) const GENERATE_SQLX_UNCHECKED_QUERIES_TODO: &str =
-        "generate-sqlx-unchecked-queries-todo";
-    pub(crate) const INFO: &str = "info";
-    pub(crate) const INIT: &str = "init";
-    pub(crate) const LOOP: &str = "loop";
     pub(crate) const LOOP_ACKNOWLEDGE_OCCURRENCE: &str = "acknowledge-occurrence";
     pub(crate) const LOOP_CLEAR_ATTEMPT: &str = "clear-attempt";
     pub(crate) const LOOP_DISPATCH: &str = "dispatch";
@@ -57,11 +41,7 @@ pub(crate) mod cli_command {
     pub(crate) const LOOP_SHOW: &str = "show";
     pub(crate) const LOOP_STATUS: &str = "status";
     pub(crate) const LOOP_TICK: &str = "tick";
-    pub(crate) const MIGRATION: &str = "migration";
     pub(crate) const MIGRATION_ADD_NESTED: &str = "add";
-    pub(crate) const MIGRATION_ADD: &str = "migration-add";
-    pub(crate) const PRESETS: &str = "presets";
-    pub(crate) const PROXY: &str = "proxy";
     pub(crate) const PROXY_ALIAS: &str = "alias";
     pub(crate) const PROXY_CERT: &str = "cert";
     pub(crate) const PROXY_CERT_GENERATE: &str = "generate";
@@ -77,22 +57,14 @@ pub(crate) mod cli_command {
     pub(crate) const PROXY_SERVICE_UNINSTALL: &str = "uninstall";
     pub(crate) const PROXY_START: &str = "start";
     pub(crate) const PROXY_STOP: &str = "stop";
-    pub(crate) const SCHEMA_DUMP: &str = "schema-dump";
-    pub(crate) const SETUP: &str = "setup";
-    pub(crate) const STATE: &str = "state";
     pub(crate) const STATE_ARCHIVE: &str = "archive";
     pub(crate) const STATE_DIAGNOSE: &str = "diagnose";
     pub(crate) const STATE_RESTORE: &str = "restore";
     pub(crate) const STATE_SUMMARY: &str = "summary";
-    pub(crate) const STATUS: &str = "status";
-    pub(crate) const SQLX: &str = "sqlx";
     pub(crate) const SQLX_MIGRATION: &str = "migration";
     pub(crate) const SQLX_MIGRATION_ADD: &str = "add";
     pub(crate) const SQLX_SCHEMA: &str = "schema";
     pub(crate) const SQLX_SCHEMA_DUMP: &str = "dump";
-    pub(crate) const UI: &str = "ui";
-    pub(crate) const UPDATE: &str = "update";
-    pub(crate) const VAULT: &str = "vault";
     pub(crate) const VAULT_AUDIT: &str = "audit";
     pub(crate) const VAULT_AUDIT_VERIFY: &str = "verify";
     pub(crate) const VAULT_BACKUP: &str = "backup";

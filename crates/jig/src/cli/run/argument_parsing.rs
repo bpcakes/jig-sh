@@ -1,4 +1,16 @@
-use super::*;
+use std::ffi::OsString;
+use std::io::Write;
+use std::process;
+
+use clap::{
+    Parser,
+    error::{ContextKind, ContextValue, ErrorKind},
+};
+
+use crate::cli::output::print_json;
+use crate::cli::structured_error::json_error_payload;
+use crate::cli::{CHECK_SUBCOMMAND_NAMES, Cli, CommandKind, TEMPLATE_ERROR_HINT};
+use crate::root_commands;
 
 pub(in crate::cli) fn parse_cli() -> Cli {
     let args = normalize_external_check_global_flags(std::env::args_os().collect());
@@ -45,7 +57,7 @@ pub(in crate::cli) fn normalize_external_check_global_flags(
     mut args: Vec<OsString>,
 ) -> Vec<OsString> {
     let Some(check_index) =
-        root_subcommand_index(&args).filter(|index| args[*index] == tool_defs::cli_command::CHECK)
+        root_subcommand_index(&args).filter(|index| args[*index] == root_commands::CHECK.name)
     else {
         return args;
     };

@@ -22,14 +22,9 @@ fn named_v6_checks_preserve_feature_specific_unavailable_diagnostics() {
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let mut observer = crate::execution::NoopExecutionObserver;
 
-    let direct_error = dispatch_named_check(
-        &ctx,
-        "sqlc",
-        crate::tool_defs::tool::SQLC_CHECK,
-        &mut observer,
-    )
-    .unwrap_err()
-    .to_string();
+    let direct_error = dispatch_named_check(&ctx, NamedCheck::SQLC, &mut observer)
+        .unwrap_err()
+        .to_string();
 
     let flagged_error = dispatch_repository_check(
         &ctx,
@@ -421,9 +416,11 @@ rust_test_command = "printf 'command tool ran\n'"
     let output = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
-                selectors: Vec::new(),
-            }),
+            crate::cli::CheckCommand::Named(crate::cli::NamedCheckCommand::Test(
+                crate::cli::CheckTargetOpts {
+                    selectors: Vec::new(),
+                },
+            )),
         )),
     )
     .unwrap();
