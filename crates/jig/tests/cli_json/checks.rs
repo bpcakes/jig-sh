@@ -197,15 +197,22 @@ fn external_check_selectors_accept_global_json_and_help_after_the_selector() {
     let payload: Value = serde_json::from_slice(&json_output.stdout).unwrap();
     assert_eq!(payload["run"]["conclusion"], "failure");
 
-    let help = jig()
-        .current_dir(repo.path())
-        .args(["check", "api:test", "--help"])
-        .output()
-        .unwrap();
-    assert!(help.status.success());
-    let help = String::from_utf8_lossy(&help.stdout);
-    assert!(help.contains("Run configured project checks"), "{help}");
-    assert!(!help.contains("unknown check option"), "{help}");
+    for flags in [
+        &["--help"][..],
+        &["--json", "--help"][..],
+        &["--help", "--json"][..],
+    ] {
+        let help = jig()
+            .current_dir(repo.path())
+            .args(["check", "api:test"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert!(help.status.success(), "{flags:?}: {help:?}");
+        let help = String::from_utf8_lossy(&help.stdout);
+        assert!(help.contains("Run configured project checks"), "{help}");
+        assert!(!help.contains("unknown check option"), "{help}");
+    }
 }
 
 #[test]
