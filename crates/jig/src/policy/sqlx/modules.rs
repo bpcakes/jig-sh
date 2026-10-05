@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use syn::visit::{self, Visit};
 
 use super::cargo_targets::CargoTargets;
-use super::scanner::{has_cfg_test, unraw};
+use super::scanner::{has_cfg_test, is_ident, unraw};
 
 /// How a `mod` item names what it loads. A `#[path]` value extends the
 /// directory itself and leaves any pending module name unused, so the two
@@ -279,9 +279,11 @@ pub(super) fn parent_dir(path: &str) -> String {
     split_path(path).0.to_string()
 }
 
+/// The `#[path]` value a declaration carries. A raw identifier names the
+/// same attribute as its bare spelling, so `#[r#path]` counts too.
 fn path_attribute(attrs: &[syn::Attribute]) -> Option<String> {
     attrs.iter().find_map(|attr| {
-        if !attr.path().is_ident("path") {
+        if !is_ident(attr.path(), "path") {
             return None;
         }
         match &attr.meta {

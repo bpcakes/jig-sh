@@ -233,7 +233,7 @@ pub(super) fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-fn is_ident(path: &syn::Path, name: &str) -> bool {
+pub(super) fn is_ident(path: &syn::Path, name: &str) -> bool {
     path.get_ident().is_some_and(|ident| ident.unraw() == name)
 }
 

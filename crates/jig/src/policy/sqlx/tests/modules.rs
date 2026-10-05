@@ -6,6 +6,7 @@ use crate::policy::sqlx::check_non_test;
 pub(super) const CALL: &str = "fn example() { let _ = sqlx::query(\"SELECT 1\"); }\n";
 pub(super) const MANIFEST: &str = "[package]\nname = \"example-project\"\nversion = \"0.1.0\"\n";
 
+mod attributes;
 mod blocks;
 mod cargo_targets;
 
@@ -105,19 +106,6 @@ fn a_path_attribute_on_an_inline_module_directs_its_children() {
     assert!(test.contains("`src/cases/fixture.rs:1`"), "{test}");
 }
 
-#[test]
-fn raw_identifier_modules_resolve_to_their_canonical_file_name() {
-    let temp = inventory(&[
-        ("src/lib.rs", "#[cfg(test)]\nmod r#type;\n"),
-        ("src/type.rs", CALL),
-    ]);
-
-    let (non_test, test) = sections(temp.path());
-
-    assert!(non_test.contains("_None_"), "{non_test}");
-    assert!(test.contains("`src/type.rs:1`"), "{test}");
-}
-
 /// A helper the production module tree still reaches describes production
 /// behavior, whichever other module tree also declares it.
 #[test]
@@ -141,26 +129,6 @@ fn a_helper_reachable_from_production_stays_non_test() {
     let (non_test, test) = sections(temp.path());
 
     assert!(non_test.contains("`src/shared/dual.rs:1`"), "{non_test}");
-    assert!(test.contains("_None_"), "{test}");
-}
-
-/// Only an exact `#[cfg(test)]` classifies a module tree; the inventory does
-/// not evaluate arbitrary cfg predicates.
-#[test]
-fn other_cfg_predicates_do_not_classify_descendants_as_test() {
-    let temp = inventory(&[
-        (
-            "src/lib.rs",
-            "#[cfg(feature = \"extra\")]\nmod extra;\n#[cfg(all(test))]\nmod combined;\n",
-        ),
-        ("src/extra.rs", CALL),
-        ("src/combined.rs", CALL),
-    ]);
-
-    let (non_test, test) = sections(temp.path());
-
-    assert!(non_test.contains("`src/extra.rs:1`"), "{non_test}");
-    assert!(non_test.contains("`src/combined.rs:1`"), "{non_test}");
     assert!(test.contains("_None_"), "{test}");
 }
 
