@@ -9,6 +9,7 @@ use jig_contract::{
 };
 
 use crate::context::RepoContext;
+use crate::exit::CliExit;
 use crate::repository::{
     FILE_BUDGET_MAX_CANDIDATES_HARD_CAP_V1, FILE_BUDGET_MAX_TOTAL_BYTES_HARD_CAP_V1,
 };
@@ -223,7 +224,11 @@ pub(super) fn run_file_budget_command(command: FileBudgetCommand, json_output: b
     if exit_status == 0 {
         Ok(())
     } else {
-        Err(super::structured_error::file_budget_exit(exit_status))
+        Err(CliExit::reported(
+            exit_status,
+            format!("file-budget diagnostic exited with status {exit_status}"),
+        )
+        .into())
     }
 }
 
@@ -236,7 +241,7 @@ fn direct_configuration(
             let _ = print_json(&json_error_payload("invalid_invocation", &message, 2));
             json_reported_error(2)
         } else {
-            super::structured_error::file_budget_invocation_error(message)
+            CliExit::unreported(2, message).into()
         }
     })
 }

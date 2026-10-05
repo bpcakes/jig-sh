@@ -44,6 +44,7 @@
 - Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
 - Change how a command's result is shown to people: its formatter in `src/cli/output.rs` or under `src/cli/output/`. The command passes that function to `emit` (or names it in its `RuntimeDispatch`); there is no central output table to extend.
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
+- Propagate a child status or an already-reported failure: return `CliExit` from `src/exit.rs`. `src/cli/structured_error.rs` owns only the `--json` error protocol; do not add per-command marker error types there.
 - Change manifest-tool behavior around command execution: `src/runtime.rs`.
 - Change run history, state maintenance, or `jig state summary`: `src/state.rs` and `src/state/`.
 - Change loop occurrence evidence, its retention, or `jig loop show`: `src/runtime/loops/evidence.rs` and `src/runtime/loops/show.rs`.
