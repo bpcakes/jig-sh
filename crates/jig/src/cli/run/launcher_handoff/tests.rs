@@ -235,9 +235,6 @@ fn generated_launcher_keeps_bare_check_and_target_selectors_repository_scoped() 
 
 #[test]
 fn contract_comparison_options_keep_launcher_and_runtime_repository_scoped() {
-    let _env = lock_env();
-    let temp = tempdir().unwrap();
-    write_compatible_runtime_repo(temp.path(), 4);
     let bare = Cli::try_parse_from(["jig", "check", "contract"]).unwrap();
     assert!(launcher_capability_only_command(&bare.command));
     assert!(generated_launcher_classifies_as_capability_only(&[
@@ -255,6 +252,9 @@ fn contract_comparison_options_keep_launcher_and_runtime_repository_scoped() {
             "explicit",
         ][..],
     ] {
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        write_compatible_runtime_repo(temp.path(), 4);
         let mut args = vec!["check", "contract"];
         args.extend_from_slice(comparison);
         assert!(
