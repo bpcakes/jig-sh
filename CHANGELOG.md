@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.7.2 - 2026-10-05
+
+### Fixed
+- Allow broad semicolon-separated SQLx inventory sources
+- Support backup restore on macOS
+- Keep macOS ACLs from bypassing restore privacy
+- Refuse restore parents whose ACL allows delete
+- Classify external cfg(test) module descendants as test code
+- Follow Rust's module directory rules when resolving mod declarations
+- Treat manifest-configured Cargo targets as production roots
+- Derive Cargo target roots from manifests instead of filenames
+- Recognize a Cargo target named main.rs in a target directory
+- Honor Cargo auto-discovery settings for target roots
+- Match Cargo's own rules for default and discovered targets
+- Retract guessed module directories and overridden target names
+- Settle the root set and consider every enclosing package
+- Keep a test filename from reclassifying what the file declares
+- Classify each loading of a file, and decline when roots never settle
+- Protect only the loading Cargo compiles
+- Require a trusted path for every restore ancestor
+- Refuse ownership-ignoring volumes anywhere on the restore path
+- See production declarations in blocks and outside the crate roots
+- Read a raw path attribute as the path attribute
+- Clear inherited macOS ACLs from vault homes and private outputs
+
+### Changed
+- Record SQLx external cfg(test) module task
+- Close jig-sh-sqlx-external-test-modules-uq7j
+- Record jig-sh-3mwh macOS vault ACL follow-up
+- Share the macOS ACL module across the crate
+- Close jig-sh-3mwh
+
+### Tests
+- Cover every refused restore parent ACL permission
+- Cover preflight through an ancestor owned by another user
+
+### Other
+- Begin v0.7.2-dev development
+
 ## v0.7.1 - 2026-10-04
 
 ### Added
