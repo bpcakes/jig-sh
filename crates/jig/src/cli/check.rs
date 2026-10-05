@@ -232,6 +232,10 @@ impl CheckOpts {
             && self.affected.is_none()
             && !self.explain
             && !self.fail_fast
+            && self
+                .comparison
+                .request()
+                .is_ok_and(|request| request.is_none())
     }
 }
 
