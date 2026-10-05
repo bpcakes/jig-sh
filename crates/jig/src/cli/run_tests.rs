@@ -1,17 +1,16 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use super::argument_parsing::{
-    args_request_json, missing_init_path_hint, moved_check_command_hint, should_add_template_hint,
-};
+use super::argument_parsing::{args_request_json, usage_hint};
 #[cfg(feature = "dev-proxy")]
 use super::dev_launch::dev_launch_identity_present;
 use super::*;
+use crate::cli::bootstrap_hints::TEMPLATE_ERROR_HINT;
+use crate::cli::check::CHECK_SUBCOMMAND_NAMES;
 use crate::cli::structured_error::require_foreground_status;
 use crate::cli::{
-    CHECK_SUBCOMMAND_NAMES, DevLaunchOpts, DevStatusOpts, DevStopOpts, InfoOpts,
-    LAUNCHER_CHECK_SUBCOMMANDS, LAUNCHER_GLOBAL_FLAGS, VaultRunOpts, VaultRuntimeOpts,
-    VaultStatusOpts,
+    DevLaunchOpts, DevStatusOpts, DevStopOpts, InfoOpts, LAUNCHER_CHECK_SUBCOMMANDS,
+    LAUNCHER_GLOBAL_FLAGS, VaultRunOpts, VaultRuntimeOpts, VaultStatusOpts,
 };
 use crate::test_env::{CurrentDirGuard, TestRepoBuilder, lock_env};
 use crate::tool_defs::{kind, tool};
@@ -76,6 +75,13 @@ fn status_run_reconciles_an_abandoned_worker_before_rendering() {
     assert_eq!(output["result"]["conclusion"], "blocked");
 }
 
+/// Parses `args` as the CLI would and returns the hint for the usage error.
+fn usage_hint_for(args: &[&str]) -> Option<String> {
+    let args = args.iter().map(OsString::from).collect::<Vec<_>>();
+    let error = Cli::try_parse_from(&args).unwrap_err();
+    usage_hint(&error, &args)
+}
+
 #[test]
 fn template_errors_get_hint() {
     let missing_template_value =
@@ -84,10 +90,12 @@ fn template_errors_get_hint() {
         missing_template_value.kind(),
         clap::error::ErrorKind::InvalidValue
     );
-    assert!(should_add_template_hint(&missing_template_value));
+    assert_eq!(
+        usage_hint_for(&["jig", "adopt", ".", "--template"]).as_deref(),
+        Some(TEMPLATE_ERROR_HINT)
+    );
 
-    let unrelated = Cli::try_parse_from(["jig", "proxy", "run", "web", "vite"]).unwrap_err();
-    assert!(!should_add_template_hint(&unrelated));
+    assert!(usage_hint_for(&["jig", "proxy", "run", "web", "vite"]).is_none());
 }
 
 #[test]
@@ -626,19 +634,16 @@ fn legacy_check_commands_get_actionable_hint() {
     ] {
         let error = Cli::try_parse_from(["jig", legacy]).unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
-        let message = error.to_string();
-        assert!(
-            message.contains("Usage: jig [OPTIONS] <COMMAND>"),
-            "legacy top-level hint depends on Clap usage text for {legacy}: {message}"
-        );
-        assert!(
-            message.contains(&format!("'{legacy}'")),
-            "legacy top-level hint depends on Clap quoting the invalid command for {legacy}: {message}"
+        let expected = format!("This check command moved. Use:\n  {replacement}");
+        assert_eq!(
+            usage_hint_for(&["jig", legacy]).as_deref(),
+            Some(expected.as_str()),
+            "wrong moved-command hint for {legacy}"
         );
         assert_eq!(
-            moved_check_command_hint(&error),
-            Some(format!("This check command moved. Use:\n  {replacement}")),
-            "wrong moved-command hint for {legacy}"
+            usage_hint_for(&["jig", "--json", legacy]).as_deref(),
+            Some(expected.as_str()),
+            "a global flag before {legacy} must not hide the hint"
         );
     }
 }
@@ -647,18 +652,9 @@ fn legacy_check_commands_get_actionable_hint() {
 fn nested_agent_map_check_gets_actionable_hint() {
     let error = Cli::try_parse_from(["jig", "agent-map", "check"]).unwrap_err();
     assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
-    let message = error.to_string();
-    assert!(
-        message.contains("unrecognized subcommand 'check'"),
-        "agent-map hint depends on Clap quoting the nested invalid command: {message}"
-    );
-    assert!(
-        message.contains("Usage: jig agent-map [OPTIONS] <COMMAND>"),
-        "agent-map hint depends on Clap nested usage text: {message}"
-    );
     assert_eq!(
-        moved_check_command_hint(&error),
-        Some("This check command moved. Use:\n  jig check agent-map".to_string())
+        usage_hint_for(&["jig", "agent-map", "check"]).as_deref(),
+        Some("This check command moved. Use:\n  jig check agent-map")
     );
 
     let unrelated_nested = Cli::try_parse_from(["jig", "agent-map", "test"]).unwrap_err();
@@ -666,13 +662,30 @@ fn nested_agent_map_check_gets_actionable_hint() {
         unrelated_nested.kind(),
         clap::error::ErrorKind::InvalidSubcommand
     );
-    assert!(moved_check_command_hint(&unrelated_nested).is_none());
+    assert!(usage_hint_for(&["jig", "agent-map", "test"]).is_none());
+}
+
+#[test]
+fn retired_check_spellings_under_another_command_get_no_hint() {
+    // `test` and `clippy` moved from the top level only; the same word
+    // rejected below an existing command is an ordinary typo.
+    for args in [
+        &["jig", "agent", "test"][..],
+        &["jig", "state", "clippy"][..],
+        &["jig", "agent", "check"][..],
+    ] {
+        let error = Cli::try_parse_from(args.iter().copied()).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        assert!(
+            usage_hint_for(args).is_none(),
+            "unexpected hint for {args:?}"
+        );
+    }
 }
 
 #[test]
 fn missing_init_path_gets_actionable_hint() {
-    let error = Cli::try_parse_from(["jig", "init"]).unwrap_err();
-    let hint = missing_init_path_hint(&error).unwrap();
+    let hint = usage_hint_for(&["jig", "init"]).unwrap();
 
     assert!(hint.contains("jig init /path/to/new-repo"));
     assert!(hint.contains(
@@ -681,6 +694,10 @@ fn missing_init_path_gets_actionable_hint() {
     assert!(hint.contains("--preset rust-react"));
     assert!(hint.contains("jig adopt ."));
     assert!(hint.contains("jig adopt . --write"));
+    assert_eq!(
+        usage_hint_for(&["jig", "--json", "init", "--preset", "harness-only"]),
+        Some(hint)
+    );
 }
 
 #[test]
@@ -722,10 +739,8 @@ fn unrelated_parse_errors_do_not_get_missing_init_path_hint() {
         missing_proxy_args.kind(),
         clap::error::ErrorKind::MissingRequiredArgument
     );
-    assert!(missing_init_path_hint(&missing_proxy_args).is_none());
-
-    let invalid_subcommand = Cli::try_parse_from(["jig", "not-a-command"]).unwrap_err();
-    assert!(missing_init_path_hint(&invalid_subcommand).is_none());
+    assert!(usage_hint_for(&["jig", "proxy", "run"]).is_none());
+    assert!(usage_hint_for(&["jig", "not-a-command"]).is_none());
 }
 
 #[test]
