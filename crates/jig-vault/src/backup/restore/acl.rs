@@ -4,8 +4,8 @@
 //! inherited allow entry survives `chmod 0700`/`0600` and can still grant
 //! other principals access. Restore therefore clears every entry from the
 //! directories and files it creates before writing contents into them, and
-//! refuses existing parents whose ACLs grant other principals write, delete,
-//! or permission-change access. Linux POSIX
+//! refuses any existing directory on the restore path whose ACL grants other
+//! principals write, delete, or permission-change access. Linux POSIX
 //! ACLs need no counterpart: the explicit mode change also narrows their mask.
 
 #[cfg(target_os = "macos")]
@@ -16,9 +16,10 @@ pub(super) use portable::{clear_directory, clear_file, reject_shared_write, requ
 
 #[cfg(target_os = "macos")]
 mod darwin {
-    use std::ffi::{c_int, c_void};
+    use std::ffi::{CString, c_char, c_int, c_void};
     use std::fs::{File, OpenOptions};
     use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::Path;
 
@@ -53,6 +54,7 @@ mod darwin {
 
     unsafe extern "C" {
         fn acl_get_fd_np(fd: c_int, acl_type: c_int) -> *mut c_void;
+        fn acl_get_link_np(path: *const c_char, acl_type: c_int) -> *mut c_void;
         fn acl_set_fd_np(fd: c_int, acl: *mut c_void, acl_type: c_int) -> c_int;
         fn acl_init(count: c_int) -> *mut c_void;
         fn acl_free(object: *mut c_void) -> c_int;
@@ -67,7 +69,7 @@ mod darwin {
 
     impl Drop for Acl {
         fn drop(&mut self) {
-            // SAFETY: the pointer came from acl_get_fd_np or acl_init and is
+            // SAFETY: the pointer came from an acl_get_* call or acl_init and is
             // released exactly once.
             unsafe {
                 acl_free(self.0);
@@ -83,7 +85,25 @@ mod darwin {
     impl Acl {
         fn read(file: &File, path: &Path) -> AnyResult<Option<Self>> {
             // SAFETY: the descriptor is open for the duration of the call.
-            let acl = unsafe { acl_get_fd_np(file.as_raw_fd(), ACL_TYPE_EXTENDED) };
+            Self::from_result(
+                unsafe { acl_get_fd_np(file.as_raw_fd(), ACL_TYPE_EXTENDED) },
+                path,
+            )
+        }
+
+        /// Reads without opening or following `path`, so a directory the
+        /// current user may traverse but not list can still be inspected.
+        fn read_link(path: &Path) -> AnyResult<Option<Self>> {
+            let c_path =
+                CString::new(path.as_os_str().as_bytes()).context("restore path contains NUL")?;
+            // SAFETY: `c_path` is NUL-terminated and outlives the call.
+            Self::from_result(
+                unsafe { acl_get_link_np(c_path.as_ptr(), ACL_TYPE_EXTENDED) },
+                path,
+            )
+        }
+
+        fn from_result(acl: *mut c_void, path: &Path) -> AnyResult<Option<Self>> {
             if !acl.is_null() {
                 return Ok(Some(Self(acl)));
             }
@@ -205,14 +225,13 @@ mod darwin {
         Ok(())
     }
 
-    /// Refuses an existing directory whose ACL grants another principal
-    /// write, delete, or permission-change access.
+    /// Refuses an existing directory on the restore path whose ACL grants
+    /// another principal write, delete, or permission-change access.
     ///
     /// Deny entries, such as the "everyone deny delete" entries macOS places
     /// on home folders, only narrow access and are accepted.
     pub(in crate::backup::restore) fn reject_shared_write(path: &Path) -> AnyResult<()> {
-        let file = open_nofollow(path)?;
-        let Some(acl) = Acl::read(&file, path)? else {
+        let Some(acl) = Acl::read_link(path)? else {
             return Ok(());
         };
         if acl
@@ -221,7 +240,7 @@ mod darwin {
             .any(|entry| entry.allows && entry.grants_unsafe_parent_access)
         {
             bail!(
-                "restore target directory has an access control list that lets other users write to, delete, or re-permission it: {}",
+                "restore path directory has an access control list that lets other users write to, delete, or re-permission it: {}",
                 path.display()
             );
         }

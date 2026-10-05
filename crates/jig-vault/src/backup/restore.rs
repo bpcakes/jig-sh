@@ -98,14 +98,14 @@ fn prepare_target_parent_from(parent: &Path, current_dir: &Path) -> AnyResult<Pa
     let parent = crate::path_security::physical_path(&parent, "restore target parent")?;
     let missing = validate_creation_ancestors(&parent)?;
     create_private_parent_chain(&missing)?;
-    reject_symlinked_ancestors(&parent)?;
+    validate_trusted_ancestors(&parent)?;
     let parent = fs::canonicalize(&parent).with_context(|| {
         format!(
             "failed to resolve private restore target parent {}",
             parent.display()
         )
     })?;
-    reject_symlinked_ancestors(&parent)?;
+    validate_trusted_ancestors(&parent)?;
     Ok(parent)
 }
 
@@ -151,17 +151,11 @@ fn validate_creation_ancestors(path: &Path) -> AnyResult<Vec<PathBuf>> {
                 ancestor.display()
             );
         }
+        // Every existing ancestor, not only the creation boundary, must be
+        // trusted before anything is created below it.
+        validate_trusted_ancestor(ancestor, &metadata)?;
         if !checked_creation_boundary {
-            let mode = metadata.permissions().mode() & 0o7777;
-            let owner = metadata.uid();
-            if !creation_boundary_is_safe(mode, owner, unsafe { libc::geteuid() }) {
-                bail!(
-                    "refusing to create restore target parent below shared-writable ancestor {}",
-                    ancestor.display()
-                );
-            }
             reject_ownership_ignoring_volume(ancestor)?;
-            acl::reject_shared_write(ancestor)?;
             checked_creation_boundary = true;
         }
     }
@@ -173,6 +167,34 @@ fn validate_creation_ancestors(path: &Path) -> AnyResult<Vec<PathBuf>> {
             path.display()
         )
     }
+}
+
+/// Another user who can rename any directory on the restore path can move
+/// the restored subtree away and substitute their own, so each existing
+/// ancestor must be owned by the current user or root, must not be writable
+/// by others unless sticky with a trusted owner, and on macOS must not carry
+/// an ACL that lets others write to, delete, or re-permission it.
+fn validate_trusted_ancestor(path: &Path, metadata: &fs::Metadata) -> AnyResult<()> {
+    let mode = metadata.permissions().mode() & 0o7777;
+    let owner = metadata.uid();
+    let effective_user = unsafe { libc::geteuid() };
+    if !ancestor_owner_is_trusted(owner, effective_user) {
+        bail!(
+            "refusing restore below an ancestor owned by another user: {}",
+            path.display()
+        );
+    }
+    if !creation_boundary_is_safe(mode, owner, effective_user) {
+        bail!(
+            "refusing restore below shared-writable ancestor {}",
+            path.display()
+        );
+    }
+    acl::reject_shared_write(path)
+}
+
+fn ancestor_owner_is_trusted(owner: u32, effective_user: u32) -> bool {
+    owner == effective_user || owner == 0
 }
 
 fn creation_boundary_is_safe(mode: u32, owner: u32, effective_user: u32) -> bool {
@@ -522,7 +544,7 @@ impl Drop for OwnedStaging {
 }
 
 fn revalidate_target(target: &RestoreTarget) -> AnyResult<()> {
-    reject_symlinked_ancestors(&target.parent)?;
+    validate_trusted_ancestors(&target.parent)?;
     let metadata = validate_parent(&target.parent)?;
     if metadata.dev() != target.parent_device || metadata.ino() != target.parent_inode {
         bail!("restore target parent identity changed after preflight");
@@ -559,7 +581,6 @@ fn validate_parent(path: &Path) -> AnyResult<fs::Metadata> {
         );
     }
     reject_ownership_ignoring_volume(path)?;
-    acl::reject_shared_write(path)?;
     Ok(metadata)
 }
 
@@ -638,7 +659,8 @@ fn validate_owned_file(path: &Path, metadata: &fs::Metadata) -> AnyResult<()> {
     Ok(())
 }
 
-fn reject_symlinked_ancestors(path: &Path) -> AnyResult<()> {
+/// Rechecks every directory from the filesystem root down to `path`.
+fn validate_trusted_ancestors(path: &Path) -> AnyResult<()> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -661,6 +683,13 @@ fn reject_symlinked_ancestors(path: &Path) -> AnyResult<()> {
                 ancestor.display()
             );
         }
+        if !metadata.is_dir() {
+            bail!(
+                "restore path ancestor is not a directory: {}",
+                ancestor.display()
+            );
+        }
+        validate_trusted_ancestor(ancestor, &metadata)?;
     }
     Ok(())
 }

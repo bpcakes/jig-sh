@@ -537,3 +537,103 @@ fn install_refuses_unexpected_or_non_private_staged_entries() {
         staging.cleanup().unwrap();
     }
 }
+
+#[test]
+fn ancestor_owner_policy_trusts_only_the_current_user_and_root() {
+    let effective_user = unsafe { libc::geteuid() };
+    let other_user = if effective_user == u32::MAX {
+        1
+    } else {
+        effective_user + 1
+    };
+
+    assert!(ancestor_owner_is_trusted(effective_user, effective_user));
+    assert!(ancestor_owner_is_trusted(0, effective_user));
+    assert!(!ancestor_owner_is_trusted(other_user, effective_user));
+}
+
+#[test]
+fn preflight_and_revalidation_refuse_a_shared_writable_higher_ancestor() {
+    let temp = private_tempdir();
+    let shared = temp.path().join("shared");
+    let private = shared.join("private");
+    fs::create_dir_all(&private).unwrap();
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o770)).unwrap();
+
+    for home in [
+        private.join("restored-home"),
+        private.join("vault-base/scopes/repo-scope"),
+    ] {
+        let error = preflight_target(home).unwrap_err().to_string();
+        assert!(error.contains("shared-writable ancestor"), "{error}");
+    }
+    assert!(!private.join("vault-base").exists());
+
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o1770)).unwrap();
+    let target = preflight_target(private.join("restored-home")).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o770)).unwrap();
+
+    let error = revalidate_target(&target).unwrap_err().to_string();
+    assert!(error.contains("shared-writable ancestor"), "{error}");
+    let error = OwnedStaging::create(&target).err().unwrap().to_string();
+    assert!(error.contains("shared-writable ancestor"), "{error}");
+    assert!(!target.home.exists());
+}
+
+#[test]
+fn preflight_accepts_a_traversable_but_unlistable_higher_ancestor() {
+    let temp = private_tempdir();
+    let unlistable = temp.path().join("unlistable");
+    let private = unlistable.join("private");
+    fs::create_dir_all(&private).unwrap();
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&unlistable, fs::Permissions::from_mode(0o300)).unwrap();
+
+    let result = preflight_target(private.join("restored-home"));
+
+    fs::set_permissions(&unlistable, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(!result.unwrap().home.exists());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn preflight_and_revalidation_refuse_an_unsafe_acl_on_a_higher_ancestor() {
+    let temp = tempfile::Builder::new()
+        .prefix("jig-vault-restore-acl-ancestor-")
+        .tempdir_in("/private/tmp")
+        .unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let upper = acl_fixture_directory(temp.path(), "upper", "everyone allow delete");
+    let private = upper.join("private");
+    fs::create_dir(&private).unwrap();
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(!has_acl_entries(&private));
+
+    for home in [
+        private.join("restored-home"),
+        private.join("vault-base/scopes/repo-scope"),
+    ] {
+        let error = preflight_target(home).unwrap_err().to_string();
+        assert!(
+            error.contains("lets other users write to, delete, or re-permission it"),
+            "{error}"
+        );
+    }
+    assert!(!private.join("vault-base").exists());
+
+    let later = temp.path().join("later");
+    let later_private = later.join("private");
+    fs::create_dir_all(&later_private).unwrap();
+    fs::set_permissions(&later, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&later_private, fs::Permissions::from_mode(0o700)).unwrap();
+    let target = preflight_target(later_private.join("restored-home")).unwrap();
+    add_acl_entry(&later, "everyone allow delete");
+
+    let error = revalidate_target(&target).unwrap_err().to_string();
+    assert!(
+        error.contains("lets other users write to, delete, or re-permission it"),
+        "{error}"
+    );
+    assert!(!target.home.exists());
+}
