@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-use super::output::HumanOutput;
+use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
 use crate::command::RuntimeCommand;
 use crate::tool_defs;
@@ -188,20 +188,20 @@ pub(crate) struct LoopTuningOpts {
 
 impl LoopCommand {
     pub(super) fn into_dispatch(self) -> RuntimeDispatch {
-        let human_output = match &self {
-            Self::Tick(_) => HumanOutput::LoopTick,
-            Self::Dispatch(_) => HumanOutput::LoopDispatch,
-            Self::Status(_) => HumanOutput::LoopStatus,
-            Self::Show(_) => HumanOutput::LoopShow,
-            Self::Run(_) => HumanOutput::LoopRun,
-            Self::ClearAttempt(_) => HumanOutput::LoopClearAttempt,
-            Self::AcknowledgeOccurrence(_) => HumanOutput::LoopAcknowledgeOccurrence,
+        let render: output::Render = match &self {
+            Self::Tick(_) => output::format_loop_tick_summary,
+            Self::Dispatch(_) => output::format_loop_dispatch_summary,
+            Self::Status(_) => output::format_loop_status_summary,
+            Self::Show(_) => output::format_loop_show_summary,
+            Self::Run(_) => output::format_loop_run_summary,
+            Self::ClearAttempt(_) => output::format_loop_clear_attempt_summary,
+            Self::AcknowledgeOccurrence(_) => output::format_loop_acknowledge_occurrence_summary,
         };
         // Tick, dispatch and run do work, so `ok: false` fails them. The
         // others are diagnostic reports: their JSON may carry `ok: false`, but
         // the command stays inspectable instead of becoming a CLI error.
         let executes = matches!(self, Self::Tick(_) | Self::Dispatch(_) | Self::Run(_));
-        let dispatch = RuntimeDispatch::new(RuntimeCommand::Loop(self.into()), human_output);
+        let dispatch = RuntimeDispatch::new(RuntimeCommand::Loop(self.into()), render);
         if executes {
             dispatch.failing_on_ok_false()
         } else {

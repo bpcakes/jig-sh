@@ -9,7 +9,7 @@ use crate::{root_commands, tool_defs};
 
 use super::AgentMapOpts;
 use super::comparison::{CliExactTreeProvenance, comparison_request};
-use super::output::HumanOutput;
+use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
 
 pub(super) const CHECK_AFTER_HELP: &str = "\
@@ -207,10 +207,11 @@ pub(crate) struct CheckOpts {
 
 impl CheckOpts {
     pub(super) fn into_dispatch(self) -> Result<RuntimeDispatch> {
-        Ok(
-            RuntimeDispatch::new(RuntimeCommand::Check(self.try_into()?), HumanOutput::Check)
-                .failing_on_ok_false(),
+        Ok(RuntimeDispatch::new(
+            RuntimeCommand::Check(self.try_into()?),
+            output::format_check_output,
         )
+        .failing_on_ok_false())
     }
 
     #[cfg(test)]

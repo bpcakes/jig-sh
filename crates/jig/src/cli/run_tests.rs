@@ -5,7 +5,7 @@ use super::argument_parsing::{args_request_json, usage_hint};
 use super::dev_launch::dev_launch_identity_present;
 use super::*;
 use crate::cli::bootstrap_hints::TEMPLATE_ERROR_HINT;
-use crate::cli::output::HumanOutput;
+use crate::cli::output;
 use crate::cli::runtime_dispatch::FailurePolicy;
 use crate::cli::structured_error::require_foreground_status;
 use crate::cli::{DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand, InfoOpts};

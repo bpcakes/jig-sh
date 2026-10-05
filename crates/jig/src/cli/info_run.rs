@@ -2,7 +2,7 @@ use std::io::Write;
 
 use anyhow::{Result, bail};
 
-use super::output::{HumanOutput, emit, print_json};
+use super::output::{self, emit, print_json};
 use super::run::finish_after_json_output;
 use super::structured_error::require_json_ok;
 use super::{InfoCommand, InfoOpts};
@@ -39,7 +39,7 @@ pub(super) fn run_info_command(opts: InfoOpts, json_output: bool) -> Result<()> 
         InfoCommand::Profile { id } => InspectRequest::Profile(id),
     });
     let output = info::run(opts.commands, json_output, request, opts.projection)?;
-    emit(json_output, HumanOutput::Info, &output)?;
+    emit(json_output, output::format_info_summary, &output)?;
     finish_after_json_output(require_json_ok(true, &output), json_output)
 }
 

@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-use super::output::HumanOutput;
+use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
 use crate::command::RuntimeCommand;
 use crate::{command, tool_defs};
@@ -51,7 +51,7 @@ impl MigrationAddOpts {
     pub(super) fn into_dispatch(self) -> RuntimeDispatch {
         RuntimeDispatch::new(
             RuntimeCommand::MigrationAdd(self.into()),
-            HumanOutput::MigrationAdd,
+            output::format_migration_add_summary,
         )
     }
 }

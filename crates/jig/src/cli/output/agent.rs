@@ -1,6 +1,6 @@
 use super::{concise_preview, value_bool, value_str};
 
-pub(super) fn format_agent_doctor_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_agent_doctor_summary(value: &serde_json::Value) -> String {
     let ready = value_bool(value, "ok").unwrap_or(false);
     let codex = &value["codex"];
     let codex_required = value_bool(codex, "required").unwrap_or(false);
@@ -70,7 +70,7 @@ pub(super) fn format_agent_doctor_summary(value: &serde_json::Value) -> String {
     lines.join("\n")
 }
 
-pub(super) fn format_agent_bootstrap_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_agent_bootstrap_summary(value: &serde_json::Value) -> String {
     let ok = value_bool(value, "ok").unwrap_or(false);
     let marketplace = value_str(value, "marketplace_source").unwrap_or("<unknown>");
     let mut lines = vec![

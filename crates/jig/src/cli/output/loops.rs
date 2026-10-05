@@ -1,6 +1,6 @@
 use super::{value_bool, value_str, value_u64};
 
-pub(super) fn format_loop_tick_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_loop_tick_summary(value: &serde_json::Value) -> String {
     let workflow = value["workflow"]["id"]
         .as_str()
         .or_else(|| value_str(value, "workflow"))
@@ -23,7 +23,7 @@ pub(super) fn format_loop_tick_summary(value: &serde_json::Value) -> String {
     lines.join("\n")
 }
 
-pub(super) fn format_loop_dispatch_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_loop_dispatch_summary(value: &serde_json::Value) -> String {
     let status = value_str(value, "status").unwrap_or("unknown");
     let due = value_u64(value, "due_count").unwrap_or(0);
     let executed = value_u64(value, "executed_count").unwrap_or(0);
@@ -48,7 +48,7 @@ pub(super) fn format_loop_dispatch_summary(value: &serde_json::Value) -> String 
     .join("\n")
 }
 
-pub(super) fn format_loop_status_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_loop_status_summary(value: &serde_json::Value) -> String {
     let workflows = value["workflows"].as_array().map(Vec::len).unwrap_or(0);
     let leases = value["leases"].as_array().map(Vec::len).unwrap_or(0);
     let attempts = value["attempts"].as_array().map(Vec::len).unwrap_or(0);
@@ -83,7 +83,7 @@ pub(super) fn format_loop_status_summary(value: &serde_json::Value) -> String {
 /// Output tails shown per action; the JSON report carries the full evidence.
 const SHOW_OUTPUT_LINES: usize = 12;
 
-pub(super) fn format_loop_show_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_loop_show_summary(value: &serde_json::Value) -> String {
     let occurrence = &value["occurrence"];
     let tick = &value["evidence"]["tick"];
     let occurrence_id = value_str(value, "occurrence_id").unwrap_or("<unknown>");
@@ -149,7 +149,7 @@ fn push_action_lines(lines: &mut Vec<String>, action: &serde_json::Value) {
     }
 }
 
-pub(super) fn format_loop_run_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_loop_run_summary(value: &serde_json::Value) -> String {
     let status = value_str(value, "status").unwrap_or("unknown");
     let tick_count = value_u64(value, "tick_count").unwrap_or(0);
     let until = value_str(value, "until").unwrap_or("unknown");
@@ -162,7 +162,7 @@ pub(super) fn format_loop_run_summary(value: &serde_json::Value) -> String {
     .join("\n")
 }
 
-pub(super) fn format_loop_clear_attempt_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_loop_clear_attempt_summary(value: &serde_json::Value) -> String {
     let workflow = value_str(value, "workflow_id")
         .or_else(|| value["workflow"]["id"].as_str())
         .or_else(|| value_str(value, "workflow"))
@@ -181,7 +181,9 @@ pub(super) fn format_loop_clear_attempt_summary(value: &serde_json::Value) -> St
     .join("\n")
 }
 
-pub(super) fn format_loop_acknowledge_occurrence_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_loop_acknowledge_occurrence_summary(
+    value: &serde_json::Value,
+) -> String {
     let occurrence_id = value_str(value, "occurrence_id").unwrap_or("<unknown>");
     let changed = value_bool(value, "changed").unwrap_or(false);
     [

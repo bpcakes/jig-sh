@@ -5,14 +5,17 @@ use crate::codex::provider::Codex;
 use anyhow::{Result, bail};
 
 use super::codex::{CodexCommand, CodexLaunchOpts, CodexResumeOpts};
-use super::output::HumanOutput;
+use super::output;
 use crate::progress::CliProgress;
 
 pub(super) fn run_codex_command(command: CodexCommand, json_output: bool) -> Result<()> {
     match command {
-        CodexCommand::Homes(opts) => {
-            super::agent_run::homes(&Codex, opts.usage, json_output, HumanOutput::CodexHomes)
-        }
+        CodexCommand::Homes(opts) => super::agent_run::homes(
+            &Codex,
+            opts.usage,
+            json_output,
+            output::format_codex_homes_summary,
+        ),
         CodexCommand::Launch(opts) => run_codex_launch(opts, json_output),
         CodexCommand::Resume(opts) => run_codex_resume(opts, json_output),
     }
@@ -36,7 +39,7 @@ fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
         prepared,
         opts.dry_run,
         json_output,
-        HumanOutput::CodexResume,
+        output::format_codex_resume_summary,
     )
 }
 
@@ -67,7 +70,7 @@ fn run_codex_launch(opts: CodexLaunchOpts, json_output: bool) -> Result<()> {
         &opts.codex_args,
         opts.dry_run,
         json_output,
-        HumanOutput::CodexLaunch,
+        output::format_codex_launch_summary,
     )
 }
 

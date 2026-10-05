@@ -1,6 +1,6 @@
 use super::{value_bool, value_str, value_u64};
 
-pub(super) fn format_state_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_state_summary(value: &serde_json::Value) -> String {
     let counts = &value["counts"];
     let repo = &value["repo"];
     let repo_name = value_str(repo, "name").unwrap_or("<unknown>");
@@ -17,7 +17,7 @@ pub(super) fn format_state_summary(value: &serde_json::Value) -> String {
     .join("\n")
 }
 
-pub(super) fn format_state_diagnose_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_state_diagnose_summary(value: &serde_json::Value) -> String {
     let checkout_bytes = value["totals"]["checkout_state_bytes"]
         .as_u64()
         .or_else(|| value["totals"]["bytes"].as_u64())
@@ -92,7 +92,7 @@ fn integrity_verdict(value: &serde_json::Value) -> String {
     problems.join("; ")
 }
 
-pub(super) fn format_state_restore_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_state_restore_summary(value: &serde_json::Value) -> String {
     let stream = value_str(value, "stream").unwrap_or("<unknown>");
     let bytes = value_u64(value, "bytes_restored").unwrap_or(0);
     let changed = value_bool(value, "changed").unwrap_or(true);
@@ -130,7 +130,7 @@ pub(super) fn format_state_restore_summary(value: &serde_json::Value) -> String 
     lines.join("\n")
 }
 
-pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String {
+pub(in crate::cli) fn format_state_archive_summary(value: &serde_json::Value) -> String {
     let dry_run = value_bool(value, "dry_run").unwrap_or(false);
     let runs_archived = value_u64(value, "runs_archived").unwrap_or(0);
     let runs_retained = value_u64(value, "runs_retained").unwrap_or(0);

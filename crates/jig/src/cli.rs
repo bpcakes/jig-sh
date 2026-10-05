@@ -436,7 +436,7 @@ impl AgentMapCommand {
     fn into_dispatch(self) -> RuntimeDispatch {
         RuntimeDispatch::new(
             RuntimeCommand::AgentMap(self.into()),
-            output::HumanOutput::AgentMapGenerate,
+            output::format_agent_map_generate_summary,
         )
     }
 }
