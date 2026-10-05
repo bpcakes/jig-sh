@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "vault_lifecycle_parts/support.rs"]
 mod vault_lifecycle_support;
@@ -6,7 +6,7 @@ mod vault_lifecycle_support;
 use vault_lifecycle_support::*;
 
 use std::os::unix::fs::PermissionsExt;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::{Command, Output};

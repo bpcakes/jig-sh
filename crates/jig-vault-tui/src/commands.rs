@@ -40,7 +40,7 @@ impl PlatformCapabilities {
     const fn current() -> Self {
         Self {
             private_output: cfg!(unix),
-            backup_restore: cfg!(target_os = "linux"),
+            backup_restore: cfg!(any(target_os = "linux", target_os = "macos")),
         }
     }
 
@@ -73,9 +73,9 @@ impl PlatformRequirement {
                 "Private file output is currently supported only on Unix.",
             ),
             Self::BackupRestore if capabilities.backup_restore => CommandAvailability::Enabled,
-            Self::BackupRestore => {
-                CommandAvailability::Disabled("Restore is currently supported only on Linux.")
-            }
+            Self::BackupRestore => CommandAvailability::Disabled(
+                "Restore is currently supported only on Linux and macOS.",
+            ),
         }
     }
 }

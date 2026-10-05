@@ -84,7 +84,7 @@ fn assert_backup_created(backend: &VaultTuiBackend, temp: &tempfile::TempDir) {
     assert_eq!(collision.kind(), VaultUiErrorKind::Conflict);
 }
 
-#[cfg(all(unix, target_os = "linux"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_backup_restores(temp: &tempfile::TempDir) {
     let restored_home = temp.path().join("restored-vault");
     let backend = VaultTuiBackend::new(request(restored_home.clone())).unwrap();
@@ -101,7 +101,8 @@ fn assert_backup_restores(temp: &tempfile::TempDir) {
     else {
         panic!("expected restore result");
     };
-    assert_eq!(root, restored_home);
+    // Restore reports the physical home, so macOS /var temp paths resolve.
+    assert_eq!(root, std::fs::canonicalize(&restored_home).unwrap());
     assert_eq!(format_version, 2);
     let restored = backend
         .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
@@ -137,12 +138,12 @@ fn lifecycle_tools_backup_restore_rotate_verify_and_project_activity() {
     assert_export_and_peek(&backend, &temp);
     assert_backup_created(&backend, &temp);
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         assert_backup_restores(&temp);
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let restored_home = temp.path().join("restored-vault");
         let restored_backend = VaultTuiBackend::new(request(restored_home.clone())).unwrap();

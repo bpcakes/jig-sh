@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 use anyhow::Context;
 use anyhow::{Result as AnyResult, bail};
 use base64::Engine;
@@ -9,19 +9,19 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::SecretBytes;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 use crate::VaultErrorKind;
 use crate::aad::push_length_prefixed_field;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::crypto::open;
 use crate::crypto::{
     KdfParams, NONCE_LEN, SALT_LEN, derive_wrap_key, random_array, seal, validate_kdf_params,
 };
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 use crate::error::{classified, classify_source};
 use crate::format::{AEAD_ALGORITHM, decode_b64_array};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::payload::{DecodedBackupArchive, decode_backup_payload};
 use super::payload::{MAX_BACKUP_PAYLOAD_BYTES, encode_backup_payload};
 use super::{BACKUP_FORMAT_VERSION, MAX_BACKUP_ARCHIVE_BYTES};
@@ -83,17 +83,17 @@ pub(super) struct BackupEnvelope {
     pub(super) ciphertext_b64: String,
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 pub(super) struct ParsedBackupArchive {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     header: BackupHeader,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     salt: [u8; SALT_LEN],
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     nonce: [u8; NONCE_LEN],
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     ciphertext: Zeroizing<Vec<u8>>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) serialized_len: usize,
 }
 
@@ -117,11 +117,11 @@ impl fmt::Debug for BackupHeader {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 impl fmt::Debug for ParsedBackupArchive {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = formatter.debug_struct("ParsedBackupArchive");
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         debug
             .field("header", &self.header)
             .field("salt_len", &self.salt.len())
@@ -181,7 +181,7 @@ pub(super) fn seal_archive(
     })
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 pub(super) fn parse_archive_bytes(bytes: Zeroizing<Vec<u8>>) -> AnyResult<ParsedBackupArchive> {
     if bytes.len() > MAX_BACKUP_ARCHIVE_BYTES {
         return Err(classified(
@@ -206,9 +206,9 @@ pub(super) fn parse_archive_bytes(bytes: Zeroizing<Vec<u8>>) -> AnyResult<Parsed
             error,
         )
     })?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let (salt, nonce) = validated_header;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = validated_header;
     let max_encoded = padded_base64_len(MAX_BACKUP_CIPHERTEXT_BYTES)?;
     if envelope.ciphertext_b64.len() > max_encoded {
@@ -231,20 +231,20 @@ pub(super) fn parse_archive_bytes(bytes: Zeroizing<Vec<u8>>) -> AnyResult<Parsed
         ));
     }
     Ok(ParsedBackupArchive {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         header: envelope.header,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         salt,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         nonce,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         ciphertext,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         serialized_len: bytes.len(),
     })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn decrypt_archive(
     passphrase: &SecretString,
     archive: ParsedBackupArchive,
@@ -343,7 +343,7 @@ pub(super) fn backup_aad(header: &BackupHeader) -> Vec<u8> {
     aad.into_bytes()
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn padded_base64_len(len: usize) -> AnyResult<usize> {
     len.checked_add(2)
         .and_then(|len| len.checked_div(3))

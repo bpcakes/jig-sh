@@ -15,13 +15,13 @@ use crate::{PreparedPrivateFile, Result, VaultError, VaultErrorKind};
 
 mod codec;
 mod payload;
-#[cfg(target_os = "linux")]
-mod restore_linux;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod restore;
 #[cfg(test)]
 mod tests;
 
 use codec::seal_archive;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use codec::{ParsedBackupArchive, decrypt_archive, parse_archive_bytes};
 pub(crate) use payload::{inspect_embedded_vault, max_backup_audit_bytes};
 
@@ -64,16 +64,16 @@ pub struct BackupCreateResult {
 ///
 /// The request is opaque and consumed by [`crate::Vault::restore_backup`].
 pub struct BackupRestoreRequest {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     archive: ParsedBackupArchive,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     target: RestoreTarget,
 }
 
 impl fmt::Debug for BackupRestoreRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = formatter.debug_struct("BackupRestoreRequest");
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         debug
             .field("archive", &"[REDACTED]")
             .field("archive_len", &self.archive.serialized_len)
@@ -91,7 +91,7 @@ pub struct BackupRestoreResult {
     pub format_version: u32,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 struct RestoreTarget {
     home: PathBuf,
     parent: PathBuf,
@@ -99,7 +99,7 @@ struct RestoreTarget {
     parent_inode: u64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl fmt::Debug for RestoreTarget {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -304,17 +304,17 @@ pub(crate) fn preflight_restore(
             "backup restore requires a bounded regular input file; stdin is unsupported",
         ));
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let archive_bytes = restore_linux::read_archive(input)
+        let archive_bytes = restore::read_archive(input)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?;
         let archive = parse_archive_bytes(archive_bytes)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Serialization, error))?;
-        let target = restore_linux::preflight_target(target_home)
+        let target = restore::preflight_target(target_home)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
         Ok(BackupRestoreRequest { archive, target })
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (input, target_home);
         Err(unsupported_restore_platform())
@@ -325,22 +325,22 @@ pub(crate) fn restore(
     passphrase: &SecretString,
     request: BackupRestoreRequest,
 ) -> Result<BackupRestoreResult> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let BackupRestoreRequest { archive, target } = request;
         let decoded = decrypt_archive(passphrase, archive)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Authentication, error))?;
-        restore_linux::restore(passphrase, decoded, target)
+        restore::restore(passphrase, decoded, target)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (passphrase, request);
         Err(unsupported_restore_platform())
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn unsupported_restore_platform() -> VaultError {
     VaultError::new(
         VaultErrorKind::InvalidInput,
