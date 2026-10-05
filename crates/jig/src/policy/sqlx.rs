@@ -10,9 +10,14 @@ use serde_json::{Value, json};
 use crate::context::RepoContext;
 use crate::policy::SqlxTodoInput;
 
+mod cargo_targets;
+mod module_graph;
+mod modules;
 mod scanner;
 
+#[cfg(test)]
 use scanner::scan_sqlx_calls;
+use scanner::scan_sqlx_file;
 
 const DEFAULT_SQLX_TODO_PATH: &str = "docs/sqlx-unchecked-queries-todo.md";
 
@@ -54,6 +59,7 @@ struct SqlxCall {
 fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     let status_by_key = read_sqlx_statuses(&ctx.root().join(prior_path));
     let mut calls = Vec::new();
+    let mut modules = BTreeMap::new();
     for file in sqlx_rust_files(ctx)? {
         let text = match fs::read_to_string(ctx.root().join(&file)) {
             Ok(text) => text,
@@ -66,7 +72,21 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
                     .with_context(|| format!("cannot read SQLx inventory source {file}"));
             }
         };
-        calls.extend(scan_sqlx_calls(&file, &text)?);
+        let scan = scan_sqlx_file(&file, &text)?;
+        calls.extend(scan.calls);
+        modules.insert(file, scan.modules);
+    }
+    // A file that only a `#[cfg(test)]` module declaration reaches is test
+    // code, exactly as the equivalent inline module already is. Relationships
+    // are read from sources outside the configured crate roots too, since a
+    // production declaration the graph cannot see would make the file it
+    // loads look like test code.
+    let targets = cargo_target_paths(ctx)?;
+    if expand_module_relationships(ctx, &targets, &mut modules)? {
+        let test_only = module_graph::test_only_files(&modules, &targets);
+        for call in &mut calls {
+            call.is_test |= test_only.contains(&call.path);
+        }
     }
     calls.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
     let checked_count = calls.iter().filter(|call| call.checked).count();
@@ -97,7 +117,7 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     let mut body = String::new();
     body.push_str("# SQLx Unchecked Queries TODO\n\n");
     body.push_str("This checklist tracks detected `sqlx::query*` call sites under the configured Rust crate roots that are not yet using compile-time checked SQLx macros.\n\n");
-    body.push_str("Coverage is a source AST inventory, not complete Rust syntax coverage or compiler analysis. Sources are parsed as complete Rust files or expression fragments, as accepted by `include!`. Parsing, AST traversal, and destruction use a controlled stack and a conservative limit of 2,048 tokens along enclosing semicolon-separated regions (including delimiter groups and expression/type chains); sibling semicolon-separated declarations and statements do not accumulate toward that limit. Sources beyond that limit fail the inventory with a path-specific error; simplify nested syntax or split long expressions/declarations. It detects direct SQLx function calls and checked macro invocations. It does not resolve aliases or shadowing, expand macros, or evaluate arbitrary cfg expressions; macro input is read only for a fixed set of standard expression macros such as `vec!` and `assert!`. Test classification uses conventional test paths and exact `#[cfg(test)]` attributes on files and inline modules; external module and `include!` relationships are not resolved. Paths Git lists that are absent from the worktree are skipped; other unreadable or unparseable Rust sources fail the inventory.\n\n");
+    body.push_str("Coverage is a source AST inventory, not complete Rust syntax coverage or compiler analysis. Sources are parsed as complete Rust files or expression fragments, as accepted by `include!`. Parsing, AST traversal, and destruction use a controlled stack and a conservative limit of 2,048 tokens along enclosing semicolon-separated regions (including delimiter groups and expression/type chains); sibling semicolon-separated declarations and statements do not accumulate toward that limit. Sources beyond that limit fail the inventory with a path-specific error; simplify nested syntax or split long expressions/declarations. It detects direct SQLx function calls and checked macro invocations. It does not resolve aliases or shadowing, expand macros, or evaluate arbitrary cfg expressions; macro input is read only for a fixed set of standard expression macros such as `vec!` and `assert!`. Test classification uses conventional test paths and exact `#[cfg(test)]` attributes on files and inline modules, and extends to a file that only `#[cfg(test)]` module declarations reach, following `mod` items and their `#[path]` attributes under Rust's module directory rules, including the declarations inside a block that Rust requires a `#[path]` for; module relationships are also read from Rust sources outside the configured crate roots that those roots name, whose own call sites are not reported, and if such a source cannot be read or parsed no file is reclassified; a Cargo target, whether discovered at a conventional location in its package or configured by a manifest path, a file production code still reaches under any of the ways it is loaded, and a file whose declaration cannot be resolved to an inventoried file stay classified by their own path and attributes; declarations that load one another, which cannot compile, leave every file classified that way; and `include!` relationships are not resolved. Paths Git lists that are absent from the worktree are skipped; other unreadable or unparseable Rust sources and Cargo manifests fail the inventory.\n\n");
     body.push_str("- Generated on: native jig\n");
     let _ = writeln!(body, "- Unchecked call sites: {}", unchecked.len());
     let _ = writeln!(
@@ -127,18 +147,112 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     })
 }
 
+/// The crate roots the repository's Cargo manifests define, both the paths
+/// they configure explicitly and the conventional locations they make Cargo
+/// discover. Each is production code however else it is declared.
+fn cargo_target_paths(ctx: &RepoContext) -> Result<cargo_targets::CargoTargets> {
+    let mut targets = cargo_targets::CargoTargets::default();
+    for manifest in sqlx_inventory_files(ctx, &[String::from(".")], is_cargo_manifest)? {
+        let text = match fs::read_to_string(ctx.root().join(&manifest)) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("cannot read SQLx inventory manifest {manifest}"));
+            }
+        };
+        let value = toml::from_str::<toml::Value>(&text)
+            .with_context(|| format!("cannot parse SQLx inventory manifest {manifest}"))?;
+        targets.add_manifest(&manifest, &value);
+    }
+    Ok(targets)
+}
+
 fn sqlx_rust_files(ctx: &RepoContext) -> Result<Vec<String>> {
+    sqlx_inventory_files(ctx, ctx.rust_crate_roots(), is_rust_source)
+}
+
+fn is_rust_source(file: &str) -> bool {
+    file.ends_with(".rs")
+}
+
+/// Reads the module declarations of Rust sources outside the configured crate
+/// roots that a crate root or another such source names, so the graph sees
+/// every production relationship. Their own call sites stay unreported: this
+/// widens relationship discovery, not the inventory. A source Git lists but
+/// that cannot be read or parsed leaves the relationships incomplete, and the
+/// caller then reclassifies nothing rather than guessing.
+fn expand_module_relationships(
+    ctx: &RepoContext,
+    targets: &cargo_targets::CargoTargets,
+    modules: &mut BTreeMap<String, modules::FileModules>,
+) -> Result<bool> {
+    let sources = sqlx_inventory_files(ctx, &[String::from(".")], is_rust_source)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let mut pending = sources
+        .iter()
+        .filter(|path| targets.contains(path) && !modules.contains_key(*path))
+        .cloned()
+        .collect::<Vec<_>>();
+    for (path, file) in modules.iter() {
+        pending.extend(
+            modules::candidate_targets(path, file, targets)
+                .into_iter()
+                .filter(|target| sources.contains(target) && !modules.contains_key(target)),
+        );
+    }
+    let mut complete = true;
+    while let Some(path) = pending.pop() {
+        if modules.contains_key(&path) {
+            continue;
+        }
+        let text = match fs::read_to_string(ctx.root().join(&path)) {
+            Ok(text) => text,
+            // An absent path declares nothing, so no relationship is lost.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
+        };
+        let Ok(scan) = scan_sqlx_file(&path, &text) else {
+            complete = false;
+            continue;
+        };
+        pending.extend(
+            modules::candidate_targets(&path, &scan.modules, targets)
+                .into_iter()
+                .filter(|target| sources.contains(target) && !modules.contains_key(target)),
+        );
+        modules.insert(path, scan.modules);
+    }
+    Ok(complete)
+}
+
+fn is_cargo_manifest(file: &str) -> bool {
+    file == "Cargo.toml" || file.ends_with("/Cargo.toml")
+}
+
+/// Repository files under `roots` that `keep` accepts. Manifests are listed
+/// repository-wide, because a manifest configuring a crate root need not sit
+/// under a configured crate root itself.
+fn sqlx_inventory_files(
+    ctx: &RepoContext,
+    roots: &[String],
+    keep: impl Fn(&str) -> bool,
+) -> Result<Vec<String>> {
     let mut files = BTreeSet::new();
     // SQLx reports are a development TODO surface, so include both committed
-    // files and non-ignored new Rust files under the configured crate roots.
-    for file in super::git_list_files(ctx.root(), ctx.rust_crate_roots())? {
-        if file.ends_with(".rs") {
+    // files and non-ignored new files.
+    for file in super::git_list_files(ctx.root(), roots)? {
+        if keep(&file) {
             files.insert(file);
         }
     }
     if super::git_success(ctx.root(), &["rev-parse", "--is-inside-work-tree"])? {
-        for file in git_untracked_files(ctx.root(), ctx.rust_crate_roots())? {
-            if file.ends_with(".rs") {
+        for file in git_untracked_files(ctx.root(), roots)? {
+            if keep(&file) {
                 files.insert(file);
             }
         }
