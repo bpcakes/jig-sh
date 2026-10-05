@@ -4,6 +4,9 @@ use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
 mod prompt;
+mod silent;
+#[cfg(test)]
+mod tests;
 
 use crate::claude::Home;
 
@@ -45,7 +48,23 @@ pub(super) fn read(
         .account(&account)
         .load_data(true)
         .skip_authenticated_items(true);
-    match query.search() {
+    read_with(
+        query,
+        allow_prompt,
+        cancelled,
+        ItemSearchOptions::search,
+        || prompt::read(&service, &account, cancelled),
+    )
+}
+
+fn read_with(
+    mut query: ItemSearchOptions,
+    allow_prompt: bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    mut search: impl FnMut(&ItemSearchOptions) -> security_framework::base::Result<Vec<SearchResult>>,
+    prompt: impl FnOnce() -> Result<Zeroizing<Vec<u8>>, String>,
+) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
+    match silent::search(&query, &mut search) {
         Ok(items) => {
             return Ok(items.into_iter().find_map(|item| match item {
                 SearchResult::Data(bytes) => Some(Zeroizing::new(bytes)),
@@ -56,7 +75,7 @@ pub(super) fn read(
             // A skipped protected item is also reported as not found. Inspect
             // attributes before falling back to a potentially stale file token.
             query.load_data(false).load_attributes(true);
-            match query.search() {
+            match silent::search(&query, &mut search) {
                 Err(error) if error.code() == -25300 => return Ok(None),
                 Ok(items) if items.is_empty() => return Ok(None),
                 _ => {}
@@ -68,7 +87,7 @@ pub(super) fn read(
         return Err("Claude usage inspection was cancelled".into());
     }
     if allow_prompt {
-        prompt::read(&service, &account, cancelled).map(Some)
+        prompt().map(Some)
     } else {
         Err("Claude Keychain credentials require permission; open jig claude launch to allow access".into())
     }
