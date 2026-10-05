@@ -154,10 +154,7 @@ fn validate_creation_ancestors(path: &Path) -> AnyResult<Vec<PathBuf>> {
         // Every existing ancestor, not only the creation boundary, must be
         // trusted before anything is created below it.
         validate_trusted_ancestor(ancestor, &metadata)?;
-        if !checked_creation_boundary {
-            reject_ownership_ignoring_volume(ancestor)?;
-            checked_creation_boundary = true;
-        }
+        checked_creation_boundary = true;
     }
     if checked_creation_boundary {
         Ok(missing)
@@ -171,10 +168,14 @@ fn validate_creation_ancestors(path: &Path) -> AnyResult<Vec<PathBuf>> {
 
 /// Another user who can rename any directory on the restore path can move
 /// the restored subtree away and substitute their own, so each existing
-/// ancestor must be owned by the current user or root, must not be writable
-/// by others unless sticky with a trusted owner, and on macOS must not carry
-/// an ACL that lets others write to, delete, or re-permission it.
+/// ancestor must be on a volume that honors ownership, must be owned by the
+/// current user or root, must not be writable by others unless sticky with a
+/// trusted owner, and on macOS must not carry an ACL that lets others write
+/// to, delete, or re-permission it.
 fn validate_trusted_ancestor(path: &Path, metadata: &fs::Metadata) -> AnyResult<()> {
+    // The owner checks below prove nothing on a volume that ignores
+    // ownership, and nested mounts can place one anywhere above the target.
+    reject_ownership_ignoring_volume(path)?;
     let mode = metadata.permissions().mode() & 0o7777;
     let owner = metadata.uid();
     let effective_user = unsafe { libc::geteuid() };
@@ -580,15 +581,14 @@ fn validate_parent(path: &Path) -> AnyResult<fs::Metadata> {
             path.display()
         );
     }
-    reject_ownership_ignoring_volume(path)?;
     Ok(metadata)
 }
 
 /// Refuses volumes whose ownership checks prove nothing.
 ///
 /// macOS can mount a volume with "ignore ownership", which reports every
-/// entry as owned by the accessing user. The owner and owner-only checks
-/// above would then pass for any local user, so restore fails closed.
+/// entry as owned by the accessing user. The owner and owner-only checks in
+/// this module would then pass for any local user, so restore fails closed.
 #[cfg(target_os = "macos")]
 fn reject_ownership_ignoring_volume(path: &Path) -> AnyResult<()> {
     let c_path =
@@ -605,7 +605,7 @@ fn reject_ownership_ignoring_volume(path: &Path) -> AnyResult<()> {
     let stats = unsafe { stats.assume_init() };
     if stats.f_flags & libc::MNT_IGNORE_OWNERSHIP as u32 != 0 {
         bail!(
-            "refusing restore onto a volume that ignores file ownership: {}",
+            "refusing restore through a volume that ignores file ownership: {}",
             path.display()
         );
     }

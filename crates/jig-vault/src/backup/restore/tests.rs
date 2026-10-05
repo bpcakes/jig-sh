@@ -637,3 +637,25 @@ fn preflight_and_revalidation_refuse_an_unsafe_acl_on_a_higher_ancestor() {
     );
     assert!(!target.home.exists());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn whole_path_checks_refuse_an_ownership_ignoring_volume_above_the_parent() {
+    // Mounting an ownership-honoring volume inside this one would model a
+    // nested mount exactly, but hdiutil requires root for `-owners on`. The
+    // whole-path walk visits the volume's top directory before any deeper
+    // directory, so a refusal naming it proves higher ancestors are checked
+    // rather than only the creation boundary and target parent.
+    let volume = OwnershipIgnoringVolume::attach();
+    let parent = volume.mountpoint.join("upper/private");
+    fs::create_dir_all(&parent).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let error = validate_trusted_ancestors(&parent).unwrap_err().to_string();
+
+    assert!(error.contains("ignores file ownership"), "{error}");
+    assert!(
+        error.ends_with(&volume.mountpoint.display().to_string()),
+        "{error}"
+    );
+}
