@@ -268,3 +268,42 @@ fn a_file_left_unloaded_by_a_retracted_guess_becomes_a_root() {
     assert!(test.contains("`src/helper.rs:1`"), "{test}");
     assert!(test.contains("`src/only.rs:1`"), "{test}");
 }
+
+/// A conventional test path names the file's own calls as test code without
+/// saying anything about what reaches it, so what it declares keeps its
+/// production classification.
+#[test]
+fn a_test_named_file_production_loads_does_not_reclassify_what_it_declares() {
+    let temp = inventory(&[
+        ("src/lib.rs", "mod test_support;\n"),
+        (
+            "src/test_support.rs",
+            &format!("#[path = \"queries.rs\"]\nmod queries;\n{CALL}"),
+        ),
+        ("src/queries.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("`src/queries.rs:1`"), "{non_test}");
+    assert!(test.contains("`src/test_support.rs:3`"), "{test}");
+}
+
+/// An attribute that compiles a whole file for tests alone does keep what it
+/// declares out of a production build.
+#[test]
+fn a_cfg_test_file_attribute_reclassifies_what_it_declares() {
+    let temp = inventory(&[
+        ("src/lib.rs", "mod support;\n"),
+        (
+            "src/support.rs",
+            "#![cfg(test)]\n#[path = \"queries.rs\"]\nmod queries;\n",
+        ),
+        ("src/queries.rs", CALL),
+    ]);
+
+    let (non_test, test) = sections(temp.path());
+
+    assert!(non_test.contains("_None_"), "{non_test}");
+    assert!(test.contains("`src/queries.rs:1`"), "{test}");
+}

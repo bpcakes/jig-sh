@@ -67,9 +67,11 @@ fn scan_bounded_sqlx_file(path: &str, text: &str) -> Result<FileScan> {
         calls: Vec::new(),
     };
     let mut declarations = Vec::new();
+    let mut cfg_test = false;
     match syn::parse_file(text) {
         Ok(file) => {
-            scanner.is_test |= has_cfg_test(&file.attrs);
+            cfg_test = has_cfg_test(&file.attrs);
+            scanner.is_test |= cfg_test;
             declarations = collect_declarations(&file.items);
             scanner.visit_file(&file);
         }
@@ -94,7 +96,7 @@ fn scan_bounded_sqlx_file(path: &str, text: &str) -> Result<FileScan> {
     }
     Ok(FileScan {
         modules: FileModules {
-            self_test: scanner.is_test,
+            cfg_test,
             declarations,
         },
         calls: scanner.calls,

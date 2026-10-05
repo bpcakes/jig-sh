@@ -40,9 +40,11 @@ pub(super) struct ModuleDecl {
 
 /// What one scanned file contributes to the module graph.
 pub(super) struct FileModules {
-    /// Whether the file is already test code on its own: a conventional test
-    /// path, or an exact `#[cfg(test)]` attribute on the file itself.
-    pub(super) self_test: bool,
+    /// Whether an exact `#[cfg(test)]` attribute covers the whole file, which
+    /// keeps everything it declares out of a production build too. A
+    /// conventional test path is not recorded here: it names the file's own
+    /// calls as test code without saying anything about what reaches it.
+    pub(super) cfg_test: bool,
     pub(super) declarations: Vec<ModuleDecl>,
 }
 
@@ -286,11 +288,13 @@ pub(super) fn test_only_files(
     targets: &CargoTargets,
 ) -> BTreeSet<String> {
     let mut claims = resolve_claims(files, targets);
-    // A file is test-only when it says so itself, or when every declaration
-    // claiming it is under `#[cfg(test)]` or made by a test-only file. A Cargo
-    // target, a file production code still reaches, one no declaration claims,
-    // and one in a declaration cycle no target enters keep their own
-    // classification, so no production call site is quietly lost.
+    // A file is test-only when an attribute compiles it for tests alone, or
+    // when every declaration claiming it is under `#[cfg(test)]` or made by a
+    // test-only file. A Cargo target, a file production code still reaches,
+    // one no declaration claims, and one in a declaration cycle no target
+    // enters keep their own classification, so no production call site is
+    // quietly lost. Only these answers propagate to what a file declares: a
+    // conventional test path names the file, not the modules it loads.
     let mut test_only: BTreeSet<&str> = BTreeSet::new();
     let mut pending: VecDeque<&str> = VecDeque::new();
     for (path, modules) in files {
@@ -298,7 +302,7 @@ pub(super) fn test_only_files(
         let test_claimed = claims.claimed.contains(path)
             && !claims.production_claims.contains_key(path)
             && cargo_target_dir(path, targets).is_none();
-        if (modules.self_test || test_claimed) && test_only.insert(path) {
+        if (modules.cfg_test || test_claimed) && test_only.insert(path) {
             pending.push_back(path);
         }
     }
