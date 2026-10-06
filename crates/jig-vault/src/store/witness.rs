@@ -195,6 +195,11 @@ impl WitnessLocation {
             fs::create_dir_all(&self.root).with_context(|| {
                 format!("failed to create vault witness {}", self.root.display())
             })?;
+            // Persist the new root's directory entry before any record or
+            // pending marker inside it can be relied on.
+            if let Some(parent) = self.root.parent() {
+                sync_parent_dir(parent)?;
+            }
         }
         let root = prepare_private_dir(&self.root)?;
         for child in [IDS_DIR, JOURNALS_DIR, LOCKS_DIR] {
