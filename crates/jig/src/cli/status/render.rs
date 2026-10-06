@@ -1,4 +1,4 @@
-use super::{concise_preview, value_str, value_u64};
+use crate::cli::output::{concise_preview, structured_target_text, value_str, value_u64};
 
 pub(in crate::cli) fn format_summary(value: &serde_json::Value) -> String {
     let outcome = value_str(value, "outcome").unwrap_or("unknown");
@@ -52,6 +52,31 @@ pub(in crate::cli) fn format_summary(value: &serde_json::Value) -> String {
         }
     }
     lines.push("Full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(in crate::cli) fn format_run_status_summary(value: &serde_json::Value) -> String {
+    let result = &value["result"];
+    let run_id = result["run_id"].as_str().unwrap_or("<unknown>");
+    let plan_id = result["plan_id"].as_str().unwrap_or("<unknown>");
+    let status = result["status"].as_str().unwrap_or("unknown");
+    let conclusion = result["conclusion"].as_str();
+    let state = conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
+    let mut lines = vec![
+        format!("Run {run_id}: {state}"),
+        format!("  Plan: {plan_id}"),
+    ];
+    if let Some(targets) = result["targets"].as_array() {
+        for target in targets {
+            let address = structured_target_text(&target["target"]);
+            let status = target["status"].as_str().unwrap_or("unknown");
+            let conclusion = target["conclusion"].as_str();
+            let state =
+                conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
+            lines.push(format!("  - {address}: {state}"));
+        }
+    }
+    lines.push("  full report: rerun with --json".into());
     lines.join("\n")
 }
 

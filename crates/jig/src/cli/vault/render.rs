@@ -1,4 +1,6 @@
-use super::{concise_preview_with_truncation, value_bool, value_i64, value_str, value_u64};
+use crate::cli::output::{
+    concise_preview_with_truncation, value_bool, value_i64, value_str, value_u64,
+};
 
 pub(in crate::cli) fn format_vault_run_summary(value: &serde_json::Value) -> String {
     let result = &value["result"];

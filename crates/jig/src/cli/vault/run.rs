@@ -3,14 +3,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::output::{self, emit};
-use super::run::finish_after_json_output;
-use super::structured_error::require_json_ok;
-use super::vault::VaultCommand;
+use super::{VaultCommand, render};
+use crate::cli::output::{self, emit};
+use crate::cli::run::finish_after_json_output;
+use crate::cli::structured_error::require_json_ok;
 use crate::exit::CliExit;
 use crate::{context::RepoContext, runtime};
 
-pub(super) fn run_vault_command(command: VaultCommand, json_output: bool) -> Result<()> {
+pub(in crate::cli) fn run_vault_command(command: VaultCommand, json_output: bool) -> Result<()> {
     run_vault_command_with_terminal_state(
         command,
         json_output,
@@ -250,8 +250,8 @@ fn normalize_absolute_path(path: &Path) -> Result<std::path::PathBuf> {
 
 const fn vault_renderer(command: &VaultCommand) -> output::Render {
     match command {
-        VaultCommand::Run(_) => output::format_vault_run_summary,
-        _ => output::format_vault_generic_summary,
+        VaultCommand::Run(_) => render::format_vault_run_summary,
+        _ => render::format_vault_generic_summary,
     }
 }
 
@@ -351,9 +351,9 @@ pub(super) fn apply_repo_vault_scope_to_options(
 }
 
 #[cfg(test)]
-#[path = "vault_run_tests.rs"]
+#[path = "run_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "vault_run_context_tests.rs"]
+#[path = "run_context_tests.rs"]
 mod context_tests;

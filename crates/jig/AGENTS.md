@@ -13,7 +13,8 @@
 - `src/cli/run.rs`: CLI startup boundaries and top-level command dispatch, one line per command.
 - `src/cli/run/launcher_handoff.rs`: generated-launcher handoff validation and the runtime compatibility probe.
 - `src/cli/runtime_dispatch.rs`: the one path from a parsed command to `runtime::dispatch`.
-- `src/cli/run/dev_launch.rs`: `jig dev` and `jig proxy` dispatch, including the private dev-worker handoff whose worker owns the existing dev lifecycle and output; `src/cli/run/dev_unavailable.rs` replaces it in builds without the `dev-proxy` feature.
+- `src/cli/<family>.rs` and `src/cli/<family>/`: one home per command family. The root file holds its clap types and dispatch description; `run.rs`, `convert.rs` and `render.rs` beside it hold its runner, its conversion to runtime requests, and its human-readable output.
+- `src/cli/proxy/run.rs`: `jig dev` and `jig proxy` dispatch, including the private dev-worker handoff whose worker owns the existing dev lifecycle and output; `src/cli/proxy/run_unavailable.rs` replaces it in builds without the `dev-proxy` feature.
 - `src/cli/run/vault_environment.rs`: CLI-startup boundary that withholds the reserved vault passphrase variables from commands that cannot capture them.
 - `src/runtime.rs`: command-backed tool execution.
 - `src/state.rs`: run history under `.agent/state`, with its diagnosis, archive, and restore maintenance.
@@ -27,7 +28,7 @@
 
 ## Edit here for X
 
-- Change CLI flags or nested subcommands: the command family's module under `src/cli/`; `src/cli.rs` wires the top-level commands.
+- Change CLI flags or nested subcommands: the command family's `src/cli/<family>.rs`; `src/cli.rs` wires the top-level commands. Convert its options to runtime requests in `src/cli/<family>/convert.rs`, or in the root file when the conversion is a few lines.
 - Change a command's argument rules (argv normalization, conflicts with global flags, usage hints): that command's module under `src/cli/`. `src/cli/run/argument_parsing.rs` is the generic pipeline that asks each owner; hints read Clap's structured error context, never its rendered text.
 - Add a top-level command, in this order; the compiler or a test enforces each step:
   1. Declare it once in the `root_commands!` table in `src/root_commands.rs`.
@@ -42,7 +43,7 @@
 - Change Claude credential lookup and read-only subscription usage: `src/claude/usage/`; keep secrets, HTTP, and platform storage out of the TUI and output renderers.
 - Change shared operation signal supervision: `src/signal_supervision.rs`, with the process-wide signal session in `src/signal_supervision/session.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
 - Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
-- Change how a command's result is shown to people: its formatter in `src/cli/output.rs` or under `src/cli/output/`. The command passes that function to `emit` (or names it in its `RuntimeDispatch`); there is no central output table to extend.
+- Change how a command's result is shown to people: its formatter in `src/cli/<family>/render.rs`, or in `src/cli/output.rs` for the summaries that still live there (check, run, setup, migration, agent-map and manifest tools). The command passes that function to `emit` (or names it in its `RuntimeDispatch`); there is no central output table to extend.
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
 - Propagate a child status or an already-reported failure: return `CliExit` from `src/exit.rs`. `src/cli/structured_error.rs` owns only the `--json` error protocol; do not add per-command marker error types there.
 - Change manifest-tool behavior around command execution: `src/runtime.rs`.

@@ -1,4 +1,4 @@
-use super::{concise_preview, value_bool, value_str};
+use crate::cli::output::{concise_preview, value_bool, value_str};
 
 pub(in crate::cli) fn format_agent_doctor_summary(value: &serde_json::Value) -> String {
     let ready = value_bool(value, "ok").unwrap_or(false);

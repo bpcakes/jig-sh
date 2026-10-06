@@ -378,7 +378,7 @@ fn clear_captured_passphrase() -> Result<()> {
 
 pub(crate) fn strip_passphrase_environment() {
     // SAFETY: every caller runs before Jig starts background threads: the
-    // vault CLI capture boundary (`cli/vault_run.rs`) and the capture paths it
+    // vault CLI capture boundary (`cli/vault/run.rs`) and the capture paths it
     // invokes, and bootstrap vault preparation before rendering. Non-vault
     // commands already withheld both variables at CLI startup through
     // `runtime::withhold_vault_passphrase_environment`. Removing both reserved

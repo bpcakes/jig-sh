@@ -5,6 +5,9 @@ use clap::{Args, Subcommand};
 
 use crate::tool_defs;
 
+pub(super) mod render;
+pub(super) mod run;
+
 pub(super) const CODEX_AFTER_HELP: &str = "\
 Codex homes are separate CODEX_HOME directories, each with its own account and
 local state. Codex configuration profiles selected with codex --profile remain

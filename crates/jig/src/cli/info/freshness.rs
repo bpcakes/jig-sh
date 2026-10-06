@@ -2,7 +2,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 
-use crate::cli::FreshnessOpts;
+use super::FreshnessOpts;
 use crate::cli::output::print_json;
 use crate::context::RepoContext;
 use crate::repository::freshness::adoption;

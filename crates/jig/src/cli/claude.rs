@@ -3,6 +3,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
+pub(super) mod render;
+pub(super) mod run;
+
 pub(super) const AFTER_HELP: &str = "\
 Claude homes are separate CLAUDE_CONFIG_DIR directories.
 Discover ~/.claude, ~/.claude-*, and the current CLAUDE_CONFIG_DIR.

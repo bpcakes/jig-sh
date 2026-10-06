@@ -1,6 +1,13 @@
 use serde_json::json;
 
 use super::*;
+use crate::cli::agent::render::format_agent_doctor_summary;
+use crate::cli::proxy::render::format_proxy_summary;
+use crate::cli::state::render::{
+    format_state_archive_summary, format_state_diagnose_summary, format_state_restore_summary,
+    format_state_summary,
+};
+use crate::cli::vault::render::format_vault_run_summary;
 
 #[test]
 fn setup_summary_reports_orchestration_and_next_step() {

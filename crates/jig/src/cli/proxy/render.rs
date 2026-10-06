@@ -1,4 +1,4 @@
-use super::{value_bool, value_i64, value_str, value_u64};
+use crate::cli::output::{value_bool, value_i64, value_str, value_u64};
 
 pub(in crate::cli) fn format_dev_summary(value: &serde_json::Value) -> String {
     let routes = value["routes"].as_array().map(Vec::len).unwrap_or(0);
@@ -223,6 +223,56 @@ fn append_dev_repo_and_state(lines: &mut Vec<String>, value: &serde_json::Value)
     if let Some(state_dir) = value_str(value, "state_dir") {
         lines.push(format!("  State: {state_dir}"));
     }
+}
+
+pub(in crate::cli) fn format_proxy_summary(value: &serde_json::Value) -> String {
+    if value_bool(value, "interrupted").unwrap_or(false) {
+        let signal = value_str(value, "termination_signal").unwrap_or("signal");
+        let mut lines = vec![format!("Proxy: stopped ({signal})")];
+        if let Some(app) = value_str(value, "app") {
+            lines.push(format!("  App: {app}"));
+        }
+        lines.push("  full report: rerun with --json".into());
+        return lines.join("\n");
+    }
+
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let mut lines = vec![format!("Proxy: {}", if ok { "ok" } else { "failed" })];
+    if let Some(running) = value_bool(value, "running") {
+        lines.push(format!("  Running: {}", if running { "yes" } else { "no" }));
+    }
+    if let Some(pid) = value_i64(value, "pid") {
+        lines.push(format!("  PID: {pid}"));
+    }
+    if let Some(http) = value_u64(value, "http_port") {
+        lines.push(format!("  HTTP port: {http}"));
+    }
+    if let Some(https) = value_u64(value, "https_port") {
+        lines.push(format!("  HTTPS port: {https}"));
+    }
+    if let Some(hostname) = value_str(value, "hostname") {
+        lines.push(format!("  Hostname: {hostname}"));
+    }
+    if let Some(app) = value_str(value, "app") {
+        lines.push(format!("  App: {app}"));
+    }
+    if let Some(routes) = value["routes"].as_array() {
+        lines.push(format!("  Routes: {}", routes.len()));
+    }
+    if let Some(path) = value_str(value, "path") {
+        lines.push(format!("  Path: {path}"));
+    }
+    if let Some(state_dir) = value_str(value, "state_dir") {
+        lines.push(format!("  State: {state_dir}"));
+    }
+    if let Some(warning) = value_str(value, "warning")
+        .or_else(|| value_str(value, "trust_warning"))
+        .or_else(|| value_str(value, "note"))
+    {
+        lines.push(format!("  Note: {warning}"));
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
 }
 
 #[cfg(test)]

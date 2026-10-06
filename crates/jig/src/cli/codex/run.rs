@@ -4,17 +4,17 @@ use crate::agent_provider::{AgentProvider, SessionProvider};
 use crate::codex::provider::Codex;
 use anyhow::{Result, bail};
 
-use super::codex::{CodexCommand, CodexLaunchOpts, CodexResumeOpts};
-use super::output;
+use super::{CodexCommand, CodexLaunchOpts, CodexResumeOpts, render};
+use crate::cli::agent_run;
 use crate::progress::CliProgress;
 
-pub(super) fn run_codex_command(command: CodexCommand, json_output: bool) -> Result<()> {
+pub(in crate::cli) fn run_codex_command(command: CodexCommand, json_output: bool) -> Result<()> {
     match command {
-        CodexCommand::Homes(opts) => super::agent_run::homes(
+        CodexCommand::Homes(opts) => agent_run::homes(
             &Codex,
             opts.usage,
             json_output,
-            output::format_codex_homes_summary,
+            render::format_codex_homes_summary,
         ),
         CodexCommand::Launch(opts) => run_codex_launch(opts, json_output),
         CodexCommand::Resume(opts) => run_codex_resume(opts, json_output),
@@ -35,11 +35,11 @@ fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
 
     let mut prepared = Codex.prepare(&home, &codex_args)?;
     prepared.report = crate::codex::resume_dry_run_report(&home, &codex_args);
-    super::agent_run::finish::<Codex>(
+    agent_run::finish::<Codex>(
         prepared,
         opts.dry_run,
         json_output,
-        output::format_codex_resume_summary,
+        render::format_codex_resume_summary,
     )
 }
 
@@ -64,13 +64,13 @@ fn resume_codex_args(
 }
 
 fn run_codex_launch(opts: CodexLaunchOpts, json_output: bool) -> Result<()> {
-    super::agent_run::launch(
+    agent_run::launch(
         &Codex,
         opts.home.as_deref(),
         &opts.codex_args,
         opts.dry_run,
         json_output,
-        output::format_codex_launch_summary,
+        render::format_codex_launch_summary,
     )
 }
 
