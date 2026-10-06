@@ -23,6 +23,9 @@ mod lifecycle;
 mod management;
 #[path = "vault_tests/mutations.rs"]
 mod mutations;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "vault_tests/rehearsal.rs"]
+mod rehearsal;
 #[path = "vault_tests/reveal.rs"]
 mod reveal;
 #[path = "vault_tests/rollback.rs"]

@@ -32,7 +32,7 @@ fn envelope(vault: &Vault) -> VaultFile {
 }
 
 /// The DEK an attacker recovers from `file` using that file's credential.
-fn extract_dek(file: &VaultFile, credential: &SecretString) -> Zeroizing<[u8; KEY_LEN]> {
+pub(super) fn extract_dek(file: &VaultFile, credential: &SecretString) -> Zeroizing<[u8; KEY_LEN]> {
     let salt = decode_b64_array::<SALT_LEN>("vault salt", &file.header.salt_b64).unwrap();
     let wrap_key = derive_wrap_key(credential, &salt, &file.header.kdf).unwrap();
     let nonce =
@@ -45,7 +45,7 @@ fn extract_dek(file: &VaultFile, credential: &SecretString) -> Zeroizing<[u8; KE
 
 /// Whether `dek` authenticates `file`'s state under that file's own state
 /// AAD and nonce.
-fn dek_opens_state(file: &VaultFile, dek: &[u8; KEY_LEN]) -> bool {
+pub(super) fn dek_opens_state(file: &VaultFile, dek: &[u8; KEY_LEN]) -> bool {
     let nonce = decode_b64_array::<NONCE_LEN>("state nonce", &file.state_nonce_b64).unwrap();
     let ciphertext = B64.decode(&file.state_b64).unwrap();
     let aad = payload_aad(&file.header, AeadRole::State);
