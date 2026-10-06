@@ -90,6 +90,9 @@ impl WitnessStore {
         let mut naming = self.records_with_pending_for(target_key)?;
         let Some((journal, digest)) = journal else {
             if naming.is_empty() {
+                // An earlier removal may have unlinked the journal without
+                // making that durable; the absence this reports must be.
+                self.sync_journals()?;
                 return Ok(TargetJournal::Absent);
             }
             return Err(classified(

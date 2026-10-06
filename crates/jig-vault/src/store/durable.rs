@@ -163,11 +163,29 @@ pub(crate) mod recording {
         Remove(PathBuf),
     }
 
+    /// A kind of directory-entry publication a sync failure can follow.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum Publication {
+        Rename,
+        Remove,
+    }
+
+    struct AfterPublication {
+        dir: PathBuf,
+        kind: Publication,
+        skip: usize,
+        armed: bool,
+    }
+
     thread_local! {
         static LOG: RefCell<Option<Vec<FsOp>>> = const { RefCell::new(None) };
         /// Paths whose sync fails after skipping the given number of
         /// matching syncs.
         static FAIL_SYNC: RefCell<Vec<(PathBuf, usize)>> = const { RefCell::new(Vec::new()) };
+        /// Directories whose sync fails right after a given publication in
+        /// them, whatever other syncs of them come first.
+        static FAIL_AFTER_PUBLICATION: RefCell<Vec<AfterPublication>> =
+            const { RefCell::new(Vec::new()) };
     }
 
     /// Runs `f` and returns the durability operations it performed on this
@@ -190,14 +208,51 @@ pub(crate) mod recording {
         FAIL_SYNC.with(|fail| fail.borrow_mut().push((path.to_path_buf(), skip)));
     }
 
-    /// Forgets which directory entries this process made durable, as a
+    /// Makes the sync of `dir` that follows its (`skip` + 1)th publication
+    /// of `kind` on this thread fail, so a test can fail exactly the sync
+    /// that would make that publication durable.
+    pub fn fail_sync_after_publication(dir: &Path, kind: Publication, skip: usize) {
+        FAIL_AFTER_PUBLICATION.with(|triggers| {
+            triggers.borrow_mut().push(AfterPublication {
+                dir: dir.to_path_buf(),
+                kind,
+                skip,
+                armed: false,
+            });
+        });
+    }
+
+    /// Forgets which entries under `prefix` this process made durable, as a
     /// fresh process would, so a retry cannot rely on an earlier attempt's
-    /// barriers.
-    pub fn forget_durable_entries() {
-        super::lock_entries().clear();
+    /// barriers. Scoped to one test's own directory, it cannot disturb
+    /// tests running in parallel.
+    pub fn forget_durable_entries_under(prefix: &Path) {
+        super::lock_entries().retain(|(path, _, _)| !path.starts_with(prefix));
     }
 
     pub(super) fn note(op: FsOp) {
+        let published = match &op {
+            FsOp::Rename(path) => Some((path, Publication::Rename)),
+            FsOp::Remove(path) => Some((path, Publication::Remove)),
+            FsOp::SyncDir(_) | FsOp::SyncFile(_) => None,
+        };
+        if let Some((path, kind)) = published {
+            FAIL_AFTER_PUBLICATION.with(|triggers| {
+                for trigger in triggers.borrow_mut().iter_mut() {
+                    if trigger.armed
+                        || trigger.kind != kind
+                        || path.parent() != Some(trigger.dir.as_path())
+                    {
+                        continue;
+                    }
+                    if trigger.skip == 0 {
+                        trigger.armed = true;
+                    } else {
+                        trigger.skip -= 1;
+                    }
+                }
+            });
+        }
         LOG.with(|log| {
             if let Some(log) = log.borrow_mut().as_mut() {
                 log.push(op);
@@ -210,6 +265,18 @@ pub(crate) mod recording {
             FsOp::SyncDir(path) | FsOp::SyncFile(path) => path.clone(),
             FsOp::Rename(_) | FsOp::Remove(_) => return Ok(()),
         };
+        if let FsOp::SyncDir(dir) = &op {
+            let armed = FAIL_AFTER_PUBLICATION.with(|triggers| {
+                let mut triggers = triggers.borrow_mut();
+                let index = triggers
+                    .iter()
+                    .position(|trigger| trigger.armed && trigger.dir == *dir);
+                index.map(|index| triggers.remove(index)).is_some()
+            });
+            if armed {
+                return Err(std::io::Error::other("injected sync failure"));
+            }
+        }
         let injected = FAIL_SYNC.with(|fail| {
             let mut fail = fail.borrow_mut();
             let Some(index) = fail.iter().position(|(candidate, _)| *candidate == path) else {

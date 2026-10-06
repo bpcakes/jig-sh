@@ -91,6 +91,26 @@ fn a_retried_open_syncs_entries_an_interrupted_attempt_left_unsynced() {
 }
 
 #[test]
+fn a_cache_reset_only_forgets_entries_under_its_own_directory() {
+    use crate::store::durable::recording::forget_durable_entries_under;
+
+    let temp = tempfile::tempdir().unwrap();
+    let profile = canonical(temp.path()).join("profile");
+    let root = profile.join(".jig/vault-witness");
+    let open = || record(|| WitnessLocation::at(root.clone()).open_or_create()).1;
+    let synced_here = |ops: &[FsOp]| syncs(ops).iter().any(|path| path.starts_with(&profile));
+    assert!(synced_here(&open()));
+
+    // Another test resetting its own directory leaves these entries known.
+    let other = tempfile::tempdir().unwrap();
+    forget_durable_entries_under(&canonical(other.path()));
+    assert!(!synced_here(&open()));
+
+    forget_durable_entries_under(&profile);
+    assert!(synced_here(&open()));
+}
+
+#[test]
 fn a_failed_entry_sync_fails_the_open_and_is_retried() {
     let temp = tempfile::tempdir().unwrap();
     let root = canonical(temp.path()).join("profile/.jig/vault-witness");

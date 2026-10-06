@@ -331,6 +331,16 @@ impl WitnessStore {
         durable::sync_dir(&self.root.join(IDS_DIR))
     }
 
+    /// Makes the journals directory's current entries durable, including
+    /// an earlier removal whose own sync never completed. A directory an
+    /// interrupted first creation never made holds nothing to persist.
+    fn sync_journals(&self) -> AnyResult<()> {
+        match fs::symlink_metadata(self.root.join(JOURNALS_DIR)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            _ => durable::sync_dir(&self.root.join(JOURNALS_DIR)),
+        }
+    }
+
     pub(crate) fn write_record(&self, record: &WitnessRecord) -> AnyResult<()> {
         record.validate(&record.vault_id)?;
         let text = serde_json::to_string_pretty(record)?;

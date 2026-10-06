@@ -63,7 +63,8 @@ pub use vault::{
 pub mod test_support {
     pub use crate::store::FaultPoint as TransactionFaultPoint;
     pub use crate::store::durable::recording::{
-        FsOp, fail_next_sync_of, fail_sync_after, forget_durable_entries, record as record_fs_ops,
+        FsOp, Publication, fail_next_sync_of, fail_sync_after, fail_sync_after_publication,
+        forget_durable_entries_under, record as record_fs_ops,
     };
 
     pub fn arm_transaction_fault(point: TransactionFaultPoint) {

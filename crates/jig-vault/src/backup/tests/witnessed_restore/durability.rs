@@ -6,11 +6,13 @@
 
 use super::*;
 use crate::store::durable::recording::{
-    FsOp, fail_next_sync_of, fail_sync_after, forget_durable_entries, record,
+    FsOp, Publication, fail_sync_after_publication, forget_durable_entries_under, record,
 };
 
 struct Layout {
     _temp: tempfile::TempDir,
+    /// This test's own directory; cache resets stay inside it.
+    base: PathBuf,
     archive: PathBuf,
     /// A dedicated parent, so its syncs are only the restore's own.
     targets: PathBuf,
@@ -35,6 +37,7 @@ fn layout() -> (Layout, impl Drop) {
     (
         Layout {
             _temp: temp,
+            base,
             archive,
             targets,
             target,
@@ -115,7 +118,7 @@ fn a_restore_makes_each_step_durable_before_the_next() {
 fn a_journal_whose_sync_failed_is_unlinked_and_its_staging_kept() {
     let (layout, _witness) = layout();
     let journals = layout.witness.join("journals");
-    fail_next_sync_of(&journals);
+    fail_sync_after_publication(&journals, Publication::Rename, 0);
     let error = restore(&layout.archive, &layout.target).unwrap_err();
     assert!(
         error
@@ -130,7 +133,7 @@ fn a_journal_whose_sync_failed_is_unlinked_and_its_staging_kept() {
     let staging = layout.targets.join(staging);
     let staged = staged_bytes(&staging);
 
-    forget_durable_entries();
+    forget_durable_entries_under(&layout.base);
     let (restored, ops) = record(|| restore(&layout.archive, &layout.target));
     restored.unwrap();
     let removed = at(&ops, 0, |op| *op == FsOp::Remove(journal.clone()));
@@ -144,15 +147,14 @@ fn a_journal_whose_sync_failed_is_unlinked_and_its_staging_kept() {
 fn a_pending_marker_whose_sync_failed_is_made_durable_before_installing() {
     let (layout, _witness) = layout();
     let ids = layout.witness.join("ids");
-    // The first records sync is the classification scan; the next publishes
-    // the pending marker.
-    fail_sync_after(&ids, 1);
+    // The first record published is the pending marker.
+    fail_sync_after_publication(&ids, Publication::Rename, 0);
     restore(&layout.archive, &layout.target).unwrap_err();
     assert!(pending_marker_visible(&layout));
     assert!(!layout.target.exists());
     assert_eq!(staging_dirs(&layout.targets).len(), 1);
 
-    forget_durable_entries();
+    forget_durable_entries_under(&layout.base);
     let (restored, ops) = record(|| restore(&layout.archive, &layout.target));
     restored.unwrap();
     let synced = at(&ops, 0, |op| *op == FsOp::SyncDir(ids.clone()));
@@ -167,14 +169,13 @@ fn an_installation_whose_sync_failed_is_made_durable_before_committing() {
     for through_restore in [true, false] {
         let (layout, _witness) = layout();
         let ids = layout.witness.join("ids");
-        // The first sync of the parent records the staging entry; the next
-        // one follows the installation rename.
-        fail_sync_after(&layout.targets, 1);
+        // The only rename into the parent is the installation.
+        fail_sync_after_publication(&layout.targets, Publication::Rename, 0);
         restore(&layout.archive, &layout.target).unwrap_err();
         assert!(layout.target.join("vault.json").exists());
         assert!(pending_marker_visible(&layout));
 
-        forget_durable_entries();
+        forget_durable_entries_under(&layout.base);
         let (retried, ops) = record(|| {
             if through_restore {
                 restore(&layout.archive, &layout.target).map(|_| ())
@@ -199,15 +200,14 @@ fn an_installation_whose_sync_failed_is_made_durable_before_committing() {
 fn a_commit_whose_sync_failed_is_made_durable_before_its_journal_is_removed() {
     let (layout, _witness) = layout();
     let (ids, journals) = (layout.witness.join("ids"), layout.witness.join("journals"));
-    // Records syncs: the classification scan, the pending marker, then the
-    // committed checkpoint.
-    fail_sync_after(&ids, 2);
+    // Records published: the pending marker, then the committed checkpoint.
+    fail_sync_after_publication(&ids, Publication::Rename, 1);
     restore(&layout.archive, &layout.target).unwrap_err();
     assert!(layout.target.join("vault.json").exists());
     assert!(!pending_marker_visible(&layout));
     let [journal] = journal_paths(&layout.target).try_into().unwrap();
 
-    forget_durable_entries();
+    forget_durable_entries_under(&layout.base);
     let (listed, ops) = record(|| {
         Vault::resolve_for_test(Some(layout.target.clone()))
             .unwrap()
@@ -220,4 +220,25 @@ fn a_commit_whose_sync_failed_is_made_durable_before_its_journal_is_removed() {
         .any(|op| *op == FsOp::SyncDir(ids.clone()));
     assert!(synced_before, "{ops:?}");
     at(&ops, removed, |op| *op == FsOp::SyncDir(journals.clone()));
+}
+
+#[test]
+fn a_journal_removal_whose_sync_failed_is_made_durable_by_the_next_open() {
+    let (layout, _witness) = layout();
+    let journals = layout.witness.join("journals");
+    fail_sync_after_publication(&journals, Publication::Remove, 0);
+    restore(&layout.archive, &layout.target).unwrap_err();
+    // Committed and unlinked, but the unlink was never made durable.
+    assert!(layout.target.join("vault.json").exists());
+    assert!(!pending_marker_visible(&layout));
+    assert!(journal_paths(&layout.target).is_empty());
+
+    forget_durable_entries_under(&layout.base);
+    let (listed, ops) = record(|| {
+        Vault::resolve_for_test(Some(layout.target.clone()))
+            .unwrap()
+            .list_fields(&test_passphrase())
+    });
+    listed.unwrap();
+    assert!(ops.contains(&FsOp::SyncDir(journals)), "{ops:?}");
 }
