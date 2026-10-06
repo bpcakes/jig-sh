@@ -117,14 +117,24 @@ struct VaultStateV3Serialized<'a> {
 #[serde(deny_unknown_fields)]
 struct VaultStateV3Deserialized {
     secrets: BTreeMap<String, SecretEntry>,
-    audit_root_b64: String,
+    audit_root_b64: EncodedAuditRoot,
     generation: u64,
     mutation_audit_mac: String,
 }
 
-impl Drop for VaultStateV3Deserialized {
+/// Encoded audit root that wipes itself when dropped.
+///
+/// Derived deserialization keeps already-parsed fields in locals until the
+/// whole struct exists, so a later missing or invalid field would drop a
+/// plain `String` without running any container destructor. Owning the wipe
+/// in the field type covers that early-return path too.
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct EncodedAuditRoot(String);
+
+impl Drop for EncodedAuditRoot {
     fn drop(&mut self) {
-        self.audit_root_b64.zeroize();
+        self.0.zeroize();
     }
 }
 
@@ -147,15 +157,19 @@ pub(super) fn serialize_state(
 pub(super) fn deserialize_state(
     bytes: &[u8],
 ) -> Result<(BTreeMap<String, SecretEntry>, V3StateFields)> {
-    let mut state = serde_json::from_slice::<VaultStateV3Deserialized>(bytes)
-        .context("failed to parse version 3 vault state")?;
+    let VaultStateV3Deserialized {
+        secrets,
+        audit_root_b64,
+        generation,
+        mutation_audit_mac,
+    } = serde_json::from_slice(bytes).context("failed to parse version 3 vault state")?;
     let fields = V3StateFields {
-        audit_root: AuditRoot::decode_b64(&state.audit_root_b64)?,
-        generation: state.generation,
-        mutation_audit_mac: std::mem::take(&mut state.mutation_audit_mac),
+        audit_root: AuditRoot::decode_b64(&audit_root_b64.0)?,
+        generation,
+        mutation_audit_mac,
     };
     fields.validate()?;
-    Ok((std::mem::take(&mut state.secrets), fields))
+    Ok((secrets, fields))
 }
 
 pub(super) fn secrets_fingerprint(secrets: &BTreeMap<String, SecretEntry>) -> Result<[u8; 32]> {
