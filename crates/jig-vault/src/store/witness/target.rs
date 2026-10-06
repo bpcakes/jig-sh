@@ -31,7 +31,7 @@ pub(super) const MAX_RECORD_SCAN_ENTRIES: usize = 64;
 
 /// What the witness says about one target's journal.
 pub(crate) enum TargetJournal {
-    /// No journal is recorded for the target.
+    /// No journal is recorded for the target, and no marker names it.
     Absent,
     /// No authoritative marker names the target.
     Orphan(OrphanJournal),
@@ -57,17 +57,28 @@ impl OrphanJournal {
 }
 
 impl WitnessStore {
-    /// Classifies the journal recorded for `target_key`. Fails closed when a
-    /// journal exists but the target lock is not held, when any record cannot be read and
-    /// validated, when the scan reaches its bound, when the journal does not
-    /// match the marker naming its target, or when several markers do.
+    /// Classifies the journal recorded for `target_key` against every
+    /// authoritative marker, whether or not the journal still exists. Fails
+    /// closed when any record cannot be read and validated, when the scan
+    /// reaches its bound, when a marker names the target but its journal is
+    /// missing or does not match it, when several markers name it, or when a
+    /// journal exists but the target lock is not held.
     pub(crate) fn classify_target_journal(&self, target_key: &str) -> AnyResult<TargetJournal> {
-        let Some((journal, digest)) = self.read_journal(target_key)? else {
-            return Ok(TargetJournal::Absent);
-        };
-        // Absence authorizes nothing; a journal's classification can.
-        self.require_target_lock(target_key)?;
+        let journal = self.read_journal(target_key)?;
+        if journal.is_some() {
+            // Only a journal's classification can authorize a deletion.
+            self.require_target_lock(target_key)?;
+        }
         let mut naming = self.records_with_pending_for(target_key)?;
+        let Some((journal, digest)) = journal else {
+            if naming.is_empty() {
+                return Ok(TargetJournal::Absent);
+            }
+            return Err(classified(
+                VaultErrorKind::AuditTampered,
+                "the pending vault transaction's journal is missing; refusing to guess its outcome",
+            ));
+        };
         if naming.len() > 1 {
             return Err(classified(
                 VaultErrorKind::AuditTampered,

@@ -407,15 +407,22 @@ fn an_interrupted_enrollment_is_made_durable_before_a_retry_accepts_it() {
     let temp = tempfile::tempdir().unwrap();
     let store = store_at(&temp, "vault");
     store.init(&passphrase()).unwrap();
-    // Losing the record makes the next authenticated use a first-use
-    // enrollment; it publishes the record, then its directory sync fails.
+    // An interrupted enrollment leaves its record published by rename but
+    // never synced; rewriting it outside the store reproduces that state.
     let record_path = record_path(&temp, &store);
+    let published = std::fs::read(&record_path).unwrap();
     std::fs::remove_file(&record_path).unwrap();
+    std::fs::write(&record_path, published).unwrap();
+    std::fs::set_permissions(
+        &record_path,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
     let ids = std::fs::canonicalize(record_path.parent().unwrap()).unwrap();
+
+    // A failed sync never lets the retry accept the state.
     fail_next_sync_of(&ids);
-    let error = store.list_fields(&passphrase()).unwrap_err();
-    assert!(error.to_string().contains("failed to enroll"), "{error}");
-    assert!(record_path.exists());
+    assert!(store.list_fields(&passphrase()).is_err());
 
     // The retry has no journal; it still syncs the visible record before
     // accepting the state against it.

@@ -250,12 +250,6 @@ impl VaultStore {
             .classify_target_journal(&target_key)
             .map_err(fail_closed)?
         {
-            TargetJournal::Absent if header_pending.is_some() => {
-                return Err(classified(
-                    VaultErrorKind::AuditTampered,
-                    "the pending vault transaction's journal is missing; refusing to guess its outcome",
-                ));
-            }
             TargetJournal::Absent => return Ok(None),
             TargetJournal::Orphan(orphan) => {
                 self.discard_orphan_journal(&witness, orphan)?;

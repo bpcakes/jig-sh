@@ -459,3 +459,23 @@ fn a_target_parent_left_by_an_interrupted_attempt_is_durable_before_the_journal(
         assert!(synced < journal_written, "{ops:?}");
     }
 }
+
+#[test]
+fn a_pending_restore_whose_journal_is_missing_blocks_every_use_of_its_target() {
+    let temp = private_temp();
+    let (archive, target) = pending_restore(temp.path());
+    let [journal] = journal_paths(&target).try_into().unwrap();
+    fs::remove_file(&journal).unwrap();
+
+    let error = restore(&archive, &target).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered, "{error}");
+    assert!(error.to_string().contains("journal is missing"), "{error}");
+    let error = Vault::resolve_for_test(Some(target.clone()))
+        .unwrap()
+        .init(&test_passphrase())
+        .unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered, "{error}");
+    // No vault was initialized over the pending restore.
+    assert!(!target.join("vault.json").exists());
+    assert_eq!(staging_dirs(temp.path()).len(), 1);
+}

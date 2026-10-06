@@ -247,3 +247,50 @@ fn records_that_cannot_be_trusted_or_the_scan_bound_never_authorize_deletion() {
         store.write_record(&other).unwrap();
     });
 }
+
+#[test]
+fn a_marker_whose_journal_is_missing_fails_closed_with_or_without_the_lock() {
+    let (_temp, store) = witness();
+    let key = target_key(Path::new("/example/home"));
+    pending_for(&store, &journal(&key));
+    fs::remove_file(store.journal_path(&key)).unwrap();
+
+    for locked in [false, true] {
+        let _target = locked.then(|| store.lock_target(&key).unwrap());
+        let error = match store.classify_target_journal(&key) {
+            Err(error) => error,
+            Ok(_) => panic!("a marker names this target without its journal"),
+        };
+        assert!(error.to_string().contains("journal is missing"), "{error}");
+    }
+    assert!(
+        store
+            .read_record(VAULT_ID)
+            .unwrap()
+            .unwrap()
+            .pending
+            .is_some()
+    );
+}
+
+#[test]
+fn concurrent_first_opens_of_a_shared_witness_both_succeed() {
+    for _ in 0..50 {
+        let temp = tempfile::tempdir().unwrap();
+        let location = WitnessLocation::at(canonical(temp.path()).join("witness"));
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let opens: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        location.open_or_create().map(|_| ())
+                    })
+                })
+                .collect();
+            for open in opens {
+                open.join().unwrap().unwrap();
+            }
+        });
+    }
+}

@@ -229,19 +229,19 @@ impl WitnessLocation {
         let root = prepare_private_dir(&self.root)?;
         for child in [IDS_DIR, JOURNALS_DIR, LOCKS_DIR] {
             let path = root.join(child);
-            match fs::symlink_metadata(&path) {
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    fs::create_dir(&path).with_context(|| {
+            // The witness is shared by every vault home, so another command
+            // may create the same directory concurrently; whoever created it,
+            // the same privacy and durability checks follow.
+            match fs::create_dir(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
                         format!(
                             "failed to create vault witness directory {}",
                             path.display()
                         )
-                    })?;
-                }
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("failed to inspect {}", path.display()));
+                    });
                 }
             }
             prepare_private_dir(&path)?;

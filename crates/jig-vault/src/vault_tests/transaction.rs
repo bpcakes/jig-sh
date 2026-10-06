@@ -469,3 +469,16 @@ fn an_unsynced_existing_home_is_durable_before_an_edit_writes_its_journal() {
         assert!(synced < journal_written, "{ops:?}");
     }
 }
+
+#[test]
+fn an_interrupted_init_whose_journal_is_missing_is_never_replaced_by_a_new_vault() {
+    let (_temp, store) = new_store();
+    store.arm_fault_for_test(FaultPoint::AfterPending);
+    store.init(&passphrase()).unwrap_err();
+    std::fs::remove_file(journal_file(&store)).unwrap();
+
+    let error = store.init(&passphrase()).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered, "{error}");
+    assert!(error.to_string().contains("journal is missing"), "{error}");
+    assert!(!store.exists().unwrap());
+}
