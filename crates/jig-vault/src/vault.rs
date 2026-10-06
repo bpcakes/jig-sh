@@ -1056,7 +1056,7 @@ impl RevealOperation {
 
 struct RevealLifecycle {
     store: VaultStore,
-    audit_key: Zeroizing<[u8; KEY_LEN]>,
+    audit_key: crate::audit::RetainedAuditKey,
     operation_id: String,
     operation: RevealOperation,
 }
@@ -1065,7 +1065,7 @@ impl RevealLifecycle {
     fn record_finish(&self, sink: &str, bytes_written: usize) -> AnyResult<()> {
         AuditEvent::append(
             &self.store,
-            self.audit_key.as_ref(),
+            &self.audit_key,
             self.operation.finish_action(),
             serde_json::json!({
                 "operation_id": self.operation_id,
@@ -1079,7 +1079,7 @@ impl RevealLifecycle {
     fn record_failure(&self, stage: &str) -> AnyResult<()> {
         AuditEvent::append(
             &self.store,
-            self.audit_key.as_ref(),
+            &self.audit_key,
             self.operation.failed_action(),
             reveal_failure_details(&self.operation_id, stage),
         )?;
@@ -1197,7 +1197,7 @@ impl std::fmt::Debug for PreparedReveal {
 
 struct PreparedExec {
     store: VaultStore,
-    audit_key: Zeroizing<[u8; KEY_LEN]>,
+    audit_key: crate::audit::RetainedAuditKey,
     operation_id: String,
     command: Vec<OsString>,
     env: Vec<ResolvedExecEnv>,
@@ -1215,7 +1215,7 @@ impl PreparedExec {
     fn record_finish(&self, exit_status: i32, exit_signal: Option<i32>) -> AnyResult<()> {
         AuditEvent::append(
             &self.store,
-            self.audit_key.as_ref(),
+            &self.audit_key,
             AuditAction::ExecFinish,
             serde_json::json!({
                 "operation_id": self.operation_id,
@@ -1242,8 +1242,7 @@ impl PreparedExec {
         let request = ResolvedExecProcess::new(command, env, redactor);
         match run_exec_process(request) {
             Ok(outcome) => {
-                if let Err(error) =
-                    record_exec_finish(&store, audit_key.as_ref(), &operation_id, &outcome)
+                if let Err(error) = record_exec_finish(&store, &audit_key, &operation_id, &outcome)
                 {
                     let finish_error = anyhow::anyhow!(
                         "vault exec child completed, but its finish audit event failed"
@@ -1251,7 +1250,7 @@ impl PreparedExec {
                     .context(error);
                     return match record_exec_failure(
                         &store,
-                        audit_key.as_ref(),
+                        &audit_key,
                         &operation_id,
                         "audit_finish",
                     ) {
@@ -1273,7 +1272,7 @@ impl PreparedExec {
                 let stage = failure.stage();
                 let process_error = failure.into_error();
                 if let Err(audit_error) =
-                    record_exec_failure(&store, audit_key.as_ref(), &operation_id, stage)
+                    record_exec_failure(&store, &audit_key, &operation_id, stage)
                 {
                     return Err(VaultError::from_anyhow(
                         VaultErrorKind::Process,
@@ -2114,7 +2113,7 @@ impl VaultStore {
                     ));
                 }
             };
-            let OpenVault { audit_key, .. } = vault;
+            let audit_key = vault.into_retained_audit_key();
             Ok(PreparedReveal {
                 lifecycle: RevealLifecycle {
                     store: self.clone(),
@@ -2178,7 +2177,7 @@ impl VaultStore {
                     ));
                 }
             };
-            let OpenVault { audit_key, .. } = vault;
+            let audit_key = vault.into_retained_audit_key();
             Ok(PreparedReveal {
                 lifecycle: RevealLifecycle {
                     store: self.clone(),
@@ -2241,7 +2240,7 @@ impl VaultStore {
                     ));
                 }
             };
-            let OpenVault { audit_key, .. } = vault;
+            let audit_key = vault.into_retained_audit_key();
             Ok(PreparedExec {
                 store: self.clone(),
                 audit_key,
@@ -2737,7 +2736,7 @@ impl OpenVault {
         action: AuditAction,
         details: serde_json::Value,
     ) -> AnyResult<AuditEvent> {
-        AuditEvent::append(store, self.audit_key.as_ref(), action, details)
+        AuditEvent::append(store, &self.retained_audit_key(), action, details)
     }
 
     pub(crate) fn append_audit_unlocked(
@@ -2826,7 +2825,7 @@ fn exec_failure_details(operation_id: &str, stage: &str) -> serde_json::Value {
 
 fn record_exec_finish(
     store: &VaultStore,
-    audit_key: &[u8],
+    audit_key: &crate::audit::RetainedAuditKey,
     operation_id: &str,
     outcome: &crate::ExecOutcome,
 ) -> AnyResult<()> {
@@ -2845,7 +2844,7 @@ fn record_exec_finish(
 
 fn record_exec_failure(
     store: &VaultStore,
-    audit_key: &[u8],
+    audit_key: &crate::audit::RetainedAuditKey,
     operation_id: &str,
     stage: &str,
 ) -> AnyResult<()> {

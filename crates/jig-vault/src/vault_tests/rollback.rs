@@ -336,6 +336,31 @@ fn retained_handles_refuse_an_audit_reverted_before_the_mutation_anchor() {
 }
 
 #[test]
+fn retained_handles_check_the_identity_they_authenticated_not_the_header() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp, "vault");
+    store.init(&passphrase()).unwrap();
+    set_value(&store, "jig://Example/TOKEN", b"retained-handle-value").unwrap();
+    let reveal = store
+        .prepare_field_read(&passphrase(), field("jig://Example/TOKEN"))
+        .unwrap();
+    store.arm_fault_for_test(FaultPoint::AfterPending);
+    set_value(&store, "jig://Example/OTHER", b"pending value").unwrap_err();
+    // The public header now claims an unwitnessed legacy vault.
+    let mut file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(store.vault_path()).unwrap()).unwrap();
+    file["header"]["version"] = 2.into();
+    file["header"]["vault_id"] = "01EXAMPLEUNWITNESSEDVAULT000".into();
+    std::fs::write(store.vault_path(), serde_json::to_vec(&file).unwrap()).unwrap();
+    let audit = std::fs::read(store.audit_path()).unwrap();
+
+    let error = reveal.write_to(&mut Vec::new()).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered, "{error}");
+    assert!(error.to_string().contains("identity changed"), "{error}");
+    assert_eq!(std::fs::read(store.audit_path()).unwrap(), audit);
+}
+
+#[test]
 fn retained_handles_still_finish_after_a_completed_rotation() {
     let temp = tempfile::tempdir().unwrap();
     let store = store_at(&temp, "vault");

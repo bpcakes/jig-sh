@@ -272,6 +272,7 @@ impl VaultStore {
                     "the pending vault transaction's journal does not match its marker",
                 ));
             }
+            witness.sync_record(id)?;
             let credential_index = match &journal.payload {
                 JournalPayload::InPlace(_) => {
                     self.check_journal_target(journal)?;

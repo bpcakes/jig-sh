@@ -13,7 +13,7 @@ use anyhow::Result as AnyResult;
 use secrecy::SecretString;
 
 use crate::VaultErrorKind;
-use crate::audit::find_verified_event_unlocked;
+use crate::audit::{RetainedAuditKey, find_verified_event_unlocked};
 use crate::error::{classified, classify_source};
 use crate::format::V3_FORMAT_VERSION;
 use crate::store::VaultStore;
@@ -154,39 +154,52 @@ impl VaultStore {
     }
 
     /// Guards appends from retained reveal, exec, broker, and backup
-    /// handles, which never reopen the vault with a passphrase. They compare
-    /// the current persisted envelope, not the handle's old state, so an
-    /// in-flight operation can still finish after a completed rotation; the
-    /// audit root they retain is stable across rotation and verifies the
-    /// committed mutation anchor.
-    pub(crate) fn guard_audit_only_append_unlocked(&self, audit_key: &[u8]) -> AnyResult<()> {
-        let Some(bytes) = self.read_vault_bytes()? else {
-            return Ok(());
+    /// handles, which never reopen the vault with a passphrase. The identity
+    /// the handle authenticated, never the current public header, selects
+    /// the witness record. They compare the current persisted envelope, not
+    /// the handle's old state, so an in-flight operation can still finish
+    /// after a completed rotation; the audit root they retain is stable
+    /// across rotation and verifies the committed mutation anchor.
+    pub(crate) fn guard_audit_only_append_unlocked(
+        &self,
+        retained: &RetainedAuditKey,
+    ) -> AnyResult<()> {
+        let vault_id = retained.vault_id();
+        let current = match self.read_vault_bytes()? {
+            Some(bytes) => {
+                let text = std::str::from_utf8(&bytes).map_err(|error| {
+                    classify_source(
+                        VaultErrorKind::Serialization,
+                        "failed to parse vault file",
+                        error.into(),
+                    )
+                })?;
+                let header = ParsedVaultEnvelope::parse(text)?.into_header();
+                if header.vault_id != vault_id {
+                    return Err(classified(
+                        VaultErrorKind::AuditTampered,
+                        "vault identity changed after this operation authenticated it; refusing to record more activity",
+                    ));
+                }
+                Some((header.version == V3_FORMAT_VERSION, bytes))
+            }
+            None => None,
         };
-        let text = std::str::from_utf8(&bytes).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "failed to parse vault file",
-                error.into(),
-            )
-        })?;
-        let header = ParsedVaultEnvelope::parse(text)?.into_header();
-        let is_v3 = header.version == V3_FORMAT_VERSION;
-        let Some(witness) = self.witness().open_existing()? else {
-            return if is_v3 {
-                Err(unwitnessed_error())
-            } else {
-                Ok(())
-            };
+        let witness = self.witness().open_existing()?;
+        let _id = witness
+            .as_ref()
+            .map(|witness| witness.lock_id(vault_id))
+            .transpose()?;
+        let record = match &witness {
+            Some(witness) => witness.read_record(vault_id)?,
+            None => None,
         };
-        let _id = witness.lock_id(&header.vault_id)?;
-        let record = witness.read_record(&header.vault_id)?;
-        match (is_v3, record) {
-            (_, Some(record)) if record.pending.is_some() => Err(classified(
+        match (record, current) {
+            (Some(record), _) if record.pending.is_some() => Err(classified(
                 VaultErrorKind::AuditTampered,
                 "a vault transaction is pending; finish it with an authenticated vault command before recording more activity",
             )),
-            (true, Some(record)) => {
+            (Some(record), Some((true, bytes))) => {
                 let committed = record.committed.expect("validated record");
                 if sha256_hex(&bytes) != committed.envelope_sha256 {
                     return Err(classified(
@@ -195,15 +208,33 @@ impl VaultStore {
                     ));
                 }
                 self.verify_anchor_unlocked(
-                    audit_key,
+                    retained.key(),
                     &committed.mutation_audit_mac,
                     committed.generation,
                 )
             }
-            (true, None) => Err(unwitnessed_error()),
-            (false, Some(_)) => Err(legacy_replay_error()),
-            (false, None) => Ok(()),
+            (Some(_), Some((false, _))) => Err(legacy_replay_error()),
+            (Some(_), None) => Err(classified(
+                VaultErrorKind::AuditTampered,
+                "vault state no longer matches its witnessed checkpoint",
+            )),
+            (None, Some((true, _))) => Err(unwitnessed_error()),
+            (None, _) => Ok(()),
         }
+    }
+}
+
+impl OpenVault {
+    /// The audit root and authenticated identity a retained handle keeps.
+    pub(super) fn into_retained_audit_key(self) -> RetainedAuditKey {
+        let Self {
+            file, audit_key, ..
+        } = self;
+        RetainedAuditKey::new(audit_key, file.header.vault_id)
+    }
+
+    pub(super) fn retained_audit_key(&self) -> RetainedAuditKey {
+        RetainedAuditKey::new(self.audit_key.clone(), self.file.header.vault_id.clone())
     }
 }
 

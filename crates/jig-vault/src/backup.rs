@@ -7,7 +7,6 @@ use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
 use crate::audit::{AuditAction, AuditEvent};
-use crate::crypto::KEY_LEN;
 use crate::error::{classified, vault_error_from_anyhow};
 use crate::format::{LATEST_FORMAT_VERSION, supports_field_kinds};
 use crate::store::VaultStore;
@@ -123,7 +122,7 @@ impl fmt::Debug for RestoreTarget {
 
 pub(crate) struct BackupSnapshot {
     pub(crate) store: VaultStore,
-    pub(crate) audit_key: Zeroizing<[u8; KEY_LEN]>,
+    pub(crate) audit_key: crate::audit::RetainedAuditKey,
     pub(crate) operation_id: String,
     pub(crate) source_vault_id: String,
     pub(crate) source_format_version: u32,
@@ -133,7 +132,7 @@ pub(crate) struct BackupSnapshot {
 
 struct BackupLifecycle {
     store: VaultStore,
-    audit_key: Zeroizing<[u8; KEY_LEN]>,
+    audit_key: crate::audit::RetainedAuditKey,
     operation_id: String,
 }
 
@@ -156,7 +155,7 @@ impl BackupLifecycle {
     fn record_finish(&self, bytes_written: usize, created_at_ms: i128) -> AnyResult<()> {
         AuditEvent::append(
             &self.store,
-            self.audit_key.as_ref(),
+            &self.audit_key,
             AuditAction::BackupFinish,
             serde_json::json!({
                 "operation_id": self.operation_id,
@@ -171,7 +170,7 @@ impl BackupLifecycle {
     fn record_failure(&self, stage: &str) -> AnyResult<()> {
         AuditEvent::append(
             &self.store,
-            self.audit_key.as_ref(),
+            &self.audit_key,
             AuditAction::BackupFailed,
             serde_json::json!({
                 "operation_id": self.operation_id,
@@ -363,12 +362,13 @@ fn validate_create_request(store: &VaultStore, output: &Path, overwrite: bool) -
     store.revalidate_existing()?;
     PreparedPrivateFile::preflight(output, overwrite).map_err(anyhow::Error::new)?;
     store.validate_external_output(output, "backup")?;
+    if store.has_pending_journal()? {
+        // The authenticated backup finishes the recorded transaction first
+        // and checks the recovered format and bounds under the vault lock;
+        // the predecessor's format and size say nothing about them.
+        return Ok(());
+    }
     let Some(vault_bytes) = store.read_vault_bytes()? else {
-        if store.has_pending_journal()? {
-            // The authenticated backup finishes the recorded transaction
-            // first and repeats every check under the vault lock.
-            return Ok(());
-        }
         anyhow::bail!("existing vault state disappeared during backup preflight");
     };
     let (vault_id, version) = inspect_embedded_vault(&vault_bytes)?;

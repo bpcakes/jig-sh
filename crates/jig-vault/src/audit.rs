@@ -181,16 +181,17 @@ struct CanonicalAuditEventForMac<'a> {
 impl AuditEvent {
     pub(crate) fn append(
         store: &VaultStore,
-        audit_key: &[u8],
+        retained: &RetainedAuditKey,
         action: AuditAction,
         details: Value,
     ) -> Result<Self> {
         // Retained reveal, exec, broker, and backup handles append without
         // reopening the vault; the guard checks the current persisted state
-        // and its mutation anchor against the witness first.
+        // and its mutation anchor against the witness for the identity the
+        // handle authenticated first.
         store.with_lock(|| {
-            store.guard_audit_only_append_unlocked(audit_key)?;
-            Self::append_unlocked(store, audit_key, action, details)
+            store.guard_audit_only_append_unlocked(retained)?;
+            Self::append_unlocked(store, retained.key(), action, details)
         })
     }
 
@@ -629,8 +630,10 @@ fn hex_lower(bytes: &[u8]) -> String {
     output
 }
 
+mod retained;
 mod transition;
 
+pub(crate) use retained::RetainedAuditKey;
 pub(crate) use transition::{find_verified_event_unlocked, verify_exact_prefix};
 
 #[cfg(test)]

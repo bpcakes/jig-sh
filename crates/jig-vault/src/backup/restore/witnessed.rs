@@ -182,6 +182,7 @@ fn resume_matching_retry(
             "the pending vault transaction's journal does not match its marker",
         ));
     }
+    witness.sync_record(&journal.vault_id)?;
     let JournalPayload::Restore(payload) = &journal.payload else {
         return Err(classified(
             VaultErrorKind::AlreadyExists,
@@ -299,12 +300,14 @@ pub(crate) fn finish_pending_restore(
 }
 
 /// Removes a restore journal no marker references, and its owned staging
-/// when the staging identity still matches.
+/// when the staging identity still matches, after making durable the record
+/// that no longer references it.
 pub(crate) fn discard_orphan_restore(
     witness: &WitnessStore,
     journal: &Journal,
     home: &Path,
 ) -> AnyResult<()> {
+    witness.sync_record(&journal.vault_id)?;
     if let JournalPayload::Restore(payload) = &journal.payload
         && let Some(parent) = home.parent()
     {

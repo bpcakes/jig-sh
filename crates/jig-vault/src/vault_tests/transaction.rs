@@ -302,6 +302,22 @@ fn a_pending_migration_finishes_with_its_original_passphrase() {
 }
 
 #[test]
+fn a_pending_migration_passes_format_preflights_and_backs_up_as_version_three() {
+    let (temp, store) = new_store();
+    init_v1(&store, &passphrase());
+    store.arm_fault_for_test(FaultPoint::AfterAudit);
+    store.migrate(&passphrase(), V3_FORMAT_VERSION).unwrap_err();
+
+    let home = store.root().to_path_buf();
+    Vault::preflight_passphrase_change(home.clone()).unwrap();
+    let output = temp.path().join("vault.backup");
+    let request = Vault::preflight_backup_create(home, &output, false).unwrap();
+    Vault::create_backup(&passphrase(), request).unwrap();
+    assert!(output.exists());
+    assert_eq!(committed_generation(&store), 1);
+}
+
+#[test]
 fn generation_overflow_is_refused_before_anything_is_written() {
     let (_temp, store) = new_store();
     store.init(&passphrase()).unwrap();

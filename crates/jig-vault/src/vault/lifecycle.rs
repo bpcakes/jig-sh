@@ -79,17 +79,18 @@ impl Vault {
 impl VaultStore {
     pub(crate) fn preflight_passphrase_change(home: PathBuf) -> Result<()> {
         let store = VaultStore::open_existing(home)?;
+        if store
+            .has_pending_journal()
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?
+        {
+            // Credential capture may proceed; the change finishes the
+            // recorded transaction first and checks the recovered format
+            // under its locks.
+            return Ok(());
+        }
         let text = store
             .read_vault_text()
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?;
-        let pending = store
-            .has_pending_journal()
-            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?;
-        if text.is_none() && pending {
-            // Credential capture may proceed; the change finishes the
-            // recorded transaction first under its locks.
-            return Ok(());
-        }
         let text = text.ok_or_else(|| {
             VaultError::new(
                 VaultErrorKind::NotFound,
@@ -363,7 +364,7 @@ impl VaultStore {
                     ));
                 }
             };
-            let OpenVault { audit_key, .. } = vault;
+            let audit_key = vault.into_retained_audit_key();
             Ok(BackupSnapshot {
                 store: self.clone(),
                 audit_key,

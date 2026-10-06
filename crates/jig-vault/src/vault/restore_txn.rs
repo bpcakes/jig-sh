@@ -225,7 +225,8 @@ impl VaultStore {
     }
 
     /// Removes a journal that no pending marker references: it was written
-    /// before its marker, so the transaction never became irrevocable.
+    /// before its marker, or it is the leftover of a promotion, so the
+    /// record that no longer references it is made durable first.
     pub(super) fn discard_orphan_journal(
         &self,
         witness: &WitnessStore,
@@ -235,6 +236,7 @@ impl VaultStore {
         if matches!(journal.payload, JournalPayload::Restore(_)) {
             return crate::backup::discard_orphan_restore(witness, journal, self.root());
         }
+        witness.sync_record(&journal.vault_id)?;
         witness.remove_journal(&journal.target.target_key)
     }
 }

@@ -35,9 +35,9 @@ pub(crate) use journal::{
 pub(crate) use record::{Checkpoint, PendingMarker, TransactionKind, WitnessRecord};
 
 use super::{
-    ensure_create_ancestor_is_not_shared_writable, ensure_create_base_is_not_symlink,
-    ensure_private_dir_permissions, lock_file, path_is_symlink, private_open_options,
-    sync_parent_dir, write_atomic_text,
+    create_dir_all_durable, ensure_create_ancestor_is_not_shared_writable,
+    ensure_create_base_is_not_symlink, ensure_private_dir_permissions, lock_file, path_is_symlink,
+    private_open_options, sync_parent_dir, write_atomic_text,
 };
 
 /// Witness root below the user's home directory in production builds.
@@ -192,24 +192,9 @@ impl WitnessLocation {
         if !self.root.exists() {
             ensure_create_base_is_not_symlink(&self.root)?;
             ensure_create_ancestor_is_not_shared_writable(&self.root)?;
-            let created: Vec<&Path> = self
-                .root
-                .ancestors()
-                .take_while(|ancestor| {
-                    fs::symlink_metadata(ancestor)
-                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-                })
-                .collect();
-            fs::create_dir_all(&self.root).with_context(|| {
+            create_dir_all_durable(&self.root).with_context(|| {
                 format!("failed to create vault witness {}", self.root.display())
             })?;
-            // Persist every new directory entry, outermost first, before any
-            // record or pending marker inside the tree can be relied on.
-            for directory in created.iter().rev() {
-                if let Some(parent) = directory.parent() {
-                    sync_parent_dir(parent)?;
-                }
-            }
         }
         let root = prepare_private_dir(&self.root)?;
         for child in [IDS_DIR, JOURNALS_DIR, LOCKS_DIR] {
@@ -282,6 +267,25 @@ impl WitnessStore {
         self.root
             .join(JOURNALS_DIR)
             .join(format!("{target_key}.json"))
+    }
+
+    /// Re-establishes the durability of the record for `vault_id`. A crash
+    /// between a record's rename and its directory sync can leave it visible
+    /// but not durable, so recovery syncs it before acting on it.
+    pub(crate) fn sync_record(&self, vault_id: &str) -> AnyResult<()> {
+        match nonblocking_open_options()
+            .read(true)
+            .open(self.record_path(vault_id))
+        {
+            Ok(file) => file
+                .sync_all()
+                .context("failed to sync a vault witness record")?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).context("failed to open a vault witness record for sync");
+            }
+        }
+        sync_parent_dir(&self.root.join(IDS_DIR))
     }
 
     /// Reads and validates the record for `vault_id`. Unreadable, malformed,

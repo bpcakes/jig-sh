@@ -17,12 +17,14 @@ use zeroize::Zeroizing;
 use crate::crypto::KdfParams;
 use crate::{Result, VaultError, VaultErrorKind, VaultHomeState};
 
+mod durable;
 mod existing;
 mod header;
 mod locking;
 mod pending;
 pub(crate) mod witness;
 
+use durable::create_dir_all_durable;
 pub(crate) use pending::pending_transaction_recorded;
 use witness::WitnessLocation;
 
@@ -453,7 +455,7 @@ fn prepare_private_dir(root: PathBuf, initialization_kdf: KdfParams) -> AnyResul
     }
     ensure_create_base_is_not_symlink(&root)?;
     ensure_create_ancestor_is_not_shared_writable(&root)?;
-    fs::create_dir_all(&root)
+    create_dir_all_durable(&root)
         .with_context(|| format!("failed to create vault home {}", root.display()))?;
     if path_is_symlink(&root)? {
         bail!(
