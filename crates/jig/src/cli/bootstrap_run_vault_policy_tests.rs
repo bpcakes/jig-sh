@@ -54,7 +54,7 @@ fn pre_capture_adopt() -> BootstrapVaultPlan {
 }
 
 #[test]
-fn adopt_reusing_an_existing_vault_keeps_its_historical_credential() {
+fn bootstrap_reusing_an_existing_vault_keeps_its_historical_credential() {
     let _env = lock_env();
     let temp = tempfile::tempdir().unwrap();
     let repo = repo_with_vault_scope(temp.path());
@@ -81,7 +81,7 @@ fn adopt_reusing_an_existing_vault_keeps_its_historical_credential() {
 }
 
 #[test]
-fn adopt_rejects_a_guessable_candidate_only_when_initializing() {
+fn bootstrap_rejects_a_guessable_candidate_only_when_initializing() {
     let _env = lock_env();
     let temp = tempfile::tempdir().unwrap();
     let repo = repo_with_vault_scope(temp.path());
@@ -106,20 +106,20 @@ fn adopt_rejects_a_guessable_candidate_only_when_initializing() {
 }
 
 #[test]
-fn init_rejects_a_guessable_candidate_before_rendering() {
-    let _env = lock_env();
-    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", HISTORICAL_PASSPHRASE);
-    let error = prepare_bootstrap_vault_with_availability(
-        BootstrapVaultIntent::Initialize,
-        BootstrapInputMode::NoInput,
-        BootstrapPassphraseAvailability::Environment,
-        BootstrapVaultCommand::Init,
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        error.contains(jig_vault::NEW_VAULT_PASSPHRASE_POLICY),
-        "{error}"
-    );
-    assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
+fn every_bootstrap_command_defers_policy_until_initialization() {
+    // A forced `init` can keep an existing `[vault].scope_id`, so neither
+    // command may reject a credential before it knows a vault is created.
+    for command in [BootstrapVaultCommand::Init, BootstrapVaultCommand::Adopt] {
+        let _env = lock_env();
+        let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", HISTORICAL_PASSPHRASE);
+        let plan = prepare_bootstrap_vault_with_availability(
+            BootstrapVaultIntent::Initialize,
+            BootstrapInputMode::NoInput,
+            BootstrapPassphraseAvailability::Environment,
+            command,
+        )
+        .unwrap();
+        assert_eq!(plan, BootstrapVaultPlan::PreCaptured);
+        assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
+    }
 }

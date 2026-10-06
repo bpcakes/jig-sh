@@ -184,15 +184,12 @@ fn prepare_bootstrap_vault_with_availability(
 ) -> Result<BootstrapVaultPlan> {
     let plan = BootstrapVaultPlan::resolve(intent, input_mode, availability, command)?;
     if plan == BootstrapVaultPlan::PreCaptured {
-        match command {
-            // A fresh `init` scope never holds a vault, so reject a candidate
-            // that fails the new-passphrase policy before rendering anything.
-            BootstrapVaultCommand::Init => runtime::capture_new_vault_passphrase()?,
-            // `adopt --write` may reuse an existing vault whose historical
-            // credential predates the policy; validate only once rendering
-            // shows a new vault will actually be initialized.
-            BootstrapVaultCommand::Adopt => runtime::capture_new_vault_passphrase_candidate()?,
-        }
+        // Rendering may reuse an existing vault, through `adopt --write` or a
+        // forced `init` that keeps an existing `[vault].scope_id`, whose
+        // historical credential predates the new-passphrase policy. Capture
+        // now, before any child process starts, but validate only once
+        // `ensure_bootstrap_vault` knows a new vault will be initialized.
+        runtime::capture_new_vault_passphrase_candidate()?;
     }
     // Rendering, Git, and template commands run next. Pre-capture already
     // consumed the passphrase; also drop a stale JIG_VAULT_NEW_PASSPHRASE that
