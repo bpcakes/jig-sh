@@ -27,6 +27,8 @@ mod mutations;
 mod reveal;
 #[path = "vault_tests/rollback.rs"]
 mod rollback;
+#[path = "vault_tests/rotation.rs"]
+mod rotation;
 #[path = "vault_tests/transaction.rs"]
 mod transaction;
 #[path = "vault_tests/v3.rs"]

@@ -25,6 +25,8 @@ use super::codec::{
 };
 use super::*;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod rotation;
 mod versions;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod witnessed_restore;

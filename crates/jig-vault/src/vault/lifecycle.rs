@@ -27,8 +27,12 @@ use crate::store::witness::TransactionKind;
 
 impl Vault {
     /// Re-encrypts a version 2 or 3 vault under a new passphrase without
-    /// changing its identity, data-encryption key, logical state, or audit
-    /// key. A version 3 change commits the next state generation.
+    /// changing its identity, logical state, or audit key. A version 3 change
+    /// rotates the data-encryption key (a fresh key, salt, and nonces reseal
+    /// all state, so a key recovered from an earlier envelope cannot decrypt
+    /// the new one) and commits the next state generation. Version 2 keeps its
+    /// frozen contract of rewrapping the unchanged key. Rotation never makes
+    /// older envelopes, backups, or previously revealed values unreadable.
     pub fn change_passphrase(&self, current: &SecretString, new: &SecretString) -> Result<()> {
         self.store.change_passphrase(current, new)
     }

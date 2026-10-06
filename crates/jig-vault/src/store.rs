@@ -76,6 +76,7 @@ pub(crate) fn arm_fault_for_test(point: FaultPoint) {
 #[cfg_attr(not(any(test, feature = "test-utils")), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FaultPoint {
+    BeforeJournal,
     AfterJournal,
     AfterPending,
     PartialAudit,

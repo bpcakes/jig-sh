@@ -1,5 +1,13 @@
 //! Envelope sealing for initialization, ordinary saves, migration, and
 //! passphrase change.
+//!
+//! Key ownership: every DEK, wrapping key, and state plaintext produced here
+//! lives in a `Zeroizing` owner returned inside the sealed envelope value,
+//! which the caller keeps until the serialized envelope is persisted and
+//! then drops on every success and error path. The caller's previous DEK
+//! stays in its own zeroizing owner (the unlocked vault). Moving fixed-size
+//! key arrays can leave transient copies that no owner wipes; this is a
+//! source-reviewed best effort, not something a unit test can prove.
 
 use anyhow::Result as AnyResult;
 use base64::Engine;
@@ -8,13 +16,14 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::crypto::{
-    KEY_LEN, KdfParams, NONCE_LEN, SALT_LEN, derive_audit_key, derive_wrap_key, random_array, seal,
+    KEY_LEN, KdfParams, NONCE_LEN, SALT_LEN, derive_audit_key, derive_wrap_key, random_array,
+    random_key, seal,
 };
 use crate::error::{VaultErrorKind, classified, classify_source};
 use crate::format::{
     AEAD_ALGORITHM, AeadRole, AuditRoot, LATEST_FORMAT_VERSION, MAGIC, V3_FORMAT_VERSION,
     V3StateFields, VaultFile, VaultHeader, VaultState, decode_b64_array, payload_aad,
-    supports_field_kinds, validate_header,
+    rotates_dek_on_rekey, supports_field_kinds, validate_header,
 };
 
 /// Fresh identity and key material for a new vault, created before its
@@ -53,14 +62,18 @@ pub(in crate::vault) struct MigratedVaultEnvelope {
     _wrap_key: Zeroizing<[u8; KEY_LEN]>,
 }
 
+/// A passphrase change. Formats that rotate the data-encryption key reseal
+/// all state under a fresh DEK, salt, wrapping key, and nonces and wrap only
+/// the new DEK, so a DEK recovered from any earlier envelope cannot decrypt
+/// the successor. Format 2 keeps its frozen contract: the unchanged DEK is
+/// rewrapped under the new passphrase and both payloads are resealed.
 pub(in crate::vault) struct RekeyedVaultEnvelope {
     file: VaultFile,
-    // Passphrase rotation keeps the DEK and logical state unchanged, but both
-    // encrypted payloads are freshly sealed under a header containing the new
-    // salt. Retain plaintext and the derived wrap key in zeroizing storage
-    // until the serialized envelope has been atomically written.
+    // Retain plaintext, the derived wrap key, and any fresh DEK in zeroizing
+    // storage until the serialized envelope has been atomically written.
     _state_plaintext: Zeroizing<Vec<u8>>,
     _wrap_key: Zeroizing<[u8; KEY_LEN]>,
+    _rotated_dek: Option<Zeroizing<[u8; KEY_LEN]>>,
 }
 
 struct SealedPayloads {
@@ -146,6 +159,49 @@ fn header_for_state(
         )
     })?;
     Ok(header)
+}
+
+/// An envelope sealed under a fresh DEK, salt, wrapping key, and nonces.
+/// Every secret-bearing intermediate stays in its zeroizing owner until the
+/// caller has persisted the serialized envelope.
+struct FreshKeySealed {
+    file: VaultFile,
+    state_plaintext: Zeroizing<Vec<u8>>,
+    wrap_key: Zeroizing<[u8; KEY_LEN]>,
+    dek: Zeroizing<[u8; KEY_LEN]>,
+}
+
+/// Seals `state` under fresh key material for `header`, adopting the current
+/// KDF policy while keeping the header's identity and creation time.
+fn seal_under_fresh_key(
+    mut header: VaultHeader,
+    passphrase: &SecretString,
+    state: &VaultState,
+    kdf: KdfParams,
+    label: &str,
+) -> AnyResult<FreshKeySealed> {
+    if state.v3.is_none() {
+        anyhow::bail!("only format 3 state can be resealed under a fresh vault key");
+    }
+    let salt = random_array::<SALT_LEN>()?;
+    let dek = random_key()?;
+    header.kdf = kdf;
+    header.salt_b64 = B64.encode(salt);
+    let header = header_for_state(header, state, label)?;
+    let wrap_key = derive_wrap_key(passphrase, &salt, &header.kdf).map_err(|error| {
+        classify_source(
+            VaultErrorKind::InvalidInput,
+            "vault passphrase could not be derived safely",
+            error,
+        )
+    })?;
+    let (file, state_plaintext) = seal_payloads(&header, &wrap_key, &dek, state)?.into_file(header);
+    Ok(FreshKeySealed {
+        file,
+        state_plaintext,
+        wrap_key,
+        dek,
+    })
 }
 
 fn derive_header_wrap_key(
@@ -337,10 +393,12 @@ impl MigratedVaultEnvelope {
 }
 
 impl RekeyedVaultEnvelope {
+    /// `legacy_dek` is rewrapped only under the frozen format 2 contract; a
+    /// format that rotates its DEK never reuses it.
     pub(in crate::vault) fn seal(
         previous: &VaultFile,
         new_passphrase: &SecretString,
-        dek: &[u8; KEY_LEN],
+        legacy_dek: &[u8; KEY_LEN],
         state: &VaultState,
         kdf: KdfParams,
     ) -> AnyResult<Self> {
@@ -349,6 +407,21 @@ impl RekeyedVaultEnvelope {
                 "vault format {} does not support passphrase change; run `jig vault migrate --to {LATEST_FORMAT_VERSION}` first",
                 previous.header.version
             );
+        }
+        if rotates_dek_on_rekey(previous.header.version) {
+            let rotated = seal_under_fresh_key(
+                previous.header.clone(),
+                new_passphrase,
+                state,
+                kdf,
+                "rekeyed",
+            )?;
+            return Ok(Self {
+                file: rotated.file,
+                _state_plaintext: rotated.state_plaintext,
+                _wrap_key: rotated.wrap_key,
+                _rotated_dek: Some(rotated.dek),
+            });
         }
 
         let salt = random_array::<SALT_LEN>()?;
@@ -368,11 +441,12 @@ impl RekeyedVaultEnvelope {
             )
         })?;
         let (file, state_plaintext) =
-            seal_payloads(&header, &wrap_key, dek, state)?.into_file(header);
+            seal_payloads(&header, &wrap_key, legacy_dek, state)?.into_file(header);
         Ok(Self {
             file,
             _state_plaintext: state_plaintext,
             _wrap_key: wrap_key,
+            _rotated_dek: None,
         })
     }
 
@@ -401,30 +475,14 @@ impl RotatedVaultEnvelope {
         state: &VaultState,
         kdf: KdfParams,
     ) -> AnyResult<Self> {
-        if state.v3.is_none() {
-            anyhow::bail!("only format 3 state can be resealed under a fresh vault key");
-        }
-        let salt = random_array::<SALT_LEN>()?;
-        let dek = Zeroizing::new(random_array::<KEY_LEN>()?);
         let mut header = previous.clone();
         header.version = V3_FORMAT_VERSION;
-        header.kdf = kdf;
-        header.salt_b64 = B64.encode(salt);
-        let header = header_for_state(header, state, "resealed format 3")?;
-        let wrap_key = derive_wrap_key(passphrase, &salt, &header.kdf).map_err(|error| {
-            classify_source(
-                VaultErrorKind::InvalidInput,
-                "vault passphrase could not be derived safely",
-                error,
-            )
-        })?;
-        let (file, state_plaintext) =
-            seal_payloads(&header, &wrap_key, &dek, state)?.into_file(header);
+        let rotated = seal_under_fresh_key(header, passphrase, state, kdf, "resealed format 3")?;
         Ok(Self {
-            file,
-            _state_plaintext: state_plaintext,
-            _wrap_key: wrap_key,
-            _dek: dek,
+            file: rotated.file,
+            _state_plaintext: rotated.state_plaintext,
+            _wrap_key: rotated.wrap_key,
+            _dek: rotated.dek,
         })
     }
 

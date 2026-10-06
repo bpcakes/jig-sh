@@ -305,6 +305,12 @@ pub(crate) const fn supports_field_kinds(version: u32) -> bool {
     matches!(version, V2_FORMAT_VERSION | V3_FORMAT_VERSION)
 }
 
+/// Formats whose passphrase change rotates the data-encryption key. Format
+/// 2 keeps its frozen contract of rewrapping the unchanged key.
+pub(crate) const fn rotates_dek_on_rekey(version: u32) -> bool {
+    matches!(version, V3_FORMAT_VERSION)
+}
+
 pub(crate) fn payload_aad(header: &VaultHeader, role: AeadRole) -> Vec<u8> {
     let mut aad = header_aad_string(header);
     if header.version == V3_FORMAT_VERSION && role == AeadRole::State {
