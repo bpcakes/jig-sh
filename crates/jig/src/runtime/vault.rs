@@ -362,6 +362,8 @@ fn status(request: VaultStatusRequest) -> Result<Value> {
         "vault_file_exists": status.exists,
         // Unauthenticated public-header discovery, never an integrity claim.
         "format_version": status.format_version,
+        // An interrupted transaction finishes on any authenticated command.
+        "pending_transaction": status.pending_transaction,
     });
     add_vault_scope_fields(&mut output, &resolved);
     Ok(output)

@@ -209,18 +209,19 @@ fn result_for(journal: &Journal, source_format_version: u32, home: &Path) -> Bac
     }
 }
 
-/// The candidate envelope text of a pending restore: the installed target
-/// when installation already happened, otherwise its staging.
+/// The candidate envelope text of a pending restore: its staging until
+/// installation renames that staging away, then the installed target. An
+/// unrelated occupant of the target is never read as the candidate.
 pub(crate) fn read_candidate(
     journal: &Journal,
     payload: &RestorePayload,
     home: &Path,
 ) -> AnyResult<String> {
-    let installed = fs::symlink_metadata(home).is_ok();
-    let path = if installed {
-        home.join(VAULT_FILE)
+    let staging = staging_path(journal, payload, home)?;
+    let path = if fs::symlink_metadata(&staging).is_ok() {
+        staging.join(VAULT_FILE)
     } else {
-        staging_path(journal, payload, home)?.join(VAULT_FILE)
+        home.join(VAULT_FILE)
     };
     let bytes = read_bounded(&path)?;
     String::from_utf8(bytes).context("pending restore candidate is not valid UTF-8")

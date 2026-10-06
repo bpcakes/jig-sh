@@ -318,6 +318,11 @@ impl WitnessStore {
         Ok(sha256_hex(text.as_bytes()))
     }
 
+    /// Whether a journal entry exists for one target, without reading it.
+    pub(crate) fn journal_exists(&self, target_key: &str) -> bool {
+        fs::symlink_metadata(self.journal_path(target_key)).is_ok()
+    }
+
     pub(crate) fn remove_journal(&self, target_key: &str) -> AnyResult<()> {
         let path = self.journal_path(target_key);
         match fs::remove_file(&path) {

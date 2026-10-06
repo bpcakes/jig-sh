@@ -19,22 +19,26 @@ impl VaultStore {
     }
 
     pub(crate) fn revalidate_existing(&self) -> AnyResult<()> {
-        validate_existing_private_dir(&self.root)
+        validate_existing_private_dir(&self.root, self.has_pending_journal()?)
     }
 }
 
 fn open_existing_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
     let root = crate::path_security::physical_path(&root, "existing vault")?;
-    validate_existing_private_dir(&root)?;
+    // An interrupted transaction may have left one state file missing; the
+    // authenticated operation finishes it, so a recorded journal lets
+    // preflight reach credential capture without waiving any other check.
+    let pending = super::pending_transaction_recorded(&root);
+    validate_existing_private_dir(&root, pending)?;
     let root = fs::canonicalize(&root)
         .with_context(|| format!("failed to canonicalize vault home {}", root.display()))?;
-    validate_existing_private_dir(&root)?;
+    validate_existing_private_dir(&root, pending)?;
     let witness = super::WitnessLocation::for_home(&root)?;
     witness.ensure_disjoint(&root)?;
     Ok(VaultStore::at(root, KdfParams::production(), witness))
 }
 
-fn validate_existing_private_dir(root: &Path) -> AnyResult<()> {
+fn validate_existing_private_dir(root: &Path, allow_missing_state: bool) -> AnyResult<()> {
     reject_symlinked_path_components(root)?;
     let metadata = fs::symlink_metadata(root)
         .with_context(|| format!("failed to inspect existing vault home {}", root.display()))?;
@@ -47,9 +51,14 @@ fn validate_existing_private_dir(root: &Path) -> AnyResult<()> {
     ensure_owned_private_directory(root, &metadata)?;
     ensure_tree_has_no_symlinks(root, root)?;
     for path in [root.join(VAULT_FILE), root.join(AUDIT_FILE)] {
-        let metadata = fs::symlink_metadata(&path).with_context(|| {
-            format!("existing vault is missing required file {}", path.display())
-        })?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Err(error) if allow_missing_state && error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            result => result.with_context(|| {
+                format!("existing vault is missing required file {}", path.display())
+            })?,
+        };
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             bail!(
                 "existing vault file must be a regular non-symlink file: {}",

@@ -114,8 +114,8 @@ impl VaultTuiBackend {
             scope: resolved.scope.to_owned(),
             scope_id: resolved.scope_id.clone(),
             repo_name: resolved.repo_name.clone(),
+            home_state: presented_home_state(&status),
             home: status.root,
-            home_state: status.home_state,
         };
         Ok(Self {
             resolved,
@@ -402,7 +402,7 @@ impl VaultBackend for VaultTuiBackend {
 
     fn home_state(&self) -> std::result::Result<VaultHomeState, VaultUiError> {
         Vault::status(Some(self.descriptor.home.clone()))
-            .map(|status| status.home_state)
+            .map(|status| presented_home_state(&status))
             .map_err(map_vault_error)
     }
 
@@ -600,6 +600,18 @@ impl VaultTuiBackend {
             selected.mutate_if_unchanged(passphrase, revision, mutation)
         })?;
         Ok(self.finish_committed(VaultCommittedAction::Mutated))
+    }
+}
+
+/// A home with an interrupted witnessed transaction is presented as
+/// initialized so the TUI routes to unlock, where authentication finishes
+/// the recorded transaction. Header-only screen selection must never hide
+/// that recovery behind initialization or restore choices.
+fn presented_home_state(status: &jig_vault::VaultStatus) -> VaultHomeState {
+    if status.pending_transaction {
+        VaultHomeState::Initialized
+    } else {
+        status.home_state
     }
 }
 

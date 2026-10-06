@@ -54,6 +54,19 @@ pub use vault::{
     VaultStatus, VaultWriteMode,
 };
 
+/// Crash injection for tests of the witnessed transaction protocol. Only
+/// this crate's tests and `test-utils` consumers can arm a crash point; it
+/// applies to the arming thread's next matching protocol step.
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub mod test_support {
+    pub use crate::store::FaultPoint as TransactionFaultPoint;
+
+    pub fn arm_transaction_fault(point: TransactionFaultPoint) {
+        crate::store::arm_fault_for_test(point);
+    }
+}
+
 /// Envelope format created by initialization and the newest explicit
 /// migration target.
 pub const LATEST_VAULT_FORMAT_VERSION: u32 = format::LATEST_FORMAT_VERSION;

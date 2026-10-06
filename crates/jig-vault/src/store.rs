@@ -19,8 +19,11 @@ use crate::{Result, VaultError, VaultErrorKind, VaultHomeState};
 
 mod existing;
 mod header;
+mod locking;
+mod pending;
 pub(crate) mod witness;
 
+pub(crate) use pending::pending_transaction_recorded;
 use witness::WitnessLocation;
 
 const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
@@ -41,7 +44,7 @@ pub(crate) struct VaultStore {
     fail_next_vault_write: Arc<AtomicBool>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     /// Armed per test thread so stores created internally, such as restore
     /// staging, share the injected crash point.
@@ -49,26 +52,27 @@ thread_local! {
 }
 
 /// Simulates a crash at `point` when a test armed it on this thread.
+/// Production builds compile this to a no-op.
 pub(crate) fn fault(point: FaultPoint) -> AnyResult<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     if ARMED_FAULT.with(|armed| armed.get()) == Some(point) {
         ARMED_FAULT.with(|armed| armed.set(None));
         bail!("injected crash at {point:?}");
     }
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-utils")))]
     let _ = point;
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(crate) fn arm_fault_for_test(point: FaultPoint) {
     ARMED_FAULT.with(|armed| armed.set(Some(point)));
 }
 
 /// Deterministic crash points of the transaction protocol, armed by tests.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "test-utils")), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FaultPoint {
+pub enum FaultPoint {
     AfterJournal,
     AfterPending,
     PartialAudit,
@@ -94,6 +98,9 @@ impl VaultStore {
         initialization_kdf: KdfParams,
     ) -> AnyResult<Self> {
         let root = resolve_root(explicit_home)?;
+        if let Some(store) = pending::pending_absent_target(&root, &initialization_kdf)? {
+            return Ok(store);
+        }
         prepare_private_dir(root, initialization_kdf)
     }
 
@@ -360,43 +367,6 @@ impl VaultStore {
 
     pub(crate) fn audit_len(&self) -> AnyResult<Option<u64>> {
         regular_file_len_no_follow(&self.audit_path())
-    }
-
-    fn lock_path(&self) -> PathBuf {
-        self.root.join(LOCK_FILE)
-    }
-
-    /// Runs `f` under the ordered locks: this home's target lock, the home
-    /// lock, then the lock of the vault ID its public header names. Same-ID
-    /// copies therefore serialize on one witness lock.
-    pub(crate) fn with_lock<T>(&self, f: impl FnOnce() -> AnyResult<T>) -> AnyResult<T> {
-        let witness = self.witness.open_or_create()?;
-        let _target = witness.lock_target(&self.target_key())?;
-        let file = private_open_options()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(self.lock_path())
-            .context("failed to open vault lock")?;
-        crate::acl::clear_file(&file, &self.lock_path())?;
-        lock_file(&file)?;
-        let result = (|| {
-            let _id = match self.header_vault_id_for_lock() {
-                Some(vault_id) => Some(witness.lock_id(&vault_id)?),
-                None => None,
-            };
-            f()
-        })();
-        let unlock = FileExt::unlock(&file);
-        match (result, unlock) {
-            (Ok(value), Ok(())) => Ok(value),
-            (Ok(_), Err(error)) => Err(error).context("failed to unlock vault lock"),
-            (Err(error), Ok(())) => Err(error),
-            (Err(error), Err(unlock_error)) => Err(error.context(format!(
-                "vault operation failed; additionally failed to unlock vault lock: {unlock_error}"
-            ))),
-        }
     }
 }
 

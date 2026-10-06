@@ -81,13 +81,21 @@ impl VaultStore {
         let store = VaultStore::open_existing(home)?;
         let text = store
             .read_vault_text()
-            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?
-            .ok_or_else(|| {
-                VaultError::new(
-                    VaultErrorKind::NotFound,
-                    format!("vault does not exist at {}", store.vault_path().display()),
-                )
-            })?;
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?;
+        let pending = store
+            .has_pending_journal()
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?;
+        if text.is_none() && pending {
+            // Credential capture may proceed; the change finishes the
+            // recorded transaction first under its locks.
+            return Ok(());
+        }
+        let text = text.ok_or_else(|| {
+            VaultError::new(
+                VaultErrorKind::NotFound,
+                format!("vault does not exist at {}", store.vault_path().display()),
+            )
+        })?;
         let file: VaultFile = serde_json::from_str(&text).map_err(|error| {
             VaultError::from_anyhow(
                 VaultErrorKind::Serialization,

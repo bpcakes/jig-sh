@@ -106,6 +106,9 @@ pub struct VaultStatus {
     /// a passphrase. It is unauthenticated discovery metadata, not proof of
     /// integrity or freshness, and is `None` when absent or unreadable.
     pub format_version: Option<u32>,
+    /// Whether an interrupted witnessed transaction is recorded for this
+    /// home. Any authenticated vault command finishes it.
+    pub pending_transaction: bool,
 }
 
 impl Vault {
@@ -162,11 +165,13 @@ impl Vault {
             .is_initialized()
             .then(|| VaultStore::public_format_version(&root))
             .flatten();
+        let pending_transaction = crate::store::pending_transaction_recorded(&root);
         Ok(VaultStatus {
             root,
             home_state,
             exists: home_state.is_initialized(),
             format_version,
+            pending_transaction,
         })
     }
 

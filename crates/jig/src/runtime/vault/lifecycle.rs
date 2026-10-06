@@ -8,7 +8,8 @@ use std::sync::{Mutex, MutexGuard};
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
     BrokeredRun, SecretBytes, VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV,
-    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, VaultError, validate_new_vault_passphrase,
+    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, VaultError, VaultErrorKind,
+    validate_new_vault_passphrase,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
@@ -151,7 +152,7 @@ pub(super) fn restore_backup(mut request: VaultBackupRestoreRequest) -> Result<V
     // Restore is intentionally a static operation. Calling `vault(&resolved)`
     // or `Vault::resolve` here would create the target before the core can
     // enforce its absent-home no-replace contract.
-    let result = Vault::restore_backup(&passphrase, prepared)?;
+    let result = Vault::restore_backup(&passphrase, prepared).map_err(restore_conflict_guidance)?;
     let mut output = json!({
         "ok": true,
         "command": "vault backup restore",
@@ -160,9 +161,27 @@ pub(super) fn restore_backup(mut request: VaultBackupRestoreRequest) -> Result<V
         "restored": true,
         "vault_id": result.vault_id,
         "format_version": result.format_version,
+        "source_format_version": result.source_format_version,
+        "generation": result.generation,
+        // A witnessed restore fences every older copy of this vault ID.
+        "other_copies_stale": result.generation.is_some(),
     });
     add_vault_scope_fields(&mut output, &resolved);
     Ok(output)
+}
+
+/// A restore conflict (an occupied target, a different pending archive, or
+/// an unrelated pending transaction) needs operator-owned directory changes.
+/// The guidance never suggests deleting the rollback witness or its journals.
+fn restore_conflict_guidance(error: VaultError) -> anyhow::Error {
+    if error.kind() != VaultErrorKind::AlreadyExists {
+        return error.into();
+    }
+    anyhow!(
+        "{} {} Resolve the conflict without deleting the vault rollback witness, then rerun the same restore or any authenticated vault command for this home.",
+        error.message(),
+        super::scope::VAULT_STORAGE_OPERATOR_STEP
+    )
 }
 
 fn concrete_vault_home(resolved: &ResolvedVaultRuntime) -> Result<PathBuf> {

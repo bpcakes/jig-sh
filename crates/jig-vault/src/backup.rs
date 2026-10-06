@@ -363,9 +363,14 @@ fn validate_create_request(store: &VaultStore, output: &Path, overwrite: bool) -
     store.revalidate_existing()?;
     PreparedPrivateFile::preflight(output, overwrite).map_err(anyhow::Error::new)?;
     store.validate_external_output(output, "backup")?;
-    let vault_bytes = store
-        .read_vault_bytes()?
-        .context("existing vault state disappeared during backup preflight")?;
+    let Some(vault_bytes) = store.read_vault_bytes()? else {
+        if store.has_pending_journal()? {
+            // The authenticated backup finishes the recorded transaction
+            // first and repeats every check under the vault lock.
+            return Ok(());
+        }
+        anyhow::bail!("existing vault state disappeared during backup preflight");
+    };
     let (vault_id, version) = inspect_embedded_vault(&vault_bytes)?;
     if !supports_field_kinds(version) {
         return Err(classified(

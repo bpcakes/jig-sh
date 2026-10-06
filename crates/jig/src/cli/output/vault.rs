@@ -55,6 +55,12 @@ pub(in crate::cli) fn format_vault_generic_summary(value: &serde_json::Value) ->
             if let Some(version) = value_u64(value, "format_version") {
                 lines.push(format!("  Format (unverified header): {version}"));
             }
+            if value_bool(value, "pending_transaction") == Some(true) {
+                lines.push(
+                    "  Pending transaction: run an authenticated vault command to finish it"
+                        .to_owned(),
+                );
+            }
         }
         "vault passphrase change" => {
             append_optional_bool(&mut lines, value, "changed", "Changed");
@@ -156,6 +162,15 @@ fn append_backup_restore(lines: &mut Vec<String>, value: &serde_json::Value) {
     append_optional_bool(lines, value, "restored", "Restored");
     if let Some(version) = value_u64(value, "format_version") {
         lines.push(format!("  Vault format: {version}"));
+    }
+    if let Some(source) = value_u64(value, "source_format_version")
+        && value_u64(value, "format_version") != Some(source)
+    {
+        lines.push(format!("  Upgraded from archived format: {source}"));
+    }
+    if let Some(generation) = value_u64(value, "generation") {
+        lines.push(format!("  Generation: {generation}"));
+        lines.push("  Other copies of this vault are now stale and will be refused.".to_owned());
     }
 }
 

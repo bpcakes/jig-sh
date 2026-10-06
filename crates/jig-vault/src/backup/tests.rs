@@ -26,6 +26,8 @@ use super::codec::{
 use super::*;
 
 mod versions;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod witnessed_restore;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn test_passphrase() -> SecretString {
