@@ -500,3 +500,45 @@ fn a_witness_root_left_without_its_directories_does_not_block_a_new_vault() {
     assert!(witness_root.join("ids").is_dir());
     assert!(vault.list_fields(&passphrase()).unwrap().is_empty());
 }
+
+#[test]
+fn the_bound_audit_prefix_and_predecessor_are_durable_before_the_journal() {
+    use crate::store::durable::recording::{FsOp, record};
+
+    let (_temp, store) = new_store();
+    store.init(&passphrase()).unwrap();
+    // An audit-only append or earlier save may have published these bytes
+    // without syncing them; the transaction binds them in its journal.
+    let (written, ops) = record(|| set_value(&store, "jig://Example/NEXT", b"next value"));
+    written.unwrap();
+    let journal_written = ops
+        .iter()
+        .position(|op| matches!(op, FsOp::Rename(path) if path.parent().is_some_and(|dir| dir.ends_with("journals"))))
+        .unwrap();
+    for state in [store.audit_path(), store.vault_path()] {
+        let synced = ops
+            .iter()
+            .position(|op| *op == FsOp::SyncFile(state.clone()))
+            .unwrap_or_else(|| panic!("{} never synced: {ops:?}", state.display()));
+        assert!(synced < journal_written, "{ops:?}");
+    }
+}
+
+#[test]
+fn a_retried_change_to_the_same_passphrase_completes_without_another_rekey() {
+    let (_temp, store) = new_store();
+    let same = passphrase();
+    store.init(&same).unwrap();
+    store.arm_fault_for_test(FaultPoint::AfterPending);
+    store.change_passphrase_for_test(&same, &same).unwrap_err();
+
+    store.change_passphrase_for_test(&same, &same).unwrap();
+    assert_eq!(committed_generation(&store), 2);
+    assert_eq!(
+        audit_events(&store)
+            .iter()
+            .filter(|event| event.action == "passphrase_change")
+            .count(),
+        1
+    );
+}

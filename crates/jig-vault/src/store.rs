@@ -354,6 +354,24 @@ impl VaultStore {
         sync_parent_dir(&self.root)
     }
 
+    /// Makes durable the state a transaction is about to bind: the audit log
+    /// (its verified prefix and any torn suffix) and the predecessor
+    /// envelope. An interrupted earlier write may have left them visible but
+    /// unsynced.
+    pub(crate) fn sync_existing_state_unlocked(&self) -> AnyResult<()> {
+        for path in [self.audit_path(), self.vault_path()] {
+            match private_open_options().read(true).open(&path) {
+                Ok(file) => sync_file(&file, &path)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to open {} for sync", path.display()));
+                }
+            }
+        }
+        sync_parent_dir(&self.root)
+    }
+
     pub(crate) fn truncate_audit_unlocked(&self, len: u64) -> AnyResult<()> {
         let path = self.audit_path();
         let file = private_open_options()

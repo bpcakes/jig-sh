@@ -551,3 +551,24 @@ fn a_restore_after_an_interrupted_witness_creation_finishes_the_tree() {
         .list_fields(&test_passphrase())
         .unwrap();
 }
+
+#[test]
+fn pending_staging_that_lost_its_privacy_is_never_installed() {
+    let temp = private_temp();
+    let (archive, target) = pending_restore(temp.path());
+    let [staging] = staging_dirs(temp.path()).try_into().unwrap();
+    let staging = temp.path().join(staging);
+    fs::set_permissions(&staging, fs::Permissions::from_mode(0o777)).unwrap();
+
+    let error = restore(&archive, &target).unwrap_err();
+    assert!(error.to_string().contains("no longer private"), "{error}");
+    assert!(!target.exists());
+    assert!(staging.exists());
+
+    fs::set_permissions(&staging, fs::Permissions::from_mode(0o700)).unwrap();
+    restore(&archive, &target).unwrap();
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+}

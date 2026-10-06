@@ -86,10 +86,12 @@ impl VaultStore {
                 audit: prepared.transition(),
             }),
         };
-        // The home receives the audit append and envelope; an interrupted
-        // earlier attempt (such as an init's home creation) may have left its
-        // entries unsynced.
+        // The home receives the audit append and envelope, and the journal
+        // binds the current audit prefix and predecessor envelope; an
+        // interrupted earlier attempt (such as an init's home creation or an
+        // audit-only append) may have left any of them unsynced.
         crate::store::ensure_entry_chain_durable(self.root()).map_err(record_error)?;
+        self.sync_existing_state_unlocked().map_err(record_error)?;
         let journal_sha256 = witness.write_journal(&journal).map_err(record_error)?;
         self.fault(FaultPoint::AfterJournal).map_err(record_error)?;
         let mut pending = record.unwrap_or_else(|| WitnessRecord::new(vault_id));

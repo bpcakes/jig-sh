@@ -154,11 +154,13 @@ impl VaultStore {
     ) -> AnyResult<()> {
         // A retry of a change that crashed after its pending marker finishes
         // with the new passphrase; that completed change is this request.
+        // The new passphrase is tried first, so a change to the same
+        // passphrase is recognized too.
         if self
-            .recover_pending_unlocked(&[current, new])?
+            .recover_pending_unlocked(&[new, current])?
             .is_some_and(|recovered| {
                 recovered.kind == TransactionKind::PassphraseChange
-                    && recovered.credential_index == 1
+                    && recovered.credential_index == 0
             })
         {
             return Ok(());

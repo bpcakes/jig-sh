@@ -278,6 +278,7 @@ pub(crate) fn finish_pending_restore(
                     "pending restore staging no longer matches its recorded transaction",
                 ));
             }
+            staging.require_owner_only()?;
             staging.require_private_contents()?;
             validate_trusted_ancestors(parent)?;
             atomic_rename_noreplace(&staging.path, home)?;
@@ -430,6 +431,18 @@ impl OwnedStaging {
         };
         staging.validate_identity()?;
         Ok(staging)
+    }
+
+    /// Adopted staging becomes the vault home, so it must still be
+    /// owner-only whatever its generated name.
+    fn require_owner_only(&self) -> AnyResult<()> {
+        let mode = fs::symlink_metadata(&self.path)
+            .with_context(|| format!("failed to inspect {}", self.path.display()))?
+            .mode();
+        if mode & 0o077 != 0 {
+            bail!("pending restore staging is no longer private to the current user");
+        }
+        Ok(())
     }
 
     /// Keeps the staging directory: a journal now refers to it.
