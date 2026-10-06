@@ -23,12 +23,15 @@ Examples:
   jig vault run --json --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'";
 
 const VAULT_INIT_AFTER_HELP: &str = "\
-Jig prompts twice for a new vault passphrase when run from a terminal; the
-operator chooses and enters it. Automation the operator runs outside any agent
-session can provide JIG_VAULT_PASSPHRASE instead. Command-line passphrases are
-not accepted. Agents must ask the operator to run this command in a terminal
-and must never request, print, store, or choose the passphrase, or set
-JIG_VAULT_PASSPHRASE themselves.
+Creates a version 3 vault. Jig prompts twice for a new vault passphrase when
+run from a terminal; the operator chooses and enters it. Automation the
+operator runs outside any agent session can provide JIG_VAULT_PASSPHRASE
+instead. A new passphrase must be at least 16 UTF-8 bytes and estimated to
+need at least 2^40 guesses. Command-line passphrases are not accepted. An
+interrupted init finishes when rerun with the same passphrase.
+Agents must ask the operator to run this command in a terminal and must never
+request, print, store, or choose the passphrase, or set JIG_VAULT_PASSPHRASE
+themselves.
 
 Example:
   jig vault init";
@@ -62,10 +65,12 @@ New Jig can read, reveal, inject, and execute from version 1 vaults, treating
 every value as concealed. Upgrade explicitly before field mutation, import,
 passphrase rotation, or backup. Migration is one-way and never runs
 implicitly: version 1 can move to 2 or directly to 3, and version 2 can move to
-3. Version 3 adds an encrypted state generation and audit anchor. Existing
-values, field kinds, identity, and audit history are kept. Migrating to the
-current version only verifies it; downgrades are refused. Older Jig rejects a
-migrated vault instead of misreading it.
+3. New vaults are created as version 3, which adds an encrypted state
+generation and audit anchor checked against a per-user rollback witness, and
+whose passphrase change rotates the data-encryption key. Existing values,
+field kinds, identity, and audit history are kept. Migrating to the current
+version only verifies it; downgrades are refused. Older Jig rejects a migrated
+vault instead of misreading it.
 
 Examples:
   jig vault migrate --to 3
@@ -148,19 +153,28 @@ The importer is a one-time local conversion tool; it does not synchronize with
 currently Unix-only.";
 
 const VAULT_PASSPHRASE_CHANGE_AFTER_HELP: &str = "\
-Reseals the complete version 2 vault under a new passphrase without changing
-its fields, identity, or timestamps. Interactive use prompts once for the
+Reseals a version 2 or 3 vault under a new passphrase without changing its
+fields, identity, or timestamps. Interactive use prompts once for the
 current passphrase and twice for the new passphrase. Without a terminal,
 automation the operator runs outside any agent session must provide both
 JIG_VAULT_PASSPHRASE and JIG_VAULT_NEW_PASSPHRASE; agents must ask the operator
 to run this command in a terminal and never set either variable themselves.
 Passphrases are never accepted as command-line arguments.
 
+On version 3 the change also rotates the data-encryption key, so a key
+recovered from an earlier copy cannot decrypt the new state; version 2 keeps
+its existing key (run vault migrate --to 3 for rotation). Rotation is not
+revocation: earlier copies and backups remain decryptable with the passphrase
+they were made with, the audit key is unchanged, and values revealed earlier
+may need rotating at their source. The new passphrase must be at least 16
+UTF-8 bytes and estimated to need at least 2^40 guesses. A version 3 change
+interrupted after it was recorded finishes only with the new passphrase.
+
 Example:
   jig vault passphrase change";
 
 const VAULT_BACKUP_CREATE_AFTER_HELP: &str = "\
-Creates a separate owner-only encrypted backup containing the exact version 2
+Creates a separate owner-only encrypted backup of the exact version 2 or 3
 vault state and audit log. The backup is encrypted with the vault's current
 passphrase and remains decryptable with that passphrase after a later
 passphrase change. The destination is installed atomically and is never sent
@@ -182,8 +196,29 @@ symbolic links are rejected. Restore is supported on Linux and macOS, which
 provide the required atomic absent-directory installation; on macOS it refuses
 volumes mounted to ignore file ownership.
 
+Restoring a version 3 backup, or a version 2 backup of a vault already
+witnessed as version 3, reseals it as version 3 under a fresh key at a
+generation above the rollback witness, so every other copy of that vault is
+refused afterwards.
+The restored vault opens with the passphrase the backup was created with;
+passphrase changes made after the backup are not carried over. An interrupted
+restore finishes when the same backup is restored again or when an
+authenticated command opens the restored home.
+
 Example:
   jig vault backup restore --in ../ExampleProject-vault.backup";
+
+const VAULT_STATUS_AFTER_HELP: &str = "\
+Reports, without a passphrase, whether vault.json exists; it never creates
+directories or tightens permissions. The format version is read from the
+unauthenticated public header. pending_transaction reports an interrupted
+vault transaction recorded in the rollback witness; any authenticated vault
+command finishes it, and a pending passphrase change needs the new
+passphrase. Neither report verifies integrity or detects rollback; only
+authenticated commands check the witness.
+
+Example:
+  jig vault status";
 
 const VAULT_TUI_AFTER_HELP: &str = "\
 Opens one fixed repo, global, or explicit-home vault in a full-screen keyboard
@@ -224,7 +259,10 @@ pub(crate) enum VaultCommand {
     )]
     Init(VaultInitOpts),
     /// Inspect local vault presence without decrypting values.
-    #[command(name = tool_defs::cli_command::VAULT_STATUS)]
+    #[command(
+        name = tool_defs::cli_command::VAULT_STATUS,
+        after_help = VAULT_STATUS_AFTER_HELP
+    )]
     Status(VaultStatusOpts),
     /// Open the keyboard-first full-screen vault manager.
     #[command(

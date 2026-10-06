@@ -39,7 +39,7 @@
 - Change child-process secret delivery after resolution: `src/run.rs`.
 - Change audit record shape: `src/audit.rs`.
 - Change metadata snapshots, verified activity projection, or atomic field/item transformations: `src/vault.rs` and `src/audit.rs`.
-- Add passphrase rotation or recovery flows: `src/crypto.rs`, `src/format.rs`, and `src/vault.rs`; v1 intentionally has no passphrase-change API.
+- Change passphrase change, DEK rotation, or pending recovery: `src/vault/lifecycle.rs`, `src/vault/envelope/seal.rs`, and `src/vault/transaction.rs`; v1 intentionally has no passphrase-change API.
 
 ## Invariants
 

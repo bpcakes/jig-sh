@@ -86,6 +86,7 @@ fn rendered_guidance_keeps_secret_access_operator_owned() {
                 "`.agent/state/runs.jsonl` outside vault redaction",
                 "Never pass `--home` or `--global`",
                 "never set `JIG_VAULT_HOME`",
+                "Never delete, move, or edit the vault rollback witness",
                 "Never request, print, inspect, test, choose, store, or set the passphrase",
                 "Never create or edit refs files or add references.",
                 "Never wrap commands that print, encode, or transmit injected values",
