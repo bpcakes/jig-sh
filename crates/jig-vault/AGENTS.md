@@ -27,6 +27,7 @@
 
 - Change vault file layout or KDF/AEAD behavior: `src/crypto.rs`, `src/format.rs`, `src/vault/envelope/seal.rs`, and `src/vault.rs`.
 - Change the migration matrix: `src/vault/migration.rs`; keep legacy-version tests naming their version explicitly instead of `LATEST_FORMAT_VERSION`.
+- Change the new-passphrase strength policy: `src/passphrase_policy.rs`.
 - Change private local state rules: `src/store.rs`.
 - Change public secret byte handling: `src/secret.rs`.
 - Change redaction coverage: `src/redact.rs`.
@@ -56,7 +57,7 @@
 - `VaultStatus::format_version` is read from the unauthenticated public header without a passphrase, lock, or file creation; it is discovery metadata, never proof of integrity or freshness, and malformed or unreadable files report `None`.
 - Keep vault state outside `.agent/state`.
 - Secret names are operator metadata, not secret material. They may appear in audit details, may contain path-shaped labels like `/` and `.`, and must never be treated as filesystem-safe path components without a separate encoding/newtype.
-- New vault passphrases must remain at least 12 bytes; existing vault unlocks must not impose a stricter retroactive floor without migration.
+- New vault passphrases must be at least 16 UTF-8 bytes with a zxcvbn 3.1.1 estimate of at least 2^40 guesses, enforced in `src/passphrase_policy.rs` by init and passphrase change before any audit or state write. Callers may validate earlier for feedback, but the core check stays authoritative. Never normalize or trim the input, never pass contextual labels to the estimator, and never expose the candidate, estimate, patterns, score, or feedback. Unlock, migration, backup, and restore must never revalidate an existing credential; tests that need weaker legacy credentials use the explicit test-only format constructors rather than weakening the policy.
 - Use private filesystem permissions, symlink refusal, locks, and atomic writes for local state.
 - Darwin ACLs bypass mode bits. Clear every ACL entry, including inherited ones, from the vault home before state files are created in it and from `vault.json` temporaries, `audit.jsonl`, and `vault.lock` before each write, and refuse a vault home whose first existing creation ancestor has an ACL allowing other principals write, delete, or permission-change access. Private outputs clear the staged file before writing contents, recheck it and the output parent before installation, and refuse such a parent. Deny-only entries remain acceptable, and Linux needs no counterpart because the explicit chmod narrows the POSIX ACL mask.
 - Filesystem hardening assumes the vault parent is controlled by the same local user; same-user directory-entry races are mitigated but not a full OS isolation boundary.

@@ -88,6 +88,9 @@ fn frozen_v2_archive_restores_as_version_two() {
     fs::write(&input, GENERATED_V2_BACKUP).unwrap();
     let target = temp.path().join("restored-v2");
     let request = Vault::preflight_backup_restore(&input, target).unwrap();
+    // Restore never applies the new-passphrase policy to the archive's
+    // historical credential.
+    assert!(crate::validate_new_vault_passphrase(&generated_v2_passphrase()).is_err());
     let restored = Vault::restore_backup(&generated_v2_passphrase(), request).unwrap();
 
     assert_eq!(restored.format_version, V2_FORMAT_VERSION);

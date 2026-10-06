@@ -11,6 +11,7 @@ mod exec_output;
 mod exec_process;
 mod format;
 mod output;
+mod passphrase_policy;
 mod path_security;
 mod redact;
 mod run;
@@ -37,6 +38,10 @@ pub use exec::{
     VAULT_NEW_PASSPHRASE_ENV, VAULT_PASSPHRASE_ENV, VaultExec, is_vault_passphrase_env,
 };
 pub use output::{PreparedPrivateFile, PrivateFilePrecondition};
+pub use passphrase_policy::{
+    MIN_MASTER_PASSPHRASE_GUESSES, MIN_MASTER_PASSPHRASE_LEN, NEW_VAULT_PASSPHRASE_POLICY,
+    validate_new_vault_passphrase, validate_new_vault_passphrase_bytes,
+};
 pub use redact::Redactor;
 pub use run::RunOutput;
 pub use secret::{SecretBytes, SecretBytesCapacityError};
@@ -44,9 +49,9 @@ pub use template::{InjectionTemplate, MAX_TEMPLATE_INPUT_LEN, MAX_TEMPLATE_OUTPU
 pub use types::{EnvVarName, FieldKind, SecretName, VaultItem, VaultReference};
 pub use vault::{
     FieldBatchResult, FieldKindChangeResult, FieldMutation, FieldRecord, LegacyConversionResult,
-    MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN, RevealResult, SecretRecord, Vault,
-    VaultHomeState, VaultImportPrecondition, VaultMigration, VaultMutation, VaultRevision,
-    VaultSnapshot, VaultStatus, VaultWriteMode, validate_new_vault_passphrase,
+    MAX_SECRET_VALUE_LEN, RevealResult, SecretRecord, Vault, VaultHomeState,
+    VaultImportPrecondition, VaultMigration, VaultMutation, VaultRevision, VaultSnapshot,
+    VaultStatus, VaultWriteMode,
 };
 
 /// Envelope format created by initialization and the newest explicit

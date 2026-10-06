@@ -258,15 +258,23 @@ fn noninteractive_bootstrap_vault_error_explains_an_outer_withheld_passphrase() 
 }
 
 #[test]
-fn pre_capture_rejects_short_new_vault_passphrase() {
-    let _env = lock_env();
-    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "short");
+fn pre_capture_rejects_short_or_guessable_new_vault_passphrases() {
+    for rejected in ["short", "passwordpasswordpassword"] {
+        let _env = lock_env();
+        let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", rejected);
 
-    let error = runtime::capture_new_vault_passphrase()
-        .unwrap_err()
-        .to_string();
+        let error = runtime::capture_new_vault_passphrase()
+            .unwrap_err()
+            .to_string();
 
-    assert!(error.contains("at least 12 bytes"));
+        assert!(
+            error.contains(jig_vault::NEW_VAULT_PASSPHRASE_POLICY),
+            "{error}"
+        );
+        assert!(error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
+        assert!(!error.contains(rejected), "{error}");
+        assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
+    }
 }
 
 #[test]

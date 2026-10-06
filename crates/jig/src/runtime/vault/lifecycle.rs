@@ -8,7 +8,7 @@ use std::sync::{Mutex, MutexGuard};
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
     BrokeredRun, SecretBytes, VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV,
-    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, validate_new_vault_passphrase,
+    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, VaultError, validate_new_vault_passphrase,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
@@ -192,15 +192,25 @@ pub(crate) fn capture_new_passphrase() -> Result<()> {
     capture_passphrase_with_prompt(PromptKind::NewVault)?;
     let validation = {
         let captured = captured_passphrase_lock()?;
-        validate_new_vault_passphrase(captured.current.as_ref().ok_or_else(|| {
+        validate_chosen_passphrase(captured.current.as_ref().ok_or_else(|| {
             anyhow!("vault passphrase capture unexpectedly produced no passphrase")
         })?)
     };
     if let Err(error) = validation {
         clear_captured_passphrase()?;
-        return Err(error.into());
+        return Err(error);
     }
     Ok(())
+}
+
+/// Applies the core new-passphrase policy to an operator-chosen candidate.
+/// A rejection keeps the core's single value-free message and routes the
+/// retry to the operator, who alone may choose a replacement.
+fn validate_chosen_passphrase(passphrase: &SecretString) -> Result<()> {
+    validate_new_vault_passphrase(passphrase).map_err(|error| {
+        let guidance = vault_passphrase_operator_guidance();
+        VaultError::new(error.kind(), format!("{} {guidance}", error.message())).into()
+    })
 }
 
 pub(crate) fn capture_passphrase_change() -> Result<()> {
@@ -213,7 +223,7 @@ pub(crate) fn capture_passphrase_change() -> Result<()> {
         clear_captured_passphrase()?;
         let current = prompt_passphrase(PromptKind::Unlock)?;
         let new = prompt_passphrase(PromptKind::NewVault)?;
-        validate_new_vault_passphrase(&new)?;
+        validate_chosen_passphrase(&new)?;
         return set_captured_passphrase_pair(current, new);
     }
     Err(passphrase_change_prompt_unavailable())
@@ -311,9 +321,7 @@ pub(crate) fn capture_passphrase_pair_from_env() -> Result<()> {
     // Match new-vault capture: once both values are valid UTF-8, consume the
     // process copies before policy validation. The parent shell is unaffected.
     strip_passphrase_environment();
-    if let Err(error) = validate_new_vault_passphrase(&new) {
-        return Err(error.into());
-    }
+    validate_chosen_passphrase(&new)?;
     set_captured_passphrase_pair(current, new)
 }
 
@@ -686,7 +694,9 @@ mod tests {
 
         let error = capture_passphrase_pair_from_env().unwrap_err().to_string();
 
-        assert!(error.contains("at least 12 bytes"));
+        assert!(error.contains(jig_vault::NEW_VAULT_PASSPHRASE_POLICY));
+        assert_operator_guidance(&error);
+        assert!(!error.contains("short"));
         assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
         assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
         assert!(passphrase_pair().is_err());
@@ -699,7 +709,8 @@ mod tests {
 
         let error = capture_new_passphrase().unwrap_err().to_string();
 
-        assert!(error.contains("at least 12 bytes"));
+        assert!(error.contains(jig_vault::NEW_VAULT_PASSPHRASE_POLICY));
+        assert_operator_guidance(&error);
         assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
         assert!(
             passphrase()

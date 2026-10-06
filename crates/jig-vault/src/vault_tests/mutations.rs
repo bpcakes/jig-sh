@@ -530,14 +530,19 @@ fn init_refuses_stale_audit_without_vault() {
 }
 
 #[test]
-fn init_rejects_short_passphrase() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    let error = store
-        .init(&SecretString::from("too-short".to_string()))
-        .unwrap_err();
-    assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert!(error.to_string().contains("at least 12 bytes"));
+fn init_rejects_short_or_guessable_passphrases_without_state() {
+    for rejected in ["too-short", "passwordpasswordpassword"] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+        let error = store
+            .init(&SecretString::from(rejected.to_string()))
+            .unwrap_err();
+        assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
+        assert_eq!(error.message(), crate::NEW_VAULT_PASSPHRASE_POLICY);
+        assert!(!error.to_string().contains(rejected));
+        assert!(!store.exists().unwrap());
+        assert!(!store.audit_exists().unwrap());
+    }
 }
 
 #[test]

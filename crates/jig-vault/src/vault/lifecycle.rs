@@ -20,7 +20,8 @@ use crate::store::VaultStore;
 use crate::{Result, VaultError, VaultErrorKind};
 
 use super::envelope::RekeyedVaultEnvelope;
-use super::{OpenVault, Vault, validate_new_vault_passphrase_inner};
+use super::{OpenVault, Vault};
+use crate::passphrase_policy::validate_new_vault_passphrase_inner;
 
 impl Vault {
     /// Re-encrypts a version 2 or 3 vault under a new passphrase without

@@ -327,7 +327,7 @@ fn weak_legacy_passphrases_still_unlock_and_migrate() {
     // Shorter than the new-passphrase floor: existing credentials are never
     // revalidated by unlock or migration.
     let weak = SecretString::from("weak-v2!".to_owned());
-    assert!(validate_new_vault_passphrase(&weak).is_err());
+    assert!(crate::validate_new_vault_passphrase(&weak).is_err());
     for from_version in [V1_FORMAT_VERSION, V2_FORMAT_VERSION] {
         let (_temp, store) = new_store();
         init_with_format(&store, &weak, from_version);

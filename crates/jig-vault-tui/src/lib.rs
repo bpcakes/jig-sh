@@ -28,6 +28,8 @@ mod viewport;
 #[cfg(test)]
 mod format_version_tests;
 #[cfg(test)]
+mod passphrase_policy_tests;
+#[cfg(test)]
 mod tests;
 
 /// Public information available before a vault is unlocked.

@@ -160,11 +160,14 @@ fn rejected_passphrase_changes_leave_vault_and_audit_bytes_unchanged() {
     let before_vault = store.read_vault_text().unwrap().unwrap();
     let before_audit = store.read_audit_text().unwrap().unwrap();
 
-    let short = SecretString::from("too-short".to_owned());
-    let error = store.change_passphrase(&old, &short).unwrap_err();
-    assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
-    assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
+    for rejected in ["too-short", "passwordpasswordpassword"] {
+        let rejected = SecretString::from(rejected.to_owned());
+        let error = store.change_passphrase(&old, &rejected).unwrap_err();
+        assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
+        assert_eq!(error.message(), crate::NEW_VAULT_PASSPHRASE_POLICY);
+        assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
+        assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
+    }
 
     let wrong = SecretString::from("wrong current passphrase".to_owned());
     let replacement = SecretString::from("valid replacement passphrase".to_owned());

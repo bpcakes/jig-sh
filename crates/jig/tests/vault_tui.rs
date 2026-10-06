@@ -332,6 +332,86 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     assert!(!output.contains(VALUE_SENTINEL));
 }
 
+/// A guessable but long passphrase typed at the hidden terminal prompts.
+const GUESSABLE_PASSPHRASE: &str = "passwordpasswordpassword";
+
+fn run_prompted_vault_command(args: &[&str], home: &std::path::Path, replies: &[&str]) -> String {
+    let Some((mut master, slave)) = required_pseudo_terminal("vault passphrase prompt") else {
+        return String::new();
+    };
+    let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
+    command
+        .args(args)
+        .arg("--home")
+        .arg(home)
+        .env_remove("JIG_VAULT_PASSPHRASE")
+        .env_remove("JIG_VAULT_NEW_PASSPHRASE")
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(slave.try_clone().unwrap()))
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stderr(Stdio::from(slave));
+    make_stdin_controlling_terminal(&mut command);
+    let mut child = ChildGuard::new(command.spawn().unwrap());
+    set_nonblocking(&master);
+    let mut output = Vec::new();
+    for (prompt, reply) in ["passphrase: "; 3].iter().zip(replies) {
+        let offset = output.len();
+        read_until_from(&mut master, &mut output, offset, prompt, PTY_EVENT_TIMEOUT);
+        master.write_all(format!("{reply}\r").as_bytes()).unwrap();
+    }
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, PTY_EXIT_TIMEOUT)
+            .expect("prompted vault command did not exit");
+    assert!(!status.success());
+    String::from_utf8_lossy(&output).into_owned()
+}
+
+fn assert_policy_rejection(output: &str) {
+    assert!(output.contains("at least 2^40 guesses"), "{output}");
+    assert!(output.contains("This step needs the operator"), "{output}");
+    assert!(!output.contains(GUESSABLE_PASSPHRASE), "{output}");
+}
+
+#[test]
+fn terminal_prompts_reject_guessable_new_passphrases_without_writing_state() {
+    let temp = support::tempdir().unwrap();
+    let new_home = temp.path().join("new-vault");
+    let output = run_prompted_vault_command(
+        &["vault", "init"],
+        &new_home,
+        &[GUESSABLE_PASSPHRASE, GUESSABLE_PASSPHRASE],
+    );
+    if output.is_empty() {
+        return;
+    }
+    assert_policy_rejection(&output);
+    assert!(!new_home.join("vault.json").exists());
+    assert!(!new_home.join("audit.jsonl").exists());
+
+    let home = temp.path().join("existing-vault");
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+    vault
+        .init(&SecretString::from(PASSPHRASE.to_owned()))
+        .unwrap();
+    let vault_before = std::fs::read(home.join("vault.json")).unwrap();
+    let audit_before = std::fs::read(home.join("audit.jsonl")).unwrap();
+    let output = run_prompted_vault_command(
+        &["vault", "passphrase", "change"],
+        &home,
+        &[PASSPHRASE, GUESSABLE_PASSPHRASE, GUESSABLE_PASSPHRASE],
+    );
+    assert_policy_rejection(&output);
+    assert!(!output.contains(PASSPHRASE), "{output}");
+    assert_eq!(
+        std::fs::read(home.join("vault.json")).unwrap(),
+        vault_before
+    );
+    assert_eq!(
+        std::fs::read(home.join("audit.jsonl")).unwrap(),
+        audit_before
+    );
+}
+
 fn assert_only_between_controlled_peek(output: &str, sentinel: &str) {
     let mut cursor = 0;
     let mut occurrences = 0;

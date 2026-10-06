@@ -16,7 +16,8 @@ use crate::format::LATEST_FORMAT_VERSION;
 use crate::store::VaultStore;
 
 use super::envelope::NewVaultMaterial;
-use super::{OpenVault, VaultEditPrecondition, now_ms, validate_new_vault_passphrase_inner};
+use super::{OpenVault, VaultEditPrecondition, now_ms};
+use crate::passphrase_policy::validate_new_vault_passphrase_inner;
 
 #[cfg(any(test, feature = "test-utils"))]
 impl super::Vault {

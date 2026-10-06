@@ -200,6 +200,9 @@ fn frozen_v2_fixture_rekey_keeps_the_legacy_dek_reuse_contract() {
 fn frozen_v2_fixture_migrates_to_v3_preserving_history_and_values() {
     let (_temp, store) = fixture_store();
     let passphrase = generated_v2_passphrase();
+    // The frozen credential predates the current new-passphrase policy;
+    // unlock and migration must never revalidate it.
+    assert!(crate::validate_new_vault_passphrase(&passphrase).is_err());
     let before_audit = store.read_audit_text().unwrap().unwrap();
     let before_fields = store.list_fields(&passphrase).unwrap();
     let before_legacy = store.list(&passphrase).unwrap();

@@ -8,7 +8,7 @@ use std::{
 use anyhow::Result as AnyResult;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
@@ -53,7 +53,6 @@ mod migration;
 use envelope::{ParsedVaultEnvelope, ResealedVaultEnvelope, UnlockedVaultEnvelope};
 
 pub const MAX_SECRET_VALUE_LEN: usize = 1024 * 1024;
-pub const MIN_MASTER_PASSPHRASE_LEN: usize = 12;
 const MAX_IMPORT_FIELDS: usize = 1_024;
 const MAX_IMPORT_VALUE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -2301,21 +2300,6 @@ impl VaultStore {
     }
 }
 
-/// Validates a passphrase for new vault creation.
-///
-/// # Errors
-///
-/// Returns an error when the passphrase is shorter than
-/// [`MIN_MASTER_PASSPHRASE_LEN`] bytes.
-pub fn validate_new_vault_passphrase(passphrase: &SecretString) -> Result<()> {
-    validate_new_vault_passphrase_inner(passphrase).map_err(|error| {
-        VaultError::new(
-            classified_kind(&error).unwrap_or(VaultErrorKind::InvalidInput),
-            error.to_string(),
-        )
-    })
-}
-
 impl OpenVault {
     fn ensure_write_mode(
         &self,
@@ -3244,16 +3228,6 @@ fn validate_serialized_field_value_len(name: &SecretName, entry: &SecretEntry) -
                 "vault secret '{}' encoded value is outside supported bounds",
                 name.as_str()
             ),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_new_vault_passphrase_inner(passphrase: &SecretString) -> AnyResult<()> {
-    if passphrase.expose_secret().len() < MIN_MASTER_PASSPHRASE_LEN {
-        return Err(classified(
-            VaultErrorKind::InvalidInput,
-            format!("vault passphrase must be at least {MIN_MASTER_PASSPHRASE_LEN} bytes"),
         ));
     }
     Ok(())

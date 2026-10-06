@@ -5,7 +5,7 @@ use crate::format::{V1_FORMAT_VERSION, V2_FORMAT_VERSION, V3_FORMAT_VERSION};
 use crate::{ExecEnvBinding, VaultExec};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Write};
 use zeroize::Zeroizing;
 
