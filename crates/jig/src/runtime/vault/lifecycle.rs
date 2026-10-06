@@ -189,7 +189,21 @@ pub(crate) fn take_optional_tui_passphrase() -> Result<Option<SecretBytes>> {
 }
 
 pub(crate) fn capture_new_passphrase() -> Result<()> {
-    capture_passphrase_with_prompt(PromptKind::NewVault)?;
+    capture_new_passphrase_candidate()?;
+    validate_captured_new_passphrase()
+}
+
+/// Captures a new-vault passphrase (prompting with confirmation when no
+/// environment value exists) without applying the new-passphrase policy.
+/// Bootstrap uses this before rendering, when it cannot yet know whether an
+/// existing vault will be reused instead of initialized.
+pub(crate) fn capture_new_passphrase_candidate() -> Result<()> {
+    capture_passphrase_with_prompt(PromptKind::NewVault)
+}
+
+/// Applies the new-passphrase policy to the captured passphrase immediately
+/// before it becomes a new credential, clearing the capture on rejection.
+pub(crate) fn validate_captured_new_passphrase() -> Result<()> {
     let validation = {
         let captured = captured_passphrase_lock()?;
         validate_chosen_passphrase(captured.current.as_ref().ok_or_else(|| {

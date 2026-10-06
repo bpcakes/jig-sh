@@ -210,6 +210,18 @@ pub(crate) fn capture_new_vault_passphrase() -> Result<()> {
     vault::capture_new_passphrase()
 }
 
+/// Captures a new-vault passphrase without the new-passphrase policy; pair
+/// it with [`validate_captured_new_vault_passphrase`] before initialization.
+pub(crate) fn capture_new_vault_passphrase_candidate() -> Result<()> {
+    // SAFETY: Callers must invoke this before starting background threads in the
+    // process; `runtime::vault` clears the captured environment variable.
+    vault::capture_new_passphrase_candidate()
+}
+
+pub(crate) fn validate_captured_new_vault_passphrase() -> Result<()> {
+    vault::validate_captured_new_passphrase()
+}
+
 pub(crate) fn capture_vault_passphrase_change() -> Result<()> {
     // SAFETY: Callers must invoke this before starting background threads in the
     // process; `runtime::vault` clears both captured environment variables.

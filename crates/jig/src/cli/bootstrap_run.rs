@@ -184,7 +184,15 @@ fn prepare_bootstrap_vault_with_availability(
 ) -> Result<BootstrapVaultPlan> {
     let plan = BootstrapVaultPlan::resolve(intent, input_mode, availability, command)?;
     if plan == BootstrapVaultPlan::PreCaptured {
-        runtime::capture_new_vault_passphrase()?;
+        match command {
+            // A fresh `init` scope never holds a vault, so reject a candidate
+            // that fails the new-passphrase policy before rendering anything.
+            BootstrapVaultCommand::Init => runtime::capture_new_vault_passphrase()?,
+            // `adopt --write` may reuse an existing vault whose historical
+            // credential predates the policy; validate only once rendering
+            // shows a new vault will actually be initialized.
+            BootstrapVaultCommand::Adopt => runtime::capture_new_vault_passphrase_candidate()?,
+        }
     }
     // Rendering, Git, and template commands run next. Pre-capture already
     // consumed the passphrase; also drop a stale JIG_VAULT_NEW_PASSPHRASE that
@@ -260,6 +268,11 @@ fn ensure_bootstrap_vault(
     if plan == BootstrapVaultPlan::CaptureAfterRender {
         runtime::capture_new_vault_passphrase().context(
             "vault auto-init passphrase capture failed after repo files were written; rerun `jig vault init` from the repo after fixing the reported vault issue",
+        )?;
+    } else {
+        // A pre-captured passphrase becomes a new credential only here.
+        runtime::validate_captured_new_vault_passphrase().context(
+            "vault auto-init rejected the new vault passphrase after repo files were written; rerun `jig vault init` from the repo after fixing the reported vault issue",
         )?;
     }
     let init = runtime::dispatch_vault(crate::command::VaultCommand::Init(
@@ -623,3 +636,6 @@ fn array_len(value: &serde_json::Value) -> usize {
 #[cfg(test)]
 #[path = "bootstrap_run_tests.rs"]
 mod bootstrap_run_tests;
+#[cfg(test)]
+#[path = "bootstrap_run_vault_policy_tests.rs"]
+mod bootstrap_run_vault_policy_tests;

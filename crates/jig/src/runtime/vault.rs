@@ -30,9 +30,10 @@ pub(super) mod tui;
 #[cfg(test)]
 use lifecycle::set_captured_passphrase;
 pub(crate) use lifecycle::{
-    capture_new_passphrase, capture_passphrase, capture_passphrase_change, passphrase_env_present,
-    passphrase_prompt_available, preflight_scoped_command, strip_passphrase_environment,
-    take_optional_tui_passphrase,
+    capture_new_passphrase, capture_new_passphrase_candidate, capture_passphrase,
+    capture_passphrase_change, passphrase_env_present, passphrase_prompt_available,
+    preflight_scoped_command, strip_passphrase_environment, take_optional_tui_passphrase,
+    validate_captured_new_passphrase,
 };
 use lifecycle::{
     change_passphrase, create_backup, hidden_terminal_input_available, passphrase,
