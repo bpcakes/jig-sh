@@ -379,7 +379,7 @@ fn apply_success(app: &mut App, kind: OperationKind, result: VaultActionResult) 
                 output.display()
             ));
         }
-        VaultActionResult::Restored { .. } => app.apply_restore(),
+        restored @ VaultActionResult::Restored { .. } => app.apply_restore(&restored),
         VaultActionResult::Exported {
             output,
             bytes_written,

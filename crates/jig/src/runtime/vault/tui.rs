@@ -520,6 +520,7 @@ impl VaultBackend for VaultTuiBackend {
                     root: restored.root,
                     vault_id: restored.vault_id,
                     format_version: restored.format_version,
+                    other_copies_stale: restored.generation.is_some(),
                 })
             }
             VaultAction::ChangePassphrase { new_passphrase } => {

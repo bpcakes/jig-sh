@@ -593,14 +593,14 @@ impl App {
         })
     }
 
-    pub(crate) fn apply_restore(&mut self) {
+    pub(crate) fn apply_restore(&mut self, restored: &crate::VaultActionResult) {
         self.descriptor.home_state = VaultHomeState::Initialized;
         self.browser = None;
         self.next_selection = None;
         self.screen = Screen::Locked(SecretInput::new());
-        self.status = Some(StatusMessage::info(
-            "Encrypted backup restored. Enter its vault passphrase to unlock.",
-        ));
+        self.status = Some(StatusMessage::info(crate::restore_notice::restore_status(
+            restored,
+        )));
     }
 
     pub(crate) fn begin_add(&mut self) {

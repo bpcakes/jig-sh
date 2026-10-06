@@ -528,3 +528,26 @@ fn an_absent_target_whose_journal_is_missing_stays_absent_and_can_resume() {
     restore(&archive, &target).unwrap();
     assert!(staging_dirs(temp.path()).is_empty());
 }
+
+#[test]
+fn a_restore_after_an_interrupted_witness_creation_finishes_the_tree() {
+    let temp = private_temp();
+    let base = fs::canonicalize(temp.path()).unwrap();
+    let (home, _vault) = source(&base.join("sources"));
+    let archive = base.join("vault.backup");
+    backup(&home, &archive, &test_passphrase());
+    // The target's witness root exists without any of its directories.
+    let witness_root = base.join("fresh-witness");
+    fs::create_dir(&witness_root).unwrap();
+    fs::set_permissions(&witness_root, fs::Permissions::from_mode(0o700)).unwrap();
+    let _witness = crate::store::witness::override_root_for_test(witness_root.clone());
+
+    let target = base.join("restored");
+    let request = Vault::preflight_backup_restore(&archive, target.clone()).unwrap();
+    Vault::restore_backup(&test_passphrase(), request).unwrap();
+    assert!(witness_root.join("ids").is_dir());
+    Vault::resolve_for_test(Some(target))
+        .unwrap()
+        .list_fields(&test_passphrase())
+        .unwrap();
+}

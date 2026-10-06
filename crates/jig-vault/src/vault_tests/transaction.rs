@@ -482,3 +482,21 @@ fn an_interrupted_init_whose_journal_is_missing_is_never_replaced_by_a_new_vault
     assert!(error.to_string().contains("journal is missing"), "{error}");
     assert!(!store.exists().unwrap());
 }
+
+#[test]
+fn a_witness_root_left_without_its_directories_does_not_block_a_new_vault() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(temp.path()).unwrap();
+    // The first command on this profile prepared the witness root, then
+    // stopped before creating any of its directories.
+    let witness_root = base.join(".jig-vault-witness");
+    std::fs::create_dir(&witness_root).unwrap();
+    std::fs::set_permissions(&witness_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let vault = Vault::resolve_for_test(Some(base.join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+    assert!(witness_root.join("ids").is_dir());
+    assert!(vault.list_fields(&passphrase()).unwrap().is_empty());
+}

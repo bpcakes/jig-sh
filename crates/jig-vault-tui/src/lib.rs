@@ -20,6 +20,7 @@ mod model;
 mod peek;
 mod quick_access;
 mod render;
+mod restore_notice;
 mod runtime;
 mod secret_input;
 mod tools;
@@ -328,6 +329,8 @@ pub enum VaultActionResult {
         root: PathBuf,
         vault_id: String,
         format_version: u32,
+        /// A witnessed restore fences every other copy of its vault ID.
+        other_copies_stale: bool,
     },
     Exported {
         output: PathBuf,

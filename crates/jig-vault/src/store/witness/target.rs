@@ -133,24 +133,37 @@ impl WitnessStore {
         if self.journal_exists(target_key) {
             return Ok(true);
         }
-        Ok(!self.scan_pending_for(target_key)?.is_empty())
+        Ok(self
+            .scan_pending_for(target_key)?
+            .is_some_and(|naming| !naming.is_empty()))
     }
 
     /// Every record whose pending marker names `target_key`, made durable
-    /// before returning. Only
-    /// `<id key>.json` entries are records; interrupted atomic writes leave
-    /// temporary names that were never published and are not read.
+    /// before returning.
     fn records_with_pending_for(&self, target_key: &str) -> AnyResult<Vec<WitnessRecord>> {
-        let naming = self.scan_pending_for(target_key)?;
+        let Some(naming) = self.scan_pending_for(target_key)? else {
+            return Ok(Vec::new());
+        };
         // What was read is now durable, so no conclusion rests on a record
         // an interrupted write published without syncing.
         self.sync_records()?;
         Ok(naming)
     }
 
-    fn scan_pending_for(&self, target_key: &str) -> AnyResult<Vec<WitnessRecord>> {
+    /// Records whose pending marker names `target_key`, or `None` when the
+    /// records directory does not exist yet: an interrupted first creation
+    /// can leave the witness root without it, and with no records no marker
+    /// names anything; the next witness open finishes the tree. Only
+    /// `<id key>.json` entries are records; interrupted atomic writes leave
+    /// temporary names that were never published and are not read.
+    fn scan_pending_for(&self, target_key: &str) -> AnyResult<Option<Vec<WitnessRecord>>> {
+        let entries = match fs::read_dir(self.root.join(IDS_DIR)) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
         let mut naming = Vec::new();
-        for (index, entry) in fs::read_dir(self.root.join(IDS_DIR))?.enumerate() {
+        for (index, entry) in entries.enumerate() {
             if index >= MAX_RECORD_SCAN_ENTRIES {
                 bail!(
                     "the vault witness has too many records to establish that no pending transaction needs this journal"
@@ -175,7 +188,7 @@ impl WitnessStore {
                 naming.push(record);
             }
         }
-        Ok(naming)
+        Ok(Some(naming))
     }
 }
 

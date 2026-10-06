@@ -91,6 +91,7 @@ fn assert_backup_restores(temp: &tempfile::TempDir) {
     let VaultActionResult::Restored {
         root,
         format_version,
+        other_copies_stale,
         ..
     } = backend
         .execute(VaultAction::RestoreBackup {
@@ -104,6 +105,7 @@ fn assert_backup_restores(temp: &tempfile::TempDir) {
     // Restore reports the physical home, so macOS /var temp paths resolve.
     assert_eq!(root, std::fs::canonicalize(&restored_home).unwrap());
     assert_eq!(format_version, 3);
+    assert!(other_copies_stale, "a witnessed restore fences the source");
     let restored = backend
         .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
         .unwrap();
