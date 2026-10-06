@@ -96,6 +96,15 @@ fn overlapping_vault_homes_and_witnesses_are_refused() {
 }
 
 #[test]
+fn a_witness_is_created_below_missing_ancestors() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("profile/.jig/vault-witness");
+    let store = WitnessLocation::at(root.clone()).open_or_create().unwrap();
+    store.write_record(&committed_record(1)).unwrap();
+    assert!(root.join(IDS_DIR).is_dir());
+}
+
+#[test]
 fn opening_an_absent_witness_creates_nothing() {
     let temp = tempfile::tempdir().unwrap();
     let location = WitnessLocation::at(temp.path().join("witness"));
@@ -253,4 +262,26 @@ fn locks_are_reentrant_within_a_thread_and_exclusive_across_descriptors() {
     drop(inner);
     assert!(probe.try_lock_exclusive().unwrap());
     FileExt::unlock(&probe).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn special_files_at_witness_paths_fail_closed_without_blocking() {
+    let (_temp, store) = witness();
+    let mkfifo = |path: &Path| {
+        let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    };
+    mkfifo(&store.record_path(VAULT_ID));
+    assert!(store.read_record(VAULT_ID).is_err());
+    let key = target_key(Path::new("/example/home"));
+    mkfifo(&store.journal_path(&key));
+    assert!(store.read_journal(&key).is_err());
+    mkfifo(
+        &store
+            .root()
+            .join(LOCKS_DIR)
+            .join(format!("id-{}.lock", id_key(VAULT_ID))),
+    );
+    assert!(store.lock_id(VAULT_ID).is_err());
 }

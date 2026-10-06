@@ -236,6 +236,9 @@ impl VaultStore {
         operation_id: String,
     ) -> Result<BackupSnapshot> {
         self.with_lock(|| {
+            // Finish any recorded transaction first so the bounds below
+            // describe the recovered state.
+            self.recover_pending_unlocked(&[passphrase])?;
             // Bound the audit before opening it. Audit verification otherwise
             // accepts the broader persistent-log cap, while backup is an
             // explicitly smaller one-shot operation.

@@ -281,3 +281,90 @@ fn an_unrelated_pending_transaction_blocks_a_restore() {
     assert!(!target.exists());
     assert!(staging_dirs(temp.path()).is_empty());
 }
+
+fn pending_restore(temp: &Path) -> (PathBuf, PathBuf) {
+    let (home, _vault) = source(temp);
+    let archive = temp.join("vault.backup");
+    backup(&home, &archive, &test_passphrase());
+    let target = temp.join("restored");
+    crate::store::arm_fault_for_test(FaultPoint::AfterPending);
+    restore(&archive, &target).unwrap_err();
+    (archive, target)
+}
+
+fn journal_paths(target: &Path) -> Vec<PathBuf> {
+    let root = WitnessLocation::for_home(target)
+        .unwrap()
+        .root()
+        .to_path_buf();
+    fs::read_dir(root.join("journals"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect()
+}
+
+#[test]
+fn a_journal_that_no_longer_matches_its_marker_is_kept() {
+    let temp = private_temp();
+    let (archive, target) = pending_restore(temp.path());
+    let [journal] = journal_paths(&target).try_into().unwrap();
+    let mut bytes = fs::read(&journal).unwrap();
+    bytes.push(b'\n');
+    fs::write(&journal, &bytes).unwrap();
+
+    let error = restore(&archive, &target).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered, "{error}");
+    assert!(error.to_string().contains("does not match its marker"));
+    assert_eq!(fs::read(&journal).unwrap(), bytes);
+    assert_eq!(staging_dirs(temp.path()).len(), 1);
+    assert!(!target.exists());
+}
+
+#[test]
+fn a_failed_recovery_read_never_cleans_away_the_pending_staging() {
+    let temp = private_temp();
+    let (archive, target) = pending_restore(temp.path());
+    let [staging] = staging_dirs(temp.path()).try_into().unwrap();
+    let staged_audit = temp.path().join(staging).join("audit.jsonl");
+    fs::set_permissions(&staged_audit, fs::Permissions::from_mode(0o000)).unwrap();
+
+    restore(&archive, &target).unwrap_err();
+    assert_eq!(staging_dirs(temp.path()).len(), 1);
+    assert!(staged_audit.exists());
+
+    fs::set_permissions(&staged_audit, fs::Permissions::from_mode(0o600)).unwrap();
+    restore(&archive, &target).unwrap();
+    assert!(staging_dirs(temp.path()).is_empty());
+}
+
+#[test]
+fn only_the_installed_staging_directory_counts_as_the_successor() {
+    let temp = private_temp();
+    let (archive, target) = pending_restore(temp.path());
+    let [staging] = staging_dirs(temp.path()).try_into().unwrap();
+    std::os::unix::fs::symlink(temp.path().join(staging), &target).unwrap();
+
+    let error = restore(&archive, &target).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AlreadyExists, "{error}");
+    assert_eq!(journal_paths(&target).len(), 1);
+    assert_eq!(staging_dirs(temp.path()).len(), 1);
+
+    fs::remove_file(&target).unwrap();
+    restore(&archive, &target).unwrap();
+    assert!(fs::symlink_metadata(&target).unwrap().is_dir());
+}
+
+#[test]
+fn an_absent_pending_target_passes_existing_home_preflights() {
+    let temp = private_temp();
+    let (_archive, target) = pending_restore(temp.path());
+
+    Vault::preflight_passphrase_change(target.clone()).unwrap();
+    let output = temp.path().join("after-recovery.backup");
+    let request = Vault::preflight_backup_create(target.clone(), &output, false).unwrap();
+    assert!(!target.exists());
+    Vault::create_backup(&test_passphrase(), request).unwrap();
+    assert!(target.exists());
+    assert!(output.exists());
+    assert!(!Vault::status(Some(target)).unwrap().pending_transaction);
+}

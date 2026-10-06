@@ -10,6 +10,7 @@
 //! restore.
 
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result as AnyResult, bail};
@@ -162,17 +163,24 @@ fn resume_matching_retry(
     };
     let _id = witness.lock_id(&journal.vault_id)?;
     let record = witness.read_record(&journal.vault_id)?;
-    let referenced = record.as_ref().is_some_and(|record| {
-        record.pending.as_ref().is_some_and(|pending| {
-            pending.target_key == target_key
-                && pending.journal_sha256 == digest
-                && pending.next == journal.next
-                && pending.operation == journal.operation
-        })
-    });
-    if !referenced {
+    let pending = record
+        .as_ref()
+        .and_then(|record| record.pending.as_ref())
+        .filter(|pending| pending.target_key == target_key);
+    let Some(pending) = pending else {
         discard_orphan_restore(witness, &journal, &target.home)?;
         return Ok(None);
+    };
+    // A marker naming this target makes its journal irrevocable: a mismatch
+    // is never evidence of an orphan.
+    if pending.journal_sha256 != digest
+        || pending.next != journal.next
+        || pending.operation != journal.operation
+    {
+        return Err(classified(
+            VaultErrorKind::AuditTampered,
+            "the pending vault transaction's journal does not match its marker",
+        ));
     }
     let JournalPayload::Restore(payload) = &journal.payload else {
         return Err(classified(
@@ -239,21 +247,23 @@ pub(crate) fn finish_pending_restore(
     let JournalPayload::Restore(payload) = &journal.payload else {
         bail!("vault transaction journal does not describe a restore");
     };
+    let parent = home
+        .parent()
+        .context("restore target has no parent directory")?;
     match fs::symlink_metadata(home) {
-        Ok(_) => {
-            if !installed_successor(journal, payload, home)? {
+        Ok(metadata) => {
+            if !installed_successor(journal, payload, home, parent, &metadata)? {
                 return Err(classified(
                     VaultErrorKind::AlreadyExists,
                     "the restore target is occupied by different contents; the pending restore stays in its staging directory until the target is free",
                 ));
             }
+            // A crash may have preceded the installation's own entry sync.
+            sync_directory(parent)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let staging_path = staging_path(journal, payload, home)?;
-            let parent = home
-                .parent()
-                .context("restore target has no parent directory")?;
-            let mut staging = OwnedStaging::adopt(
+            let staging = OwnedStaging::adopt(
                 staging_path,
                 parent.to_path_buf(),
                 payload.staging_device,
@@ -264,22 +274,14 @@ pub(crate) fn finish_pending_restore(
                 || sha256_hex(&read_bounded(&staging.path.join(AUDIT_FILE))?)
                     != payload.audit_sha256
             {
-                staging.persist();
                 return Err(classified(
                     VaultErrorKind::AuditTampered,
                     "pending restore staging no longer matches its recorded transaction",
                 ));
             }
-            let installed = (|| -> AnyResult<()> {
-                staging.require_private_contents()?;
-                validate_trusted_ancestors(parent)?;
-                atomic_rename_noreplace(&staging.path, home)?;
-                Ok(())
-            })();
-            // Whatever happened, the staging is the transaction's durable
-            // reference and must never be cleaned away here.
-            staging.persist();
-            installed?;
+            staging.require_private_contents()?;
+            validate_trusted_ancestors(parent)?;
+            atomic_rename_noreplace(&staging.path, home)?;
             sync_directory(parent).with_context(|| {
                 format!(
                     "restored vault was installed at {}, but its parent directory could not be synced",
@@ -314,6 +316,9 @@ pub(crate) fn discard_orphan_restore(
                 payload.staging_device,
                 payload.staging_inode,
             )?;
+            // No marker references the journal, so its staging is owned
+            // again and may be cleaned away.
+            staging.active = true;
             staging.cleanup()?;
         }
     }
@@ -334,11 +339,33 @@ fn staging_path(journal: &Journal, payload: &RestorePayload, home: &Path) -> Any
     Ok(parent.join(&payload.staging_leaf))
 }
 
+/// Whether `home` is this restore's own installed successor. Installation
+/// renames the recorded staging directory itself into place, so only that
+/// directory identity, still private and holding the recorded bytes, counts.
 fn installed_successor(
     journal: &Journal,
     payload: &RestorePayload,
     home: &Path,
+    parent: &Path,
+    metadata: &fs::Metadata,
 ) -> AnyResult<bool> {
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.dev() != payload.staging_device
+        || metadata.ino() != payload.staging_inode
+    {
+        return Ok(false);
+    }
+    if metadata.mode() & 0o077 != 0 {
+        bail!("the installed restore target is no longer private to the current user");
+    }
+    OwnedStaging::adopt(
+        home.to_path_buf(),
+        parent.to_path_buf(),
+        payload.staging_device,
+        payload.staging_inode,
+    )?
+    .require_private_contents()?;
     let vault = match read_bounded_optional(&home.join(VAULT_FILE))? {
         Some(bytes) => bytes,
         None => return Ok(false),
@@ -390,20 +417,18 @@ impl OwnedStaging {
         Self::create_at(target, target.parent.join(leaf))
     }
 
-    /// Re-adopts staging recorded by a journal, verifying its identity.
+    /// Re-adopts staging recorded by a journal, verifying its identity. The
+    /// adopted staging is never cleaned up unless its owner reactivates it,
+    /// so an error on any recovery path preserves the recovery data.
     fn adopt(path: PathBuf, parent: PathBuf, device: u64, inode: u64) -> AnyResult<Self> {
         let staging = Self {
             path,
             parent,
             device,
             inode,
-            active: true,
+            active: false,
         };
-        if let Err(error) = staging.validate_identity() {
-            let mut staging = staging;
-            staging.persist();
-            return Err(error);
-        }
+        staging.validate_identity()?;
         Ok(staging)
     }
 

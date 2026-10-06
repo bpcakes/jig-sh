@@ -192,13 +192,23 @@ impl WitnessLocation {
         if !self.root.exists() {
             ensure_create_base_is_not_symlink(&self.root)?;
             ensure_create_ancestor_is_not_shared_writable(&self.root)?;
+            let created: Vec<&Path> = self
+                .root
+                .ancestors()
+                .take_while(|ancestor| {
+                    fs::symlink_metadata(ancestor)
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                })
+                .collect();
             fs::create_dir_all(&self.root).with_context(|| {
                 format!("failed to create vault witness {}", self.root.display())
             })?;
-            // Persist the new root's directory entry before any record or
-            // pending marker inside it can be relied on.
-            if let Some(parent) = self.root.parent() {
-                sync_parent_dir(parent)?;
+            // Persist every new directory entry, outermost first, before any
+            // record or pending marker inside the tree can be relied on.
+            for directory in created.iter().rev() {
+                if let Some(parent) = directory.parent() {
+                    sync_parent_dir(parent)?;
+                }
             }
         }
         let root = prepare_private_dir(&self.root)?;
@@ -382,13 +392,20 @@ impl HeldLock {
         if reentered {
             return Ok(Self { path });
         }
-        let file = private_open_options()
+        let file = nonblocking_open_options()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
             .open(&path)
             .context("failed to open a vault witness lock")?;
+        if !file
+            .metadata()
+            .context("failed to inspect a vault witness lock")?
+            .is_file()
+        {
+            bail!("vault witness lock is not a regular file");
+        }
         crate::acl::clear_file(&file, &path)?;
         lock_file(&file)?;
         HELD_LOCKS.with(|held| held.borrow_mut().insert(path.clone(), (1, Rc::new(file))));
@@ -412,10 +429,23 @@ impl Drop for HeldLock {
     }
 }
 
+/// Private no-follow options that also never block opening a FIFO or device
+/// planted at a witness path; callers check the file type after opening.
+fn nonblocking_open_options() -> fs::OpenOptions {
+    #[allow(unused_mut)]
+    let mut options = private_open_options();
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        libc::O_NOFOLLOW | libc::O_NONBLOCK,
+    );
+    options
+}
+
 /// Reads a witness file without following symlinks, requiring a regular,
 /// owner-only file owned by the current user within `max_len` bytes.
 fn read_protected(path: &Path, max_len: u64) -> AnyResult<Option<Vec<u8>>> {
-    let mut file = match private_open_options().read(true).open(path) {
+    let mut file = match nonblocking_open_options().read(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {

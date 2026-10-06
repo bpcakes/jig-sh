@@ -318,6 +318,24 @@ fn retained_handles_refuse_to_append_while_a_transaction_is_pending() {
 }
 
 #[test]
+fn retained_handles_refuse_an_audit_reverted_before_the_mutation_anchor() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp, "vault");
+    store.init(&passphrase()).unwrap();
+    let before_mutation = std::fs::read(store.audit_path()).unwrap();
+    set_value(&store, "jig://Example/TOKEN", b"retained-handle-value").unwrap();
+    let reveal = store
+        .prepare_field_read(&passphrase(), field("jig://Example/TOKEN"))
+        .unwrap();
+    // A valid chain prefix that predates the committed mutation event.
+    std::fs::write(store.audit_path(), &before_mutation).unwrap();
+
+    let error = reveal.write_to(&mut Vec::new()).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered, "{error}");
+    assert_eq!(std::fs::read(store.audit_path()).unwrap(), before_mutation);
+}
+
+#[test]
 fn retained_handles_still_finish_after_a_completed_rotation() {
     let temp = tempfile::tempdir().unwrap();
     let store = store_at(&temp, "vault");

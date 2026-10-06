@@ -233,6 +233,21 @@ fn any_authenticated_command_also_finishes_an_interrupted_init() {
 }
 
 #[test]
+fn a_backup_finishes_an_interrupted_init_before_bounding_its_snapshot() {
+    let (temp, store) = new_store();
+    store.arm_fault_for_test(FaultPoint::AfterAudit);
+    store.init(&passphrase()).unwrap_err();
+    assert!(store.read_vault_text().unwrap().is_none());
+
+    let output = temp.path().join("vault.backup");
+    let request =
+        Vault::preflight_backup_create(store.root().to_path_buf(), &output, false).unwrap();
+    Vault::create_backup(&passphrase(), request).unwrap();
+    assert!(output.exists());
+    assert_eq!(committed_generation(&store), 1);
+}
+
+#[test]
 fn a_pending_passphrase_change_finishes_only_with_the_new_passphrase() {
     let (_temp, store) = new_store();
     let old = passphrase();

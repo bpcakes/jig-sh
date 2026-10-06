@@ -103,10 +103,23 @@ impl VaultStore {
         compare_with_checkpoint(&checkpoint, committed)
     }
 
-    /// Requires the state's mutation MAC to name an event in the verified
-    /// chain that committed exactly this generation.
     fn verify_mutation_anchor_unlocked(&self, vault: &OpenVault) -> AnyResult<()> {
         let fields = vault.state.v3.as_ref().expect("format 3 state");
+        self.verify_anchor_unlocked(
+            vault.audit_key.as_ref(),
+            &fields.mutation_audit_mac,
+            fields.generation,
+        )
+    }
+
+    /// Requires `mutation_audit_mac` to name an event in the verified chain
+    /// that committed exactly `generation`.
+    fn verify_anchor_unlocked(
+        &self,
+        audit_key: &[u8],
+        mutation_audit_mac: &str,
+        generation: u64,
+    ) -> AnyResult<()> {
         if !self.audit_exists()? {
             return Err(classified(
                 VaultErrorKind::AuditTampered,
@@ -116,24 +129,20 @@ impl VaultStore {
                 ),
             ));
         }
-        let (_, anchor) = find_verified_event_unlocked(
-            self,
-            vault.audit_key.as_ref(),
-            &fields.mutation_audit_mac,
-        )
-        .map_err(|error| {
-            classify_source(
-                VaultErrorKind::AuditTampered,
-                "vault audit chain verification failed",
-                error,
-            )
-        })?;
+        let (_, anchor) = find_verified_event_unlocked(self, audit_key, mutation_audit_mac)
+            .map_err(|error| {
+                classify_source(
+                    VaultErrorKind::AuditTampered,
+                    "vault audit chain verification failed",
+                    error,
+                )
+            })?;
         let anchored = anchor.is_some_and(|event| {
             event
                 .details
                 .get(GENERATION_DETAIL)
                 .and_then(serde_json::Value::as_u64)
-                == Some(fields.generation)
+                == Some(generation)
         });
         if !anchored {
             return Err(classified(
@@ -147,8 +156,10 @@ impl VaultStore {
     /// Guards appends from retained reveal, exec, broker, and backup
     /// handles, which never reopen the vault with a passphrase. They compare
     /// the current persisted envelope, not the handle's old state, so an
-    /// in-flight operation can still finish after a completed rotation.
-    pub(crate) fn guard_audit_only_append_unlocked(&self) -> AnyResult<()> {
+    /// in-flight operation can still finish after a completed rotation; the
+    /// audit root they retain is stable across rotation and verifies the
+    /// committed mutation anchor.
+    pub(crate) fn guard_audit_only_append_unlocked(&self, audit_key: &[u8]) -> AnyResult<()> {
         let Some(bytes) = self.read_vault_bytes()? else {
             return Ok(());
         };
@@ -183,7 +194,11 @@ impl VaultStore {
                         "vault state no longer matches its witnessed checkpoint",
                     ));
                 }
-                Ok(())
+                self.verify_anchor_unlocked(
+                    audit_key,
+                    &committed.mutation_audit_mac,
+                    committed.generation,
+                )
             }
             (true, None) => Err(unwitnessed_error()),
             (false, Some(_)) => Err(legacy_replay_error()),

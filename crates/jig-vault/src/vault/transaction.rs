@@ -158,7 +158,7 @@ impl VaultStore {
         let suffix = &current[prefix_len..];
         let append = transition.append.as_bytes();
         if suffix == append {
-            return Ok(());
+            return self.sync_state_file_unlocked(&self.audit_path());
         }
         let captured_torn_suffix = transition.torn_suffix_len > 0
             && suffix.len() as u64 == transition.torn_suffix_len
@@ -180,13 +180,14 @@ impl VaultStore {
     }
 
     /// Installs the recorded candidate only over the exact recorded
-    /// predecessor, accepting an already installed candidate.
+    /// predecessor, accepting an already installed candidate once it is
+    /// durable.
     fn install_candidate(&self, journal: &Journal, candidate: &str) -> AnyResult<()> {
         let current = self
             .read_vault_bytes()?
             .map(|bytes| sha256_hex(bytes.as_slice()));
         if current.as_deref() == Some(journal.next.envelope_sha256.as_str()) {
-            return Ok(());
+            return self.sync_state_file_unlocked(&self.vault_path());
         }
         if current != journal.previous_envelope_sha256 {
             return Err(classified(

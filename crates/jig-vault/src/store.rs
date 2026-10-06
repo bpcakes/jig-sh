@@ -201,12 +201,17 @@ impl VaultStore {
         #[cfg(unix)]
         if let Ok(output_metadata) = fs::metadata(&normalized_output) {
             for source in [self.vault_path(), self.audit_path()] {
-                let source_metadata = fs::metadata(&source).with_context(|| {
-                    format!(
-                        "failed to inspect {operation_label} source {}",
-                        source.display()
-                    )
-                })?;
+                // A state file a pending transaction has not installed yet
+                // cannot be aliased.
+                let source_metadata = match fs::metadata(&source) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    result => result.with_context(|| {
+                        format!(
+                            "failed to inspect {operation_label} source {}",
+                            source.display()
+                        )
+                    })?,
+                };
                 if output_metadata.dev() == source_metadata.dev()
                     && output_metadata.ino() == source_metadata.ino()
                 {
@@ -333,6 +338,19 @@ impl VaultStore {
             .with_context(|| format!("failed to write vault audit log {}", path.display()))?;
         file.sync_all()
             .with_context(|| format!("failed to sync vault audit log {}", path.display()))?;
+        sync_parent_dir(&self.root)
+    }
+
+    /// Re-establishes the durability barrier of a state file whose bytes a
+    /// recovery step found already in place: a crash may have preceded the
+    /// original sync.
+    pub(crate) fn sync_state_file_unlocked(&self, path: &Path) -> AnyResult<()> {
+        let file = private_open_options()
+            .read(true)
+            .open(path)
+            .with_context(|| format!("failed to open {} for sync", path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync {}", path.display()))?;
         sync_parent_dir(&self.root)
     }
 

@@ -19,12 +19,22 @@ impl VaultStore {
     }
 
     pub(crate) fn revalidate_existing(&self) -> AnyResult<()> {
-        validate_existing_private_dir(&self.root, self.has_pending_journal()?)
+        let pending = self.has_pending_journal()?;
+        if pending && is_absent(&self.root)? {
+            return validate_pending_absent_parent(&self.root);
+        }
+        validate_existing_private_dir(&self.root, pending)
     }
 }
 
 fn open_existing_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
     let root = crate::path_security::physical_path(&root, "existing vault")?;
+    // An interrupted restore keeps its final target absent until the
+    // authenticated operation installs it; only its parent can be checked.
+    if let Some(store) = super::pending::pending_absent_target(&root, &KdfParams::production())? {
+        validate_pending_absent_parent(&root)?;
+        return Ok(store);
+    }
     // An interrupted transaction may have left one state file missing; the
     // authenticated operation finishes it, so a recorded journal lets
     // preflight reach credential capture without waiving any other check.
@@ -66,6 +76,40 @@ fn validate_existing_private_dir(root: &Path, allow_missing_state: bool) -> AnyR
             );
         }
         ensure_owned_private_file(&path, &metadata)?;
+    }
+    Ok(())
+}
+
+fn is_absent(path: &Path) -> AnyResult<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", path.display())),
+    }
+}
+
+/// The parent of an absent pending restore target must be a real directory
+/// owned by the current user and reached without symlinks. Installation
+/// repeats the restore's own trusted-ancestor checks.
+fn validate_pending_absent_parent(root: &Path) -> AnyResult<()> {
+    let parent = root
+        .parent()
+        .with_context(|| format!("vault home has no parent directory: {}", root.display()))?;
+    reject_symlinked_path_components(parent)?;
+    let metadata = fs::symlink_metadata(parent)
+        .with_context(|| format!("failed to inspect vault home parent {}", parent.display()))?;
+    if !metadata.is_dir() {
+        bail!(
+            "vault home parent must be a real directory: {}",
+            parent.display()
+        );
+    }
+    #[cfg(unix)]
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        bail!(
+            "vault home parent is not owned by the current user: {}",
+            parent.display()
+        );
     }
     Ok(())
 }

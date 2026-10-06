@@ -187,9 +187,9 @@ impl AuditEvent {
     ) -> Result<Self> {
         // Retained reveal, exec, broker, and backup handles append without
         // reopening the vault; the guard checks the current persisted state
-        // against the witness first.
+        // and its mutation anchor against the witness first.
         store.with_lock(|| {
-            store.guard_audit_only_append_unlocked()?;
+            store.guard_audit_only_append_unlocked(audit_key)?;
             Self::append_unlocked(store, audit_key, action, details)
         })
     }
