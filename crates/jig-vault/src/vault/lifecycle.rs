@@ -20,8 +20,10 @@ use crate::store::VaultStore;
 use crate::{Result, VaultError, VaultErrorKind};
 
 use super::envelope::RekeyedVaultEnvelope;
+use super::transaction::InPlaceCommit;
 use super::{OpenVault, Vault};
 use crate::passphrase_policy::validate_new_vault_passphrase_inner;
+use crate::store::witness::TransactionKind;
 
 impl Vault {
     /// Re-encrypts a version 2 or 3 vault under a new passphrase without
@@ -141,6 +143,17 @@ impl VaultStore {
         new: &SecretString,
         kdf: KdfParams,
     ) -> AnyResult<()> {
+        // A retry of a change that crashed after its pending marker finishes
+        // with the new passphrase; that completed change is this request.
+        if self
+            .recover_pending_unlocked(&[current, new])?
+            .is_some_and(|recovered| {
+                recovered.kind == TransactionKind::PassphraseChange
+                    && recovered.credential_index == 1
+            })
+        {
+            return Ok(());
+        }
         let mut vault = self.open_unlocked(current)?;
         vault.verify_audit_unlocked(self).map_err(|error| {
             classify_source(
@@ -174,19 +187,30 @@ impl VaultStore {
                 error,
             )
         })?;
-        match prepared {
-            Some(prepared) => prepared.commit_unlocked(self).map(drop),
-            None => vault
-                .append_audit_unlocked(self, AuditAction::PassphraseChange, details)
-                .map(drop),
+        if let Some(prepared) = prepared {
+            let generation = vault
+                .state
+                .v3
+                .as_ref()
+                .map_or(0, |fields| fields.generation);
+            return self.commit_in_place_unlocked(InPlaceCommit {
+                kind: TransactionKind::PassphraseChange,
+                vault_id: &vault.file.header.vault_id,
+                previous_envelope_sha256: Some(&vault.envelope_sha256),
+                candidate: &file_text,
+                generation,
+                prepared: &prepared,
+            });
         }
-        .map_err(|error| {
-            classify_source(
-                VaultErrorKind::AuditTampered,
-                "vault audit append failed before passphrase change save",
-                error,
-            )
-        })?;
+        vault
+            .append_audit_unlocked(self, AuditAction::PassphraseChange, details)
+            .map_err(|error| {
+                classify_source(
+                    VaultErrorKind::AuditTampered,
+                    "vault audit append failed before passphrase change save",
+                    error,
+                )
+            })?;
         self.write_vault_text_unlocked(&file_text)
             .map_err(|error| {
                 classify_source(

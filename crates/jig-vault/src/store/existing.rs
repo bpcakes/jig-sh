@@ -2,8 +2,6 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::{Arc, atomic::AtomicBool};
 
 use anyhow::{Context, Result as AnyResult, bail};
 
@@ -31,12 +29,9 @@ fn open_existing_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
     let root = fs::canonicalize(&root)
         .with_context(|| format!("failed to canonicalize vault home {}", root.display()))?;
     validate_existing_private_dir(&root)?;
-    Ok(VaultStore {
-        root,
-        initialization_kdf: KdfParams::production(),
-        #[cfg(test)]
-        fail_next_vault_write: Arc::new(AtomicBool::new(false)),
-    })
+    let witness = super::WitnessLocation::for_home(&root)?;
+    witness.ensure_disjoint(&root)?;
+    Ok(VaultStore::at(root, KdfParams::production(), witness))
 }
 
 fn validate_existing_private_dir(root: &Path) -> AnyResult<()> {

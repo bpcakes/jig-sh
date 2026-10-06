@@ -50,7 +50,15 @@ mod commit;
 mod envelope;
 mod lifecycle;
 mod migration;
-use envelope::{ParsedVaultEnvelope, ResealedVaultEnvelope, UnlockedVaultEnvelope};
+mod restore_txn;
+mod transaction;
+mod witnessed;
+
+use envelope::{ResealedVaultEnvelope, UnlockedVaultEnvelope};
+pub(crate) use restore_txn::{
+    RestoreSource, authenticate_restore_candidate_text, restore_pending_error,
+};
+pub(crate) use transaction::promote_witness_record;
 
 pub const MAX_SECRET_VALUE_LEN: usize = 1024 * 1024;
 const MAX_IMPORT_FIELDS: usize = 1_024;
@@ -1001,6 +1009,8 @@ pub(crate) struct OpenVault {
     state: VaultState,
     dek: Zeroizing<[u8; KEY_LEN]>,
     audit_key: Zeroizing<[u8; KEY_LEN]>,
+    /// SHA-256 of the exact persisted envelope bytes this handle opened.
+    envelope_sha256: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1316,7 +1326,7 @@ impl std::fmt::Debug for OpenVault {
 }
 
 impl OpenVault {
-    fn from_unlocked(envelope: UnlockedVaultEnvelope) -> Self {
+    fn from_unlocked(envelope: UnlockedVaultEnvelope, envelope_sha256: String) -> Self {
         let UnlockedVaultEnvelope {
             file,
             state,
@@ -1328,6 +1338,7 @@ impl OpenVault {
             state,
             dek,
             audit_key,
+            envelope_sha256,
         }
     }
 }
@@ -2286,17 +2297,11 @@ impl VaultStore {
         VaultError::from_anyhow(default, error)
     }
 
+    /// Opens the live vault under the held locks after finishing any pending
+    /// transaction for this home and checking the out-of-home witness.
     fn open_unlocked(&self, passphrase: &SecretString) -> AnyResult<OpenVault> {
-        let text = self.read_vault_text()?.ok_or_else(|| {
-            classified(
-                VaultErrorKind::NotFound,
-                format!("vault does not exist at {}", self.vault_path().display()),
-            )
-        })?;
-        let parsed = ParsedVaultEnvelope::parse(&text)?;
-        let validated = parsed.validate()?;
-        let unlocked = validated.unlock(passphrase)?;
-        Ok(OpenVault::from_unlocked(unlocked))
+        self.open_witnessed_unlocked(&[passphrase])
+            .map(|(vault, _)| vault)
     }
 }
 

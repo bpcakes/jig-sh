@@ -16,6 +16,7 @@ mod seal;
 
 pub(super) use seal::{
     MigratedVaultEnvelope, NewVaultMaterial, RekeyedVaultEnvelope, ResealedVaultEnvelope,
+    RotatedVaultEnvelope,
 };
 
 pub(super) struct ParsedVaultEnvelope {
@@ -45,6 +46,11 @@ impl ParsedVaultEnvelope {
             )
         })?;
         Ok(Self { file })
+    }
+
+    /// The unauthenticated public header, for lock and witness lookups only.
+    pub(super) fn into_header(self) -> crate::format::VaultHeader {
+        self.file.header
     }
 
     pub(super) fn validate(self) -> AnyResult<ValidatedVaultEnvelope> {

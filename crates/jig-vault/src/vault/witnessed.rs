@@ -1,0 +1,232 @@
+//! Authenticated open and audit-only append boundaries against the
+//! out-of-home witness.
+//!
+//! Every authenticated read or edit first finishes any pending transaction
+//! recorded for this home, then checks the unlocked state against the
+//! witness: a format 3 state must match its committed checkpoint exactly and
+//! be anchored to its mutation audit event, and an older-format copy of a
+//! witnessed ID is refused as a replay. The first authenticated use of an
+//! unwitnessed format 3 vault enrolls it. Status, info, and doctor stay
+//! read-only header observations and never reach this boundary.
+
+use anyhow::Result as AnyResult;
+use secrecy::SecretString;
+
+use crate::VaultErrorKind;
+use crate::audit::find_verified_event_unlocked;
+use crate::error::{classified, classify_source};
+use crate::format::V3_FORMAT_VERSION;
+use crate::store::VaultStore;
+use crate::store::witness::{Checkpoint, WitnessRecord, sha256_hex};
+
+use super::OpenVault;
+use super::commit::GENERATION_DETAIL;
+use super::envelope::ParsedVaultEnvelope;
+use super::transaction::Recovered;
+
+impl VaultStore {
+    /// Opens the live vault with `credentials[0]` after finishing any
+    /// pending transaction any of `credentials` authenticates.
+    pub(super) fn open_witnessed_unlocked(
+        &self,
+        credentials: &[&SecretString],
+    ) -> AnyResult<(OpenVault, Option<Recovered>)> {
+        let recovered = self.recover_pending_unlocked(credentials)?;
+        let bytes = self.read_vault_bytes()?.ok_or_else(|| {
+            classified(
+                VaultErrorKind::NotFound,
+                format!("vault does not exist at {}", self.vault_path().display()),
+            )
+        })?;
+        let text = std::str::from_utf8(&bytes).map_err(|error| {
+            classify_source(
+                VaultErrorKind::Serialization,
+                "failed to parse vault file",
+                error.into(),
+            )
+        })?;
+        let unlocked = ParsedVaultEnvelope::parse(text)?
+            .validate()?
+            .unlock(credentials[0])?;
+        let vault = OpenVault::from_unlocked(unlocked, sha256_hex(&bytes));
+        self.verify_witnessed_state_unlocked(&vault)?;
+        Ok((vault, recovered))
+    }
+
+    fn verify_witnessed_state_unlocked(&self, vault: &OpenVault) -> AnyResult<()> {
+        let vault_id = &vault.file.header.vault_id;
+        let Some(fields) = vault.state.v3.as_ref() else {
+            let Some(witness) = self.witness().open_existing()? else {
+                return Ok(());
+            };
+            let _id = witness.lock_id(vault_id)?;
+            if witness.read_record(vault_id)?.is_some() {
+                return Err(legacy_replay_error());
+            }
+            return Ok(());
+        };
+        self.verify_mutation_anchor_unlocked(vault)?;
+        let witness = self.witness().open_or_create()?;
+        let _id = witness.lock_id(vault_id)?;
+        let checkpoint = Checkpoint {
+            generation: fields.generation,
+            envelope_sha256: vault.envelope_sha256.clone(),
+            mutation_audit_mac: fields.mutation_audit_mac.clone(),
+        };
+        let Some(record) = witness.read_record(vault_id)? else {
+            // First authenticated use on this profile establishes the
+            // baseline. A missing witness is indistinguishable from first
+            // use and is outside the rollback guarantee.
+            let mut record = WitnessRecord::new(vault_id);
+            record.committed = Some(checkpoint);
+            return witness.write_record(&record).map_err(|error| {
+                classify_source(
+                    VaultErrorKind::Io,
+                    "failed to enroll the vault in its rollback witness",
+                    error,
+                )
+            });
+        };
+        if let Some(pending) = &record.pending {
+            return Err(classified(
+                VaultErrorKind::AlreadyExists,
+                format!(
+                    "a vault {} for this vault is pending at another vault home; finish it there before using this copy",
+                    pending.operation.label()
+                ),
+            ));
+        }
+        let committed = record
+            .committed
+            .as_ref()
+            .expect("validated records without pending have a checkpoint");
+        compare_with_checkpoint(&checkpoint, committed)
+    }
+
+    /// Requires the state's mutation MAC to name an event in the verified
+    /// chain that committed exactly this generation.
+    fn verify_mutation_anchor_unlocked(&self, vault: &OpenVault) -> AnyResult<()> {
+        let fields = vault.state.v3.as_ref().expect("format 3 state");
+        if !self.audit_exists()? {
+            return Err(classified(
+                VaultErrorKind::AuditTampered,
+                format!(
+                    "vault audit log is missing at {}; restore audit.jsonl before continuing",
+                    self.audit_path().display()
+                ),
+            ));
+        }
+        let (_, anchor) = find_verified_event_unlocked(
+            self,
+            vault.audit_key.as_ref(),
+            &fields.mutation_audit_mac,
+        )
+        .map_err(|error| {
+            classify_source(
+                VaultErrorKind::AuditTampered,
+                "vault audit chain verification failed",
+                error,
+            )
+        })?;
+        let anchored = anchor.is_some_and(|event| {
+            event
+                .details
+                .get(GENERATION_DETAIL)
+                .and_then(serde_json::Value::as_u64)
+                == Some(fields.generation)
+        });
+        if !anchored {
+            return Err(classified(
+                VaultErrorKind::AuditTampered,
+                "vault state is not anchored to its mutation audit event",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Guards appends from retained reveal, exec, broker, and backup
+    /// handles, which never reopen the vault with a passphrase. They compare
+    /// the current persisted envelope, not the handle's old state, so an
+    /// in-flight operation can still finish after a completed rotation.
+    pub(crate) fn guard_audit_only_append_unlocked(&self) -> AnyResult<()> {
+        let Some(bytes) = self.read_vault_bytes()? else {
+            return Ok(());
+        };
+        let text = std::str::from_utf8(&bytes).map_err(|error| {
+            classify_source(
+                VaultErrorKind::Serialization,
+                "failed to parse vault file",
+                error.into(),
+            )
+        })?;
+        let header = ParsedVaultEnvelope::parse(text)?.into_header();
+        let is_v3 = header.version == V3_FORMAT_VERSION;
+        let Some(witness) = self.witness().open_existing()? else {
+            return if is_v3 {
+                Err(unwitnessed_error())
+            } else {
+                Ok(())
+            };
+        };
+        let _id = witness.lock_id(&header.vault_id)?;
+        let record = witness.read_record(&header.vault_id)?;
+        match (is_v3, record) {
+            (_, Some(record)) if record.pending.is_some() => Err(classified(
+                VaultErrorKind::AuditTampered,
+                "a vault transaction is pending; finish it with an authenticated vault command before recording more activity",
+            )),
+            (true, Some(record)) => {
+                let committed = record.committed.expect("validated record");
+                if sha256_hex(&bytes) != committed.envelope_sha256 {
+                    return Err(classified(
+                        VaultErrorKind::AuditTampered,
+                        "vault state no longer matches its witnessed checkpoint",
+                    ));
+                }
+                Ok(())
+            }
+            (true, None) => Err(unwitnessed_error()),
+            (false, Some(_)) => Err(legacy_replay_error()),
+            (false, None) => Ok(()),
+        }
+    }
+}
+
+fn compare_with_checkpoint(current: &Checkpoint, committed: &Checkpoint) -> AnyResult<()> {
+    if current.generation < committed.generation {
+        return Err(classified(
+            VaultErrorKind::AuditTampered,
+            format!(
+                "vault state generation {} is older than its witnessed generation {}; refusing a rolled-back copy",
+                current.generation, committed.generation
+            ),
+        ));
+    }
+    if current.generation > committed.generation {
+        return Err(classified(
+            VaultErrorKind::AuditTampered,
+            "vault state is newer than its witnessed checkpoint without a recorded transaction; refusing an unwitnessed fork",
+        ));
+    }
+    if current != committed {
+        return Err(classified(
+            VaultErrorKind::AuditTampered,
+            "vault state forks from its witnessed checkpoint at the same generation",
+        ));
+    }
+    Ok(())
+}
+
+fn legacy_replay_error() -> anyhow::Error {
+    classified(
+        VaultErrorKind::AuditTampered,
+        "this vault ID was already witnessed as format 3; refusing an older-format copy",
+    )
+}
+
+fn unwitnessed_error() -> anyhow::Error {
+    classified(
+        VaultErrorKind::AuditTampered,
+        "this format 3 vault has no witnessed checkpoint; reopen it with its passphrase first",
+    )
+}

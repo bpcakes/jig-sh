@@ -24,6 +24,10 @@ use codec::seal_archive;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use codec::{ParsedBackupArchive, decrypt_archive, parse_archive_bytes};
 pub(crate) use payload::{inspect_embedded_vault, max_backup_audit_bytes};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use restore::{
+    discard_orphan_restore, finish_pending_restore, read_candidate as read_restore_candidate,
+};
 
 pub const BACKUP_FORMAT_VERSION: u32 = 1;
 pub const MAX_BACKUP_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
@@ -88,7 +92,14 @@ impl fmt::Debug for BackupRestoreRequest {
 pub struct BackupRestoreResult {
     pub root: PathBuf,
     pub vault_id: String,
+    /// Format of the restored vault. A format 2 archive whose vault ID is
+    /// already witnessed as format 3 is restored as format 3.
     pub format_version: u32,
+    /// Format of the vault inside the archive.
+    pub source_format_version: u32,
+    /// Generation of a witnessed restore. Every other copy of the vault ID
+    /// is older and is now refused as stale. `None` for a legacy restore.
+    pub generation: Option<u64>,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

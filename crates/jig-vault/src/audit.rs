@@ -134,6 +134,8 @@ pub(crate) struct PreparedAuditAppend {
     line: String,
     valid_len: usize,
     audit_len: usize,
+    torn_suffix_sha256: Option<String>,
+    needs_separator: bool,
 }
 
 impl PreparedAuditAppend {
@@ -183,7 +185,13 @@ impl AuditEvent {
         action: AuditAction,
         details: Value,
     ) -> Result<Self> {
-        store.with_lock(|| Self::append_unlocked(store, audit_key, action, details))
+        // Retained reveal, exec, broker, and backup handles append without
+        // reopening the vault; the guard checks the current persisted state
+        // against the witness first.
+        store.with_lock(|| {
+            store.guard_audit_only_append_unlocked()?;
+            Self::append_unlocked(store, audit_key, action, details)
+        })
     }
 
     pub(crate) fn append_unlocked(
@@ -246,6 +254,8 @@ impl AuditEvent {
             line,
             valid_len: verified.valid_len,
             audit_len: verified.audit_len,
+            torn_suffix_sha256: verified.torn_suffix_sha256,
+            needs_separator: verified.prefix_needs_separator,
         })
     }
 
@@ -300,6 +310,8 @@ struct VerifiedAuditLog {
     verification: AuditVerification,
     valid_len: usize,
     audit_len: usize,
+    torn_suffix_sha256: Option<String>,
+    prefix_needs_separator: bool,
 }
 
 fn verify_chain_for_append_unlocked(
@@ -327,6 +339,8 @@ const fn empty_verified_audit_log() -> VerifiedAuditLog {
         },
         valid_len: 0,
         audit_len: 0,
+        torn_suffix_sha256: None,
+        prefix_needs_separator: false,
     }
 }
 
@@ -395,6 +409,11 @@ fn verify_chain_text(text: &str, audit_key: &[u8]) -> Result<VerifiedAuditLog> {
         },
         valid_len,
         audit_len,
+        torn_suffix_sha256: (valid_len < audit_len)
+            .then(|| crate::store::witness::sha256_hex(&text.as_bytes()[valid_len..])),
+        // A complete final event without a newline stays valid; the next
+        // append terminates it instead of discarding it as a torn tail.
+        prefix_needs_separator: valid_len > 0 && !text[..valid_len].ends_with('\n'),
     })
 }
 
@@ -609,6 +628,10 @@ fn hex_lower(bytes: &[u8]) -> String {
     }
     output
 }
+
+mod transition;
+
+pub(crate) use transition::{find_verified_event_unlocked, verify_exact_prefix};
 
 #[cfg(test)]
 mod tests;

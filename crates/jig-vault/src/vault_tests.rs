@@ -25,6 +25,8 @@ mod management;
 mod mutations;
 #[path = "vault_tests/reveal.rs"]
 mod reveal;
+#[path = "vault_tests/transaction.rs"]
+mod transaction;
 #[path = "vault_tests/v3.rs"]
 mod v3;
 

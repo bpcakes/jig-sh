@@ -29,6 +29,7 @@ pub(super) struct DecodedBackupArchive {
     pub(super) source_vault_id: String,
     pub(super) source_format_version: u32,
     pub(super) backup_created_at_ms: i128,
+    pub(super) archive_sha256: String,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -117,6 +118,7 @@ fn backup_payload_fixed_len(source_vault_id_len: usize) -> AnyResult<usize> {
 pub(super) fn decode_backup_payload(
     plaintext: Zeroizing<Vec<u8>>,
     backup_created_at_ms: i128,
+    archive_sha256: String,
 ) -> AnyResult<DecodedBackupArchive> {
     if plaintext.len() > MAX_BACKUP_PAYLOAD_BYTES {
         return Err(classified(
@@ -161,6 +163,7 @@ pub(super) fn decode_backup_payload(
         source_vault_id,
         source_format_version,
         backup_created_at_ms,
+        archive_sha256,
     })
 }
 

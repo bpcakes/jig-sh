@@ -19,6 +19,9 @@ use crate::{Result, VaultError, VaultErrorKind, VaultHomeState};
 
 mod existing;
 mod header;
+pub(crate) mod witness;
+
+use witness::WitnessLocation;
 
 const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
 const VAULT_FILE: &str = "vault.json";
@@ -33,8 +36,45 @@ pub(crate) const AUDIT_TEXT_READ_LIMIT: u64 = 256 * 1024 * 1024;
 pub(crate) struct VaultStore {
     root: PathBuf,
     initialization_kdf: KdfParams,
+    witness: WitnessLocation,
     #[cfg(test)]
     fail_next_vault_write: Arc<AtomicBool>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Armed per test thread so stores created internally, such as restore
+    /// staging, share the injected crash point.
+    static ARMED_FAULT: std::cell::Cell<Option<FaultPoint>> = const { std::cell::Cell::new(None) };
+}
+
+/// Simulates a crash at `point` when a test armed it on this thread.
+pub(crate) fn fault(point: FaultPoint) -> AnyResult<()> {
+    #[cfg(test)]
+    if ARMED_FAULT.with(|armed| armed.get()) == Some(point) {
+        ARMED_FAULT.with(|armed| armed.set(None));
+        bail!("injected crash at {point:?}");
+    }
+    #[cfg(not(test))]
+    let _ = point;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn arm_fault_for_test(point: FaultPoint) {
+    ARMED_FAULT.with(|armed| armed.set(Some(point)));
+}
+
+/// Deterministic crash points of the transaction protocol, armed by tests.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FaultPoint {
+    AfterJournal,
+    AfterPending,
+    PartialAudit,
+    AfterAudit,
+    AfterEnvelope,
+    AfterPromotion,
 }
 
 impl VaultStore {
@@ -75,6 +115,42 @@ impl VaultStore {
         &self.root
     }
 
+    /// Builds a store for a validated physical home whose witness location
+    /// has already been checked to be disjoint from it.
+    fn at(root: PathBuf, initialization_kdf: KdfParams, witness: WitnessLocation) -> Self {
+        Self {
+            root,
+            initialization_kdf,
+            witness,
+            #[cfg(test)]
+            fail_next_vault_write: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(crate) fn witness(&self) -> &WitnessLocation {
+        &self.witness
+    }
+
+    /// Key of this home as a final target in the witness.
+    pub(crate) fn target_key(&self) -> String {
+        witness::target_key(&self.root)
+    }
+
+    /// Unauthenticated vault ID from the public header, used only to pick
+    /// which ID lock to take. Authentication happens after locking.
+    pub(crate) fn header_vault_id_for_lock(&self) -> Option<String> {
+        header::public_vault_id(&self.root)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arm_fault_for_test(&self, point: FaultPoint) {
+        arm_fault_for_test(point);
+    }
+
+    pub(crate) fn fault(&self, point: FaultPoint) -> AnyResult<()> {
+        fault(point)
+    }
+
     pub(crate) fn initialization_kdf(&self) -> &KdfParams {
         &self.initialization_kdf
     }
@@ -109,6 +185,11 @@ impl VaultStore {
         if normalized_output.starts_with(self.root()) {
             bail!("{operation_label} output must be outside the source vault home");
         }
+        // The witness holds the checkpoints and recovery journals an output
+        // must never replace, whether by path or through a hard link.
+        if self.witness.contains(&normalized_output)? {
+            bail!("{operation_label} output must be outside the vault rollback witness");
+        }
 
         #[cfg(unix)]
         if let Ok(output_metadata) = fs::metadata(&normalized_output) {
@@ -124,6 +205,9 @@ impl VaultStore {
                 {
                     bail!("{operation_label} output must not alias a source vault file");
                 }
+            }
+            if self.witness.aliases_protected_file(&output_metadata)? {
+                bail!("{operation_label} output must not alias a vault rollback witness file");
             }
         }
         Ok(())
@@ -228,6 +312,23 @@ impl VaultStore {
         Ok(())
     }
 
+    /// Appends exact bytes to the audit log, creating a private log when it
+    /// is absent, and syncs the file and its directory.
+    pub(crate) fn append_audit_bytes_unlocked(&self, bytes: &[u8]) -> AnyResult<()> {
+        let path = self.audit_path();
+        let mut file = private_open_options()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("failed to open vault audit log {}", path.display()))?;
+        crate::acl::clear_file(&file, &path)?;
+        file.write_all(bytes)
+            .with_context(|| format!("failed to write vault audit log {}", path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync vault audit log {}", path.display()))?;
+        sync_parent_dir(&self.root)
+    }
+
     pub(crate) fn truncate_audit_unlocked(&self, len: u64) -> AnyResult<()> {
         let path = self.audit_path();
         let file = private_open_options()
@@ -265,7 +366,12 @@ impl VaultStore {
         self.root.join(LOCK_FILE)
     }
 
+    /// Runs `f` under the ordered locks: this home's target lock, the home
+    /// lock, then the lock of the vault ID its public header names. Same-ID
+    /// copies therefore serialize on one witness lock.
     pub(crate) fn with_lock<T>(&self, f: impl FnOnce() -> AnyResult<T>) -> AnyResult<T> {
+        let witness = self.witness.open_or_create()?;
+        let _target = witness.lock_target(&self.target_key())?;
         let file = private_open_options()
             .create(true)
             .truncate(false)
@@ -275,7 +381,13 @@ impl VaultStore {
             .context("failed to open vault lock")?;
         crate::acl::clear_file(&file, &self.lock_path())?;
         lock_file(&file)?;
-        let result = f();
+        let result = (|| {
+            let _id = match self.header_vault_id_for_lock() {
+                Some(vault_id) => Some(witness.lock_id(&vault_id)?),
+                None => None,
+            };
+            f()
+        })();
         let unlock = FileExt::unlock(&file);
         match (result, unlock) {
             (Ok(value), Ok(())) => Ok(value),
@@ -343,6 +455,8 @@ fn resolve_root(explicit_home: Option<PathBuf>) -> AnyResult<PathBuf> {
 }
 
 fn prepare_private_dir(root: PathBuf, initialization_kdf: KdfParams) -> AnyResult<VaultStore> {
+    // Refuse an overlapping witness before creating anything.
+    WitnessLocation::for_home(&root)?.ensure_disjoint(&root)?;
     if path_is_symlink(&root)? {
         bail!(
             "Vault home {} must not be a symlink. Use a dedicated real directory.",
@@ -369,12 +483,9 @@ fn prepare_private_dir(root: PathBuf, initialization_kdf: KdfParams) -> AnyResul
     // Re-walk after chmod so a same-user directory-entry race cannot trade a
     // checked file for a symlink while permissions are being tightened.
     ensure_tree_has_no_symlinks(&root, &root)?;
-    Ok(VaultStore {
-        root,
-        initialization_kdf,
-        #[cfg(test)]
-        fail_next_vault_write: Arc::new(AtomicBool::new(false)),
-    })
+    let witness = WitnessLocation::for_home(&root)?;
+    witness.ensure_disjoint(&root)?;
+    Ok(VaultStore::at(root, initialization_kdf, witness))
 }
 
 fn lock_file(file: &File) -> AnyResult<()> {

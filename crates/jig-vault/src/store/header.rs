@@ -23,6 +23,26 @@ struct PublicHeaderProbe {
     version: u32,
 }
 
+#[derive(Deserialize)]
+struct PublicIdProbe {
+    header: PublicIdHeader,
+}
+
+#[derive(Deserialize)]
+struct PublicIdHeader {
+    vault_id: String,
+}
+
+/// Reads the unauthenticated vault ID from a home's public header. Like the
+/// version probe it never blocks, creates, or fails; malformed files report
+/// `None`.
+pub(super) fn public_vault_id(root: &Path) -> Option<String> {
+    let text = read_regular_text(&root.join(VAULT_FILE))?;
+    let probe: PublicIdProbe = serde_json::from_str(&text).ok()?;
+    let id = probe.header.vault_id;
+    super::witness::record_vault_id_is_valid(&id).then_some(id)
+}
+
 /// Reads the format version recorded in a vault home's public header.
 ///
 /// The value is unauthenticated discovery metadata: it proves neither

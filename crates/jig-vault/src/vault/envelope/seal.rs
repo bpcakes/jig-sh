@@ -380,3 +380,55 @@ impl RekeyedVaultEnvelope {
         Ok(serde_json::to_string_pretty(&self.file)?)
     }
 }
+
+/// A format 3 envelope resealed under a fresh DEK, salt, wrapping key, and
+/// nonces, keeping the header's vault ID and creation time. The audit root
+/// travels in the state, so audit verification is unaffected; ciphertext
+/// sealed under any earlier DEK stays decryptable by that DEK.
+pub(in crate::vault) struct RotatedVaultEnvelope {
+    file: VaultFile,
+    // Keep secret-bearing intermediates zeroizing until the serialized
+    // envelope has been persisted.
+    _state_plaintext: Zeroizing<Vec<u8>>,
+    _wrap_key: Zeroizing<[u8; KEY_LEN]>,
+    _dek: Zeroizing<[u8; KEY_LEN]>,
+}
+
+impl RotatedVaultEnvelope {
+    pub(in crate::vault) fn seal(
+        previous: &VaultHeader,
+        passphrase: &SecretString,
+        state: &VaultState,
+        kdf: KdfParams,
+    ) -> AnyResult<Self> {
+        if state.v3.is_none() {
+            anyhow::bail!("only format 3 state can be resealed under a fresh vault key");
+        }
+        let salt = random_array::<SALT_LEN>()?;
+        let dek = Zeroizing::new(random_array::<KEY_LEN>()?);
+        let mut header = previous.clone();
+        header.version = V3_FORMAT_VERSION;
+        header.kdf = kdf;
+        header.salt_b64 = B64.encode(salt);
+        let header = header_for_state(header, state, "resealed format 3")?;
+        let wrap_key = derive_wrap_key(passphrase, &salt, &header.kdf).map_err(|error| {
+            classify_source(
+                VaultErrorKind::InvalidInput,
+                "vault passphrase could not be derived safely",
+                error,
+            )
+        })?;
+        let (file, state_plaintext) =
+            seal_payloads(&header, &wrap_key, &dek, state)?.into_file(header);
+        Ok(Self {
+            file,
+            _state_plaintext: state_plaintext,
+            _wrap_key: wrap_key,
+            _dek: dek,
+        })
+    }
+
+    pub(in crate::vault) fn serialize_pretty(&self) -> AnyResult<String> {
+        Ok(serde_json::to_string_pretty(&self.file)?)
+    }
+}

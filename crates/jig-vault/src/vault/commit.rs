@@ -14,8 +14,10 @@ use crate::audit::{AuditAction, AuditEvent, PreparedAuditAppend, verify_chain_un
 use crate::error::{classified, classify_source};
 use crate::format::LATEST_FORMAT_VERSION;
 use crate::store::VaultStore;
+use crate::store::witness::TransactionKind;
 
 use super::envelope::NewVaultMaterial;
+use super::transaction::InPlaceCommit;
 use super::{OpenVault, VaultEditPrecondition, now_ms};
 use crate::passphrase_policy::validate_new_vault_passphrase_inner;
 
@@ -126,6 +128,15 @@ impl OpenVault {
 
 impl VaultStore {
     pub(super) fn init_unlocked(&self, passphrase: &SecretString) -> AnyResult<()> {
+        // A retried init resumes its own interrupted transaction, which the
+        // original passphrase authenticates, instead of failing on the
+        // partially written home.
+        if self
+            .recover_pending_unlocked(&[passphrase])?
+            .is_some_and(|recovered| recovered.kind == TransactionKind::Init)
+        {
+            return Ok(());
+        }
         if self.read_vault_text()?.is_some() {
             return Err(classified(
                 VaultErrorKind::AlreadyExists,
@@ -169,7 +180,21 @@ impl VaultStore {
         )
         .map_err(|error| error.context("failed to initialize vault audit log"))?;
         let mutation_audit_mac = material.is_v3().then(|| prepared.mac().to_owned());
+        let vault_id = material.vault_id().to_owned();
+        let is_v3 = material.is_v3();
         let envelope = material.seal(passphrase, mutation_audit_mac)?;
+        if is_v3 {
+            // Nothing reaches the home before the durable pending marker, so
+            // a failure leaves no partial vault to roll back.
+            return self.commit_in_place_unlocked(InPlaceCommit {
+                kind: TransactionKind::Init,
+                vault_id: &vault_id,
+                previous_envelope_sha256: None,
+                candidate: &envelope.file_text,
+                generation: 1,
+                prepared: &prepared,
+            });
+        }
         if let Err(error) = prepared.commit_unlocked(self) {
             return Err(with_init_rollback(
                 self,
@@ -251,17 +276,30 @@ impl VaultStore {
                 error,
             )
         })?;
-        match prepared {
-            Some(prepared) => prepared.commit_unlocked(self).map(drop),
-            None => vault.append_audit_unlocked(self, action, details).map(drop),
+        if let Some(prepared) = prepared {
+            let generation = vault
+                .state
+                .v3
+                .as_ref()
+                .map_or(0, |fields| fields.generation);
+            return self.commit_in_place_unlocked(InPlaceCommit {
+                kind: TransactionKind::Edit,
+                vault_id: &vault.file.header.vault_id,
+                previous_envelope_sha256: Some(&vault.envelope_sha256),
+                candidate: &file_text,
+                generation,
+                prepared: &prepared,
+            });
         }
-        .map_err(|error| {
-            classify_source(
-                VaultErrorKind::AuditTampered,
-                "vault audit append failed before state save",
-                error,
-            )
-        })?;
+        vault
+            .append_audit_unlocked(self, action, details)
+            .map_err(|error| {
+                classify_source(
+                    VaultErrorKind::AuditTampered,
+                    "vault audit append failed before state save",
+                    error,
+                )
+            })?;
         self.write_vault_text_unlocked(&file_text).map_err(|error| {
             classify_source(
                 VaultErrorKind::Io,

@@ -242,10 +242,10 @@ fn batch_validation_rejects_mixed_valid_short_and_oversized_values_without_writi
 }
 
 #[test]
-fn field_batch_save_failure_leaves_audited_leading_intent_and_can_be_retried() {
+fn v2_field_batch_save_failure_leaves_audited_leading_intent_and_can_be_retried() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    store.init(&passphrase()).unwrap();
+    init_v2(&store, &passphrase());
     let before_vault = store.read_vault_text().unwrap().unwrap();
     let reference = VaultReference::parse("jig://Production/RESTIC_PASSWORD").unwrap();
 
@@ -290,12 +290,15 @@ fn migration_save_failure_leaves_version_one_readable_and_can_be_retried() {
         let error = store.migrate(&passphrase(), target).unwrap_err();
         assert_eq!(error.kind(), VaultErrorKind::Io);
         assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
-        assert!(store.verify_audit(&passphrase()).is_ok());
         let still_v1: VaultFile = serde_json::from_str(&before_vault).unwrap();
         assert_eq!(still_v1.header.version, V1_FORMAT_VERSION);
+        // Format 2 keeps the legacy audit-ahead behavior and needs a retry;
+        // a format 3 migration is pending and the next authenticated command
+        // finishes it instead.
+        assert!(store.verify_audit(&passphrase()).is_ok());
 
         let retry = store.migrate(&passphrase(), target).unwrap();
-        assert!(retry.changed);
+        assert_eq!(retry.changed, target == V2_FORMAT_VERSION);
         let migrated: VaultFile =
             serde_json::from_str(&store.read_vault_text().unwrap().unwrap()).unwrap();
         assert_eq!(migrated.header.version, target);
@@ -712,12 +715,11 @@ fn audited_edit_rejects_tampered_audit_before_saving_state() {
         )
         .unwrap_err();
     assert_eq!(public_error.kind(), VaultErrorKind::AuditTampered);
-    let reopened = store.open_unlocked(&passphrase()).unwrap();
-    assert!(
-        reopened
-            .secret_value(&SecretName::parse("other").unwrap())
-            .is_err()
-    );
+    // The tampered chain also blocks authenticated reads, so inspect the
+    // encrypted state directly.
+    let file: VaultFile = serde_json::from_str(&store.read_vault_text().unwrap().unwrap()).unwrap();
+    let state = decrypt_state_for_test(&file, &passphrase());
+    assert!(!String::from_utf8_lossy(&state).contains("\"other\""));
 }
 
 #[test]

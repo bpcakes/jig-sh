@@ -17,6 +17,11 @@ use crate::{VaultError, VaultErrorKind};
 use super::payload::DecodedBackupArchive;
 use super::{BackupRestoreResult, MAX_BACKUP_ARCHIVE_BYTES, RestoreTarget};
 
+mod witnessed;
+
+pub(super) use witnessed::restore;
+pub(crate) use witnessed::{discard_orphan_restore, finish_pending_restore, read_candidate};
+
 const VAULT_FILE: &str = "vault.json";
 const AUDIT_FILE: &str = "audit.jsonl";
 const LOCK_FILE: &str = "vault.lock";
@@ -72,7 +77,9 @@ pub(super) fn preflight_target(target_home: PathBuf) -> AnyResult<RestoreTarget>
     let parent = prepare_target_parent(&parent)?;
     let metadata = validate_parent(&parent)?;
     let home = parent.join(file_name);
-    require_absent(&home)?;
+    if !witnessed::target_has_journal(&home)? {
+        require_absent(&home)?;
+    }
     Ok(RestoreTarget {
         home,
         parent,
@@ -257,7 +264,8 @@ fn create_private_parent_chain(missing: &[PathBuf]) -> AnyResult<()> {
     Ok(())
 }
 
-pub(super) fn restore(
+/// Restores an unwitnessed format 2 archive exactly as archived.
+fn restore_legacy(
     passphrase: &SecretString,
     decoded: DecodedBackupArchive,
     target: RestoreTarget,
@@ -286,6 +294,8 @@ pub(super) fn restore(
             root: target.home.clone(),
             vault_id: decoded.source_vault_id.clone(),
             format_version: decoded.source_format_version,
+            source_format_version: decoded.source_format_version,
+            generation: None,
         })
     })();
 
@@ -310,7 +320,6 @@ struct OwnedStaging {
 
 impl OwnedStaging {
     fn create(target: &RestoreTarget) -> AnyResult<Self> {
-        revalidate_target(target)?;
         let leaf = target
             .home
             .file_name()
@@ -322,7 +331,11 @@ impl OwnedStaging {
             std::process::id(),
             ulid::Ulid::new()
         ));
-        let path = target.parent.join(name);
+        Self::create_at(target, target.parent.join(name))
+    }
+
+    fn create_at(target: &RestoreTarget, path: PathBuf) -> AnyResult<Self> {
+        revalidate_target(target)?;
         let mut builder = fs::DirBuilder::new();
         builder.mode(0o700);
         builder.create(&path).with_context(|| {

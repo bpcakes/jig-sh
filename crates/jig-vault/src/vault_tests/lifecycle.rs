@@ -185,12 +185,12 @@ fn rejected_passphrase_changes_leave_vault_and_audit_bytes_unchanged() {
 }
 
 #[test]
-fn passphrase_change_save_failure_leaves_old_envelope_and_leading_intent() {
+fn v2_passphrase_change_save_failure_leaves_old_envelope_and_leading_intent() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     let old = passphrase();
     let new = SecretString::from("replacement passphrase after fault".to_owned());
-    store.init(&old).unwrap();
+    init_v2(&store, &old);
     let before_vault = store.read_vault_text().unwrap().unwrap();
     store.fail_next_vault_write_for_test();
 

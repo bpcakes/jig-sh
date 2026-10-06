@@ -147,15 +147,35 @@ fn backups_record_and_restore_the_actual_source_format() {
         let request = Vault::preflight_backup_restore(&output, target.clone()).unwrap();
         let restored = Vault::restore_backup(&passphrase, request).unwrap();
         assert_eq!(restored.format_version, version, "v{version}");
-        // Restore currently installs the exact archived envelope and appends
-        // only an audit-only restore event, so the generation is unchanged.
-        assert_eq!(
-            fs::read_to_string(restored.root.join("vault.json")).unwrap(),
-            source_file
-        );
+        assert_eq!(restored.source_format_version, version);
+        let installed = fs::read_to_string(restored.root.join("vault.json")).unwrap();
         let vault = Vault::resolve_for_test(Some(restored.root.clone())).unwrap();
         vault.verify_audit(&passphrase).unwrap();
         vault.list_fields(&passphrase).unwrap();
+        if version == V2_FORMAT_VERSION {
+            // An unwitnessed format 2 archive keeps the legacy restore.
+            assert_eq!(installed, source_file);
+            assert_eq!(restored.generation, None);
+            continue;
+        }
+        // A format 3 restore is resealed above the witness and fences the
+        // older source copy that shares its vault ID.
+        assert_ne!(installed, source_file);
+        assert_eq!(restored.generation, Some(2));
+        let restore_event = backup_events(&restored.root).pop().unwrap();
+        assert_eq!(restore_event.action, "backup_restore");
+        assert_eq!(restore_event.details["source_generation"], 1);
+        assert_eq!(restore_event.details["generation"], 2);
+        let stale = Vault::resolve_for_test(Some(source_home.clone()))
+            .unwrap()
+            .list_fields(&passphrase)
+            .unwrap_err();
+        assert_eq!(stale.kind(), VaultErrorKind::AuditTampered);
+        assert!(
+            stale
+                .to_string()
+                .contains("older than its witnessed generation")
+        );
     }
 }
 
@@ -196,9 +216,12 @@ fn frozen_v3_archive_restores_as_version_three() {
     let restored_file: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(restored.root.join("vault.json")).unwrap())
             .unwrap();
+    // A fresh profile has no witness, so the restore lands one above the
+    // archived generation.
+    assert_eq!(restored.generation, Some(GENERATED_V3_GENERATION + 1));
     assert_eq!(
         restored_file["header"]["generation"],
-        GENERATED_V3_GENERATION
+        GENERATED_V3_GENERATION + 1
     );
     let vault = Vault::resolve_for_test(Some(restored.root.clone())).unwrap();
     assert_eq!(
@@ -210,5 +233,6 @@ fn frozen_v3_archive_restores_as_version_three() {
     let last = backup_events(&restored.root).pop().unwrap();
     assert_eq!(last.action, "backup_restore");
     assert_eq!(last.details["source_format_version"], V3_FORMAT_VERSION);
-    assert!(last.details.get("generation").is_none());
+    assert_eq!(last.details["source_generation"], GENERATED_V3_GENERATION);
+    assert_eq!(last.details["generation"], GENERATED_V3_GENERATION + 1);
 }

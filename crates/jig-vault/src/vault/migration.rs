@@ -11,11 +11,13 @@ use crate::audit::{AuditAction, AuditEvent};
 use crate::error::{classified, classify_source};
 use crate::format::{AuditRoot, V2_FORMAT_VERSION, V3_FORMAT_VERSION, V3StateFields};
 use crate::store::VaultStore;
+use crate::store::witness::TransactionKind;
 use crate::{Result, VaultError, VaultErrorKind};
 
 use super::VaultMigration;
 use super::commit::prepare_v3_mutation_event;
 use super::envelope::MigratedVaultEnvelope;
+use super::transaction::InPlaceCommit;
 
 impl VaultStore {
     pub(crate) fn migrate(
@@ -103,16 +105,27 @@ impl VaultStore {
                 error,
             )
         })?;
-        match prepared {
-            Some(prepared) => prepared.commit_unlocked(self).map(drop),
-            None => AuditEvent::append_unlocked(
-                self,
-                vault.audit_key.as_ref(),
-                AuditAction::VaultFormatMigrate,
-                details,
-            )
-            .map(drop),
+        if let Some(prepared) = prepared {
+            self.commit_in_place_unlocked(InPlaceCommit {
+                kind: TransactionKind::Migrate,
+                vault_id: &vault.file.header.vault_id,
+                previous_envelope_sha256: Some(&vault.envelope_sha256),
+                candidate: &file_text,
+                generation: 1,
+                prepared: &prepared,
+            })?;
+            return Ok(VaultMigration {
+                from_version,
+                to_version: target_version,
+                changed: true,
+            });
         }
+        AuditEvent::append_unlocked(
+            self,
+            vault.audit_key.as_ref(),
+            AuditAction::VaultFormatMigrate,
+            details,
+        )
         .map_err(|error| {
             classify_source(
                 VaultErrorKind::AuditTampered,
