@@ -54,13 +54,15 @@ pub use vault::{
     VaultStatus, VaultWriteMode,
 };
 
-/// Crash injection for tests of the witnessed transaction protocol. Only
-/// this crate's tests and `test-utils` consumers can arm a crash point; it
-/// applies to the arming thread's next matching protocol step.
+/// Crash injection and durability recording for tests of the witnessed
+/// transaction protocol. Only this crate's tests and `test-utils` consumers
+/// can arm a crash point, record durability operations, or inject a sync
+/// failure; each applies to the calling thread only.
 #[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
 pub mod test_support {
     pub use crate::store::FaultPoint as TransactionFaultPoint;
+    pub use crate::store::durable::recording::{FsOp, fail_next_sync_of, record as record_fs_ops};
 
     pub fn arm_transaction_fault(point: TransactionFaultPoint) {
         crate::store::arm_fault_for_test(point);

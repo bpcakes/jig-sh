@@ -17,7 +17,8 @@ use crate::error::{classified, classify_source};
 use crate::format::{AuditRoot, V1_FORMAT_VERSION, V3_FORMAT_VERSION, V3StateFields};
 use crate::store::VaultStore;
 use crate::store::witness::{
-    Checkpoint, Journal, JournalPayload, TransactionKind, WitnessRecord, WitnessStore, sha256_hex,
+    Checkpoint, Journal, JournalPayload, OrphanJournal, TransactionKind, WitnessRecord,
+    WitnessStore, sha256_hex,
 };
 
 use super::OpenVault;
@@ -224,19 +225,18 @@ impl VaultStore {
         }
     }
 
-    /// Removes a journal that no pending marker references: it was written
-    /// before its marker, or it is the leftover of a promotion, so the
-    /// record that no longer references it is made durable first.
+    /// Removes a journal established, under this target's lock, to have no
+    /// authoritative pending marker: written before its marker, or left
+    /// over after a promotion.
     pub(super) fn discard_orphan_journal(
         &self,
         witness: &WitnessStore,
-        journal: &Journal,
+        orphan: OrphanJournal,
     ) -> AnyResult<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        if matches!(journal.payload, JournalPayload::Restore(_)) {
-            return crate::backup::discard_orphan_restore(witness, journal, self.root());
+        if matches!(orphan.journal().payload, JournalPayload::Restore(_)) {
+            return crate::backup::discard_orphan_restore(witness, orphan, self.root());
         }
-        witness.sync_record(&journal.vault_id)?;
-        witness.remove_journal(&journal.target.target_key)
+        witness.delete_orphan_journal(orphan)
     }
 }

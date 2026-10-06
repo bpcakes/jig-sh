@@ -399,3 +399,27 @@ fn status_reports_a_pending_transaction_without_side_effects() {
     assert!(!status.pending_transaction);
     assert!(status.exists);
 }
+
+#[test]
+fn an_interrupted_enrollment_is_made_durable_before_a_retry_accepts_it() {
+    use crate::store::durable::recording::{FsOp, fail_next_sync_of, record};
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp, "vault");
+    store.init(&passphrase()).unwrap();
+    // Losing the record makes the next authenticated use a first-use
+    // enrollment; it publishes the record, then its directory sync fails.
+    let record_path = record_path(&temp, &store);
+    std::fs::remove_file(&record_path).unwrap();
+    let ids = std::fs::canonicalize(record_path.parent().unwrap()).unwrap();
+    fail_next_sync_of(&ids);
+    let error = store.list_fields(&passphrase()).unwrap_err();
+    assert!(error.to_string().contains("failed to enroll"), "{error}");
+    assert!(record_path.exists());
+
+    // The retry has no journal; it still syncs the visible record before
+    // accepting the state against it.
+    let (listed, ops) = record(|| store.list_fields(&passphrase()));
+    listed.unwrap();
+    assert!(ops.contains(&FsOp::SyncDir(ids)), "{ops:?}");
+}

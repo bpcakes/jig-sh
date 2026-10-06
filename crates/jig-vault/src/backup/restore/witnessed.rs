@@ -20,13 +20,13 @@ use crate::VaultErrorKind;
 use crate::error::classified;
 use crate::format::V2_FORMAT_VERSION;
 use crate::store::witness::{
-    self, JOURNAL_SCHEMA, Journal, JournalPayload, JournalTarget, PendingMarker, RestorePayload,
-    TransactionKind, WitnessLocation, WitnessRecord, WitnessStore, sha256_hex,
+    self, JOURNAL_SCHEMA, Journal, JournalPayload, JournalTarget, OrphanJournal, PendingMarker,
+    RestorePayload, TargetJournal, TransactionKind, WitnessLocation, WitnessRecord, WitnessStore,
+    sha256_hex,
 };
 use crate::store::{AUDIT_TEXT_READ_LIMIT, FaultPoint, VaultStore};
 use crate::vault::{
-    RestoreSource, authenticate_restore_candidate_text, promote_witness_record,
-    restore_pending_error,
+    RestoreSource, authenticate_restore_candidate_text, fail_closed, restore_pending_error,
 };
 
 use super::super::payload::DecodedBackupArchive;
@@ -123,6 +123,9 @@ fn restore_transactional(
                 audit_sha256: sha256_hex(&audit),
             }),
         };
+        // The target's parent holds the staging and receives the install; an
+        // interrupted earlier restore may have created it unsynced.
+        crate::store::ensure_entry_chain_durable(&target.parent)?;
         let journal_sha256 = witness.write_journal(&journal)?;
         // From here staging is the journal's durable reference: recovery
         // discards it only while no marker references the journal.
@@ -150,7 +153,8 @@ fn restore_transactional(
 }
 
 /// Resumes a pending restore when this command retries the exact archive
-/// it started from; discards a journal no marker references.
+/// it started from; discards only a journal established to have no
+/// authoritative pending marker.
 fn resume_matching_retry(
     witness: &WitnessStore,
     target: &RestoreTarget,
@@ -158,40 +162,35 @@ fn resume_matching_retry(
     decoded: &DecodedBackupArchive,
 ) -> AnyResult<Option<BackupRestoreResult>> {
     let target_key = witness::target_key(&target.home);
-    let Some((journal, digest)) = witness.read_journal(&target_key)? else {
-        return Ok(None);
-    };
-    let _id = witness.lock_id(&journal.vault_id)?;
-    let record = witness.read_record(&journal.vault_id)?;
-    let pending = record
-        .as_ref()
-        .and_then(|record| record.pending.as_ref())
-        .filter(|pending| pending.target_key == target_key);
-    let Some(pending) = pending else {
-        discard_orphan_restore(witness, &journal, &target.home)?;
-        return Ok(None);
-    };
-    // A marker naming this target makes its journal irrevocable: a mismatch
-    // is never evidence of an orphan.
-    if pending.journal_sha256 != digest
-        || pending.next != journal.next
-        || pending.operation != journal.operation
+    let (vault_id, record, journal) = match witness
+        .classify_target_journal(&target_key)
+        .map_err(fail_closed)?
     {
+        TargetJournal::Absent => return Ok(None),
+        TargetJournal::Orphan(orphan) => {
+            discard_orphan_restore(witness, orphan, &target.home)?;
+            return Ok(None);
+        }
+        TargetJournal::Referenced {
+            vault_id,
+            record,
+            journal,
+        } => (vault_id, record, journal),
+    };
+    let _id = witness.lock_id(&vault_id)?;
+    if witness.read_record(&vault_id)?.as_ref() != Some(&record) {
         return Err(classified(
             VaultErrorKind::AuditTampered,
-            "the pending vault transaction's journal does not match its marker",
+            "the pending vault transaction changed while it was being recovered",
         ));
     }
-    witness.sync_record(&journal.vault_id)?;
     let JournalPayload::Restore(payload) = &journal.payload else {
         return Err(classified(
             VaultErrorKind::AlreadyExists,
             "a different vault transaction is pending for this restore target; finish it with an authenticated vault command first",
         ));
     };
-    if payload.archive_sha256 != decoded.archive_sha256
-        || journal.vault_id != decoded.source_vault_id
-    {
+    if payload.archive_sha256 != decoded.archive_sha256 || vault_id != decoded.source_vault_id {
         return Err(classified(
             VaultErrorKind::AlreadyExists,
             "a restore of a different archive is pending for this target; retry with the same archive or finish it with an authenticated vault command",
@@ -199,7 +198,6 @@ fn resume_matching_retry(
     }
     let candidate = read_candidate(&journal, payload, &target.home)?;
     authenticate_restore_candidate_text(&journal, &candidate, &[passphrase])?;
-    let record = record.expect("a referenced journal has a record");
     finish_pending_restore(witness, &journal, record, &target.home)?;
     Ok(Some(result_for(
         &journal,
@@ -296,18 +294,17 @@ pub(crate) fn finish_pending_restore(
                 .with_context(|| format!("failed to inspect restore target {}", home.display()));
         }
     }
-    promote_witness_record(witness, journal, &mut record)
+    witness.promote(journal, &mut record)
 }
 
-/// Removes a restore journal no marker references, and its owned staging
-/// when the staging identity still matches, after making durable the record
-/// that no longer references it.
+/// Removes a restore journal established to have no authoritative pending
+/// marker, and its owned staging when the staging identity still matches.
 pub(crate) fn discard_orphan_restore(
     witness: &WitnessStore,
-    journal: &Journal,
+    orphan: OrphanJournal,
     home: &Path,
 ) -> AnyResult<()> {
-    witness.sync_record(&journal.vault_id)?;
+    let journal = orphan.journal();
     if let JournalPayload::Restore(payload) = &journal.payload
         && let Some(parent) = home.parent()
     {
@@ -325,7 +322,7 @@ pub(crate) fn discard_orphan_restore(
             staging.cleanup()?;
         }
     }
-    witness.remove_journal(&journal.target.target_key)
+    witness.delete_orphan_journal(orphan)
 }
 
 fn staging_path(journal: &Journal, payload: &RestorePayload, home: &Path) -> AnyResult<PathBuf> {

@@ -17,14 +17,15 @@ use zeroize::Zeroizing;
 use crate::crypto::KdfParams;
 use crate::{Result, VaultError, VaultErrorKind, VaultHomeState};
 
-mod durable;
+pub(crate) mod durable;
 mod existing;
 mod header;
 mod locking;
 mod pending;
 pub(crate) mod witness;
 
-use durable::create_dir_all_durable;
+pub(crate) use durable::ensure_entry_chain_durable;
+use durable::{create_dir_all_durable, sync_dir as sync_parent_dir, sync_file};
 pub(crate) use pending::pending_transaction_recorded;
 use witness::WitnessLocation;
 
@@ -318,8 +319,7 @@ impl VaultStore {
             .with_context(|| format!("failed to write vault audit event to {}", path.display()))?;
         file.write_all(b"\n")
             .with_context(|| format!("failed to finish vault audit event in {}", path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("failed to sync vault audit log {}", path.display()))?;
+        sync_file(&file, &path)?;
         if let Some(parent) = path.parent() {
             sync_parent_dir(parent)?;
         }
@@ -338,8 +338,7 @@ impl VaultStore {
         crate::acl::clear_file(&file, &path)?;
         file.write_all(bytes)
             .with_context(|| format!("failed to write vault audit log {}", path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("failed to sync vault audit log {}", path.display()))?;
+        sync_file(&file, &path)?;
         sync_parent_dir(&self.root)
     }
 
@@ -351,8 +350,7 @@ impl VaultStore {
             .read(true)
             .open(path)
             .with_context(|| format!("failed to open {} for sync", path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("failed to sync {}", path.display()))?;
+        sync_file(&file, path)?;
         sync_parent_dir(&self.root)
     }
 
@@ -365,8 +363,7 @@ impl VaultStore {
         crate::acl::clear_file(&file, &path)?;
         file.set_len(len)
             .with_context(|| format!("failed to truncate vault audit log {}", path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("failed to sync vault audit log {}", path.display()))?;
+        sync_file(&file, &path)?;
         if let Some(parent) = path.parent() {
             sync_parent_dir(parent)?;
         }
@@ -611,10 +608,9 @@ fn write_atomic_text(path: &Path, contents: &str) -> AnyResult<()> {
         crate::acl::clear_file(&file, &tmp_path)?;
         file.write_all(contents.as_bytes())
             .with_context(|| format!("failed to write temp vault file {}", tmp_path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("failed to sync temp vault file {}", tmp_path.display()))?;
+        sync_file(&file, &tmp_path)?;
         drop(file);
-        fs::rename(&tmp_path, path).with_context(|| {
+        durable::rename(&tmp_path, path).with_context(|| {
             format!(
                 "failed to replace vault file {} from {}",
                 path.display(),
@@ -629,19 +625,6 @@ fn write_atomic_text(path: &Path, contents: &str) -> AnyResult<()> {
         let _ = fs::remove_file(&tmp_path);
     }
     result
-}
-
-fn sync_parent_dir(path: &Path) -> AnyResult<()> {
-    #[cfg(unix)]
-    {
-        let dir = File::open(path)
-            .with_context(|| format!("failed to open parent directory {}", path.display()))?;
-        dir.sync_all()
-            .with_context(|| format!("failed to sync parent directory {}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
 }
 
 #[cfg(unix)]

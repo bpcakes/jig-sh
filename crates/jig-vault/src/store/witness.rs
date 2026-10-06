@@ -27,17 +27,20 @@ use sha2::{Digest, Sha256};
 
 mod journal;
 mod record;
+mod target;
 
 pub(crate) use journal::{
     AuditTransition, InPlacePayload, JOURNAL_SCHEMA, Journal, JournalPayload, JournalTarget,
     RestorePayload,
 };
 pub(crate) use record::{Checkpoint, PendingMarker, TransactionKind, WitnessRecord};
+pub(crate) use target::{OrphanJournal, TargetJournal};
 
+use super::durable::{self, ensure_entry_chain_durable};
 use super::{
     create_dir_all_durable, ensure_create_ancestor_is_not_shared_writable,
     ensure_create_base_is_not_symlink, ensure_private_dir_permissions, lock_file, path_is_symlink,
-    private_open_options, sync_parent_dir, write_atomic_text,
+    private_open_options, write_atomic_text,
 };
 
 /// Witness root below the user's home directory in production builds.
@@ -59,6 +62,27 @@ pub(crate) const JOURNAL_READ_LIMIT: u64 = 48 * 1024 * 1024;
 pub(crate) const WITNESS_ROOT_ENV_FOR_TESTS: &str = "JIG_VAULT_WITNESS_ROOT";
 #[cfg(any(test, feature = "test-utils"))]
 const TEST_WITNESS_DIR_NAME: &str = ".jig-vault-witness";
+
+#[cfg(test)]
+thread_local! {
+    /// Places this thread's witness away from the vault homes, so tests can
+    /// tell home directory syncs from witness directory syncs.
+    static ROOT_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// Uses `root` as the witness of every vault home on this thread until the
+/// returned guard drops.
+#[cfg(test)]
+pub(crate) fn override_root_for_test(root: PathBuf) -> impl Drop {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ROOT_OVERRIDE.with(|root| root.borrow_mut().take());
+        }
+    }
+    ROOT_OVERRIDE.with(|current| *current.borrow_mut() = Some(root));
+    Restore
+}
 
 /// Where the witness for one vault home lives. Resolving a location never
 /// creates or reads anything.
@@ -94,6 +118,10 @@ impl WitnessLocation {
 
     #[cfg(any(test, feature = "test-utils"))]
     fn isolated_for_tests(home: &Path) -> AnyResult<Self> {
+        #[cfg(test)]
+        if let Some(root) = ROOT_OVERRIDE.with(|root| root.borrow().clone()) {
+            return Ok(Self { root });
+        }
         let root = match std::env::var_os(WITNESS_ROOT_ENV_FOR_TESTS) {
             Some(value) if !value.is_empty() => PathBuf::from(value),
             _ => home
@@ -181,7 +209,9 @@ impl WitnessLocation {
         Ok(Some(WitnessStore { root }))
     }
 
-    /// Opens the witness, creating its private tree when needed.
+    /// Opens the witness, creating its private tree when needed. Every open
+    /// re-establishes the durability of the tree's directory entries, since
+    /// an interrupted earlier attempt may have created them unsynced.
     pub(crate) fn open_or_create(&self) -> AnyResult<WitnessStore> {
         if path_is_symlink(&self.root)? {
             bail!(
@@ -208,7 +238,6 @@ impl WitnessLocation {
                             path.display()
                         )
                     })?;
-                    sync_parent_dir(&root)?;
                 }
                 Err(error) => {
                     return Err(error)
@@ -216,6 +245,9 @@ impl WitnessLocation {
                 }
             }
             prepare_private_dir(&path)?;
+        }
+        for durable_child in [IDS_DIR, JOURNALS_DIR] {
+            ensure_entry_chain_durable(&root.join(durable_child))?;
         }
         Ok(WitnessStore { root })
     }
@@ -269,36 +301,34 @@ impl WitnessStore {
             .join(format!("{target_key}.json"))
     }
 
-    /// Re-establishes the durability of the record for `vault_id`. A crash
-    /// between a record's rename and its directory sync can leave it visible
-    /// but not durable, so recovery syncs it before acting on it.
-    pub(crate) fn sync_record(&self, vault_id: &str) -> AnyResult<()> {
-        match nonblocking_open_options()
-            .read(true)
-            .open(self.record_path(vault_id))
-        {
-            Ok(file) => file
-                .sync_all()
-                .context("failed to sync a vault witness record")?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).context("failed to open a vault witness record for sync");
-            }
-        }
-        sync_parent_dir(&self.root.join(IDS_DIR))
-    }
-
     /// Reads and validates the record for `vault_id`. Unreadable, malformed,
-    /// or symlinked records fail closed and are never treated as absent.
+    /// or symlinked records fail closed and are never treated as absent. A
+    /// returned record is durable: an interrupted write may have left it
+    /// visible but unsynced, and every caller relies on what it says.
     pub(crate) fn read_record(&self, vault_id: &str) -> AnyResult<Option<WitnessRecord>> {
         record::validate_vault_id(vault_id)?;
-        let Some(bytes) = read_protected(&self.record_path(vault_id), RECORD_READ_LIMIT)? else {
+        let Some(record) = self.read_record_file(&self.record_path(vault_id))? else {
             return Ok(None);
         };
-        let record: WitnessRecord = serde_json::from_slice(&bytes)
-            .context("vault witness record is malformed; refusing to treat it as absent")?;
         record.validate(vault_id)?;
+        self.sync_records()?;
         Ok(Some(record))
+    }
+
+    fn read_record_file(&self, path: &Path) -> AnyResult<Option<WitnessRecord>> {
+        let Some(bytes) = read_protected(path, RECORD_READ_LIMIT)? else {
+            return Ok(None);
+        };
+        let record = serde_json::from_slice(&bytes)
+            .context("vault witness record is malformed; refusing to treat it as absent")?;
+        Ok(Some(record))
+    }
+
+    /// Makes every visible record durable. Records are written by syncing
+    /// their contents before the rename that publishes them, so syncing the
+    /// directory that holds the renames is enough.
+    fn sync_records(&self) -> AnyResult<()> {
+        durable::sync_dir(&self.root.join(IDS_DIR))
     }
 
     pub(crate) fn write_record(&self, record: &WitnessRecord) -> AnyResult<()> {
@@ -342,25 +372,48 @@ impl WitnessStore {
         fs::symlink_metadata(self.journal_path(target_key)).is_ok()
     }
 
-    pub(crate) fn remove_journal(&self, target_key: &str) -> AnyResult<()> {
-        let path = self.journal_path(target_key);
-        match fs::remove_file(&path) {
+    /// Promotes a finished transaction's pending marker to the committed
+    /// checkpoint, then removes its journal: the marker that referenced it
+    /// is durably gone first.
+    pub(crate) fn promote(&self, journal: &Journal, record: &mut WitnessRecord) -> AnyResult<()> {
+        record.committed = Some(journal.next.clone());
+        record.pending = None;
+        self.write_record(record)?;
+        super::fault(super::FaultPoint::AfterPromotion)?;
+        // Only an exact leftover journal remains after a crash here; the next
+        // recovery finds no marker naming its target and removes it.
+        self.remove_journal(&journal.target.target_key)
+    }
+
+    /// Removes a target's journal. Reachable only through promotion and an
+    /// established orphan. A retried removal still syncs the directory,
+    /// since the earlier unlink may not have been made durable.
+    fn remove_journal(&self, target_key: &str) -> AnyResult<()> {
+        match durable::remove_file(&self.journal_path(target_key)) {
             Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(error).context("failed to remove the vault transaction journal");
             }
         }
-        sync_parent_dir(&self.root.join(JOURNALS_DIR))
+        durable::sync_dir(&self.root.join(JOURNALS_DIR))
+    }
+
+    /// Whether this thread holds the lock of one final target.
+    fn holds_target_lock(&self, target_key: &str) -> bool {
+        let path = self.target_lock_path(target_key);
+        HELD_LOCKS.with(|held| held.borrow().contains_key(&path))
+    }
+
+    fn target_lock_path(&self, target_key: &str) -> PathBuf {
+        self.root
+            .join(LOCKS_DIR)
+            .join(format!("target-{target_key}.lock"))
     }
 
     /// Locks one final target path. Taken before any home or ID lock.
     pub(crate) fn lock_target(&self, target_key: &str) -> AnyResult<HeldLock> {
-        HeldLock::acquire(
-            self.root
-                .join(LOCKS_DIR)
-                .join(format!("target-{target_key}.lock")),
-        )
+        HeldLock::acquire(self.target_lock_path(target_key))
     }
 
     /// Locks one vault ID, shared by every same-ID copy. Taken after the

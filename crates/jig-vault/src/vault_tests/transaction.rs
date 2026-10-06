@@ -335,3 +335,137 @@ fn generation_overflow_is_refused_before_anything_is_written() {
         .unwrap();
     assert_eq!(store.read_audit_text().unwrap().unwrap(), before);
 }
+
+fn journal_file(store: &VaultStore) -> std::path::PathBuf {
+    let journals = store.witness().root().join("journals");
+    let [path] = std::fs::read_dir(journals)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    path
+}
+
+/// Rewrites the journal to claim another valid vault ID; it stays parseable.
+fn claim_other_vault(path: &std::path::Path) -> (Vec<u8>, Vec<u8>) {
+    let original = std::fs::read(path).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    value["vault_id"] = "01EXAMPLEOTHERVAULTID0000000".into();
+    let changed = serde_json::to_vec(&value).unwrap();
+    std::fs::write(path, &changed).unwrap();
+    (original, changed)
+}
+
+#[test]
+fn a_pending_journal_claiming_another_valid_vault_is_kept_and_refused() {
+    let (_temp, store) = new_store();
+    store.init(&passphrase()).unwrap();
+    store.arm_fault_for_test(FaultPoint::AfterPending);
+    set_value(&store, "jig://Example/KEPT", b"kept value").unwrap_err();
+    let path = journal_file(&store);
+    let (original, changed) = claim_other_vault(&path);
+
+    let error = store.list_fields(&passphrase()).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered, "{error}");
+    assert!(
+        error.to_string().contains("does not match its marker"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), changed);
+    assert!(pending_kind(&store, &vault_id(&store)).is_some());
+
+    // The untouched recovery data still finishes the transaction.
+    std::fs::write(&path, original).unwrap();
+    assert_eq!(field_names(&store), vec!["jig://Example/KEPT"]);
+    assert_eq!(committed_generation(&store), 2);
+}
+
+#[test]
+fn an_unreferenced_journal_claiming_another_vault_is_discarded() {
+    let (_temp, store) = new_store();
+    store.init(&passphrase()).unwrap();
+    store.arm_fault_for_test(FaultPoint::AfterJournal);
+    set_value(&store, "jig://Example/LOST", b"never committed").unwrap_err();
+    claim_other_vault(&journal_file(&store));
+
+    assert!(field_names(&store).is_empty());
+    assert!(journal_candidate(&store).is_none());
+    assert_eq!(committed_generation(&store), 1);
+}
+
+#[test]
+fn a_home_left_by_an_interrupted_attempt_is_durable_before_init_writes_its_journal() {
+    use crate::store::durable::recording::{FsOp, record};
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(temp.path()).unwrap();
+    // The witness lives on another branch, so its syncs cannot stand in for
+    // the home's.
+    let _witness = crate::store::witness::override_root_for_test(base.join("a/b/witness"));
+    let outer = base.join("c");
+    let inner = outer.join("d");
+    let home = inner.join("vault");
+    // An earlier attempt created the home and its parents, then crashed
+    // before syncing any of their entries.
+    for dir in [&outer, &inner, &home] {
+        std::fs::create_dir(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let ((), ops) = record(|| {
+        let store = VaultStore::resolve_for_test(Some(home.clone())).unwrap();
+        store.init(&passphrase()).unwrap();
+    });
+    let journal_written = ops
+        .iter()
+        .position(|op| matches!(op, FsOp::Rename(path) if path.parent().is_some_and(|dir| dir.ends_with("journals"))))
+        .unwrap();
+    for dir in [&inner, &outer] {
+        let synced = ops
+            .iter()
+            .position(|op| *op == FsOp::SyncDir(dir.clone()))
+            .unwrap_or_else(|| panic!("{} never synced: {ops:?}", dir.display()));
+        assert!(synced < journal_written, "{ops:?}");
+    }
+}
+
+#[test]
+fn an_unsynced_existing_home_is_durable_before_an_edit_writes_its_journal() {
+    use crate::store::durable::recording::{FsOp, record};
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(temp.path()).unwrap();
+    let _witness = crate::store::witness::override_root_for_test(base.join("a/b/witness"));
+    let original = VaultStore::resolve_for_test(Some(base.join("original/vault"))).unwrap();
+    original.init(&passphrase()).unwrap();
+    // Another process placed an identical copy into new directories and
+    // crashed before syncing their entries; nothing here resolves it.
+    let outer = base.join("c");
+    let inner = outer.join("d");
+    let home = inner.join("vault");
+    for dir in [&outer, &inner, &home] {
+        std::fs::create_dir(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    for name in ["vault.json", "audit.jsonl"] {
+        std::fs::copy(original.root().join(name), home.join(name)).unwrap();
+    }
+    let copy = VaultStore::open_existing(home).unwrap();
+
+    let (written, ops) = record(|| set_value(&copy, "jig://Example/COPY", b"copy value"));
+    written.unwrap();
+    let journal_written = ops
+        .iter()
+        .position(|op| matches!(op, FsOp::Rename(path) if path.parent().is_some_and(|dir| dir.ends_with("journals"))))
+        .unwrap();
+    for dir in [&inner, &outer] {
+        let synced = ops
+            .iter()
+            .position(|op| *op == FsOp::SyncDir(dir.clone()))
+            .unwrap_or_else(|| panic!("{} never synced: {ops:?}", dir.display()));
+        assert!(synced < journal_written, "{ops:?}");
+    }
+}

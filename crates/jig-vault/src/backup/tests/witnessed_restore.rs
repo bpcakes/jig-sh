@@ -368,3 +368,94 @@ fn an_absent_pending_target_passes_existing_home_preflights() {
     assert!(output.exists());
     assert!(!Vault::status(Some(target)).unwrap().pending_transaction);
 }
+
+/// Rewrites a journal to claim another valid vault ID; it stays parseable.
+fn claim_other_vault(path: &Path) -> (Vec<u8>, Vec<u8>) {
+    let original = fs::read(path).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    value["vault_id"] = "01EXAMPLEOTHERVAULTID0000000".into();
+    let changed = serde_json::to_vec(&value).unwrap();
+    fs::write(path, &changed).unwrap();
+    (original, changed)
+}
+
+#[test]
+fn a_restore_journal_claiming_another_valid_vault_keeps_its_recovery_data() {
+    let temp = private_temp();
+    let (archive, target) = pending_restore(temp.path());
+    let [journal] = journal_paths(&target).try_into().unwrap();
+    let (original, changed) = claim_other_vault(&journal);
+
+    // Neither a restore retry nor generic recovery mistakes it for an orphan.
+    let error = restore(&archive, &target).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered, "{error}");
+    assert!(
+        error.to_string().contains("does not match its marker"),
+        "{error}"
+    );
+    let error = Vault::resolve_for_test(Some(target.clone()))
+        .unwrap()
+        .list_fields(&test_passphrase())
+        .unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered, "{error}");
+    assert_eq!(fs::read(&journal).unwrap(), changed);
+    assert_eq!(staging_dirs(temp.path()).len(), 1);
+    assert!(!target.exists());
+
+    fs::write(&journal, original).unwrap();
+    restore(&archive, &target).unwrap();
+    assert!(staging_dirs(temp.path()).is_empty());
+}
+
+#[test]
+fn an_unreferenced_restore_journal_claiming_another_vault_is_discarded() {
+    let temp = private_temp();
+    let (home, _vault) = source(temp.path());
+    let archive = temp.path().join("vault.backup");
+    backup(&home, &archive, &test_passphrase());
+    let target = temp.path().join("restored");
+    crate::store::arm_fault_for_test(FaultPoint::AfterJournal);
+    restore(&archive, &target).unwrap_err();
+    let [journal] = journal_paths(&target).try_into().unwrap();
+    claim_other_vault(&journal);
+
+    restore(&archive, &target).unwrap();
+    assert!(staging_dirs(temp.path()).is_empty());
+    assert!(journal_paths(&target).is_empty());
+}
+
+#[test]
+fn a_target_parent_left_by_an_interrupted_attempt_is_durable_before_the_journal() {
+    use crate::store::durable::recording::{FsOp, record};
+
+    let temp = private_temp();
+    let base = fs::canonicalize(temp.path()).unwrap();
+    let outer = base.join("c");
+    let parent = outer.join("d");
+    let (home, _vault) = source(&base.join("sources"));
+    let archive = base.join("vault.backup");
+    backup(&home, &archive, &test_passphrase());
+    // The witness of the restore target lives on another branch, so its
+    // syncs cannot stand in for the target parent's.
+    let _witness = crate::store::witness::override_root_for_test(base.join("a/b/witness"));
+    // An earlier restore created the parents, then crashed before syncing
+    // their entries.
+    for dir in [&outer, &parent] {
+        fs::create_dir(dir).unwrap();
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let (restored, ops) = record(|| restore(&archive, &parent.join("restored")));
+    restored.unwrap();
+    let journal_written = ops
+        .iter()
+        .position(|op| matches!(op, FsOp::Rename(path) if path.parent().is_some_and(|dir| dir.ends_with("journals"))))
+        .unwrap();
+    for dir in [&outer, &base] {
+        let synced = ops
+            .iter()
+            .position(|op| *op == FsOp::SyncDir(dir.clone()))
+            .unwrap_or_else(|| panic!("{} never synced: {ops:?}", dir.display()));
+        assert!(synced < journal_written, "{ops:?}");
+    }
+}

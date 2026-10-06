@@ -19,8 +19,8 @@ use crate::crypto::KEY_LEN;
 use crate::error::{classified, classify_source};
 use crate::store::witness::{
     AuditTransition, Checkpoint, InPlacePayload, JOURNAL_SCHEMA, Journal, JournalPayload,
-    JournalTarget, PendingMarker, TransactionKind, WitnessRecord, WitnessStore, directory_identity,
-    sha256_hex,
+    JournalTarget, PendingMarker, TargetJournal, TransactionKind, WitnessRecord, WitnessStore,
+    directory_identity, sha256_hex,
 };
 use crate::store::{AUDIT_TEXT_READ_LIMIT, FaultPoint, VaultStore};
 
@@ -86,6 +86,10 @@ impl VaultStore {
                 audit: prepared.transition(),
             }),
         };
+        // The home receives the audit append and envelope; an interrupted
+        // earlier attempt (such as an init's home creation) may have left its
+        // entries unsynced.
+        crate::store::ensure_entry_chain_durable(self.root()).map_err(record_error)?;
         let journal_sha256 = witness.write_journal(&journal).map_err(record_error)?;
         self.fault(FaultPoint::AfterJournal).map_err(record_error)?;
         let mut pending = record.unwrap_or_else(|| WitnessRecord::new(vault_id));
@@ -118,7 +122,7 @@ impl VaultStore {
         self.fault(FaultPoint::AfterAudit)?;
         self.install_candidate(journal, &payload.candidate_envelope)?;
         self.fault(FaultPoint::AfterEnvelope)?;
-        promote_witness_record(witness, journal, &mut record)
+        witness.promote(journal, &mut record)
     }
 
     /// Brings the audit log from the recorded prefix to exactly the recorded
@@ -212,8 +216,10 @@ impl VaultStore {
     }
 
     /// Finishes a pending transaction recorded for this target, after
-    /// authenticating its candidate with one of `credentials`. An
-    /// unreferenced journal predates its marker and is discarded.
+    /// authenticating its candidate with one of `credentials`. Whether the
+    /// target's journal is still referenced is established from every
+    /// witness record, never from the journal's own claims; only an
+    /// established orphan is discarded.
     pub(super) fn recover_pending_unlocked(
         &self,
         credentials: &[&SecretString],
@@ -222,77 +228,69 @@ impl VaultStore {
             return Ok(None);
         };
         let target_key = self.target_key();
-        let journal = witness.read_journal(&target_key).map_err(|error| {
-            classify_source(
-                VaultErrorKind::AuditTampered,
-                "vault transaction journal for this home is unreadable; refusing to guess its outcome",
-                error,
-            )
-        })?;
-        let header_id = self.header_vault_id_for_lock();
-        let mut ids: Vec<String> = header_id.iter().cloned().collect();
-        if let Some((journal, _)) = &journal
-            && !ids.contains(&journal.vault_id)
-        {
-            ids.push(journal.vault_id.clone());
-        }
-        for id in &ids {
-            let _id = witness.lock_id(id)?;
-            let Some(record) = witness.read_record(id)? else {
-                continue;
-            };
-            let Some(pending) = record.pending.clone() else {
-                continue;
-            };
-            if pending.target_key != target_key {
-                if header_id.as_deref() == Some(id.as_str()) {
-                    return Err(classified(
-                        VaultErrorKind::AlreadyExists,
-                        format!(
-                            "a vault {} for this vault is pending at another vault home; finish it there before using this copy",
-                            pending.operation.label()
-                        ),
-                    ));
-                }
-                continue;
+        let header_pending = match self.header_vault_id_for_lock() {
+            Some(id) => {
+                let _id = witness.lock_id(&id)?;
+                witness.read_record(&id)?.and_then(|record| record.pending)
             }
-            let Some((journal, digest)) = &journal else {
+            None => None,
+        };
+        if let Some(pending) = &header_pending
+            && pending.target_key != target_key
+        {
+            return Err(classified(
+                VaultErrorKind::AlreadyExists,
+                format!(
+                    "a vault {} for this vault is pending at another vault home; finish it there before using this copy",
+                    pending.operation.label()
+                ),
+            ));
+        }
+        let (vault_id, record, journal) = match witness
+            .classify_target_journal(&target_key)
+            .map_err(fail_closed)?
+        {
+            TargetJournal::Absent if header_pending.is_some() => {
                 return Err(classified(
                     VaultErrorKind::AuditTampered,
                     "the pending vault transaction's journal is missing; refusing to guess its outcome",
                 ));
-            };
-            if *digest != pending.journal_sha256
-                || journal.vault_id != *id
-                || journal.next != pending.next
-                || journal.operation != pending.operation
-            {
-                return Err(classified(
-                    VaultErrorKind::AuditTampered,
-                    "the pending vault transaction's journal does not match its marker",
-                ));
             }
-            witness.sync_record(id)?;
-            let credential_index = match &journal.payload {
-                JournalPayload::InPlace(_) => {
-                    self.check_journal_target(journal)?;
-                    let (key, index) = authenticate_candidate(journal, credentials)?;
-                    self.finish_in_place(&witness, journal, record, Some(&key))?;
-                    index
-                }
-                JournalPayload::Restore(_) => {
-                    self.recover_pending_restore(&witness, journal, record, credentials)?
-                }
-            };
-            return Ok(Some(Recovered {
-                kind: pending.operation,
-                credential_index,
-            }));
+            TargetJournal::Absent => return Ok(None),
+            TargetJournal::Orphan(orphan) => {
+                self.discard_orphan_journal(&witness, orphan)?;
+                return Ok(None);
+            }
+            TargetJournal::Referenced {
+                vault_id,
+                record,
+                journal,
+            } => (vault_id, record, journal),
+        };
+        let _id = witness.lock_id(&vault_id)?;
+        // Only this target's lock holder may change a marker naming it;
+        // re-reading under the ID lock confirms nothing else did.
+        if witness.read_record(&vault_id)?.as_ref() != Some(&record) {
+            return Err(classified(
+                VaultErrorKind::AuditTampered,
+                "the pending vault transaction changed while it was being recovered",
+            ));
         }
-        if let Some((journal, _)) = &journal {
-            self.discard_orphan_journal(&witness, journal)?;
-        }
-        Ok(None)
+        let credential_index = match &journal.payload {
+            JournalPayload::InPlace(_) => {
+                self.check_journal_target(&journal)?;
+                let (key, index) = authenticate_candidate(&journal, credentials)?;
+                self.finish_in_place(&witness, &journal, record, Some(&key))?;
+                index
+            }
+            JournalPayload::Restore(_) => {
+                self.recover_pending_restore(&witness, &journal, record, credentials)?
+            }
+        };
+        Ok(Some(Recovered {
+            kind: journal.operation,
+            credential_index,
+        }))
     }
 
     fn check_journal_target(&self, journal: &Journal) -> AnyResult<()> {
@@ -378,20 +376,17 @@ pub(super) fn pending_credential_error(kind: TransactionKind) -> anyhow::Error {
     )
 }
 
-/// Promotes a finished transaction's pending marker to the committed
-/// checkpoint, then removes its journal.
-pub(crate) fn promote_witness_record(
-    witness: &WitnessStore,
-    journal: &Journal,
-    record: &mut WitnessRecord,
-) -> AnyResult<()> {
-    record.committed = Some(journal.next.clone());
-    record.pending = None;
-    witness.write_record(record)?;
-    crate::store::fault(FaultPoint::AfterPromotion)?;
-    // Only an exact leftover journal remains after a crash here; the next
-    // recovery treats it as unreferenced and removes it.
-    witness.remove_journal(&journal.target.target_key)
+/// Keeps a classified failure's own kind and message; anything else that
+/// prevents establishing the target's transaction state fails closed.
+pub(crate) fn fail_closed(error: anyhow::Error) -> anyhow::Error {
+    if crate::error::classified_kind(&error).is_some() {
+        return error;
+    }
+    classify_source(
+        VaultErrorKind::AuditTampered,
+        "the vault transaction state for this home could not be established; refusing to guess its outcome",
+        error,
+    )
 }
 
 /// Failures after the pending marker is durable never roll back.

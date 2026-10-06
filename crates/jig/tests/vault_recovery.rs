@@ -196,3 +196,32 @@ fn a_rolled_back_copy_is_refused_value_free() {
     );
     assert!(!error.contains("recovery value"));
 }
+
+#[test]
+fn a_pending_restore_journal_claiming_another_vault_is_kept_and_refused() {
+    let temp = private_tempdir();
+    let (_home, _vault, archive) = source_with_backup(temp.path(), "source");
+    let target = temp.path().join("restored");
+    pending_restore(&archive, &target, TransactionFaultPoint::AfterPending);
+    let journals = temp.path().join(".jig-vault-witness/journals");
+    let [journal] = std::fs::read_dir(journals)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+    value["vault_id"] = "01EXAMPLEOTHERVAULTID0000000".into();
+    let changed = serde_json::to_vec(&value).unwrap();
+    std::fs::write(&journal, &changed).unwrap();
+
+    let error = failure(&jig(
+        &["backup", "restore", "--in", archive.to_str().unwrap()],
+        &target,
+    ));
+    assert!(error.contains("does not match its marker"), "{error}");
+    assert!(!error.contains("recovery value"));
+    assert_eq!(std::fs::read(&journal).unwrap(), changed);
+    assert!(!target.exists());
+}
