@@ -251,6 +251,65 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     }));
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn the_tui_finishes_a_pending_restore_instead_of_offering_init_or_restore() {
+    use jig_vault::test_support::{TransactionFaultPoint, arm_transaction_fault};
+
+    let temp = support::tempdir().unwrap();
+    let source_home = temp.path().join("source");
+    let source = Vault::resolve_for_test(Some(source_home.clone())).unwrap();
+    let passphrase = SecretString::from(PASSPHRASE.to_owned());
+    source.init(&passphrase).unwrap();
+    source
+        .set_field(
+            &passphrase,
+            "jig://Production/RECOVERED_FIELD".parse().unwrap(),
+            FieldKind::Text,
+            SecretBytes::new(b"recovered".to_vec()),
+        )
+        .unwrap();
+    let archive = temp.path().join("source.backup");
+    let request = Vault::preflight_backup_create(source_home, &archive, false).unwrap();
+    Vault::create_backup(&passphrase, request).unwrap();
+    let target = temp.path().join("restored");
+    let request = Vault::preflight_backup_restore(&archive, target.clone()).unwrap();
+    arm_transaction_fault(TransactionFaultPoint::AfterPending);
+    assert!(Vault::restore_backup(&passphrase, request).is_err());
+    assert!(!target.exists());
+
+    let Some((mut master, slave)) = required_pseudo_terminal("vault tui pending restore") else {
+        return;
+    };
+    let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
+    command
+        .args(["vault", "tui", "--home"])
+        .arg(&target)
+        .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
+        .env_remove("JIG_VAULT_WITNESS_ROOT")
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(slave.try_clone().unwrap()))
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stderr(Stdio::from(slave));
+    make_stdin_controlling_terminal(&mut command);
+    let mut child = ChildGuard::new(command.spawn().unwrap());
+    set_nonblocking(&master);
+    let mut output = Vec::new();
+    // The initial credential unlocks and finishes the recorded restore.
+    read_until(
+        &mut master,
+        &mut output,
+        "RECOVERED_FIELD",
+        PTY_EVENT_TIMEOUT,
+    );
+    master.write_all(b"\x03").unwrap();
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, PTY_EXIT_TIMEOUT)
+            .expect("vault TUI did not exit");
+    assert!(status.success(), "vault TUI exited with {status}");
+    assert!(target.join("vault.json").exists());
+}
+
 #[test]
 fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     let temp = support::tempdir().unwrap();

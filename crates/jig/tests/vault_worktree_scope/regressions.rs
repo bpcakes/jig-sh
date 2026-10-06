@@ -110,10 +110,13 @@ fn worktree_local_vault_keeps_working_through_the_cli() {
         info["capabilities"]["vault_main_checkout_root"],
         serde_json::Value::Null
     );
-    // Using the kept vault never creates the shared namespace.
+    // Using the kept vault never creates the shared namespace. Test builds
+    // keep the rollback witness beside the vault home, which is not a
+    // namespace.
     assert_eq!(
         std::fs::read_dir(vault_base.join("scopes"))
             .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name() != ".jig-vault-witness")
             .count(),
         1
     );

@@ -138,11 +138,6 @@ fn lifecycle_tools_backup_restore_rotate_verify_and_project_activity() {
     assert_export_and_peek(&backend, &temp);
     assert_backup_created(&backend, &temp);
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        assert_backup_restores(&temp);
-    }
-
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let restored_home = temp.path().join("restored-vault");
@@ -193,6 +188,11 @@ fn lifecycle_tools_backup_restore_rotate_verify_and_project_activity() {
     .unwrap();
     let tampered = backend.execute(VaultAction::VerifyAudit).unwrap_err();
     assert_eq!(tampered.kind(), VaultUiErrorKind::Audit);
+
+    // A witnessed restore fences every older copy of the vault ID, so it
+    // runs after the source is no longer used.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    assert_backup_restores(&temp);
 }
 
 #[cfg(unix)]

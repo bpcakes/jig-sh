@@ -68,3 +68,37 @@ fn version_two_vaults_keep_field_management_without_migrating() {
     assert_eq!(snapshot.format_version, 2);
     assert_eq!(snapshot.fields.len(), 1);
 }
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_pending_absent_restore_target_is_presented_for_unlock_and_finished() {
+    use jig_vault::test_support::{TransactionFaultPoint, arm_transaction_fault};
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let source_home = temp.path().join("source");
+    let source = Vault::resolve_for_test(Some(source_home.clone())).unwrap();
+    let passphrase = SecretString::from(PASSPHRASE.to_owned());
+    source.init(&passphrase).unwrap();
+    let archive = temp.path().join("source.backup");
+    let create = Vault::preflight_backup_create(source_home, &archive, false).unwrap();
+    Vault::create_backup(&passphrase, create).unwrap();
+    let target = temp.path().join("restored");
+    let restore = Vault::preflight_backup_restore(&archive, target.clone()).unwrap();
+    arm_transaction_fault(TransactionFaultPoint::AfterPending);
+    assert!(Vault::restore_backup(&passphrase, restore).is_err());
+
+    let backend = VaultTuiBackend::new(request(target.clone())).unwrap();
+    assert_eq!(backend.descriptor().home_state, VaultHomeState::Initialized);
+    assert!(!target.exists());
+    let snapshot = backend
+        .unlock(SecretBytes::new(PASSPHRASE.as_bytes().to_vec()))
+        .unwrap();
+    assert_eq!(
+        snapshot.format_version,
+        jig_vault::LATEST_VAULT_FORMAT_VERSION
+    );
+    assert!(target.join("vault.json").exists());
+    assert_eq!(backend.home_state().unwrap(), VaultHomeState::Initialized);
+}

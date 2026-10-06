@@ -29,7 +29,7 @@
 - Protected file input accepts only a bounded, non-symlink regular file and preserves exact bytes without routing them through text metadata buffers.
 - Import dry-run and preview paths resolve no values; a commit requires the separate exact `IMPORT` confirmation and rechecks current collisions and destination state.
 - Version 1 is read-only and offers only explicit migration to the latest format. Versions 2 and 3 share the complete management surface; version 2 additionally offers explicit migration, whose confirmation names the current and target versions. Gate on field-kind support, never on equality with one version.
-- Restore is offered only for an absent target and returns through the ordinary locked/unlock flow; passphrase rotation replaces the session credential only after the atomic core change succeeds.
+- Restore is offered only for an absent target and returns through the ordinary locked/unlock flow; a home with a recorded pending transaction is presented as initialized by the backend so unlock finishes it; passphrase rotation replaces the session credential only after the atomic core change succeeds.
 - At most one backend worker may exist. Join a non-cancellable mutation before terminal restoration.
 - Scope is fixed for the session and stays visible.
 - Lock drops credentials, snapshots, and all pending protected inputs.
