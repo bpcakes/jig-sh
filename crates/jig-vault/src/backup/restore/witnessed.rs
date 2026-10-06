@@ -36,15 +36,15 @@ use super::{
     revalidate_target, sync_directory, validate_trusted_ancestors, vault_error_as_classified,
 };
 
-/// Whether a transaction journal exists for `home` as a final target. Never
-/// creates or locks anything; a journal only allows a possible retry to
-/// reach credential capture and never waives any later check.
-pub(super) fn target_has_journal(home: &Path) -> AnyResult<bool> {
+/// Whether a transaction is recorded for `home` as a final target. Never
+/// creates or locks anything; it only allows a possible retry to reach
+/// credential capture and never waives any later check.
+pub(super) fn target_has_transaction(home: &Path) -> AnyResult<bool> {
     let location = WitnessLocation::for_home(home)?;
     let Some(witness) = location.open_existing()? else {
         return Ok(false);
     };
-    Ok(witness.read_journal(&witness::target_key(home))?.is_some())
+    witness.target_pending(&witness::target_key(home))
 }
 
 pub(in crate::backup) fn restore(

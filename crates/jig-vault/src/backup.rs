@@ -320,9 +320,12 @@ pub(crate) fn preflight_restore(
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?;
         let archive = parse_archive_bytes(archive_bytes)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Serialization, error))?;
-        let target = restore::preflight_target(target_home)
-            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
-        Ok(BackupRestoreRequest { archive, target })
+        // A target overlapping the protected witness is refused before any
+        // parent directory is prepared for it.
+        refuse_witness_overlap(&target_home)
+            .and_then(|()| restore::preflight_target(target_home))
+            .map(|target| BackupRestoreRequest { archive, target })
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -350,6 +353,12 @@ pub(crate) fn restore(
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn refuse_witness_overlap(target_home: &Path) -> AnyResult<()> {
+    let home = crate::path_security::physical_path(target_home, "restore target")?;
+    crate::store::witness::WitnessLocation::for_home(&home)?.ensure_disjoint(&home)
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn unsupported_restore_platform() -> VaultError {
     VaultError::new(
@@ -362,7 +371,7 @@ fn validate_create_request(store: &VaultStore, output: &Path, overwrite: bool) -
     store.revalidate_existing()?;
     PreparedPrivateFile::preflight(output, overwrite).map_err(anyhow::Error::new)?;
     store.validate_external_output(output, "backup")?;
-    if store.has_pending_journal()? {
+    if store.has_pending_transaction()? {
         // The authenticated backup finishes the recorded transaction first
         // and checks the recovered format and bounds under the vault lock;
         // the predecessor's format and size say nothing about them.

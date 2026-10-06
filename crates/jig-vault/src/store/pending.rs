@@ -1,4 +1,6 @@
-//! Nonmutating discovery of pending witnessed transactions for one target.
+//! Nonmutating discovery of pending witnessed transactions for one target:
+//! its journal, or an authoritative marker naming it whose journal is
+//! missing.
 //!
 //! Discovery only lets a possible retry reach credential capture. It never
 //! creates, locks, or authenticates anything, and the authenticated
@@ -20,9 +22,10 @@ fn final_target(root: &Path) -> Option<PathBuf> {
     Some(parent.join(root.file_name()?))
 }
 
-/// Keeps an absent home absent when a transaction journal is recorded for
-/// it: a pending restore installs it without replacement, so resolving the
-/// home must not create it.
+/// Keeps an absent home absent when a transaction is recorded for it: a
+/// pending restore installs it without replacement, so resolving the home
+/// must not create it, even when the transaction can only fail closed
+/// because its journal is missing.
 pub(super) fn pending_absent_target(
     root: &Path,
     initialization_kdf: &KdfParams,
@@ -35,7 +38,7 @@ pub(super) fn pending_absent_target(
         return Ok(None);
     };
     let witness = WitnessLocation::for_home(&target)?;
-    if !journal_recorded(&witness, &target)? {
+    if !transaction_recorded(&witness, &target)? {
         return Ok(None);
     }
     witness.ensure_disjoint(&target)?;
@@ -46,28 +49,28 @@ pub(super) fn pending_absent_target(
     )))
 }
 
-fn journal_recorded(witness: &WitnessLocation, target: &Path) -> AnyResult<bool> {
+fn transaction_recorded(witness: &WitnessLocation, target: &Path) -> AnyResult<bool> {
     let Some(store) = witness.open_existing()? else {
         return Ok(false);
     };
-    Ok(store.journal_exists(&witness::target_key(target)))
+    store.target_pending(&witness::target_key(target))
 }
 
 /// Best-effort, read-only probe for status reporting: whether a transaction
-/// journal is recorded for this home.
+/// is recorded for this home.
 pub(crate) fn pending_transaction_recorded(home: &Path) -> bool {
     let Some(target) = final_target(home) else {
         return false;
     };
     WitnessLocation::for_home(&target)
         .ok()
-        .and_then(|witness| journal_recorded(&witness, &target).ok())
+        .and_then(|witness| transaction_recorded(&witness, &target).ok())
         .unwrap_or(false)
 }
 
 impl VaultStore {
-    /// Whether a transaction journal is recorded for this home.
-    pub(crate) fn has_pending_journal(&self) -> AnyResult<bool> {
-        journal_recorded(&self.witness, &self.root)
+    /// Whether a transaction is recorded for this home.
+    pub(crate) fn has_pending_transaction(&self) -> AnyResult<bool> {
+        transaction_recorded(&self.witness, &self.root)
     }
 }

@@ -77,7 +77,7 @@ pub(super) fn preflight_target(target_home: PathBuf) -> AnyResult<RestoreTarget>
     let parent = prepare_target_parent(&parent)?;
     let metadata = validate_parent(&parent)?;
     let home = parent.join(file_name);
-    if !witnessed::target_has_journal(&home)? {
+    if !witnessed::target_has_transaction(&home)? {
         require_absent(&home)?;
     }
     Ok(RestoreTarget {

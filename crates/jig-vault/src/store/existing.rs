@@ -19,7 +19,7 @@ impl VaultStore {
     }
 
     pub(crate) fn revalidate_existing(&self) -> AnyResult<()> {
-        let pending = self.has_pending_journal()?;
+        let pending = self.has_pending_transaction()?;
         if pending && is_absent(&self.root)? {
             return validate_pending_absent_parent(&self.root);
         }

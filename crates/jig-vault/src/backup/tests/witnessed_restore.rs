@@ -251,7 +251,7 @@ fn a_collision_never_overwrites_the_occupant_or_drops_staging() {
     assert_eq!(fs::read(target.join("occupant")).unwrap(), b"unrelated");
     assert_eq!(staging_dirs(temp.path()).len(), 1);
     let store = VaultStore::open_existing(home).unwrap();
-    assert!(!store.has_pending_journal().unwrap());
+    assert!(!store.has_pending_transaction().unwrap());
 
     fs::remove_file(target.join("occupant")).unwrap();
     fs::remove_dir(&target).unwrap();
@@ -478,4 +478,53 @@ fn a_pending_restore_whose_journal_is_missing_blocks_every_use_of_its_target() {
     // No vault was initialized over the pending restore.
     assert!(!target.join("vault.json").exists());
     assert_eq!(staging_dirs(temp.path()).len(), 1);
+}
+
+#[test]
+fn a_restore_target_inside_the_witness_is_refused_before_creating_anything() {
+    let temp = private_temp();
+    let base = fs::canonicalize(temp.path()).unwrap();
+    let witness_root = base.join("witness");
+    // Production shares one witness across every home; mirror that here.
+    let _witness = crate::store::witness::override_root_for_test(witness_root.clone());
+    let (home, vault) = source(&base.join("homes"));
+    let archive = base.join("vault.backup");
+    backup(&home, &archive, &test_passphrase());
+    let ids = witness_root.join("ids");
+    let entries = || fs::read_dir(&ids).unwrap().count();
+    let before = entries();
+
+    let target = ids
+        .join(format!("{}.json", "a".repeat(64)))
+        .join("ExampleVault");
+    let error = Vault::preflight_backup_restore(&archive, target).unwrap_err();
+    assert!(error.to_string().contains("must not overlap"), "{error}");
+    assert_eq!(entries(), before);
+    vault.list_fields(&test_passphrase()).unwrap();
+}
+
+#[test]
+fn an_absent_target_whose_journal_is_missing_stays_absent_and_can_resume() {
+    let temp = private_temp();
+    let (archive, target) = pending_restore(temp.path());
+    let [journal] = journal_paths(&target).try_into().unwrap();
+    let original = fs::read(&journal).unwrap();
+    fs::remove_file(&journal).unwrap();
+
+    assert!(
+        Vault::status(Some(target.clone()))
+            .unwrap()
+            .pending_transaction
+    );
+    let vault = Vault::resolve_for_test(Some(target.clone())).unwrap();
+    assert!(!target.exists());
+    let error = vault.list_fields(&test_passphrase()).unwrap_err();
+    assert!(error.to_string().contains("journal is missing"), "{error}");
+    assert!(!target.exists());
+
+    // Nothing obstructs the transaction once its journal is back.
+    fs::write(&journal, original).unwrap();
+    fs::set_permissions(&journal, fs::Permissions::from_mode(0o600)).unwrap();
+    restore(&archive, &target).unwrap();
+    assert!(staging_dirs(temp.path()).is_empty());
 }

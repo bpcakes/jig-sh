@@ -294,3 +294,17 @@ fn concurrent_first_opens_of_a_shared_witness_both_succeed() {
         });
     }
 }
+
+#[test]
+fn a_target_is_pending_while_its_journal_or_a_marker_naming_it_exists() {
+    let (_temp, store) = witness();
+    let key = target_key(Path::new("/example/home"));
+    assert!(!store.target_pending(&key).unwrap());
+    pending_for(&store, &journal(&key));
+    assert!(store.target_pending(&key).unwrap());
+    // A marker still names the target after its journal goes missing.
+    fs::remove_file(store.journal_path(&key)).unwrap();
+    let (pending, ops) = record(|| store.target_pending(&key));
+    assert!(pending.unwrap());
+    assert!(ops.is_empty(), "discovery must not sync: {ops:?}");
+}

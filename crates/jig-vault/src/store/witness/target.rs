@@ -124,11 +124,31 @@ impl WitnessStore {
         Ok(())
     }
 
+    /// Whether a transaction is recorded for `target_key`: its journal
+    /// exists, or an authoritative marker names it although the journal is
+    /// missing. Read-only discovery that never creates, locks, or syncs; it
+    /// only keeps absent targets absent and lets a possible retry reach
+    /// credential capture.
+    pub(crate) fn target_pending(&self, target_key: &str) -> AnyResult<bool> {
+        if self.journal_exists(target_key) {
+            return Ok(true);
+        }
+        Ok(!self.scan_pending_for(target_key)?.is_empty())
+    }
+
     /// Every record whose pending marker names `target_key`, made durable
     /// before returning. Only
     /// `<id key>.json` entries are records; interrupted atomic writes leave
     /// temporary names that were never published and are not read.
     fn records_with_pending_for(&self, target_key: &str) -> AnyResult<Vec<WitnessRecord>> {
+        let naming = self.scan_pending_for(target_key)?;
+        // What was read is now durable, so no conclusion rests on a record
+        // an interrupted write published without syncing.
+        self.sync_records()?;
+        Ok(naming)
+    }
+
+    fn scan_pending_for(&self, target_key: &str) -> AnyResult<Vec<WitnessRecord>> {
         let mut naming = Vec::new();
         for (index, entry) in fs::read_dir(self.root.join(IDS_DIR))?.enumerate() {
             if index >= MAX_RECORD_SCAN_ENTRIES {
@@ -155,9 +175,6 @@ impl WitnessStore {
                 naming.push(record);
             }
         }
-        // What was read is now durable, so no conclusion rests on a record
-        // an interrupted write published without syncing.
-        self.sync_records()?;
         Ok(naming)
     }
 }

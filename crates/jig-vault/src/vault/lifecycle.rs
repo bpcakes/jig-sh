@@ -80,7 +80,7 @@ impl VaultStore {
     pub(crate) fn preflight_passphrase_change(home: PathBuf) -> Result<()> {
         let store = VaultStore::open_existing(home)?;
         if store
-            .has_pending_journal()
+            .has_pending_transaction()
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?
         {
             // Credential capture may proceed; the change finishes the
