@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 use crate::audit::{AuditAction, AuditEvent};
 use crate::crypto::KEY_LEN;
 use crate::error::{classified, vault_error_from_anyhow};
-use crate::format::FORMAT_VERSION;
+use crate::format::{LATEST_FORMAT_VERSION, supports_field_kinds};
 use crate::store::VaultStore;
 use crate::{PreparedPrivateFile, Result, VaultError, VaultErrorKind};
 
@@ -356,11 +356,11 @@ fn validate_create_request(store: &VaultStore, output: &Path, overwrite: bool) -
         .read_vault_bytes()?
         .context("existing vault state disappeared during backup preflight")?;
     let (vault_id, version) = inspect_embedded_vault(&vault_bytes)?;
-    if version != FORMAT_VERSION {
+    if !supports_field_kinds(version) {
         return Err(classified(
             VaultErrorKind::InvalidInput,
             format!(
-                "vault format {version} cannot be backed up; run `jig vault migrate --to {FORMAT_VERSION}` first"
+                "vault format {version} cannot be backed up; run `jig vault migrate --to {LATEST_FORMAT_VERSION}` first"
             ),
         ));
     }

@@ -15,7 +15,7 @@ use crate::error::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::format::V1_FORMAT_VERSION;
-use crate::format::{FORMAT_VERSION, VaultFile, validate_header};
+use crate::format::{LATEST_FORMAT_VERSION, VaultFile, supports_field_kinds, validate_header};
 use crate::store::VaultStore;
 use crate::{Result, VaultError, VaultErrorKind};
 
@@ -23,13 +23,14 @@ use super::envelope::RekeyedVaultEnvelope;
 use super::{OpenVault, Vault, validate_new_vault_passphrase_inner};
 
 impl Vault {
-    /// Re-encrypts a version-two vault under a new passphrase without changing
-    /// its identity, data-encryption key, state, or audit key.
+    /// Re-encrypts a version 2 or 3 vault under a new passphrase without
+    /// changing its identity, data-encryption key, logical state, or audit
+    /// key. A version 3 change commits the next state generation.
     pub fn change_passphrase(&self, current: &SecretString, new: &SecretString) -> Result<()> {
         self.store.change_passphrase(current, new)
     }
 
-    /// Validates an existing version-two vault before passphrase capture,
+    /// Validates an existing version 2 or 3 vault before passphrase capture,
     /// without creating a vault home, lock, file, or audit event.
     pub fn preflight_passphrase_change(home: PathBuf) -> Result<()> {
         VaultStore::preflight_passphrase_change(home)
@@ -92,11 +93,11 @@ impl VaultStore {
         })?;
         validate_header(&file.header)
             .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Serialization, error))?;
-        if file.header.version != FORMAT_VERSION {
+        if !supports_field_kinds(file.header.version) {
             return Err(VaultError::new(
                 VaultErrorKind::InvalidInput,
                 format!(
-                    "vault format {} does not support passphrase change; run `jig vault migrate --to {FORMAT_VERSION}` first",
+                    "vault format {} does not support passphrase change; run `jig vault migrate --to {LATEST_FORMAT_VERSION}` first",
                     file.header.version
                 ),
             ));
@@ -139,7 +140,7 @@ impl VaultStore {
         new: &SecretString,
         kdf: KdfParams,
     ) -> AnyResult<()> {
-        let vault = self.open_unlocked(current)?;
+        let mut vault = self.open_unlocked(current)?;
         vault.verify_audit_unlocked(self).map_err(|error| {
             classify_source(
                 VaultErrorKind::AuditTampered,
@@ -147,12 +148,12 @@ impl VaultStore {
                 error,
             )
         })?;
-        if vault.format_version() != FORMAT_VERSION {
+        let format_version = vault.format_version();
+        if !supports_field_kinds(format_version) {
             return Err(classified(
                 VaultErrorKind::InvalidInput,
                 format!(
-                    "vault format {} does not support passphrase change; run `jig vault migrate --to {FORMAT_VERSION}` first",
-                    vault.format_version()
+                    "vault format {format_version} does not support passphrase change; run `jig vault migrate --to {LATEST_FORMAT_VERSION}` first"
                 ),
             ));
         }
@@ -160,6 +161,9 @@ impl VaultStore {
         // Complete every fallible cryptographic and serialization step before
         // appending intent so invalid input and RNG/serialization failures do
         // not advance the audit chain.
+        let details = serde_json::json!({ "format_version": format_version });
+        let prepared =
+            vault.stage_v3_mutation(self, AuditAction::PassphraseChange, details.clone())?;
         let envelope = RekeyedVaultEnvelope::seal(&vault.file, new, &vault.dek, &vault.state, kdf)?;
         let file_text = envelope.serialize_pretty()?;
         self.validate_vault_text_len(&file_text).map_err(|error| {
@@ -169,19 +173,19 @@ impl VaultStore {
                 error,
             )
         })?;
-        vault
-            .append_audit_unlocked(
-                self,
-                AuditAction::PassphraseChange,
-                serde_json::json!({ "format_version": FORMAT_VERSION }),
+        match prepared {
+            Some(prepared) => prepared.commit_unlocked(self).map(drop),
+            None => vault
+                .append_audit_unlocked(self, AuditAction::PassphraseChange, details)
+                .map(drop),
+        }
+        .map_err(|error| {
+            classify_source(
+                VaultErrorKind::AuditTampered,
+                "vault audit append failed before passphrase change save",
+                error,
             )
-            .map_err(|error| {
-                classify_source(
-                    VaultErrorKind::AuditTampered,
-                    "vault audit append failed before passphrase change save",
-                    error,
-                )
-            })?;
+        })?;
         self.write_vault_text_unlocked(&file_text)
             .map_err(|error| {
                 classify_source(
@@ -210,11 +214,11 @@ impl VaultStore {
             })?;
             let (pre_start_id, pre_start_version) =
                 inspect_embedded_vault(&pre_start_vault_bytes)?;
-            if pre_start_version != FORMAT_VERSION {
+            if !supports_field_kinds(pre_start_version) {
                 return Err(classified(
                     VaultErrorKind::InvalidInput,
                     format!(
-                        "vault format {pre_start_version} cannot be backed up; run `jig vault migrate --to {FORMAT_VERSION}` first"
+                        "vault format {pre_start_version} cannot be backed up; run `jig vault migrate --to {LATEST_FORMAT_VERSION}` first"
                     ),
                 ));
             }
@@ -246,13 +250,11 @@ impl VaultStore {
                     error,
                 )
             })?;
-            if vault.format_version() != FORMAT_VERSION {
+            let source_format_version = vault.format_version();
+            if source_format_version != pre_start_version {
                 return Err(classified(
-                    VaultErrorKind::InvalidInput,
-                    format!(
-                        "vault format {} cannot be backed up; run `jig vault migrate --to {FORMAT_VERSION}` first",
-                        vault.format_version()
-                    ),
+                    VaultErrorKind::Serialization,
+                    "vault format changed while preparing backup",
                 ));
             }
             let source_vault_id = vault.file.header.vault_id.clone();
@@ -263,7 +265,7 @@ impl VaultStore {
                     serde_json::json!({
                         "operation_id": operation_id,
                         "source_vault_id": source_vault_id,
-                        "source_format_version": FORMAT_VERSION,
+                        "source_format_version": source_format_version,
                     }),
                 )
                 .map_err(|error| {
@@ -282,7 +284,7 @@ impl VaultStore {
                     )
                 })?;
                 let (captured_id, captured_version) = inspect_embedded_vault(&vault_bytes)?;
-                if captured_id != source_vault_id || captured_version != FORMAT_VERSION {
+                if captured_id != source_vault_id || captured_version != source_format_version {
                     return Err(classified(
                         VaultErrorKind::Serialization,
                         "vault identity changed while preparing backup",
@@ -331,7 +333,7 @@ impl VaultStore {
                 audit_key,
                 operation_id,
                 source_vault_id,
-                source_format_version: FORMAT_VERSION,
+                source_format_version,
                 vault_bytes,
                 audit_bytes,
             })
@@ -366,7 +368,7 @@ impl VaultStore {
                 return Err(classified(
                     VaultErrorKind::InvalidInput,
                     format!(
-                        "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {FORMAT_VERSION}` and create a new backup"
+                        "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {LATEST_FORMAT_VERSION}` and create a new backup"
                     ),
                 ));
             }

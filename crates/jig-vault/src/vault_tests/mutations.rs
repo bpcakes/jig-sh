@@ -21,7 +21,7 @@ fn field_mutations_require_explicit_version_one_migration_without_writing() {
         .unwrap_err();
 
     assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert!(error.to_string().contains("jig vault migrate --to 2"));
+    assert!(error.to_string().contains("jig vault migrate --to 3"));
     assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
     assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
 }
@@ -280,24 +280,27 @@ fn field_batch_save_failure_leaves_audited_leading_intent_and_can_be_retried() {
 
 #[test]
 fn migration_save_failure_leaves_version_one_readable_and_can_be_retried() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    init_v1(&store, &passphrase());
-    let before_vault = store.read_vault_text().unwrap().unwrap();
+    for target in [V2_FORMAT_VERSION, V3_FORMAT_VERSION] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+        init_v1(&store, &passphrase());
+        let before_vault = store.read_vault_text().unwrap().unwrap();
 
-    store.fail_next_vault_write_for_test();
-    let error = store.migrate(&passphrase(), FORMAT_VERSION).unwrap_err();
-    assert_eq!(error.kind(), VaultErrorKind::Io);
-    assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
-    assert!(store.verify_audit(&passphrase()).is_ok());
-    let still_v1: VaultFile = serde_json::from_str(&before_vault).unwrap();
-    assert_eq!(still_v1.header.version, V1_FORMAT_VERSION);
+        store.fail_next_vault_write_for_test();
+        let error = store.migrate(&passphrase(), target).unwrap_err();
+        assert_eq!(error.kind(), VaultErrorKind::Io);
+        assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
+        assert!(store.verify_audit(&passphrase()).is_ok());
+        let still_v1: VaultFile = serde_json::from_str(&before_vault).unwrap();
+        assert_eq!(still_v1.header.version, V1_FORMAT_VERSION);
 
-    let retry = store.migrate(&passphrase(), FORMAT_VERSION).unwrap();
-    assert!(retry.changed);
-    let migrated: VaultFile =
-        serde_json::from_str(&store.read_vault_text().unwrap().unwrap()).unwrap();
-    assert_eq!(migrated.header.version, FORMAT_VERSION);
+        let retry = store.migrate(&passphrase(), target).unwrap();
+        assert!(retry.changed);
+        let migrated: VaultFile =
+            serde_json::from_str(&store.read_vault_text().unwrap().unwrap()).unwrap();
+        assert_eq!(migrated.header.version, target);
+        store.verify_audit(&passphrase()).unwrap();
+    }
 }
 
 #[test]
@@ -334,7 +337,7 @@ fn tampered_audit_blocks_field_batches_and_migration_without_new_append() {
     std::fs::write(migration_store.audit_path(), &migration_audit).unwrap();
     let before_migration_vault = migration_store.read_vault_text().unwrap().unwrap();
     let migration_error = migration_store
-        .migrate(&passphrase(), FORMAT_VERSION)
+        .migrate(&passphrase(), V3_FORMAT_VERSION)
         .unwrap_err();
     assert_eq!(migration_error.kind(), VaultErrorKind::AuditTampered);
     assert_eq!(

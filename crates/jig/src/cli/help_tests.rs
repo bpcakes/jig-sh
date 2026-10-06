@@ -232,7 +232,7 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_help, "Both concealed and text fields are encrypted");
     assert_help_contains(&vault_help, "jig vault init");
     assert_help_contains(&vault_help, "jig vault tui");
-    assert_help_contains(&vault_help, "jig vault migrate --to 2");
+    assert_help_contains(&vault_help, "jig vault migrate --to 3");
     assert_help_contains(
         &vault_help,
         "jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt",
@@ -304,10 +304,12 @@ fn vault_help_includes_quick_start_examples() {
     );
 
     let vault_migrate_help = rendered_help(&["vault", "migrate"]);
+    assert_help_contains(&vault_migrate_help, "jig vault migrate --to 3");
     assert_help_contains(&vault_migrate_help, "jig vault migrate --to 2");
     assert_help_contains(&vault_migrate_help, "--to <TO>");
     assert_help_contains(&vault_migrate_help, "version 1 vaults");
-    assert_help_contains(&vault_migrate_help, "old Jig rejects");
+    assert_help_contains(&vault_migrate_help, "downgrades are refused");
+    assert_help_contains(&vault_migrate_help, "Older Jig rejects");
 
     let vault_field_set_help = rendered_help(&["vault", "field", "set"]);
     assert_help_contains(&vault_field_set_help, "--text");

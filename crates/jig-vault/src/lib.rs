@@ -17,6 +17,8 @@ mod run;
 mod secret;
 mod store;
 mod template;
+#[cfg(test)]
+mod test_fixtures;
 mod types;
 mod vault;
 
@@ -46,3 +48,7 @@ pub use vault::{
     VaultHomeState, VaultImportPrecondition, VaultMigration, VaultMutation, VaultRevision,
     VaultSnapshot, VaultStatus, VaultWriteMode, validate_new_vault_passphrase,
 };
+
+/// Envelope format created by initialization and the newest explicit
+/// migration target.
+pub const LATEST_VAULT_FORMAT_VERSION: u32 = format::LATEST_FORMAT_VERSION;

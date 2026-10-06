@@ -10,8 +10,8 @@ use crate::VaultErrorKind;
 use crate::crypto::{KEY_LEN, NONCE_LEN, SALT_LEN, validate_kdf_params};
 use crate::error::{classified, classify_source};
 use crate::format::{
-    AEAD_ALGORITHM, FORMAT_VERSION, MAGIC, V1_FORMAT_VERSION, VaultHeader, decode_b64_array,
-    validate_header,
+    AEAD_ALGORITHM, LATEST_FORMAT_VERSION, MAGIC, V1_FORMAT_VERSION, VaultHeader, decode_b64_array,
+    supports_field_kinds, validate_header,
 };
 
 use super::codec::{BackupKdfParams, validate_short_ascii};
@@ -180,11 +180,11 @@ fn validate_payload_metadata(
         return Err(classified(
             VaultErrorKind::InvalidInput,
             format!(
-                "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {FORMAT_VERSION}` and create a new backup"
+                "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {LATEST_FORMAT_VERSION}` and create a new backup"
             ),
         ));
     }
-    if source_format_version != FORMAT_VERSION {
+    if !supports_field_kinds(source_format_version) {
         return Err(classified(
             VaultErrorKind::InvalidInput,
             format!("unsupported embedded vault format {source_format_version}"),
@@ -246,11 +246,11 @@ pub(crate) fn inspect_embedded_vault(vault_bytes: &[u8]) -> AnyResult<(String, u
         return Err(classified(
             VaultErrorKind::InvalidInput,
             format!(
-                "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {FORMAT_VERSION}` and create a new backup"
+                "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {LATEST_FORMAT_VERSION}` and create a new backup"
             ),
         ));
     }
-    if embedded_header.version != FORMAT_VERSION {
+    if !supports_field_kinds(embedded_header.version) {
         return Err(classified(
             VaultErrorKind::InvalidInput,
             "unsupported embedded vault format",
@@ -348,6 +348,10 @@ struct StrictEmbeddedVaultHeader {
     kdf: BackupKdfParams,
     salt_b64: String,
     aead: String,
+    /// Required for embedded format 3 and rejected for format 2 by the
+    /// shared header validation.
+    #[serde(default)]
+    generation: Option<u64>,
 }
 
 impl StrictEmbeddedVaultHeader {
@@ -360,6 +364,7 @@ impl StrictEmbeddedVaultHeader {
             kdf: self.kdf.as_vault_params(),
             salt_b64: self.salt_b64.clone(),
             aead: self.aead.clone(),
+            generation: self.generation,
         }
     }
 }

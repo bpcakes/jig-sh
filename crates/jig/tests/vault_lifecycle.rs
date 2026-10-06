@@ -127,3 +127,55 @@ fn passphrase_change_backup_and_restore_preserve_state_without_leaks() {
 
     assert_restore_contract(temp.path(), &backup_one, &backup_passphrase, &fields_before);
 }
+
+fn vault_json(args: &[&str], home: &Path) -> Output {
+    let mut full = vec!["--json".as_ref(), "vault".as_ref()];
+    full.extend(args.iter().map(|arg| std::ffi::OsStr::new(*arg)));
+    full.extend(["--home".as_ref(), home.as_os_str()]);
+    jig_with_passphrases(full, OLD_PASSPHRASE, None)
+}
+
+#[test]
+fn status_and_migrate_report_format_versions_through_the_cli() {
+    let temp = private_tempdir();
+    let home = temp.path().join("legacy-home");
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+    vault
+        .init_format_for_test(&SecretString::from(OLD_PASSPHRASE.to_owned()), 2)
+        .unwrap();
+
+    let status = vault_json(&["status"], &home);
+    assert!(status.status.success());
+    assert_eq!(output_json(&status)["format_version"], 2);
+
+    let migrated = vault_json(&["migrate", "--to", "3"], &home);
+    assert!(
+        migrated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&combined_output(&migrated))
+    );
+    let payload = output_json(&migrated);
+    assert_eq!(payload["from_version"], 2);
+    assert_eq!(payload["to_version"], 3);
+    assert_eq!(payload["changed"], true);
+    assert_contains_no_lifecycle_secrets(&combined_output(&migrated));
+    assert_eq!(
+        output_json(&vault_json(&["status"], &home))["format_version"],
+        3
+    );
+
+    let downgrade = vault_json(&["migrate", "--to", "2"], &home);
+    assert!(!downgrade.status.success());
+    let combined = combined_output(&downgrade);
+    assert!(String::from_utf8_lossy(&combined).contains("downgrades are not supported"));
+    assert_contains_no_lifecycle_secrets(&combined);
+    assert!(
+        !vault_json(&["migrate", "--to", "4"], &home)
+            .status
+            .success()
+    );
+    assert_eq!(
+        output_json(&vault_json(&["status"], &home))["format_version"],
+        3
+    );
+}

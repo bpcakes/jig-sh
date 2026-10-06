@@ -103,7 +103,7 @@ fn assert_backup_restores(temp: &tempfile::TempDir) {
     };
     // Restore reports the physical home, so macOS /var temp paths resolve.
     assert_eq!(root, std::fs::canonicalize(&restored_home).unwrap());
-    assert_eq!(format_version, 2);
+    assert_eq!(format_version, 3);
     let restored = backend
         .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
         .unwrap();

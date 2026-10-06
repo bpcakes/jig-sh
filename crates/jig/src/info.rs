@@ -132,6 +132,7 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             "vault_scope_id": vault.scope_id,
             "vault_main_checkout_root": vault.main_checkout_root,
             "vault_worktree_local": vault.worktree_local,
+            "vault_format_version": vault.format_version,
             "vault_error": vault.error,
         },
         "contract_tools": ctx.tool_specs().iter().map(|tool| {
@@ -179,6 +180,8 @@ struct VaultCapability {
     /// Whether a linked Git worktree keeps the vault an earlier Jig version
     /// created in its own namespace instead of sharing the main checkout's.
     worktree_local: bool,
+    /// Unauthenticated format version from the public vault header.
+    format_version: Option<u32>,
     error: Option<String>,
 }
 
@@ -197,6 +200,9 @@ fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
                 .as_str()
                 .map(str::to_string),
             worktree_local: output["vault_worktree_local"].as_bool().unwrap_or(false),
+            format_version: output["format_version"]
+                .as_u64()
+                .and_then(|version| u32::try_from(version).ok()),
             error: None,
         },
         Err(error) => VaultCapability {
@@ -207,6 +213,7 @@ fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
             scope_id: None,
             main_checkout_root: None,
             worktree_local: false,
+            format_version: None,
             error: Some(format!("{error:#}")),
         },
     }
@@ -300,6 +307,7 @@ mod tests {
         assert_eq!(capabilities["vault_scope"], "repo");
         assert_eq!(capabilities["vault_scope_id"], "scope_1");
         assert_eq!(capabilities["vault_main_checkout_root"], "/tmp/main");
+        assert_eq!(capabilities["vault_format_version"], 3);
     }
 
     fn assert_repo_integrations(output: &Value) {
@@ -343,6 +351,7 @@ mod tests {
                 scope_id: Some("scope_1".into()),
                 main_checkout_root: Some("/tmp/main".into()),
                 worktree_local: false,
+                format_version: Some(3),
                 error: None,
             },
         );
@@ -369,6 +378,7 @@ mod tests {
                 scope_id: Some("scope_1".into()),
                 main_checkout_root: None,
                 worktree_local: false,
+                format_version: None,
                 error: None,
             },
         );
@@ -404,6 +414,7 @@ mod tests {
                 scope_id: Some("scope_1".into()),
                 main_checkout_root: None,
                 worktree_local: true,
+                format_version: None,
                 error: None,
             },
         );
@@ -436,6 +447,7 @@ mod tests {
                 scope_id: None,
                 main_checkout_root: None,
                 worktree_local: false,
+                format_version: None,
                 error: Some("vault status failed".into()),
             },
         );

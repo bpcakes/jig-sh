@@ -33,7 +33,9 @@ use crate::exec_process::{
 };
 #[cfg(test)]
 use crate::format::{AeadRole, decode_b64_array, payload_aad};
-use crate::format::{FORMAT_VERSION, SecretEntry, V1_FORMAT_VERSION, VaultFile, VaultState};
+use crate::format::{
+    LATEST_FORMAT_VERSION, SecretEntry, VaultFile, VaultState, supports_field_kinds,
+};
 use crate::output::{
     OutputInstallFailure, PreparedPrivateFile, PrivateFilePrecondition, install_private_bytes,
 };
@@ -44,12 +46,11 @@ use crate::template::InjectionTemplate;
 use crate::types::{EnvVarName, FieldKind, SecretName, VaultItem, VaultReference};
 use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
 
+mod commit;
 mod envelope;
 mod lifecycle;
-use envelope::{
-    MigratedVaultEnvelope, NewVaultEnvelope, ParsedVaultEnvelope, ResealedVaultEnvelope,
-    UnlockedVaultEnvelope,
-};
+mod migration;
+use envelope::{ParsedVaultEnvelope, ResealedVaultEnvelope, UnlockedVaultEnvelope};
 
 pub const MAX_SECRET_VALUE_LEN: usize = 1024 * 1024;
 pub const MIN_MASTER_PASSPHRASE_LEN: usize = 12;
@@ -94,6 +95,10 @@ pub struct VaultStatus {
     pub home_state: VaultHomeState,
     /// Compatibility projection of [`VaultStatus::home_state`].
     pub exists: bool,
+    /// Format version read from an initialized home's public header without
+    /// a passphrase. It is unauthenticated discovery metadata, not proof of
+    /// integrity or freshness, and is `None` when absent or unreadable.
+    pub format_version: Option<u32>,
 }
 
 impl Vault {
@@ -146,10 +151,15 @@ impl Vault {
     /// or cannot be inspected.
     pub fn status(explicit_home: Option<PathBuf>) -> Result<VaultStatus> {
         let (root, home_state) = VaultStore::inspect(explicit_home)?;
+        let format_version = home_state
+            .is_initialized()
+            .then(|| VaultStore::public_format_version(&root))
+            .flatten();
         Ok(VaultStatus {
             root,
             home_state,
             exists: home_state.is_initialized(),
+            format_version,
         })
     }
 
@@ -218,17 +228,18 @@ impl Vault {
         self.store.list(passphrase)
     }
 
-    /// Explicitly upgrades a version 1 vault envelope to the current format.
+    /// Explicitly upgrades a vault envelope to format 2 or 3.
     ///
     /// Version 1 vaults remain readable for compatibility, but field-oriented
-    /// mutations require this deliberate one-way upgrade so older binaries do
-    /// not silently discard field kinds.
+    /// mutations require a deliberate one-way upgrade so older binaries do
+    /// not silently discard field kinds. Supported transitions are 1->2,
+    /// 1->3, and 2->3; migrating to the current format only verifies it.
     ///
     /// # Errors
     ///
-    /// Returns an error when the target is unsupported, the vault cannot be
-    /// opened and audit-verified, or the audit/state transition cannot be
-    /// written atomically.
+    /// Returns an error when the target is unsupported or older than the
+    /// current format, the vault cannot be opened and audit-verified, or the
+    /// audit/state transition cannot be written atomically.
     pub fn migrate(
         &self,
         passphrase: &SecretString,
@@ -309,7 +320,7 @@ impl Vault {
 
     /// Creates or updates one canonical encrypted field.
     ///
-    /// Fields can be set only after an explicit v1-to-v2 migration. Text
+    /// Fields can be set only after explicit migration from version 1. Text
     /// fields remain encrypted and may be empty; concealed fields retain the
     /// existing minimum length required for reliable redaction.
     ///
@@ -373,7 +384,7 @@ impl Vault {
     /// # Errors
     ///
     /// Returns an error when the field is missing, the current vault format
-    /// is not writable v2, the new kind is incompatible with the stored value
+    /// is version 1, the new kind is incompatible with the stored value
     /// length, or the audited atomic save fails.
     pub fn change_field_kind(
         &self,
@@ -389,7 +400,7 @@ impl Vault {
     /// # Errors
     ///
     /// Returns an error when source and destination match, the source is
-    /// missing, the destination exists, the vault is not writable v2, or the
+    /// missing, the destination exists, the vault is version 1, or the
     /// audited atomic save fails.
     pub fn rename_field(
         &self,
@@ -405,7 +416,7 @@ impl Vault {
     /// # Errors
     ///
     /// Returns an error when source and destination match, the source item is
-    /// empty, any destination field exists, the vault is not writable v2, or
+    /// empty, any destination field exists, the vault is version 1, or
     /// the audited atomic save fails.
     pub fn rename_item(
         &self,
@@ -420,7 +431,7 @@ impl Vault {
     ///
     /// # Errors
     ///
-    /// Returns an error when the item is empty, the vault is not writable v2,
+    /// Returns an error when the item is empty, the vault is version 1,
     /// or the audited atomic save fails.
     pub fn remove_item(
         &self,
@@ -437,7 +448,7 @@ impl Vault {
     ///
     /// Returns an error when the source is already canonical or missing, the
     /// destination exists, the requested kind is incompatible with the stored
-    /// value length, the vault is not writable v2, or the audited atomic save
+    /// value length, the vault is version 1, or the audited atomic save
     /// fails.
     pub fn convert_legacy_secret(
         &self,
@@ -469,7 +480,7 @@ impl Vault {
     }
 
     /// Reports which proposed import references already exist in a writable
-    /// version-two vault, without appending audit state or mutating fields.
+    /// version 2 or 3 vault, without appending audit state or mutating fields.
     ///
     /// Returned booleans preserve the input order. The vault and its audit
     /// chain are verified together under one lock so dry-run collision reports
@@ -1328,52 +1339,6 @@ impl VaultStore {
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
-    fn init_unlocked(&self, passphrase: &SecretString) -> AnyResult<()> {
-        if self.read_vault_text()?.is_some() {
-            return Err(classified(
-                VaultErrorKind::AlreadyExists,
-                format!("vault already exists at {}", self.vault_path().display()),
-            ));
-        }
-        if self.audit_exists()? {
-            return Err(classified(
-                VaultErrorKind::AuditTampered,
-                format!(
-                    "vault audit log already exists at {}; remove the stale vault home before init",
-                    self.audit_path().display()
-                ),
-            ));
-        }
-        validate_new_vault_passphrase_inner(passphrase)?;
-
-        let envelope =
-            NewVaultEnvelope::seal(passphrase, now_ms(), self.initialization_kdf().clone())?;
-        if let Err(error) = AuditEvent::append_unlocked(
-            self,
-            envelope.audit_key.as_ref(),
-            AuditAction::VaultInitialized,
-            serde_json::json!({
-                "vault_id": envelope.file.header.vault_id,
-            }),
-        ) {
-            let cleanup_error = rollback_failed_init(self);
-            let error = error.context("failed to initialize vault audit log");
-            return match cleanup_error {
-                Some(cleanup_error) => Err(error.context(cleanup_error)),
-                None => Err(error),
-            };
-        }
-        if let Err(error) = self.write_vault_text_unlocked(&envelope.file_text) {
-            let cleanup_error = rollback_failed_init(self);
-            let error = error.context("failed to write initialized vault file");
-            return match cleanup_error {
-                Some(cleanup_error) => Err(error.context(cleanup_error)),
-                None => Err(error),
-            };
-        }
-        Ok(())
-    }
-
     /// Runs a vault mutation while preserving the audit invariant: open under
     /// lock, verify the current chain, mutate in memory, append the audit
     /// intent, then save state before releasing the lock. If the process dies
@@ -1426,61 +1391,6 @@ impl VaultStore {
             should_commit,
             details,
         )
-    }
-
-    fn edit_with_audit_if_precondition<R>(
-        &self,
-        passphrase: &SecretString,
-        precondition: VaultEditPrecondition<'_>,
-        action: AuditAction,
-        edit: impl FnOnce(&mut OpenVault) -> AnyResult<R>,
-        should_commit: impl FnOnce(&R) -> bool,
-        details: impl FnOnce(&R) -> serde_json::Value,
-    ) -> AnyResult<R> {
-        self.with_lock(|| {
-            let mut vault = self.open_unlocked(passphrase)?;
-            verify_chain_unlocked(self, vault.audit_key.as_ref()).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::AuditTampered,
-                    "vault audit chain verification failed",
-                    error,
-                )
-            })?;
-            precondition.enforce(
-                &vault,
-                "vault state changed since the metadata snapshot; refresh and retry",
-            )?;
-            let result = edit(&mut vault)?;
-            if !should_commit(&result) {
-                return Ok(result);
-            }
-            let envelope = vault.prepare_save_unlocked()?;
-            let file_text = envelope.serialize_pretty()?;
-            self.validate_vault_text_len(&file_text).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::InvalidInput,
-                    "vault state is too large to save safely",
-                    error,
-                )
-            })?;
-            AuditEvent::append_unlocked(self, vault.audit_key.as_ref(), action, details(&result))
-                .map_err(|error| {
-                classify_source(
-                    VaultErrorKind::AuditTampered,
-                    "vault audit append failed before state save",
-                    error,
-                )
-            })?;
-            self.write_vault_text_unlocked(&file_text)
-                .map_err(|error| {
-                    classify_source(
-                        VaultErrorKind::Io,
-                        "vault audit was appended, but state save failed",
-                        error,
-                    )
-                })?;
-            Ok(result)
-        })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -1617,92 +1527,6 @@ impl VaultStore {
             .map_err(|error| self.map_open_error(error))
     }
 
-    pub(crate) fn migrate(
-        &self,
-        passphrase: &SecretString,
-        target_version: u32,
-    ) -> Result<VaultMigration> {
-        if target_version != FORMAT_VERSION {
-            return Err(VaultError::new(
-                VaultErrorKind::InvalidInput,
-                format!(
-                    "unsupported vault migration target {target_version}; run `jig vault migrate --to {FORMAT_VERSION}`"
-                ),
-            ));
-        }
-        self.with_lock(|| self.migrate_unlocked(passphrase, target_version))
-            .map_err(|error| self.map_open_error(error))
-    }
-
-    fn migrate_unlocked(
-        &self,
-        passphrase: &SecretString,
-        target_version: u32,
-    ) -> AnyResult<VaultMigration> {
-        let vault = self.open_unlocked(passphrase)?;
-        vault.verify_audit_unlocked(self).map_err(|error| {
-            classify_source(
-                VaultErrorKind::AuditTampered,
-                "vault audit chain verification failed",
-                error,
-            )
-        })?;
-        let from_version = vault.format_version();
-        if from_version == target_version {
-            return Ok(VaultMigration {
-                from_version,
-                to_version: target_version,
-                changed: false,
-            });
-        }
-        if from_version != V1_FORMAT_VERSION {
-            return Err(classified(
-                VaultErrorKind::InvalidInput,
-                format!("vault format {from_version} cannot be migrated to {target_version}"),
-            ));
-        }
-
-        let envelope =
-            MigratedVaultEnvelope::v1_to_v2(&vault.file, passphrase, &vault.dek, &vault.state)?;
-        let file_text = envelope.serialize_pretty()?;
-        self.validate_vault_text_len(&file_text).map_err(|error| {
-            classify_source(
-                VaultErrorKind::InvalidInput,
-                "vault format migration would exceed the persistent vault size limit",
-                error,
-            )
-        })?;
-        AuditEvent::append_unlocked(
-            self,
-            vault.audit_key.as_ref(),
-            AuditAction::VaultFormatMigrate,
-            serde_json::json!({
-                "from_version": from_version,
-                "to_version": target_version,
-            }),
-        )
-        .map_err(|error| {
-            classify_source(
-                VaultErrorKind::AuditTampered,
-                "vault audit append failed before format migration save",
-                error,
-            )
-        })?;
-        self.write_vault_text_unlocked(&file_text)
-            .map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Io,
-                    "vault format migration audit was appended, but state save failed",
-                    error,
-                )
-            })?;
-        Ok(VaultMigration {
-            from_version,
-            to_version: target_version,
-            changed: true,
-        })
-    }
-
     pub(crate) fn list_fields(&self, passphrase: &SecretString) -> Result<Vec<FieldRecord>> {
         self.with_lock(|| {
             self.open_unlocked(passphrase)
@@ -1834,7 +1658,7 @@ impl VaultStore {
             passphrase,
             AuditAction::FieldBatchApply,
             |vault| {
-                vault.ensure_field_format_v2()?;
+                vault.ensure_field_kinds()?;
                 Ok(vault.apply_validated_field_batch(mutations))
             },
             |result| field_batch_audit_details(&audit_sets, &audit_removes, result),
@@ -1879,7 +1703,7 @@ impl VaultStore {
             precondition,
             AuditAction::FieldBatchApply,
             |vault| {
-                vault.ensure_field_format_v2()?;
+                vault.ensure_field_kinds()?;
                 vault.ensure_write_mode(&name, mode, "vault field")?;
                 Ok(vault.apply_validated_field_batch(mutations))
             },
@@ -1917,7 +1741,7 @@ impl VaultStore {
             precondition,
             AuditAction::FieldBatchApply,
             |vault| {
-                vault.ensure_field_format_v2()?;
+                vault.ensure_field_kinds()?;
                 if !vault.state.secrets.contains_key(name.as_str()) {
                     return Err(classified(
                         VaultErrorKind::NotFound,
@@ -1958,7 +1782,7 @@ impl VaultStore {
             precondition,
             AuditAction::FieldKindChange,
             |vault| {
-                vault.ensure_field_format_v2()?;
+                vault.ensure_field_kinds()?;
                 vault.change_field_kind(reference, kind)
             },
             |result| result.changed,
@@ -2003,7 +1827,7 @@ impl VaultStore {
             precondition,
             AuditAction::FieldRename,
             |vault| {
-                vault.ensure_field_format_v2()?;
+                vault.ensure_field_kinds()?;
                 vault.rename_field(from, to)
             },
             |result| {
@@ -2046,7 +1870,7 @@ impl VaultStore {
             precondition,
             AuditAction::ItemRename,
             |vault| {
-                vault.ensure_field_format_v2()?;
+                vault.ensure_field_kinds()?;
                 vault.rename_item(from, to)
             },
             |result| {
@@ -2080,7 +1904,7 @@ impl VaultStore {
             precondition,
             AuditAction::ItemRemove,
             |vault| {
-                vault.ensure_field_format_v2()?;
+                vault.ensure_field_kinds()?;
                 vault.remove_item(item)
             },
             |result| {
@@ -2134,7 +1958,7 @@ impl VaultStore {
             precondition,
             AuditAction::LegacySecretConvert,
             |vault| {
-                vault.ensure_field_format_v2()?;
+                vault.ensure_field_kinds()?;
                 vault.convert_legacy_secret(secret_name, reference, kind)
             },
             |result| {
@@ -2179,7 +2003,7 @@ impl VaultStore {
                     error,
                 )
             })?;
-            vault.ensure_field_format_v2()?;
+            vault.ensure_field_kinds()?;
             Ok(VaultImportPrecondition {
                 revision: vault.revision(),
                 fields: references
@@ -2231,7 +2055,7 @@ impl VaultStore {
             passphrase,
             AuditAction::OnePasswordImport,
             |vault| {
-                vault.ensure_field_format_v2()?;
+                vault.ensure_field_kinds()?;
                 if let Some(precondition) = precondition {
                     enforce_import_precondition(vault, &precondition, replace)?;
                 } else if !replace {
@@ -2590,12 +2414,12 @@ impl OpenVault {
             && self.file.state_nonce_b64 == revision.state_nonce_b64
     }
 
-    fn ensure_field_format_v2(&self) -> AnyResult<()> {
-        if self.format_version() != FORMAT_VERSION {
+    fn ensure_field_kinds(&self) -> AnyResult<()> {
+        if !supports_field_kinds(self.format_version()) {
             return Err(classified(
                 VaultErrorKind::InvalidInput,
                 format!(
-                    "vault format {} does not support field mutations; run `jig vault migrate --to {FORMAT_VERSION}`",
+                    "vault format {} does not support field mutations; run `jig vault migrate --to {LATEST_FORMAT_VERSION}`",
                     self.format_version()
                 ),
             ));
@@ -3433,27 +3257,6 @@ fn validate_new_vault_passphrase_inner(passphrase: &SecretString) -> AnyResult<(
         ));
     }
     Ok(())
-}
-
-fn rollback_failed_init(store: &VaultStore) -> Option<String> {
-    let mut failures = Vec::new();
-    for path in [store.vault_path(), store.audit_path()] {
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => failures.push(format!("failed to remove {}: {error}", path.display())),
-        }
-    }
-    if failures.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "vault init rollback left partial state; inspect or remove {} and {} before retrying: {}",
-            store.vault_path().display(),
-            store.audit_path().display(),
-            failures.join("; ")
-        ))
-    }
 }
 
 #[cfg(test)]

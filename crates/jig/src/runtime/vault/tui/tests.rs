@@ -6,6 +6,7 @@ use super::*;
 use crate::command::{VaultRuntimeOptions, VaultTuiRequest};
 
 mod core;
+mod formats;
 mod lifecycle;
 
 fn request(home: std::path::PathBuf) -> VaultTuiRequest {

@@ -200,7 +200,7 @@ request, choose, or set the passphrase. Command-line passphrases are not accepte
 Quick start:
   jig vault init
   jig vault tui
-  jig vault migrate --to 2
+  jig vault migrate --to 3
   jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt
   printf '%s' 'local' | jig vault field set jig://Production/MODE --text --value-stdin
   jig vault read jig://Production/RESTIC_PASSWORD | command

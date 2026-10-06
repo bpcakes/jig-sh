@@ -1,4 +1,5 @@
 use jig_tui::sanitize_text;
+use jig_vault::LATEST_VAULT_FORMAT_VERSION;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -23,6 +24,8 @@ use crate::{
     tools::{BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm},
     viewport::{ScreenLayout, ViewportSize, ratatui_viewport, screen_layout},
 };
+
+mod migration;
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
@@ -76,7 +79,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             match &app.screen {
                 Screen::Help => draw_help(frame, centered_rect(82, 82, area), app),
                 Screen::ConfirmMigration => {
-                    draw_migration_confirmation(frame, centered_rect(72, 56, area));
+                    migration::draw_confirmation(frame, centered_rect(72, 56, area), app);
                 }
                 Screen::Form(form) => {
                     draw_management_form(frame, centered_rect(78, 68, area), app, form);
@@ -342,7 +345,7 @@ fn draw_browser_header(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         "audit torn tail"
     };
-    let version_style = if snapshot.format_version == 2 {
+    let version_style = if snapshot.format_version == LATEST_VAULT_FORMAT_VERSION {
         Style::default().fg(GOOD)
     } else {
         Style::default().fg(WARN)
@@ -553,13 +556,17 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn common_action_hints(app: &App) -> String {
-    [UiCommand::MigrateToV2, UiCommand::Refresh, UiCommand::Lock]
-        .into_iter()
-        .filter(|command| command.visible_in_state(app))
-        .filter(|command| command.availability(app).is_enabled())
-        .map(UiCommand::hint)
-        .collect::<Vec<_>>()
-        .join("  ")
+    [
+        UiCommand::MigrateToLatest,
+        UiCommand::Refresh,
+        UiCommand::Lock,
+    ]
+    .into_iter()
+    .filter(|command| command.visible_in_state(app))
+    .filter(|command| command.availability(app).is_enabled())
+    .map(UiCommand::hint)
+    .collect::<Vec<_>>()
+    .join("  ")
 }
 
 fn context_action_hints(app: &App, width: u16) -> String {
@@ -640,27 +647,6 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(lines)
             .block(panel("Vault help"))
             .wrap(Wrap { trim: true }),
-        area,
-    );
-}
-
-fn draw_migration_confirmation(frame: &mut Frame, area: Rect) {
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Migrate vault from version 1 to version 2?",
-                Style::default().fg(WARN).add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from("This one-way upgrade preserves values as concealed fields."),
-            Line::from("Older Jig versions will reject the migrated vault."),
-            Line::from(""),
-            Line::from("Enter migrate   Esc cancel"),
-        ])
-        .alignment(Alignment::Center)
-        .block(panel("Confirm migration"))
-        .wrap(Wrap { trim: true }),
         area,
     );
 }

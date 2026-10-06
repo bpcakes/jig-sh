@@ -26,6 +26,8 @@ mod tools;
 mod viewport;
 
 #[cfg(test)]
+mod format_version_tests;
+#[cfg(test)]
 mod tests;
 
 /// Public information available before a vault is unlocked.
@@ -96,7 +98,9 @@ impl std::error::Error for VaultUiError {}
 #[derive(Debug)]
 pub enum VaultAction {
     Refresh,
-    MigrateToV2,
+    /// Explicit one-way migration of a version 1 or 2 vault to the latest
+    /// format.
+    MigrateToLatest,
     Mutate {
         revision: VaultRevision,
         mutation: VaultMutation,

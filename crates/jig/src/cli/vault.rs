@@ -60,11 +60,15 @@ Examples:
 const VAULT_MIGRATE_AFTER_HELP: &str = "\
 New Jig can read, reveal, inject, and execute from version 1 vaults, treating
 every value as concealed. Upgrade explicitly before field mutation, import,
-passphrase rotation, or backup. The migration is one-way, retains existing
-values as concealed fields, and produces version 2 state that old Jig rejects
-instead of misreading.
+passphrase rotation, or backup. Migration is one-way and never runs
+implicitly: version 1 can move to 2 or directly to 3, and version 2 can move to
+3. Version 3 adds an encrypted state generation and audit anchor. Existing
+values, field kinds, identity, and audit history are kept. Migrating to the
+current version only verifies it; downgrades are refused. Older Jig rejects a
+migrated vault instead of misreading it.
 
-Example:
+Examples:
+  jig vault migrate --to 3
   jig vault migrate --to 2";
 
 const VAULT_READ_AFTER_HELP: &str = "\
@@ -444,7 +448,7 @@ pub(crate) struct VaultMigrateOpts {
     #[arg(
         long,
         value_parser = parse_vault_migration_target,
-        help = "Vault format version to migrate to; currently only 2 is supported"
+        help = "Vault format version to migrate to: 2 or 3"
     )]
     pub(crate) to: u32,
     #[command(flatten)]
@@ -697,10 +701,10 @@ fn parse_import_item(value: &str) -> Result<VaultItem, String> {
 fn parse_vault_migration_target(value: &str) -> Result<u32, String> {
     let target = value
         .parse::<u32>()
-        .map_err(|_| "vault migration target must be the integer 2".to_owned())?;
-    if target == 2 {
+        .map_err(|_| "vault migration target must be the integer 2 or 3".to_owned())?;
+    if matches!(target, 2 | 3) {
         Ok(target)
     } else {
-        Err("only vault migration target 2 is supported".to_owned())
+        Err("only vault migration targets 2 and 3 are supported".to_owned())
     }
 }

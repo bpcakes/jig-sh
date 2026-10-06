@@ -52,6 +52,9 @@ pub(in crate::cli) fn format_vault_generic_summary(value: &serde_json::Value) ->
                 .or_else(|| value_bool(value, "vault_file_exists"))
                 .unwrap_or(false);
             lines.push(format!("  Exists: {}", if exists { "yes" } else { "no" }));
+            if let Some(version) = value_u64(value, "format_version") {
+                lines.push(format!("  Format (unverified header): {version}"));
+            }
         }
         "vault passphrase change" => {
             append_optional_bool(&mut lines, value, "changed", "Changed");

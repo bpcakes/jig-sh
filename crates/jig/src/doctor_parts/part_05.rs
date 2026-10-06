@@ -162,6 +162,10 @@ fn vault_detail(output: &Value) -> String {
     if output["vault_worktree_local"].as_bool() == Some(true) {
         detail.push_str(" worktree_local=true");
     }
+    // Read from the unauthenticated public header; not an integrity check.
+    if let Some(version) = output["format_version"].as_u64() {
+        let _ = write!(detail, " format_version={version}");
+    }
     detail
 }
 

@@ -349,7 +349,7 @@ fn apply_success(app: &mut App, kind: OperationKind, result: VaultActionResult) 
                 OperationKind::Unlock => "Vault unlocked.",
                 OperationKind::Initialize => "Vault initialized and unlocked.",
                 OperationKind::Refresh => "Vault metadata refreshed.",
-                OperationKind::Migrate => "Vault migrated to version 2.",
+                OperationKind::Migrate => "Vault migrated to version 3.",
                 OperationKind::Mutation => "Vault updated.",
                 OperationKind::Import => "1Password import completed.",
                 OperationKind::Passphrase => "Vault passphrase changed.",
@@ -427,7 +427,7 @@ impl VaultCommittedAction {
     fn completion_message(&self) -> String {
         match self {
             Self::Initialized => "Vault initialization completed".to_owned(),
-            Self::Migrated => "Vault migration to version 2 completed".to_owned(),
+            Self::Migrated => "Vault migration to version 3 completed".to_owned(),
             Self::Mutated => "Vault update completed".to_owned(),
             Self::Imported => "1Password import completed".to_owned(),
             Self::PassphraseChanged => "Vault passphrase change completed".to_owned(),
@@ -556,7 +556,7 @@ impl BackendRequest {
         match self {
             Self::Unlock(_) => OperationKind::Unlock,
             Self::Initialize(_) => OperationKind::Initialize,
-            Self::Execute(VaultAction::MigrateToV2) => OperationKind::Migrate,
+            Self::Execute(VaultAction::MigrateToLatest) => OperationKind::Migrate,
             Self::Execute(VaultAction::Refresh) => OperationKind::Refresh,
             Self::Execute(VaultAction::Mutate { .. }) => OperationKind::Mutation,
             Self::Execute(VaultAction::Activity { .. }) => OperationKind::Activity,
@@ -831,8 +831,8 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         Screen::ConfirmMigration => {
             return match key.code {
                 KeyCode::Enter => {
-                    app.begin_loading("Migrating vault to version 2");
-                    RuntimeAction::Start(BackendRequest::Execute(VaultAction::MigrateToV2))
+                    app.begin_loading("Migrating vault to version 3");
+                    RuntimeAction::Start(BackendRequest::Execute(VaultAction::MigrateToLatest))
                 }
                 KeyCode::Esc | KeyCode::Char('q') => {
                     app.close_overlay();

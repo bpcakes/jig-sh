@@ -206,10 +206,9 @@ impl App {
     }
 
     pub(crate) fn confirm_migration(&mut self) {
-        if self
-            .snapshot()
-            .is_some_and(|snapshot| snapshot.format_version == 1)
-        {
+        if self.snapshot().is_some_and(|snapshot| {
+            snapshot.format_version < jig_vault::LATEST_VAULT_FORMAT_VERSION
+        }) {
             self.screen = Screen::ConfirmMigration;
         }
     }
@@ -445,7 +444,7 @@ impl App {
                 self.begin_loading("Refreshing vault metadata");
                 return CommandOutcome::Start(VaultAction::Refresh);
             }
-            UiCommand::MigrateToV2 => self.confirm_migration(),
+            UiCommand::MigrateToLatest => self.confirm_migration(),
             UiCommand::Lock => return CommandOutcome::Lock,
             UiCommand::Activity
             | UiCommand::VerifyAudit
@@ -1125,9 +1124,9 @@ impl App {
     fn require_writable_v2(&mut self) -> bool {
         if self
             .snapshot()
-            .is_none_or(|snapshot| snapshot.format_version != 2)
+            .is_none_or(|snapshot| !crate::commands::supports_field_kinds(snapshot.format_version))
         {
-            self.set_error("Vault management requires version 2; press m to migrate first.");
+            self.set_error("Vault management requires version 2 or later; press m to migrate.");
             return false;
         }
         true

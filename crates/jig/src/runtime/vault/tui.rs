@@ -7,9 +7,9 @@ use anyhow::Result;
 #[cfg(all(unix, not(test)))]
 use anyhow::anyhow;
 use jig_vault::{
-    PreparedPrivateFile, PrivateFilePrecondition, SecretBytes, Vault, VaultError, VaultErrorKind,
-    VaultHomeState, VaultImportPrecondition, VaultReference, VaultRevision, VaultSnapshot,
-    validate_new_vault_passphrase,
+    LATEST_VAULT_FORMAT_VERSION, PreparedPrivateFile, PrivateFilePrecondition, SecretBytes, Vault,
+    VaultError, VaultErrorKind, VaultHomeState, VaultImportPrecondition, VaultReference,
+    VaultRevision, VaultSnapshot, validate_new_vault_passphrase,
 };
 use jig_vault_tui::{
     ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
@@ -453,8 +453,10 @@ impl VaultBackend for VaultTuiBackend {
     fn execute(&self, action: VaultAction) -> std::result::Result<VaultActionResult, VaultUiError> {
         match action {
             VaultAction::Refresh => self.refresh().map(VaultActionResult::Snapshot),
-            VaultAction::MigrateToV2 => {
-                self.with_vault(|selected, passphrase| selected.migrate(passphrase, 2))?;
+            VaultAction::MigrateToLatest => {
+                self.with_vault(|selected, passphrase| {
+                    selected.migrate(passphrase, LATEST_VAULT_FORMAT_VERSION)
+                })?;
                 Ok(self.finish_committed(VaultCommittedAction::Migrated))
             }
             VaultAction::Mutate { revision, mutation } => self.execute_mutation(revision, mutation),
