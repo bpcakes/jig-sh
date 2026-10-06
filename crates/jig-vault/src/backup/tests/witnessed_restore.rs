@@ -138,21 +138,42 @@ fn a_witnessed_v2_archive_is_restored_as_version_three() {
 }
 
 #[test]
-fn an_orphan_journal_before_the_marker_is_discarded_on_retry() {
+fn an_orphan_journal_is_unlinked_and_its_abandoned_staging_kept() {
     let temp = private_temp();
     let (home, _vault) = source(temp.path());
     let archive = temp.path().join("vault.backup");
     backup(&home, &archive, &test_passphrase());
     let target = temp.path().join("restored");
 
+    // A failure after ownership was handed off never deletes the staging.
     crate::store::arm_fault_for_test(FaultPoint::AfterJournal);
     assert!(restore(&archive, &target).is_err());
     assert!(!target.exists());
-    assert_eq!(staging_dirs(temp.path()).len(), 1);
+    let [abandoned] = staging_dirs(temp.path()).try_into().unwrap();
+    let abandoned = temp.path().join(abandoned);
+    let bytes = staged_bytes(&abandoned);
 
     restore(&archive, &target).unwrap();
     assert!(target.exists());
-    assert!(staging_dirs(temp.path()).is_empty());
+    assert!(journal_paths(&target).is_empty());
+    assert_eq!(staged_bytes(&abandoned), bytes);
+    assert_eq!(staging_dirs(temp.path()).len(), 1);
+}
+
+/// The exact files of one directory, by name.
+fn staged_bytes(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect();
+    files.sort();
+    files
 }
 
 #[test]
@@ -408,7 +429,7 @@ fn a_restore_journal_claiming_another_valid_vault_keeps_its_recovery_data() {
 }
 
 #[test]
-fn an_unreferenced_restore_journal_claiming_another_vault_is_discarded() {
+fn an_unreferenced_restore_journal_claiming_another_vault_is_unlinked_alone() {
     let temp = private_temp();
     let (home, _vault) = source(temp.path());
     let archive = temp.path().join("vault.backup");
@@ -418,10 +439,13 @@ fn an_unreferenced_restore_journal_claiming_another_vault_is_discarded() {
     restore(&archive, &target).unwrap_err();
     let [journal] = journal_paths(&target).try_into().unwrap();
     claim_other_vault(&journal);
+    let [abandoned] = staging_dirs(temp.path()).try_into().unwrap();
+    let abandoned = temp.path().join(abandoned);
+    let bytes = staged_bytes(&abandoned);
 
     restore(&archive, &target).unwrap();
-    assert!(staging_dirs(temp.path()).is_empty());
     assert!(journal_paths(&target).is_empty());
+    assert_eq!(staged_bytes(&abandoned), bytes);
 }
 
 #[test]
@@ -572,3 +596,6 @@ fn pending_staging_that_lost_its_privacy_is_never_installed() {
         0o700
     );
 }
+
+mod durability;
+mod ownership;

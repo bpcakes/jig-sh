@@ -20,8 +20,8 @@ use crate::VaultErrorKind;
 use crate::error::classified;
 use crate::format::V2_FORMAT_VERSION;
 use crate::store::witness::{
-    self, JOURNAL_SCHEMA, Journal, JournalPayload, JournalTarget, OrphanJournal, PendingMarker,
-    RestorePayload, TargetJournal, TransactionKind, WitnessLocation, WitnessRecord, WitnessStore,
+    self, JOURNAL_SCHEMA, Journal, JournalPayload, JournalTarget, PendingMarker, RestorePayload,
+    TargetJournal, TargetLock, TransactionKind, WitnessLocation, WitnessRecord, WitnessStore,
     sha256_hex,
 };
 use crate::store::{AUDIT_TEXT_READ_LIMIT, FaultPoint, VaultStore};
@@ -31,9 +31,10 @@ use crate::vault::{
 
 use super::super::payload::DecodedBackupArchive;
 use super::super::{BackupRestoreResult, RestoreTarget};
+use super::staging::{FreshStaging, StagingRef, require_recorded_private_home};
 use super::{
-    AUDIT_FILE, OwnedStaging, VAULT_FILE, atomic_rename_noreplace, restore_legacy,
-    revalidate_target, sync_directory, validate_trusted_ancestors, vault_error_as_classified,
+    AUDIT_FILE, VAULT_FILE, restore_legacy, revalidate_target, sync_directory,
+    validate_trusted_ancestors, vault_error_as_classified,
 };
 
 /// Whether a transaction is recorded for `home` as a final target. Never
@@ -56,8 +57,10 @@ pub(in crate::backup) fn restore(
     location.ensure_disjoint(&target.home)?;
     let witness = location.open_or_create()?;
     let target_key = witness::target_key(&target.home);
-    let _target = witness.lock_target(&target_key)?;
-    if let Some(result) = resume_matching_retry(&witness, &target, passphrase, &decoded)? {
+    let target_lock = witness.lock_target(&target_key)?;
+    if let Some(result) =
+        resume_matching_retry(&witness, &target_lock, &target, passphrase, &decoded)?
+    {
         return Ok(result);
     }
     revalidate_target(&target)?;
@@ -81,13 +84,20 @@ fn restore_transactional(
         &target_key[..16],
         ulid::Ulid::new()
     );
-    // Until the journal exists, dropping the staging cleans it up.
-    let mut staging = OwnedStaging::create_named(target, &staging_leaf)?;
-    staging.write_file(VAULT_FILE, decoded.vault_bytes())?;
-    staging.write_file(AUDIT_FILE, decoded.audit_bytes())?;
-    staging.sync()?;
-    let staged =
-        VaultStore::open_existing(staging.path.clone()).map_err(vault_error_as_classified)?;
+    // This operation owns the staging, and cleans it up on any failure,
+    // only until it hands ownership off just before publishing the journal.
+    let staging = FreshStaging::create_named(target, &staging_leaf)?;
+    let staged = (|| -> AnyResult<VaultStore> {
+        staging.write_file(VAULT_FILE, decoded.vault_bytes())?;
+        staging.write_file(AUDIT_FILE, decoded.audit_bytes())?;
+        staging.sync()?;
+        VaultStore::open_existing(staging.path().to_path_buf()).map_err(vault_error_as_classified)
+    })();
+    let staged = match staged {
+        Ok(staged) => staged,
+        Err(error) => return Err(staging.abandon(error)),
+    };
+    let staged_ref = &staged;
     let source = RestoreSource {
         vault_id: &decoded.source_vault_id,
         format_version: decoded.source_format_version,
@@ -95,41 +105,49 @@ fn restore_transactional(
     };
     // The journal and pending marker are written while the staging and ID
     // locks taken for the plan are still held.
-    staged.prepare_restore_candidate(passphrase, &source, witness, |plan| {
-        staging.sync()?;
-        let audit = staged
-            .read_audit_bytes_bounded(AUDIT_TEXT_READ_LIMIT as usize)?
-            .context("restored audit log disappeared from staging")?;
-        let journal = Journal {
-            schema: JOURNAL_SCHEMA,
-            operation: TransactionKind::Restore,
-            vault_id: decoded.source_vault_id.clone(),
-            target: JournalTarget {
-                target_key: target_key.to_owned(),
-                parent_device: target.parent_device,
-                parent_inode: target.parent_inode,
-            },
-            previous: plan
-                .record
-                .as_ref()
-                .and_then(|record| record.committed.clone()),
-            previous_envelope_sha256: None,
-            next: plan.next,
-            payload: JournalPayload::Restore(RestorePayload {
-                archive_sha256: decoded.archive_sha256.clone(),
-                staging_leaf: staging_leaf.clone(),
-                staging_device: staging.device,
-                staging_inode: staging.inode,
-                audit_sha256: sha256_hex(&audit),
-            }),
+    staged.prepare_restore_candidate(passphrase, &source, witness, move |plan| {
+        let prepared = (|| -> AnyResult<Journal> {
+            staging.sync()?;
+            let audit = staged_ref
+                .read_audit_bytes_bounded(AUDIT_TEXT_READ_LIMIT as usize)?
+                .context("restored audit log disappeared from staging")?;
+            let journal = Journal {
+                schema: JOURNAL_SCHEMA,
+                operation: TransactionKind::Restore,
+                vault_id: decoded.source_vault_id.clone(),
+                target: JournalTarget {
+                    target_key: target_key.to_owned(),
+                    parent_device: target.parent_device,
+                    parent_inode: target.parent_inode,
+                },
+                previous: plan
+                    .record
+                    .as_ref()
+                    .and_then(|record| record.committed.clone()),
+                previous_envelope_sha256: None,
+                next: plan.next.clone(),
+                payload: JournalPayload::Restore(RestorePayload {
+                    archive_sha256: decoded.archive_sha256.clone(),
+                    staging_leaf: staging_leaf.clone(),
+                    staging_device: staging.device(),
+                    staging_inode: staging.inode(),
+                    audit_sha256: sha256_hex(&audit),
+                }),
+            };
+            // The target's parent holds the staging and receives the
+            // install; an interrupted earlier restore may have created it
+            // unsynced.
+            crate::store::ensure_entry_chain_durable(&target.parent)?;
+            Ok(journal)
+        })();
+        let journal = match prepared {
+            Ok(journal) => journal,
+            Err(error) => return Err(staging.abandon(error)),
         };
-        // The target's parent holds the staging and receives the install; an
-        // interrupted earlier restore may have created it unsynced.
-        crate::store::ensure_entry_chain_durable(&target.parent)?;
+        // From here the staging is recovery data: every failure, including a
+        // published journal whose sync failed, preserves it.
+        staging.hand_off();
         let journal_sha256 = witness.write_journal(&journal)?;
-        // From here staging is the journal's durable reference: recovery
-        // discards it only while no marker references the journal.
-        staging.persist();
         crate::store::fault(FaultPoint::AfterJournal)?;
         let mut record = plan
             .record
@@ -153,29 +171,30 @@ fn restore_transactional(
 }
 
 /// Resumes a pending restore when this command retries the exact archive
-/// it started from; discards only a journal established to have no
-/// authoritative pending marker.
+/// it started from. A journal established, under this acquisition of the
+/// target lock, to have no authoritative pending marker is unlinked; any
+/// staging it names is left alone.
 fn resume_matching_retry(
     witness: &WitnessStore,
+    target_lock: &TargetLock,
     target: &RestoreTarget,
     passphrase: &SecretString,
     decoded: &DecodedBackupArchive,
 ) -> AnyResult<Option<BackupRestoreResult>> {
-    let target_key = witness::target_key(&target.home);
     let (vault_id, record, journal) = match witness
-        .classify_target_journal(&target_key)
+        .classify_target_journal(target_lock)
         .map_err(fail_closed)?
     {
         TargetJournal::Absent => return Ok(None),
         TargetJournal::Orphan(orphan) => {
-            discard_orphan_restore(witness, orphan, &target.home)?;
+            witness.delete_orphan_journal(orphan)?;
             return Ok(None);
         }
         TargetJournal::Referenced {
             vault_id,
             record,
             journal,
-        } => (vault_id, record, journal),
+        } => (vault_id, *record, journal),
     };
     let _id = witness.lock_id(&vault_id)?;
     if witness.read_record(&vault_id)?.as_ref() != Some(&record) {
@@ -251,7 +270,7 @@ pub(crate) fn finish_pending_restore(
         .context("restore target has no parent directory")?;
     match fs::symlink_metadata(home) {
         Ok(metadata) => {
-            if !installed_successor(journal, payload, home, parent, &metadata)? {
+            if !installed_successor(journal, payload, home, &metadata)? {
                 return Err(classified(
                     VaultErrorKind::AlreadyExists,
                     "the restore target is occupied by different contents; the pending restore stays in its staging directory until the target is free",
@@ -261,16 +280,17 @@ pub(crate) fn finish_pending_restore(
             sync_directory(parent)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let staging_path = staging_path(journal, payload, home)?;
-            let staging = OwnedStaging::adopt(
-                staging_path,
+            // The marker binds this journal, so the staging it names is this
+            // transaction's recovery data: installable, never deletable.
+            let staging = StagingRef::adopt(
+                staging_path(journal, payload, home)?,
                 parent.to_path_buf(),
                 payload.staging_device,
                 payload.staging_inode,
             )?;
-            if sha256_hex(&read_bounded(&staging.path.join(VAULT_FILE))?)
+            if sha256_hex(&read_bounded(&staging.path().join(VAULT_FILE))?)
                 != journal.next.envelope_sha256
-                || sha256_hex(&read_bounded(&staging.path.join(AUDIT_FILE))?)
+                || sha256_hex(&read_bounded(&staging.path().join(AUDIT_FILE))?)
                     != payload.audit_sha256
             {
                 return Err(classified(
@@ -278,10 +298,9 @@ pub(crate) fn finish_pending_restore(
                     "pending restore staging no longer matches its recorded transaction",
                 ));
             }
-            staging.require_owner_only()?;
-            staging.require_private_contents()?;
+            staging.require_installable()?;
             validate_trusted_ancestors(parent)?;
-            atomic_rename_noreplace(&staging.path, home)?;
+            staging.install(home)?;
             sync_directory(parent).with_context(|| {
                 format!(
                     "restored vault was installed at {}, but its parent directory could not be synced",
@@ -296,34 +315,6 @@ pub(crate) fn finish_pending_restore(
         }
     }
     witness.promote(journal, &mut record)
-}
-
-/// Removes a restore journal established to have no authoritative pending
-/// marker, and its owned staging when the staging identity still matches.
-pub(crate) fn discard_orphan_restore(
-    witness: &WitnessStore,
-    orphan: OrphanJournal,
-    home: &Path,
-) -> AnyResult<()> {
-    let journal = orphan.journal();
-    if let JournalPayload::Restore(payload) = &journal.payload
-        && let Some(parent) = home.parent()
-    {
-        let staging_path = staging_path(journal, payload, home)?;
-        if fs::symlink_metadata(&staging_path).is_ok() {
-            let mut staging = OwnedStaging::adopt(
-                staging_path,
-                parent.to_path_buf(),
-                payload.staging_device,
-                payload.staging_inode,
-            )?;
-            // No marker references the journal, so its staging is owned
-            // again and may be cleaned away.
-            staging.active = true;
-            staging.cleanup()?;
-        }
-    }
-    witness.delete_orphan_journal(orphan)
 }
 
 fn staging_path(journal: &Journal, payload: &RestorePayload, home: &Path) -> AnyResult<PathBuf> {
@@ -347,7 +338,6 @@ fn installed_successor(
     journal: &Journal,
     payload: &RestorePayload,
     home: &Path,
-    parent: &Path,
     metadata: &fs::Metadata,
 ) -> AnyResult<bool> {
     if metadata.file_type().is_symlink()
@@ -357,16 +347,7 @@ fn installed_successor(
     {
         return Ok(false);
     }
-    if metadata.mode() & 0o077 != 0 {
-        bail!("the installed restore target is no longer private to the current user");
-    }
-    OwnedStaging::adopt(
-        home.to_path_buf(),
-        parent.to_path_buf(),
-        payload.staging_device,
-        payload.staging_inode,
-    )?
-    .require_private_contents()?;
+    require_recorded_private_home(home, payload.staging_device, payload.staging_inode)?;
     let vault = match read_bounded_optional(&home.join(VAULT_FILE))? {
         Some(bytes) => bytes,
         None => return Ok(false),
@@ -411,42 +392,4 @@ fn read_bounded_optional(path: &Path) -> AnyResult<Option<Vec<u8>>> {
         .take(AUDIT_TEXT_READ_LIMIT + 1)
         .read_to_end(&mut bytes)?;
     Ok(Some(bytes))
-}
-
-impl OwnedStaging {
-    fn create_named(target: &RestoreTarget, leaf: &str) -> AnyResult<Self> {
-        Self::create_at(target, target.parent.join(leaf))
-    }
-
-    /// Re-adopts staging recorded by a journal, verifying its identity. The
-    /// adopted staging is never cleaned up unless its owner reactivates it,
-    /// so an error on any recovery path preserves the recovery data.
-    fn adopt(path: PathBuf, parent: PathBuf, device: u64, inode: u64) -> AnyResult<Self> {
-        let staging = Self {
-            path,
-            parent,
-            device,
-            inode,
-            active: false,
-        };
-        staging.validate_identity()?;
-        Ok(staging)
-    }
-
-    /// Adopted staging becomes the vault home, so it must still be
-    /// owner-only whatever its generated name.
-    fn require_owner_only(&self) -> AnyResult<()> {
-        let mode = fs::symlink_metadata(&self.path)
-            .with_context(|| format!("failed to inspect {}", self.path.display()))?
-            .mode();
-        if mode & 0o077 != 0 {
-            bail!("pending restore staging is no longer private to the current user");
-        }
-        Ok(())
-    }
-
-    /// Keeps the staging directory: a journal now refers to it.
-    fn persist(&mut self) {
-        self.active = false;
-    }
 }

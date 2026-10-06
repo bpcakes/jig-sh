@@ -6,21 +6,27 @@
 //! be mistaken for an orphan while a durable marker still needs its
 //! recovery data. Classification reads every witness record instead.
 //!
-//! It must run under the target's lock. Every writer that creates or clears
-//! a marker naming a target, or writes that target's journal, holds the
-//! same lock, and records are only replaced by atomic renames. No record
-//! naming the target can therefore appear, change, or vanish between
-//! classification and a deletion made under the same lock.
+//! It runs under one acquisition of the target's lock, which the result
+//! borrows. Every writer that creates or clears a marker naming a target,
+//! or writes that target's journal, holds the same lock, and records are
+//! only replaced by atomic renames. No record naming the target can
+//! therefore appear, change, or vanish between classification and a
+//! deletion made through the proof it returns.
+//!
+//! An orphan proof authorizes unlinking only the target's journal file. It
+//! never authorizes deleting staging or any directory a journal names: that
+//! no transaction needs a journal says nothing about who owns what it
+//! describes.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result as AnyResult, bail};
 
 use crate::VaultErrorKind;
 use crate::error::classified;
 
-use super::{IDS_DIR, Journal, WitnessRecord, WitnessStore, id_key, record};
+use super::{HeldLock, IDS_DIR, Journal, WitnessRecord, WitnessStore, id_key, record};
 
 /// Records are scanned up to this many directory entries. Reaching the
 /// bound never authorizes a deletion.
@@ -29,46 +35,58 @@ const MAX_RECORD_SCAN_ENTRIES: usize = 100_000;
 #[cfg(test)]
 pub(super) const MAX_RECORD_SCAN_ENTRIES: usize = 64;
 
+/// One acquisition of a final target's lock, held while this value lives.
+pub(crate) struct TargetLock {
+    root: PathBuf,
+    key: String,
+    _held: HeldLock,
+}
+
+impl TargetLock {
+    pub(super) fn new(root: PathBuf, key: &str, held: HeldLock) -> Self {
+        Self {
+            root,
+            key: key.to_owned(),
+            _held: held,
+        }
+    }
+}
+
 /// What the witness says about one target's journal.
-pub(crate) enum TargetJournal {
+pub(crate) enum TargetJournal<'lock> {
     /// No journal is recorded for the target, and no marker names it.
     Absent,
     /// No authoritative marker names the target.
-    Orphan(OrphanJournal),
+    Orphan(OrphanJournal<'lock>),
     /// Exactly one marker names the target and binds this exact journal.
     Referenced {
         vault_id: String,
-        record: WitnessRecord,
+        record: Box<WitnessRecord>,
         journal: Box<Journal>,
     },
 }
 
-/// Proof, established under the target lock, that no authoritative pending
-/// marker references a journal: the only way to delete a journal (and its
-/// restore staging) outside the promotion that finishes it.
-pub(crate) struct OrphanJournal {
-    journal: Journal,
-}
-
-impl OrphanJournal {
-    pub(crate) fn journal(&self) -> &Journal {
-        &self.journal
-    }
+/// Proof, bound to the target-lock acquisition that established it, that
+/// no authoritative pending marker references the target's journal. It
+/// authorizes unlinking only that journal file, and is the only way to do
+/// so outside the promotion that finishes a transaction.
+pub(crate) struct OrphanJournal<'lock> {
+    lock: &'lock TargetLock,
 }
 
 impl WitnessStore {
-    /// Classifies the journal recorded for `target_key` against every
+    /// Classifies the journal of the target `lock` holds against every
     /// authoritative marker, whether or not the journal still exists. Fails
     /// closed when any record cannot be read and validated, when the scan
     /// reaches its bound, when a marker names the target but its journal is
-    /// missing or does not match it, when several markers name it, or when a
-    /// journal exists but the target lock is not held.
-    pub(crate) fn classify_target_journal(&self, target_key: &str) -> AnyResult<TargetJournal> {
+    /// missing or does not match it, or when several markers name it.
+    pub(crate) fn classify_target_journal<'lock>(
+        &self,
+        lock: &'lock TargetLock,
+    ) -> AnyResult<TargetJournal<'lock>> {
+        self.require_own_lock(lock)?;
+        let target_key = lock.key.as_str();
         let journal = self.read_journal(target_key)?;
-        if journal.is_some() {
-            // Only a journal's classification can authorize a deletion.
-            self.require_target_lock(target_key)?;
-        }
         let mut naming = self.records_with_pending_for(target_key)?;
         let Some((journal, digest)) = journal else {
             if naming.is_empty() {
@@ -86,7 +104,7 @@ impl WitnessStore {
             ));
         }
         let Some(record) = naming.pop() else {
-            return Ok(TargetJournal::Orphan(OrphanJournal { journal }));
+            return Ok(TargetJournal::Orphan(OrphanJournal { lock }));
         };
         let pending = record
             .pending
@@ -104,22 +122,21 @@ impl WitnessStore {
         }
         Ok(TargetJournal::Referenced {
             vault_id: record.vault_id.clone(),
-            record,
+            record: Box::new(record),
             journal: Box::new(journal),
         })
     }
 
-    /// Removes an established orphan's journal, still under the lock that
-    /// established it.
-    pub(crate) fn delete_orphan_journal(&self, orphan: OrphanJournal) -> AnyResult<()> {
-        let target_key = orphan.journal.target.target_key;
-        self.require_target_lock(&target_key)?;
-        self.remove_journal(&target_key)
+    /// Unlinks an established orphan's journal file, and nothing else,
+    /// while the lock acquisition that established it is still held.
+    pub(crate) fn delete_orphan_journal(&self, orphan: OrphanJournal<'_>) -> AnyResult<()> {
+        self.require_own_lock(orphan.lock)?;
+        self.remove_journal(&orphan.lock.key)
     }
 
-    fn require_target_lock(&self, target_key: &str) -> AnyResult<()> {
-        if !self.holds_target_lock(target_key) {
-            bail!("the vault transaction journal can only be classified under its target lock");
+    fn require_own_lock(&self, lock: &TargetLock) -> AnyResult<()> {
+        if lock.root != self.root {
+            bail!("a target lock of another vault witness cannot classify this witness's journals");
         }
         Ok(())
     }

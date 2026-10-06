@@ -17,8 +17,7 @@ use crate::error::{classified, classify_source};
 use crate::format::{AuditRoot, V1_FORMAT_VERSION, V3_FORMAT_VERSION, V3StateFields};
 use crate::store::VaultStore;
 use crate::store::witness::{
-    Checkpoint, Journal, JournalPayload, OrphanJournal, TransactionKind, WitnessRecord,
-    WitnessStore, sha256_hex,
+    Checkpoint, Journal, JournalPayload, TransactionKind, WitnessRecord, WitnessStore, sha256_hex,
 };
 
 use super::OpenVault;
@@ -223,20 +222,5 @@ impl VaultStore {
             let _ = (witness, payload, record, credentials);
             bail!("vault restore recovery is unsupported on this platform")
         }
-    }
-
-    /// Removes a journal established, under this target's lock, to have no
-    /// authoritative pending marker: written before its marker, or left
-    /// over after a promotion.
-    pub(super) fn discard_orphan_journal(
-        &self,
-        witness: &WitnessStore,
-        orphan: OrphanJournal,
-    ) -> AnyResult<()> {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        if matches!(orphan.journal().payload, JournalPayload::Restore(_)) {
-            return crate::backup::discard_orphan_restore(witness, orphan, self.root());
-        }
-        witness.delete_orphan_journal(orphan)
     }
 }

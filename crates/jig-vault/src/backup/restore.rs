@@ -1,6 +1,6 @@
-use std::ffi::{CStr, CString, OsStr, OsString};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::ffi::{CStr, CString, OsStr};
+use std::fs::{self, OpenOptions};
+use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
@@ -17,10 +17,13 @@ use crate::{VaultError, VaultErrorKind};
 use super::payload::DecodedBackupArchive;
 use super::{BackupRestoreResult, MAX_BACKUP_ARCHIVE_BYTES, RestoreTarget};
 
+mod staging;
 mod witnessed;
 
 pub(super) use witnessed::restore;
-pub(crate) use witnessed::{discard_orphan_restore, finish_pending_restore, read_candidate};
+pub(crate) use witnessed::{finish_pending_restore, read_candidate};
+
+use staging::FreshStaging;
 
 const VAULT_FILE: &str = "vault.json";
 const AUDIT_FILE: &str = "audit.jsonl";
@@ -271,14 +274,14 @@ fn restore_legacy(
     target: RestoreTarget,
 ) -> AnyResult<BackupRestoreResult> {
     revalidate_target(&target)?;
-    let mut staging = OwnedStaging::create(&target)?;
-    let result = (|| -> AnyResult<BackupRestoreResult> {
+    let staging = FreshStaging::create(&target)?;
+    let prepared = (|| -> AnyResult<()> {
         staging.write_file(VAULT_FILE, decoded.vault_bytes())?;
         staging.write_file(AUDIT_FILE, decoded.audit_bytes())?;
         staging.sync()?;
 
-        let staged_store =
-            VaultStore::open_existing(staging.path.clone()).map_err(vault_error_as_classified)?;
+        let staged_store = VaultStore::open_existing(staging.path().to_path_buf())
+            .map_err(vault_error_as_classified)?;
         staged_store
             .finalize_backup_restore(
                 passphrase,
@@ -288,274 +291,19 @@ fn restore_legacy(
             )
             .map_err(vault_error_as_classified)?;
         staging.sync()?;
-        revalidate_target(&target)?;
-        staging.install(&target)?;
-        Ok(BackupRestoreResult {
-            root: target.home.clone(),
-            vault_id: decoded.source_vault_id.clone(),
-            format_version: decoded.source_format_version,
-            source_format_version: decoded.source_format_version,
-            generation: None,
-        })
+        revalidate_target(&target)
     })();
-
-    match result {
-        Ok(result) => Ok(result),
-        Err(error) => match staging.cleanup() {
-            Ok(()) => Err(error),
-            Err(cleanup_error) => Err(error.context(format!(
-                "restore failed; additionally could not safely clean its owned staging directory: {cleanup_error}"
-            ))),
-        },
+    if let Err(error) = prepared {
+        return Err(staging.abandon(error.context("restore failed")));
     }
-}
-
-struct OwnedStaging {
-    path: PathBuf,
-    parent: PathBuf,
-    device: u64,
-    inode: u64,
-    active: bool,
-}
-
-impl OwnedStaging {
-    fn create(target: &RestoreTarget) -> AnyResult<Self> {
-        let leaf = target
-            .home
-            .file_name()
-            .expect("preflight restore target has a leaf");
-        let mut name = OsString::from(".");
-        name.push(leaf);
-        name.push(format!(
-            ".{}.{}.jig-vault-restore.tmp",
-            std::process::id(),
-            ulid::Ulid::new()
-        ));
-        Self::create_at(target, target.parent.join(name))
-    }
-
-    fn create_at(target: &RestoreTarget, path: PathBuf) -> AnyResult<Self> {
-        revalidate_target(target)?;
-        let mut builder = fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder.create(&path).with_context(|| {
-            format!(
-                "failed to create private restore staging directory beside {}",
-                target.home.display()
-            )
-        })?;
-        // DirBuilder's 0700 mode can only be tightened by the umask. Stat
-        // immediately and retain the exact identity before any cleanup is
-        // permitted; an inspection failure deliberately leaves the
-        // generated name for manual review instead of deleting an
-        // unverified directory entry.
-        let metadata = fs::symlink_metadata(&path).with_context(|| {
-            format!(
-                "restore staging directory was created at {}, but its identity could not be verified; inspect it manually",
-                path.display()
-            )
-        })?;
-        validate_owned_directory(&path, &metadata)?;
-        let mut staging = Self {
-            path,
-            parent: target.parent.clone(),
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            active: true,
-        };
-        let setup = (|| -> AnyResult<()> {
-            fs::set_permissions(&staging.path, fs::Permissions::from_mode(0o700)).with_context(
-                || {
-                    format!(
-                        "failed to restrict restore staging directory {}",
-                        staging.path.display()
-                    )
-                },
-            )?;
-            // Staged files must not inherit the parent's ACL entries.
-            acl::clear_directory(&staging.path)?;
-            let metadata = fs::symlink_metadata(&staging.path).with_context(|| {
-                format!(
-                    "failed to inspect restore staging directory {}",
-                    staging.path.display()
-                )
-            })?;
-            staging.validate_metadata_identity(&metadata)?;
-            sync_directory(&target.parent)?;
-            Ok(())
-        })();
-        match setup {
-            Ok(()) => Ok(staging),
-            Err(error) => {
-                match staging.cleanup() {
-                    Ok(()) => Err(error),
-                    Err(cleanup_error) => Err(error.context(format!(
-                        "restore staging setup failed; additionally identity-checked cleanup failed: {cleanup_error}"
-                    ))),
-                }
-            }
-        }
-    }
-
-    fn write_file(&self, name: &str, bytes: &[u8]) -> AnyResult<()> {
-        let path = self.path.join(name);
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&path)
-            .with_context(|| format!("failed to create staged restore file {name}"))?;
-        acl::clear_file(&file, &path)?;
-        file.write_all(bytes)
-            .with_context(|| format!("failed to write staged restore file {name}"))?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("failed to restrict staged restore file {name}"))?;
-        let metadata = file
-            .metadata()
-            .with_context(|| format!("failed to inspect staged restore file {name}"))?;
-        validate_owned_file(&path, &metadata)?;
-        file.sync_all()
-            .with_context(|| format!("failed to sync staged restore file {name}"))?;
-        Ok(())
-    }
-
-    fn sync(&self) -> AnyResult<()> {
-        self.validate_identity()?;
-        sync_directory(&self.path)
-    }
-
-    fn install(&mut self, target: &RestoreTarget) -> AnyResult<()> {
-        self.validate_identity()?;
-        self.require_private_contents()?;
-        revalidate_target(target)?;
-        atomic_rename_noreplace(&self.path, &target.home)?;
-        // The generated staging name no longer exists after this point;
-        // cleanup must never target the user-selected installed home.
-        self.active = false;
-        sync_directory(&self.parent).with_context(|| {
-            format!(
-                "restored vault was installed at {}, but its parent directory could not be synced",
-                target.home.display()
-            )
-        })?;
-        Ok(())
-    }
-
-    fn cleanup(&mut self) -> AnyResult<()> {
-        if !self.active {
-            return Ok(());
-        }
-        let metadata = match fs::symlink_metadata(&self.path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                self.active = false;
-                return Ok(());
-            }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to inspect restore staging directory {}",
-                        self.path.display()
-                    )
-                });
-            }
-        };
-        self.validate_metadata_identity(&metadata)?;
-        for entry in fs::read_dir(&self.path).with_context(|| {
-            format!(
-                "failed to enumerate restore staging directory {}",
-                self.path.display()
-            )
-        })? {
-            let entry = entry.context("failed to inspect restore staging entry")?;
-            let name = entry.file_name();
-            if !matches!(name.to_str(), Some(VAULT_FILE | AUDIT_FILE | LOCK_FILE)) {
-                bail!(
-                    "refusing to clean restore staging directory containing unexpected entry {}",
-                    entry.path().display()
-                );
-            }
-            let metadata = fs::symlink_metadata(entry.path()).with_context(|| {
-                format!(
-                    "failed to inspect staged restore entry {}",
-                    entry.path().display()
-                )
-            })?;
-            validate_owned_file(&entry.path(), &metadata)?;
-            fs::remove_file(entry.path()).with_context(|| {
-                format!(
-                    "failed to remove staged restore file {}",
-                    entry.path().display()
-                )
-            })?;
-        }
-        fs::remove_dir(&self.path).with_context(|| {
-            format!(
-                "failed to remove restore staging directory {}",
-                self.path.display()
-            )
-        })?;
-        sync_directory(&self.parent)?;
-        self.active = false;
-        Ok(())
-    }
-
-    /// Rechecks everything that will be published, including files the
-    /// vault store wrote while finalizing the staged restore.
-    fn require_private_contents(&self) -> AnyResult<()> {
-        acl::require_none(&self.path)?;
-        for entry in fs::read_dir(&self.path).with_context(|| {
-            format!(
-                "failed to enumerate restore staging directory {}",
-                self.path.display()
-            )
-        })? {
-            let entry = entry.context("failed to inspect restore staging entry")?;
-            if !matches!(
-                entry.file_name().to_str(),
-                Some(VAULT_FILE | AUDIT_FILE | LOCK_FILE)
-            ) {
-                bail!(
-                    "refusing to install restore staging directory containing unexpected entry {}",
-                    entry.path().display()
-                );
-            }
-            let metadata = fs::symlink_metadata(entry.path()).with_context(|| {
-                format!(
-                    "failed to inspect staged restore entry {}",
-                    entry.path().display()
-                )
-            })?;
-            validate_owned_file(&entry.path(), &metadata)?;
-            acl::require_none(&entry.path())?;
-        }
-        Ok(())
-    }
-
-    fn validate_identity(&self) -> AnyResult<()> {
-        let metadata = fs::symlink_metadata(&self.path).with_context(|| {
-            format!(
-                "failed to inspect restore staging directory {}",
-                self.path.display()
-            )
-        })?;
-        self.validate_metadata_identity(&metadata)
-    }
-
-    fn validate_metadata_identity(&self, metadata: &fs::Metadata) -> AnyResult<()> {
-        validate_owned_directory(&self.path, metadata)?;
-        if metadata.dev() != self.device || metadata.ino() != self.inode {
-            bail!("restore staging directory identity changed; refusing cleanup or install");
-        }
-        Ok(())
-    }
-}
-
-impl Drop for OwnedStaging {
-    fn drop(&mut self) {
-        let _ = self.cleanup();
-    }
+    staging.install(&target)?;
+    Ok(BackupRestoreResult {
+        root: target.home,
+        vault_id: decoded.source_vault_id.clone(),
+        format_version: decoded.source_format_version,
+        source_format_version: decoded.source_format_version,
+        generation: None,
+    })
 }
 
 fn revalidate_target(target: &RestoreTarget) -> AnyResult<()> {
@@ -654,25 +402,6 @@ fn validate_owned_directory(path: &Path, metadata: &fs::Metadata) -> AnyResult<(
     Ok(())
 }
 
-fn validate_owned_file(path: &Path, metadata: &fs::Metadata) -> AnyResult<()> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        bail!(
-            "staged restore path is not a regular file: {}",
-            path.display()
-        );
-    }
-    if metadata.uid() != unsafe { libc::geteuid() } {
-        bail!(
-            "staged restore file is not owned by the current user: {}",
-            path.display()
-        );
-    }
-    if metadata.permissions().mode() & 0o077 != 0 {
-        bail!("staged restore file is not owner-only: {}", path.display());
-    }
-    Ok(())
-}
-
 /// Rechecks every directory from the filesystem root down to `path`.
 fn validate_trusted_ancestors(path: &Path) -> AnyResult<()> {
     let absolute = if path.is_absolute() {
@@ -709,11 +438,13 @@ fn validate_trusted_ancestors(path: &Path) -> AnyResult<()> {
 }
 
 fn atomic_rename_noreplace(source: &Path, destination: &Path) -> AnyResult<()> {
+    let destination_path = destination;
     let source =
         CString::new(source.as_os_str().as_bytes()).context("restore staging path contains NUL")?;
     let destination = CString::new(destination.as_os_str().as_bytes())
         .context("restore target path contains NUL")?;
     let Err(error) = rename_noreplace(&source, &destination) else {
+        crate::store::durable::renamed(destination_path);
         return Ok(());
     };
     match error.raw_os_error() {
@@ -783,10 +514,7 @@ const fn noreplace_is_unsupported(errno: i32) -> bool {
 }
 
 fn sync_directory(path: &Path) -> AnyResult<()> {
-    File::open(path)
-        .with_context(|| format!("failed to open directory {} for sync", path.display()))?
-        .sync_all()
-        .with_context(|| format!("failed to sync directory {}", path.display()))
+    crate::store::durable::sync_dir(path)
 }
 
 fn vault_error_as_classified(error: VaultError) -> anyhow::Error {

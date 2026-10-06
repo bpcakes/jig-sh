@@ -27,7 +27,7 @@ static DURABLE_ENTRIES: Mutex<BTreeSet<(PathBuf, u64, u64)>> = Mutex::new(BTreeS
 
 /// Syncs one directory, persisting the entries renamed, created, or
 /// removed in it.
-pub(super) fn sync_dir(path: &Path) -> AnyResult<()> {
+pub(crate) fn sync_dir(path: &Path) -> AnyResult<()> {
     #[cfg(any(test, feature = "test-utils"))]
     recording::observe(recording::FsOp::SyncDir(path.to_path_buf()))
         .with_context(|| format!("failed to sync directory {}", path.display()))?;
@@ -42,7 +42,7 @@ pub(super) fn sync_dir(path: &Path) -> AnyResult<()> {
 }
 
 /// Syncs one open file's contents and metadata.
-pub(super) fn sync_file(file: &File, path: &Path) -> AnyResult<()> {
+pub(crate) fn sync_file(file: &File, path: &Path) -> AnyResult<()> {
     #[cfg(any(test, feature = "test-utils"))]
     recording::observe(recording::FsOp::SyncFile(path.to_path_buf()))
         .with_context(|| format!("failed to sync {}", path.display()))?;
@@ -56,6 +56,15 @@ pub(super) fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
     #[cfg(any(test, feature = "test-utils"))]
     recording::note(recording::FsOp::Rename(to.to_path_buf()));
     Ok(())
+}
+
+/// Notes a rename made by other means, such as a no-replace directory
+/// rename; the caller syncs the containing directory.
+pub(crate) fn renamed(to: &Path) {
+    #[cfg(any(test, feature = "test-utils"))]
+    recording::note(recording::FsOp::Rename(to.to_path_buf()));
+    #[cfg(not(any(test, feature = "test-utils")))]
+    let _ = to;
 }
 
 /// Removes one file; the caller syncs the containing directory.
@@ -156,7 +165,9 @@ pub(crate) mod recording {
 
     thread_local! {
         static LOG: RefCell<Option<Vec<FsOp>>> = const { RefCell::new(None) };
-        static FAIL_SYNC: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+        /// Paths whose sync fails after skipping the given number of
+        /// matching syncs.
+        static FAIL_SYNC: RefCell<Vec<(PathBuf, usize)>> = const { RefCell::new(Vec::new()) };
     }
 
     /// Runs `f` and returns the durability operations it performed on this
@@ -170,7 +181,20 @@ pub(crate) mod recording {
 
     /// Makes the next sync of exactly `path` on this thread fail.
     pub fn fail_next_sync_of(path: &Path) {
-        FAIL_SYNC.with(|fail| fail.borrow_mut().push(path.to_path_buf()));
+        fail_sync_after(path, 0);
+    }
+
+    /// Makes the sync of exactly `path` that follows `skip` successful
+    /// syncs of it on this thread fail.
+    pub fn fail_sync_after(path: &Path, skip: usize) {
+        FAIL_SYNC.with(|fail| fail.borrow_mut().push((path.to_path_buf(), skip)));
+    }
+
+    /// Forgets which directory entries this process made durable, as a
+    /// fresh process would, so a retry cannot rely on an earlier attempt's
+    /// barriers.
+    pub fn forget_durable_entries() {
+        super::lock_entries().clear();
     }
 
     pub(super) fn note(op: FsOp) {
@@ -188,8 +212,15 @@ pub(crate) mod recording {
         };
         let injected = FAIL_SYNC.with(|fail| {
             let mut fail = fail.borrow_mut();
-            let index = fail.iter().position(|candidate| *candidate == path);
-            index.map(|index| fail.remove(index)).is_some()
+            let Some(index) = fail.iter().position(|(candidate, _)| *candidate == path) else {
+                return false;
+            };
+            if fail[index].1 == 0 {
+                fail.remove(index);
+                return true;
+            }
+            fail[index].1 -= 1;
+            false
         });
         if injected {
             return Err(std::io::Error::other("injected sync failure"));

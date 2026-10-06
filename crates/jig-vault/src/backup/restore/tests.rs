@@ -189,11 +189,12 @@ fn preflight_refuses_an_existing_symlink_above_the_creation_boundary() {
 fn owned_staging_cleanup_removes_only_validated_generated_entries() {
     let temp = private_tempdir();
     let target = preflight_target(temp.path().join("restored-home")).unwrap();
-    let mut staging = OwnedStaging::create(&target).unwrap();
-    let staging_path = staging.path.clone();
+    let staging = FreshStaging::create(&target).unwrap();
+    let staging_path = staging.path().to_path_buf();
     staging.write_file(VAULT_FILE, b"vault").unwrap();
     staging.write_file(AUDIT_FILE, b"audit").unwrap();
-    staging.cleanup().unwrap();
+    // Fresh staging this operation still owns is cleaned up when dropped.
+    drop(staging);
     assert!(!staging_path.exists());
     assert!(!target.home.exists());
 }
@@ -202,21 +203,21 @@ fn owned_staging_cleanup_removes_only_validated_generated_entries() {
 fn staging_cleanup_refuses_a_replaced_directory_identity() {
     let temp = private_tempdir();
     let target = preflight_target(temp.path().join("restored-home")).unwrap();
-    let mut staging = OwnedStaging::create(&target).unwrap();
-    let original = staging.path.with_extension("original-stage");
-    fs::rename(&staging.path, &original).unwrap();
-    fs::create_dir(&staging.path).unwrap();
-    fs::set_permissions(&staging.path, fs::Permissions::from_mode(0o700)).unwrap();
+    let staging = FreshStaging::create(&target).unwrap();
+    let staging_path = staging.path().to_path_buf();
+    let original = staging_path.with_extension("original-stage");
+    fs::rename(&staging_path, &original).unwrap();
+    fs::create_dir(&staging_path).unwrap();
+    fs::set_permissions(&staging_path, fs::Permissions::from_mode(0o700)).unwrap();
 
-    let error = staging.cleanup().unwrap_err();
-    assert!(error.to_string().contains("identity changed"));
-    assert!(staging.path.exists());
+    // Abandoning consumes ownership, so nothing can act on the replacement.
+    let error = staging.abandon(anyhow::anyhow!("probe"));
+    assert!(error.to_string().contains("identity changed"), "{error:#}");
+    assert!(staging_path.exists());
     assert!(original.exists());
 
-    // Test-only explicit cleanup of the two exact paths. Disable the
-    // guard first so Drop cannot act on the replacement.
-    staging.active = false;
-    fs::remove_dir(&staging.path).unwrap();
+    // Test-only explicit cleanup of the two exact paths.
+    fs::remove_dir(&staging_path).unwrap();
     fs::remove_dir(&original).unwrap();
 }
 
@@ -224,8 +225,8 @@ fn staging_cleanup_refuses_a_replaced_directory_identity() {
 fn atomic_install_never_replaces_a_raced_target() {
     let temp = private_tempdir();
     let target = preflight_target(temp.path().join("restored-home")).unwrap();
-    let mut staging = OwnedStaging::create(&target).unwrap();
-    let staging_path = staging.path.clone();
+    let staging = FreshStaging::create(&target).unwrap();
+    let staging_path = staging.path().to_path_buf();
     staging.write_file(VAULT_FILE, b"vault").unwrap();
     staging.write_file(AUDIT_FILE, b"audit").unwrap();
     fs::create_dir(&target.home).unwrap();
@@ -233,13 +234,13 @@ fn atomic_install_never_replaces_a_raced_target() {
 
     // Invoke the final primitive directly to model the target
     // appearing after the last ordinary preflight check.
-    let error = atomic_rename_noreplace(&staging.path, &target.home).unwrap_err();
+    let error = atomic_rename_noreplace(&staging_path, &target.home).unwrap_err();
     assert_eq!(
         crate::error::classified_kind(&error),
         Some(VaultErrorKind::AlreadyExists)
     );
     assert_eq!(fs::read(target.home.join("marker")).unwrap(), b"unchanged");
-    staging.cleanup().unwrap();
+    drop(staging);
     assert!(!staging_path.exists());
 }
 
@@ -287,8 +288,8 @@ fn restore_clears_inherited_acls_before_writing_or_installing() {
     assert!(!has_acl_entries(&chained.parent));
 
     let target = preflight_target(shared.join("restored-home")).unwrap();
-    let mut staging = OwnedStaging::create(&target).unwrap();
-    assert!(!has_acl_entries(&staging.path));
+    let staging = FreshStaging::create(&target).unwrap();
+    assert!(!has_acl_entries(staging.path()));
     staging.write_file(VAULT_FILE, b"vault").unwrap();
     staging.write_file(AUDIT_FILE, b"audit").unwrap();
     staging.install(&target).unwrap();
@@ -331,16 +332,18 @@ fn preflight_refuses_parents_whose_acl_allows_write_or_delete() {
 fn install_refuses_a_staged_file_that_gained_an_acl() {
     let temp = private_tempdir();
     let target = preflight_target(temp.path().join("restored-home")).unwrap();
-    let mut staging = OwnedStaging::create(&target).unwrap();
+    let staging = FreshStaging::create(&target).unwrap();
+    let staging_path = staging.path().to_path_buf();
     staging.write_file(VAULT_FILE, b"vault").unwrap();
     staging.write_file(AUDIT_FILE, b"audit").unwrap();
-    add_acl_entry(&staging.path.join(AUDIT_FILE), "everyone allow read");
+    add_acl_entry(&staging_path.join(AUDIT_FILE), "everyone allow read");
 
-    let error = staging.install(&target).unwrap_err().to_string();
+    // A refused install cleans up the staging it still owned.
+    let error = format!("{:#}", staging.install(&target).unwrap_err());
 
     assert!(error.contains("access control list"), "{error}");
     assert!(!target.home.exists());
-    staging.cleanup().unwrap();
+    assert!(!staging_path.exists());
 }
 
 /// A throwaway APFS image attached with ownership ignored, detached on drop.
@@ -472,17 +475,22 @@ fn install_refuses_unexpected_or_non_private_staged_entries() {
     let temp = private_tempdir();
     for (label, tamper, untamper, expected) in cases {
         let target = preflight_target(temp.path().join(label)).unwrap();
-        let mut staging = OwnedStaging::create(&target).unwrap();
+        let staging = FreshStaging::create(&target).unwrap();
+        let staging_path = staging.path().to_path_buf();
         staging.write_file(VAULT_FILE, b"vault").unwrap();
         staging.write_file(AUDIT_FILE, b"audit").unwrap();
-        tamper(&staging.path);
+        tamper(&staging_path);
 
-        let error = staging.install(&target).unwrap_err().to_string();
+        let error = format!("{:#}", staging.install(&target).unwrap_err());
 
         assert!(error.contains(expected), "{label}: {error}");
         assert!(!target.home.exists(), "{label}");
-        untamper(&staging.path);
-        staging.cleanup().unwrap();
+        // Cleanup stopped at the tampered entry; remove what is left.
+        untamper(&staging_path);
+        for name in [VAULT_FILE, AUDIT_FILE] {
+            let _ = fs::remove_file(staging_path.join(name));
+        }
+        fs::remove_dir(&staging_path).unwrap();
     }
 }
 
@@ -524,7 +532,7 @@ fn preflight_and_revalidation_refuse_a_shared_writable_higher_ancestor() {
 
     let error = revalidate_target(&target).unwrap_err().to_string();
     assert!(error.contains("shared-writable ancestor"), "{error}");
-    let error = OwnedStaging::create(&target).err().unwrap().to_string();
+    let error = FreshStaging::create(&target).err().unwrap().to_string();
     assert!(error.contains("shared-writable ancestor"), "{error}");
     assert!(!target.home.exists());
 }

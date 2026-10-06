@@ -34,7 +34,7 @@ pub(crate) use journal::{
     RestorePayload,
 };
 pub(crate) use record::{Checkpoint, PendingMarker, TransactionKind, WitnessRecord};
-pub(crate) use target::{OrphanJournal, TargetJournal};
+pub(crate) use target::{TargetJournal, TargetLock};
 
 use super::durable::{self, ensure_entry_chain_durable};
 use super::{
@@ -399,12 +399,6 @@ impl WitnessStore {
         durable::sync_dir(&self.root.join(JOURNALS_DIR))
     }
 
-    /// Whether this thread holds the lock of one final target.
-    fn holds_target_lock(&self, target_key: &str) -> bool {
-        let path = self.target_lock_path(target_key);
-        HELD_LOCKS.with(|held| held.borrow().contains_key(&path))
-    }
-
     fn target_lock_path(&self, target_key: &str) -> PathBuf {
         self.root
             .join(LOCKS_DIR)
@@ -412,8 +406,12 @@ impl WitnessStore {
     }
 
     /// Locks one final target path. Taken before any home or ID lock.
-    pub(crate) fn lock_target(&self, target_key: &str) -> AnyResult<HeldLock> {
-        HeldLock::acquire(self.target_lock_path(target_key))
+    pub(crate) fn lock_target(&self, target_key: &str) -> AnyResult<TargetLock> {
+        Ok(TargetLock::new(
+            self.root.clone(),
+            target_key,
+            HeldLock::acquire(self.target_lock_path(target_key))?,
+        ))
     }
 
     /// Locks one vault ID, shared by every same-ID copy. Taken after the

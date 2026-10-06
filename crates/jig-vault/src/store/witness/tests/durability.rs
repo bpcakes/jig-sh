@@ -152,9 +152,9 @@ fn a_journal_claiming_another_valid_vault_keeps_its_marker_and_data() {
     let key = target_key(Path::new("/example/home"));
     pending_for(&store, &journal(&key));
     let changed = claim_other_vault(&store, &key);
-    let _target = store.lock_target(&key).unwrap();
+    let lock = store.lock_target(&key).unwrap();
 
-    let error = match store.classify_target_journal(&key) {
+    let error = match store.classify_target_journal(&lock) {
         Err(error) => error,
         Ok(_) => panic!("a marker names this target; the journal is not an orphan"),
     };
@@ -175,7 +175,7 @@ fn a_journal_claiming_another_valid_vault_keeps_its_marker_and_data() {
 }
 
 #[test]
-fn an_unreferenced_journal_is_an_orphan_only_under_its_target_lock() {
+fn an_orphan_proof_unlinks_only_its_targets_journal_under_its_own_lock() {
     let (_temp, store) = witness();
     let key = target_key(Path::new("/example/home"));
     store.write_journal(&journal(&key)).unwrap();
@@ -185,24 +185,25 @@ fn an_unreferenced_journal_is_an_orphan_only_under_its_target_lock() {
     store.write_record(&committed_record(1)).unwrap();
     fs::write(store.root().join(IDS_DIR).join(".abc.json.1.tmp"), b"{").unwrap();
 
-    assert!(store.classify_target_journal(&key).is_err());
-    let orphan = {
-        let _target = store.lock_target(&key).unwrap();
-        match store.classify_target_journal(&key).unwrap() {
-            TargetJournal::Orphan(orphan) => orphan,
-            _ => panic!("no marker names the target"),
-        }
-    };
-    // The proof only deletes while the lock that established it is held.
-    assert!(store.delete_orphan_journal(orphan).is_err());
-    assert!(store.journal_exists(&key));
+    // A lock of another witness never classifies this one's journals.
+    let (_other_temp, other) = witness();
+    let foreign = other.lock_target(&key).unwrap();
+    assert!(store.classify_target_journal(&foreign).is_err());
 
-    let _target = store.lock_target(&key).unwrap();
-    let TargetJournal::Orphan(orphan) = store.classify_target_journal(&key).unwrap() else {
+    let lock = store.lock_target(&key).unwrap();
+    let TargetJournal::Orphan(orphan) = store.classify_target_journal(&lock).unwrap() else {
         panic!("no marker names the target");
     };
-    store.delete_orphan_journal(orphan).unwrap();
+    let (deleted, ops) = record(|| store.delete_orphan_journal(orphan));
+    deleted.unwrap();
     assert!(!store.journal_exists(&key));
+    assert_eq!(
+        ops,
+        vec![
+            FsOp::Remove(store.journal_path(&key)),
+            FsOp::SyncDir(store.root().join(JOURNALS_DIR)),
+        ]
+    );
 }
 
 #[test]
@@ -212,8 +213,8 @@ fn records_that_cannot_be_trusted_or_the_scan_bound_never_authorize_deletion() {
         let (_temp, store) = witness();
         store.write_journal(&journal(&key)).unwrap();
         prepare(&store);
-        let _target = store.lock_target(&key).unwrap();
-        assert!(store.classify_target_journal(&key).is_err());
+        let lock = store.lock_target(&key).unwrap();
+        assert!(store.classify_target_journal(&lock).is_err());
         assert!(store.journal_exists(&key));
     };
     // A malformed record.
@@ -249,20 +250,18 @@ fn records_that_cannot_be_trusted_or_the_scan_bound_never_authorize_deletion() {
 }
 
 #[test]
-fn a_marker_whose_journal_is_missing_fails_closed_with_or_without_the_lock() {
+fn a_marker_whose_journal_is_missing_fails_closed() {
     let (_temp, store) = witness();
     let key = target_key(Path::new("/example/home"));
     pending_for(&store, &journal(&key));
     fs::remove_file(store.journal_path(&key)).unwrap();
 
-    for locked in [false, true] {
-        let _target = locked.then(|| store.lock_target(&key).unwrap());
-        let error = match store.classify_target_journal(&key) {
-            Err(error) => error,
-            Ok(_) => panic!("a marker names this target without its journal"),
-        };
-        assert!(error.to_string().contains("journal is missing"), "{error}");
-    }
+    let lock = store.lock_target(&key).unwrap();
+    let error = match store.classify_target_journal(&lock) {
+        Err(error) => error,
+        Ok(_) => panic!("a marker names this target without its journal"),
+    };
+    assert!(error.to_string().contains("journal is missing"), "{error}");
     assert!(
         store
             .read_record(VAULT_ID)

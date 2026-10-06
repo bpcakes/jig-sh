@@ -230,6 +230,9 @@ impl VaultStore {
             return Ok(None);
         };
         let target_key = self.target_key();
+        // Classification and any orphan deletion happen under this one
+        // acquisition of the target lock (reentrant under `with_lock`).
+        let target_lock = witness.lock_target(&target_key)?;
         let header_pending = match self.header_vault_id_for_lock() {
             Some(id) => {
                 let _id = witness.lock_id(&id)?;
@@ -249,19 +252,19 @@ impl VaultStore {
             ));
         }
         let (vault_id, record, journal) = match witness
-            .classify_target_journal(&target_key)
+            .classify_target_journal(&target_lock)
             .map_err(fail_closed)?
         {
             TargetJournal::Absent => return Ok(None),
             TargetJournal::Orphan(orphan) => {
-                self.discard_orphan_journal(&witness, orphan)?;
+                witness.delete_orphan_journal(orphan)?;
                 return Ok(None);
             }
             TargetJournal::Referenced {
                 vault_id,
                 record,
                 journal,
-            } => (vault_id, record, journal),
+            } => (vault_id, *record, journal),
         };
         let _id = witness.lock_id(&vault_id)?;
         // Only this target's lock holder may change a marker naming it;
