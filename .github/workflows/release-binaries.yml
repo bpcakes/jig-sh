@@ -23,6 +23,8 @@ on:
       - "scripts/package-release-binary.py"
       - "scripts/publish-release-binaries.py"
       - "scripts/smoke-release-binary.py"
+      - "scripts/check-vault-production-features.py"
+      - "scripts/tests/test_vault_production_features.py"
       - "scripts/install-jig.sh"
       - "scripts/install.sh"
       - "scripts/tests/test_jig_standalone_install.py"
@@ -80,6 +82,10 @@ jobs:
         with:
           workspaces: release-source
           shared-key: release-binary-${{ matrix.target }}
+      - name: Check release vault features
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python3 scripts/check-vault-production-features.py --manifest-path release-source/Cargo.toml --target "$TARGET"
       - name: Build locked full-featured binary
         working-directory: release-source
         env:

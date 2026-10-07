@@ -59,6 +59,15 @@ fn assert_rollback(error: &VaultError) {
             .contains("older than its witnessed generation"),
         "{error}"
     );
+    assert_stale_copy_guidance(error);
+}
+
+fn assert_stale_copy_guidance(error: &VaultError) {
+    let message = error.to_string();
+    assert!(message.contains("Operator step: use the current vault home"));
+    assert!(message.contains("restored home"));
+    assert!(message.contains("Agents must ask the operator"));
+    assert!(message.contains("Never delete or edit the rollback witness or its journals"));
 }
 
 #[test]
@@ -109,6 +118,7 @@ fn a_replayed_older_format_copy_of_a_witnessed_vault_is_refused() {
     let error = store.list_fields(&passphrase()).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::AuditTampered);
     assert!(error.to_string().contains("already witnessed as format 3"));
+    assert_stale_copy_guidance(&error);
     assert!(store.migrate(&passphrase(), V3_FORMAT_VERSION).is_err());
 }
 

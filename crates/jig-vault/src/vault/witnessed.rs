@@ -243,7 +243,7 @@ fn compare_with_checkpoint(current: &Checkpoint, committed: &Checkpoint) -> AnyR
         return Err(classified(
             VaultErrorKind::AuditTampered,
             format!(
-                "vault state generation {} is older than its witnessed generation {}; refusing a rolled-back copy",
+                "vault state generation {} is older than its witnessed generation {}; refusing a rolled-back copy. {STALE_COPY_RECOVERY_GUIDANCE}",
                 current.generation, committed.generation
             ),
         ));
@@ -269,10 +269,14 @@ fn compare_with_checkpoint(current: &Checkpoint, committed: &Checkpoint) -> AnyR
 
 const PROFILE_RECOVERY_GUIDANCE: &str = "Operator step: if another user profile can still authenticate the intended vault, create an encrypted backup there and restore it to an absent target on this profile using the documented recovery procedure. Agents must ask the operator. Never delete or edit the rollback witness to bypass this refusal.";
 
+const STALE_COPY_RECOVERY_GUIDANCE: &str = "Operator step: use the current vault home, or the restored home if a backup was restored. If the current copy is unavailable, use the documented authenticated backup recovery procedure to restore to an absent target. Agents must ask the operator. Never delete or edit the rollback witness or its journals to bypass this refusal.";
+
 fn legacy_replay_error() -> anyhow::Error {
     classified(
         VaultErrorKind::AuditTampered,
-        "this vault ID was already witnessed as format 3; refusing an older-format copy",
+        format!(
+            "this vault ID was already witnessed as format 3; refusing an older-format copy. {STALE_COPY_RECOVERY_GUIDANCE}"
+        ),
     )
 }
 

@@ -145,7 +145,12 @@ override still perform full validation.
 
 The Release binaries workflow builds native archives on Linux and macOS for both
 x86-64 and ARM64. Changes to binary distribution tooling also run that matrix on
-pull requests. The `test_jig_binary_distribution.py` unittest module exercises
+pull requests. Repository policy and each release target run
+`scripts/check-vault-production-features.py` to reject `jig-vault/test-utils`
+in the production Cargo dependency graph. The guard excludes dev-dependencies;
+isolated test-support builds remain available. Run its real-Cargo regression
+fixtures with `python3 -m unittest discover -s scripts/tests -p 'test_vault_production_features.py'`.
+The `test_jig_binary_distribution.py` unittest module exercises
 cold installs without Cargo, checksums, host selection, fallback, publication
 retries, and cache preservation. `test_jig_standalone_install.py` covers first-time
 installation, latest-release selection, host requirements, and safe replacement. On stable tags,

@@ -201,6 +201,32 @@ fn a_rolled_back_copy_is_refused_value_free() {
         "{error}"
     );
     assert!(!error.contains("recovery value"));
+    assert_stale_guidance(&error);
+}
+
+fn assert_stale_guidance(error: &str) {
+    assert!(error.contains("Operator step: use the current vault home"));
+    assert!(error.contains("restored home"));
+    assert!(error.contains("Agents must ask the operator"));
+    assert!(error.contains("Never delete or edit the rollback witness or its journals"));
+    assert!(!error.contains(PASSPHRASE));
+}
+
+#[test]
+fn a_legacy_replay_has_operator_guidance_in_cli_errors() {
+    let temp = private_tempdir();
+    let home = temp.path().join("ExampleVault");
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+    vault.init_format_for_test(&passphrase(), 2).unwrap();
+    let old_vault = std::fs::read(home.join("vault.json")).unwrap();
+    let old_audit = std::fs::read(home.join("audit.jsonl")).unwrap();
+    vault.migrate(&passphrase(), 3).unwrap();
+    std::fs::write(home.join("vault.json"), old_vault).unwrap();
+    std::fs::write(home.join("audit.jsonl"), old_audit).unwrap();
+
+    let error = failure(&jig(&["field", "list"], &home));
+    assert!(error.contains("refusing an older-format copy"));
+    assert_stale_guidance(&error);
 }
 
 #[test]

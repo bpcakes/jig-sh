@@ -9,6 +9,7 @@ mod core;
 mod formats;
 mod lifecycle;
 mod rekey_policy;
+mod stale_copy;
 
 fn request(home: std::path::PathBuf) -> VaultTuiRequest {
     VaultTuiRequest {

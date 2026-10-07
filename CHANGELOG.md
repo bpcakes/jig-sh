@@ -106,6 +106,8 @@
   before its pending marker, while preserving abandoned staging.
 - Explain independent-profile witness divergence and operator backup/restore
   recovery; newer-state and fork refusals now include recovery guidance.
+- Explain operator recovery on rollback and older-format replay refusals,
+  including using the current or restored home without editing the witness.
 - On macOS, the Claude home picker's usage check no longer prompts for
   Keychain access as `jig`. It reads with system dialogs disabled, then
   requests permission through Apple's `/usr/bin/security` tool, whose
