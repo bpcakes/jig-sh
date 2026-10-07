@@ -394,7 +394,7 @@ mod tests {
             assert_eq!(plan.identity().as_str(), identity);
             assert_eq!(
                 plan.project.backend_language(),
-                crate::backend::BackendLanguage::Rust
+                jig_context::backend::BackendLanguage::Rust
             );
             assert_eq!(plan.database(), ScaffoldDb::None);
             assert!(plan.frontends().is_empty());

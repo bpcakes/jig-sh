@@ -551,6 +551,7 @@ inputs = [
     "crates/jig/src/cli/bootstrap_run*.rs",
     "crates/jig/src/**/vault*.rs",
     "crates/jig/src/**/vault/**",
+    "crates/jig-context/src/vault_config.rs",
     "crates/jig/src/command/vault.rs",
     "crates/jig/src/exit.rs",
     "crates/jig/src/doctor.rs",

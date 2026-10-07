@@ -1,5 +1,6 @@
+use jig_context::RepoContext;
+
 use super::*;
-use crate::context::RepoContext;
 
 #[test]
 fn freshness_epoch_keeps_git_defaults_and_preserves_authored_assertions() {
@@ -26,7 +27,7 @@ fn freshness_epoch_keeps_git_defaults_and_preserves_authored_assertions() {
     let current = render_context(&template, &answers, None).unwrap();
     assert_eq!(
         current["_jig"]["contract_version"],
-        crate::context::CURRENT_CONTRACT_VERSION
+        jig_context::CURRENT_CONTRACT_VERSION
     );
     let actions = current["repository"]["actions"].as_array().unwrap();
     assert!(!actions.is_empty());

@@ -1,9 +1,9 @@
 use std::fs;
 
+use jig_context::RepoContext;
 use tempfile::tempdir;
 
 use super::super::{NoopExecutionObserver, OccurrenceStore, dispatch_workflow, list_workflows};
-use crate::context::RepoContext;
 use crate::runtime::loops::occurrence::OccurrenceStatus;
 use crate::runtime::loops::state::{LeaseAcquire, LeaseStore};
 use crate::test_env::TestRepoBuilder;

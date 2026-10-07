@@ -120,7 +120,7 @@ fn full_readoption_from_contract_eight_moves_tracker_ownership_and_reports_dropp
         });
     }
     fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
-    crate::context::RepoContext::load_from(&repo).unwrap();
+    jig_context::RepoContext::load_from(&repo).unwrap();
     fs::remove_file(repo.join("apps/web/package.json")).unwrap();
     fs::remove_file(repo.join("package.json")).unwrap();
     fs::remove_file(repo.join("package-lock.json")).unwrap();
@@ -144,10 +144,10 @@ fn full_readoption_from_contract_eight_moves_tracker_ownership_and_reports_dropp
             "`refinements`",
         ],
     );
-    let ctx = crate::context::RepoContext::load_from_root(repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from_root(repo).unwrap();
     assert_eq!(
         ctx.contract_version(),
-        crate::context::CURRENT_CONTRACT_VERSION
+        jig_context::CURRENT_CONTRACT_VERSION
     );
     assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
 }

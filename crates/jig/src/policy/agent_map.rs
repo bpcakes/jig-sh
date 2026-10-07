@@ -4,11 +4,11 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
 use crate::agent_guides::is_ignored_guide_component;
 use crate::bootstrap::path::{validate_repository_regular_file_leaf, write_repository_file_atomic};
-use crate::context::RepoContext;
 use crate::policy::AgentMapInput;
 
 pub(super) fn generate(ctx: &RepoContext, opts: &AgentMapInput) -> Result<Value> {
@@ -172,7 +172,7 @@ fn validate(root: &Path, map_path: &Path) -> Result<CheckResult> {
 }
 
 fn normalize_map_path(map_path: &Path) -> Result<PathBuf> {
-    crate::repository_path::normalize_repo_relative_path(map_path, "agent map path")
+    jig_context::repository_path::normalize_repo_relative_path(map_path, "agent map path")
 }
 
 pub(super) fn list_guides(root: &Path) -> Result<Vec<String>> {
@@ -259,11 +259,11 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    use jig_context::RepoContext;
     use tempfile::tempdir;
 
     use super::write;
     use super::{check_guides, normalize_map_path, validate};
-    use crate::context::RepoContext;
     use crate::test_env::TestRepoBuilder;
 
     #[test]

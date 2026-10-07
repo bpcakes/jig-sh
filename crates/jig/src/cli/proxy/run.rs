@@ -4,6 +4,7 @@
 use std::process;
 
 use anyhow::Result;
+use jig_context::RepoContext;
 
 use crate::cli::output::{emit, print_json};
 use crate::cli::run::finish_after_json_output;
@@ -12,7 +13,6 @@ use crate::cli::structured_error::{
 };
 use crate::cli::{DevOpts, ProxyCommand};
 use crate::command::RuntimeCommand;
-use crate::context::RepoContext;
 use crate::dev_proxy::commands::{can_run_without_context, dev_contextless, proxy_without_context};
 use crate::{root_commands, runtime};
 

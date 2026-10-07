@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 
+use jig_context::RepoContext;
 use tempfile::tempdir;
 
 use super::super::super::engine::{status_at_with_cancellation, tick_with_observer};
@@ -13,7 +14,6 @@ use super::super::super::occurrence::{
 use super::super::super::state::{AttemptStore, LOOP_RUNTIME_DIR, LeaseStore};
 use super::super::{NoopExecutionObserver, OccurrenceStore, dispatch_workflow, list_workflows};
 use crate::command::{LoopStatusRequest, LoopTickRequest};
-use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 #[cfg(unix)]
 use crate::test_env::{EnvVarGuard, lock_env};

@@ -2,11 +2,11 @@ use std::io::Write;
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
+use jig_context::RepoContext;
 
 use super::output::{emit, print_json};
 use super::run::finish_after_json_output;
 use super::structured_error::require_json_ok;
-use crate::context::RepoContext;
 use crate::repository::InspectRequest;
 use crate::{doctor, info};
 

@@ -4,15 +4,15 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use jig_context::repository_path::normalize_repo_relative_path;
+use jig_context::{CommandOutputLimit, RepoContext};
 use jig_contract::TargetId;
 use tempfile::TempDir;
 
-use crate::context::{CommandOutputLimit, RepoContext};
 use crate::execution::{
     ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
     run_supervised_execution_command,
 };
-use crate::repository_path::normalize_repo_relative_path;
 use crate::source_projection::{
     IGNORED_DOTENV_PATHSPECS, MAX_SUBMODULE_DEPTH, initialized_submodule_paths,
 };
@@ -462,7 +462,7 @@ fn run_schema_drift_check(
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
-    let working_directory = crate::repository_path::resolve_repository_working_directory(
+    let working_directory = jig_context::repository_path::resolve_repository_working_directory(
         sandbox_root,
         runner.working_directory,
     )?;

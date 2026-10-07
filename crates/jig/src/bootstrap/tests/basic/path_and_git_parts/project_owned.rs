@@ -48,7 +48,7 @@ fn adopt_keeps_project_owned_build_and_lint_configuration() {
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
     assert!(contract.contains(&format!(
         r#""contract_version": {}"#,
-        crate::context::CURRENT_CONTRACT_VERSION
+        jig_context::CURRENT_CONTRACT_VERSION
     )));
     assert!(!contract.contains("jig_version"));
     assert!(contract.contains(r#""kind": "command""#));

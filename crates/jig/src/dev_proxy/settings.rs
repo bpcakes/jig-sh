@@ -51,7 +51,7 @@ pub(super) fn build_settings(
         .to_ascii_lowercase();
     let http_port = opts.http_port.unwrap_or(defaults.http_port);
     let https_port = opts.https_port.or(defaults.https_port);
-    crate::context::validate_dev_proxy_settings(
+    jig_context::validate_dev_proxy_settings(
         http_port,
         https_port,
         &tld,

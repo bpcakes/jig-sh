@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
 use crate::command::{LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest};
-use crate::context::RepoContext;
 use crate::execution::ExecutionControl;
 
 use super::super::occurrence::{OccurrenceAcknowledgement, OccurrenceStore};

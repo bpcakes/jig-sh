@@ -5,9 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
 use crate::policy::SqlxTodoInput;
 
 mod cargo_targets;
@@ -22,7 +22,7 @@ use scanner::scan_sqlx_file;
 const DEFAULT_SQLX_TODO_PATH: &str = "docs/sqlx-unchecked-queries-todo.md";
 
 pub(super) fn generate_todo(ctx: &RepoContext, opts: &SqlxTodoInput) -> Result<Value> {
-    let output = crate::repository_path::normalize_repo_relative_path(
+    let output = jig_context::repository_path::normalize_repo_relative_path(
         &opts
             .output
             .clone()

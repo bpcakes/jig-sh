@@ -61,11 +61,11 @@ fn authored_mixed_go_postgres_model_defaults_its_owned_migration_directory() {
     assert!(answers.rust_backend_enabled());
     assert_eq!(
         answers.migration_dir(),
-        Some(crate::backend::GO_POSTGRES_MIGRATION_DIR)
+        Some(jig_context::backend::GO_POSTGRES_MIGRATION_DIR)
     );
     assert_eq!(
         rendered["migration_dir"],
-        crate::backend::GO_POSTGRES_MIGRATION_DIR
+        jig_context::backend::GO_POSTGRES_MIGRATION_DIR
     );
     assert_eq!(rendered["rust_migration_dir"], serde_json::Value::Null);
 }

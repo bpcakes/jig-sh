@@ -2,13 +2,14 @@ use std::io::IsTerminal;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use jig_context::RepoContext;
 
 use super::{VaultCommand, render};
 use crate::cli::output::{self, emit};
 use crate::cli::run::finish_after_json_output;
 use crate::cli::structured_error::require_json_ok;
 use crate::exit::CliExit;
-use crate::{context::RepoContext, runtime};
+use crate::runtime;
 
 pub(in crate::cli) fn run_vault_command(command: VaultCommand, json_output: bool) -> Result<()> {
     run_vault_command_with_terminal_state(

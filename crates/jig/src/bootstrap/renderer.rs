@@ -183,7 +183,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
         request.progress,
     )?;
 
-    let staged_context = crate::context::RepoContext::load_from_root(destination.clone())
+    let staged_context = jig_context::RepoContext::load_from_root(destination.clone())
         .with_context(|| {
             format!(
                 "Staged render produced an invalid Jig config or contract in {}",

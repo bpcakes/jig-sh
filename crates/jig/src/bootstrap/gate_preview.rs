@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
+use jig_context::{RepoContext, WorkGate};
 
 use super::answers::RenderAnswers;
-use crate::context::{RepoContext, WorkGate};
 use crate::tool_defs::{kind, tool};
 
 pub(super) const fn jig_launcher(minimal_footprint: bool) -> &'static str {

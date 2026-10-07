@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn write_v6_mixed_migration_policy_repo(root: &Path, owner: &str) {
     TestRepoBuilder::new(root)
-        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .contract_version(jig_context::CURRENT_CONTRACT_VERSION)
         .config(format!(
             r#"
 migration_dir = "database/migrations"

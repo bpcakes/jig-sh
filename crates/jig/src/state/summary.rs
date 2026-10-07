@@ -4,10 +4,10 @@ use std::collections::VecDeque;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
 use crate::cancellation::ensure_status_collection_active;
-use crate::context::RepoContext;
 
 use super::jsonl::{scan_dashboard_jsonl_raw, scan_jsonl_raw};
 use super::privacy::{redact_repository_root, repository_root_spellings};

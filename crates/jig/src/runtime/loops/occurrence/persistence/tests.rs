@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 
 use fs4::fs_std::FileExt;
+use jig_context::RepoContext;
 
 use super::*;
-use crate::context::RepoContext;
 use crate::runtime::loops::state::read_json_or_default;
 use crate::test_env::TestRepoBuilder;
 

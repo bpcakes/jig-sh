@@ -6,7 +6,7 @@ use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, OpenOptions};
 use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag};
 
-use crate::repository_path::normalize_portable_repo_path;
+use jig_context::repository_path::normalize_portable_repo_path;
 
 pub(crate) const MAX_GUIDE_BYTES: u64 = 1024 * 1024;
 

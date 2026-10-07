@@ -2,6 +2,7 @@ use std::fs::{self, File};
 use std::io::Read;
 
 use anyhow::{Context, Result};
+use jig_context::RepoContext;
 use jig_contract::{
     ComparisonPreparationFailureV1, ComparisonPreparationV1, ComparisonRequestV1, CurrentViewV1,
     FindingSeverity, MissingComparisonV1, NativeFileBudgetConfigV1, PolicyPreparationFailureV1,
@@ -13,7 +14,6 @@ use jig_file_budget::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::context::RepoContext;
 use crate::source_identity::{
     fetch_exact_push_before_object_v1, read_index_blob_v1, resolve_comparison_v1,
 };
@@ -265,9 +265,9 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    use jig_context::RepoContext;
     use tempfile::{TempDir, tempdir};
 
-    use crate::context::RepoContext;
     use crate::test_env::TestRepoBuilder;
 
     const VALID_POLICY: &str = r#"

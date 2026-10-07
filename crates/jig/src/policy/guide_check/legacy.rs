@@ -5,9 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
 use crate::policy::agent_map::relative_string;
 
 pub(super) fn check(ctx: &RepoContext) -> Result<Value> {

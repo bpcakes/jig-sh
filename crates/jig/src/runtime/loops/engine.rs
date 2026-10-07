@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
 use crate::command::LoopTickRequest;
-use crate::context::RepoContext;
 use crate::execution::{AdditionalCancellationControl, ExecutionControl};
 use crate::state::now_ms;
 

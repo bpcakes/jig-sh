@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use jig_context::{DevAppConfig, RepoContext};
 use serde_json::Value;
 
 use crate::command::{
@@ -16,7 +17,6 @@ use crate::command::{
     ProxyCertUntrustRequest, ProxyListRequest, ProxyPruneRequest, ProxyRunRequest,
     ProxyServiceInstallRequest, ProxyServiceRuntimeRequest, ProxyStopRequest,
 };
-use crate::context::{DevAppConfig, RepoContext};
 use crate::progress::CliProgress;
 use crate::shell::quote as shell_quote;
 

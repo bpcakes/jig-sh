@@ -12,13 +12,13 @@ use std::{
 };
 
 use anyhow::Result;
+use jig_context::RepoContext;
 use jig_contract::{
     CargoImpactContextV1, CargoImpactReasonV1, CargoImpactV1, ComponentId, RunPlan,
 };
 use jig_rust::select_cargo_impact_v1;
 
 use crate::{
-    context::RepoContext,
     execution::{ExecutionCancellation, ExecutionControl, ExecutionObserver},
     repository::{RepositoryCatalog, cargo_discovery},
 };

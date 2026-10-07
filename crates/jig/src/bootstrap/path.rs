@@ -1202,7 +1202,7 @@ fn reserved_git_metadata_component(relative: &Path) -> Option<&str> {
             return None;
         };
         let component = component.to_str()?;
-        crate::context::is_reserved_git_metadata_component(component).then_some(component)
+        jig_context::is_reserved_git_metadata_component(component).then_some(component)
     })
 }
 

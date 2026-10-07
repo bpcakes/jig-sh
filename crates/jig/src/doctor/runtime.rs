@@ -1,12 +1,12 @@
 use std::{ffi::OsStr, fs, path::Path, time::SystemTime};
 
-use serde_json::json;
-
-use super::{DoctorCheck, LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE, check};
-use crate::context::{
+use jig_context::{
     INSTALLER_CACHE_LAYOUT_MARKER, LAUNCHER_REPAIR_STAGING_PREFIX, RuntimeCacheProfile,
     runtime_cache_base, runtime_profile_cache_path,
 };
+use serde_json::json;
+
+use super::{DoctorCheck, LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE, check};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeDiagnosis<'a> {
@@ -119,7 +119,7 @@ impl<'a> RuntimeFacts<'a> {
             RuntimeDiagnosis::ContractUnreadable
         } else if let Some(version) = self
             .contract_version
-            .filter(|version| !crate::context::is_active_contract_version(*version))
+            .filter(|version| !jig_context::is_active_contract_version(*version))
         {
             RuntimeDiagnosis::UnsupportedContract(version)
         } else if !self.launcher.contract_probe {
@@ -518,13 +518,13 @@ pub(super) fn contract_migration_check(root: &Path, contract_version: u32) -> Do
         "migration available",
         format!(
             "contract {contract_version} remains supported; current generated repositories use contract {}, and migrating refreshes the harness to it",
-            crate::context::CURRENT_CONTRACT_VERSION
+            jig_context::CURRENT_CONTRACT_VERSION
         ),
     )
     .with_fix(&fix)
     .with_data(json!({
         "contract_version": contract_version,
-        "current_contract_version": crate::context::CURRENT_CONTRACT_VERSION,
+        "current_contract_version": jig_context::CURRENT_CONTRACT_VERSION,
         "managed_paths_manifest_present": managed_manifest_exists,
     }))
 }

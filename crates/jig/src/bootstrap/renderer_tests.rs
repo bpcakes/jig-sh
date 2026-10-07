@@ -1,4 +1,5 @@
-use crate::backend::BackendLanguage;
+use jig_context::backend::BackendLanguage;
+
 use crate::bootstrap::AnswerOpts;
 use crate::bootstrap::answers::AnswerResolution;
 use crate::bootstrap::repository_model::RepositoryProjectionHint;
@@ -106,7 +107,7 @@ fn rendered_jig_workflows_cache_the_installer_runtime_profile() {
         &AnswerOpts {
             repo_name: Some("ExampleProject".into()),
             backend_language: Some(BackendLanguage::Go),
-            go_database: Some(crate::backend::GoDatabase::Postgres),
+            go_database: Some(jig_context::backend::GoDatabase::Postgres),
             go_module: Some("example.com/ExampleProject".into()),
             sqlx_enabled: Some(false),
             schema_dump_enabled: Some(false),
@@ -136,7 +137,7 @@ fn rendered_jig_workflows_cache_the_installer_runtime_profile() {
             &answers,
             destination.path(),
             Some(&selected),
-            Some(crate::context::CURRENT_CONTRACT_VERSION),
+            Some(jig_context::CURRENT_CONTRACT_VERSION),
         )
         .unwrap();
         let installer =
@@ -263,7 +264,7 @@ fn neutral_rust_workspace_guidance_survives_authored_recopy() {
         &rust_render_answers(RepositoryProjectionHint::RustWorkspace),
         initial.path(),
         Some(&selected),
-        Some(crate::context::CURRENT_CONTRACT_VERSION),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
     )
     .unwrap();
     let initial_guide = fs::read_to_string(initial.path().join("AGENTS.md")).unwrap();
@@ -298,7 +299,7 @@ fn neutral_rust_workspace_guidance_survives_authored_recopy() {
         &reloaded,
         recopy.path(),
         Some(&guide_only),
-        Some(crate::context::CURRENT_CONTRACT_VERSION),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
     )
     .unwrap();
     assert_eq!(
@@ -315,7 +316,7 @@ fn backend_guidance_keeps_ownership_and_focused_checks() {
         &rust_render_answers(RepositoryProjectionHint::Backend),
         destination.path(),
         Some(&BTreeSet::from([PathBuf::from("AGENTS.md")])),
-        Some(crate::context::CURRENT_CONTRACT_VERSION),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
     )
     .unwrap();
     let guide = fs::read_to_string(destination.path().join("AGENTS.md")).unwrap();

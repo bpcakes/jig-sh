@@ -1,5 +1,6 @@
+use jig_context::RepoContext;
+
 use super::*;
-use crate::context::RepoContext;
 use jig_contract::{ComponentSpec, ProfileSpec};
 use serde_json::{Value, json};
 use std::fs;

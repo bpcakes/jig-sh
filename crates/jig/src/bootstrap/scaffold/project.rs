@@ -1,4 +1,5 @@
-use crate::backend::{BackendLanguage, GoDatabase};
+use jig_context::backend::{BackendLanguage, GoDatabase};
+
 use crate::bootstrap::{APPLICATION_BACKEND_DEV_APP_NAME, DevApp, ScaffoldDb, ScaffoldPreset};
 
 use super::frontend::FrontendScaffold;

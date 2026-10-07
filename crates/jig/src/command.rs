@@ -46,7 +46,6 @@ pub(crate) use vault::{
     VaultPassphraseCommand, VaultReadRequest, VaultRepoScope, VaultRunRequest, VaultRuntimeOptions,
     VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest, VaultSecretRemoveRequest,
     VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest, VaultTuiRequest,
-    is_valid_vault_scope_id,
 };
 
 #[derive(Debug)]

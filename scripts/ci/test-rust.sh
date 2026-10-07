@@ -7,7 +7,7 @@ mode="${1:-workspace}"
 profile=ci
 case "$mode" in
   workspace) build_args=(--workspace); feature_args=() ;;
-  minimal|minimal-focused) build_args=(-p jig-sh --no-default-features); feature_args=(--no-default-features) ;;
+  minimal|minimal-focused) build_args=(-p jig-sh -p jig-context --no-default-features); feature_args=(--no-default-features) ;;
   *) echo "Usage: scripts/ci/test-rust.sh [workspace|minimal|minimal-focused]" >&2; exit 2 ;;
 esac
 if [ "$mode" = minimal-focused ]; then profile=minimal-ci; fi

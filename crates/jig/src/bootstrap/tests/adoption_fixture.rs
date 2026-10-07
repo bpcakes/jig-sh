@@ -54,6 +54,6 @@ pub(super) fn downgrade_to_contract_eight(repo: &Path) {
         )])),
     );
     fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
-    let ctx = crate::context::RepoContext::load_from_root(repo.to_path_buf()).unwrap();
+    let ctx = jig_context::RepoContext::load_from_root(repo.to_path_buf()).unwrap();
     assert_eq!(ctx.contract_version(), 8);
 }

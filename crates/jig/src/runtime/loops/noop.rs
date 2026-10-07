@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::json;
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 use super::workflow::WorkflowTick;
 

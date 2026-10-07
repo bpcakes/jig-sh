@@ -7,7 +7,7 @@ use anyhow::Result;
 use fs4::fs_std::FileExt;
 use ulid::Ulid;
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 #[cfg(test)]
 thread_local! {

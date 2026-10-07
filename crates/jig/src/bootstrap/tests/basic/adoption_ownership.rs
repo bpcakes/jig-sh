@@ -227,7 +227,7 @@ fn minimal_frontend_keeps_metadata_without_enabling_web_harness_capabilities() {
         !command.as_str().unwrap().contains("scripts/jig")
             && !command.as_str().unwrap().contains("typescript")
     }));
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     assert_eq!(ctx.frontend_apps().len(), 1);
     assert!(
         jig_features::required_contract_tools(&ctx)

@@ -3,8 +3,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_context::RepoContext;
 
-use crate::context::RepoContext;
 use crate::execution::{ExecutionControl, run_authoritative_execution_command};
 use jig_git::{git_program, scrub_known_repository_git_environment};
 

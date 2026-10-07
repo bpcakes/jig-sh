@@ -2,9 +2,10 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use jig_context::RepoContext;
 use jig_contract::{ExecutionResourceV1, PlannedTarget};
 
-use crate::{context::RepoContext, state::ResourceClaim};
+use crate::state::ResourceClaim;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ResolvedResources {

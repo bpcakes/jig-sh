@@ -26,7 +26,7 @@ pub(super) fn validate_answers(vault: &VaultAnswers) -> Result<()> {
             vault.scope
         );
     }
-    if !crate::command::is_valid_vault_scope_id(&vault.scope_id) {
+    if !jig_context::is_valid_vault_scope_id(&vault.scope_id) {
         bail!(
             "vault.scope_id must be 1 to 128 bytes and may only contain letters, digits, '_', or '-'"
         );
@@ -105,7 +105,7 @@ pub(super) fn apply_existing_default(
             path.display()
         );
     };
-    if !crate::command::is_valid_vault_scope_id(scope_id) {
+    if !jig_context::is_valid_vault_scope_id(scope_id) {
         bail!(
             "Invalid [vault].scope_id in {}: must be 1 to 128 bytes and may only contain letters, digits, '_', or '-'",
             path.display()

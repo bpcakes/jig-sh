@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use fs4::fs_std::FileExt;
 use jig_contract::ActionEffect;
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 use super::support::{AdvisoryLeaseFile, ensure_state_layout};
 

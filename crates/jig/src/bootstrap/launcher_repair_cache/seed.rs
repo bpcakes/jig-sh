@@ -8,7 +8,7 @@ use anyhow::{Result, bail};
 #[cfg(not(test))]
 use std::path::PathBuf;
 
-use crate::context::{LAUNCHER_REPAIR_STAGING_PREFIX, RuntimeCacheProfile, runtime_cache_base};
+use jig_context::{LAUNCHER_REPAIR_STAGING_PREFIX, RuntimeCacheProfile, runtime_cache_base};
 
 #[cfg(not(test))]
 use super::publication::reap_stale_launcher_repair_staging;

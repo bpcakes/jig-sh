@@ -13,14 +13,14 @@ pub(super) fn tracker_state_paths(root: &Path) -> Result<Vec<&'static str>> {
     #[derive(serde::Deserialize)]
     struct Configuration {
         #[serde(default)]
-        work: Option<crate::context::WorkConfig>,
+        work: Option<jig_context::WorkConfig>,
         #[serde(default)]
         repository: Option<Repository>,
     }
     #[derive(serde::Deserialize)]
     struct Repository {
         #[serde(default)]
-        tracker: Option<crate::context::RepositoryTracker>,
+        tracker: Option<jig_context::RepositoryTracker>,
     }
     let configuration: Configuration =
         toml::from_str(&contents).context("Failed to parse tracker configuration")?;

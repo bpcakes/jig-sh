@@ -41,7 +41,7 @@ fn recopy_preserves_legacy_check_policy_and_tracker_in_pinned_templates() {
             no_vault: true,
             answers: AnswerOpts {
                 repo_name: Some("ExampleProject".into()),
-                backend_language: Some(crate::backend::BackendLanguage::Rust),
+                backend_language: Some(jig_context::backend::BackendLanguage::Rust),
                 sqlx_enabled: Some(false),
                 ..AnswerOpts::default()
             },

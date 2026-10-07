@@ -1,7 +1,7 @@
 use anyhow::Result;
+use jig_context::RepoContext;
 
 use super::repository_snapshot;
-use crate::context::RepoContext;
 
 fn dashboard_repository(
     repository: super::RepositorySnapshot,

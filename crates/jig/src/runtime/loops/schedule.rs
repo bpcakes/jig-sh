@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
 use crate::command::{LoopDispatchRequest, LoopRunRequest, LoopTickRequest};
-use crate::context::RepoContext;
 #[cfg(test)]
 use crate::execution::NoopExecutionObserver;
 use crate::execution::{

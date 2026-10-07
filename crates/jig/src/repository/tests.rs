@@ -6,10 +6,9 @@ use jig_contract::{
 use std::collections::BTreeSet;
 use tempfile::tempdir;
 
-use crate::{
-    context::{MAX_COMMAND_TIMEOUT_SECONDS, RepoContext},
-    test_env::TestRepoBuilder,
-};
+use jig_context::{MAX_COMMAND_TIMEOUT_SECONDS, RepoContext};
+
+use crate::test_env::TestRepoBuilder;
 
 use super::{RepositoryCatalog, unique_legacy_action_id, validate_action_working_directories};
 

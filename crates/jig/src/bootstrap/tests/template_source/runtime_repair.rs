@@ -1,3 +1,5 @@
+use jig_context::CURRENT_CONTRACT_VERSION;
+
 use super::*;
 
 #[test]
@@ -182,7 +184,7 @@ fn pinned_updates_preserve_release_support_without_seeding_source_caches() {
         assert!(
             crate::runtime_artifacts::inspect_installer(&installer).supports_release_runtime_pin()
         );
-        let cache = crate::context::runtime_cache_base(&repo);
+        let cache = jig_context::runtime_cache_base(&repo);
         for suffix in ["", "-runtime"] {
             assert!(
                 !cache
@@ -361,7 +363,7 @@ fn recopy_renders_committed_pre_v4_template_with_legacy_jig_version() {
         answers: AnswerOpts {
             repo_name: Some("demo".into()),
             jig_version: Some("0.2.0-beta.1".into()),
-            backend_language: Some(crate::backend::BackendLanguage::Rust),
+            backend_language: Some(jig_context::backend::BackendLanguage::Rust),
             sqlx_enabled: Some(false),
             ..AnswerOpts::default()
         },

@@ -3,7 +3,9 @@ use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Context;
 
-use crate::repository_path::{resolve_repository_working_directory, validate_runner_environment};
+use jig_context::repository_path::{
+    resolve_repository_working_directory, validate_runner_environment,
+};
 
 use super::*;
 

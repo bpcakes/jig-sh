@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
 use anyhow::{Result, bail};
+use jig_context::{DevConfig, config_app_dirs_match, validate_dev_proxy_settings};
 use serde::{Deserialize, Serialize};
 
 use super::{
     DevApp, DevSettingsAnswers, FrontendApp, is_safe_frontend_app_name,
     is_supported_frontend_app_kind, validate_frontend_app_dir,
 };
-use crate::context::{DevConfig, config_app_dirs_match, validate_dev_proxy_settings};
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]

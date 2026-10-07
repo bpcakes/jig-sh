@@ -5,7 +5,7 @@ pub(super) fn render_context(
     answers: &RenderAnswers,
     contract_version: Option<u32>,
 ) -> Result<JsonValue> {
-    let contract_version = contract_version.unwrap_or(crate::context::CURRENT_CONTRACT_VERSION);
+    let contract_version = contract_version.unwrap_or(jig_context::CURRENT_CONTRACT_VERSION);
     let mut context = serde_json::to_value(answers)?
         .as_object()
         .cloned()

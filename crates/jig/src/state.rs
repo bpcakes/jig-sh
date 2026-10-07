@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 #[cfg(test)]
 pub(crate) use execution_leases::acquire_repository_execution_lease;

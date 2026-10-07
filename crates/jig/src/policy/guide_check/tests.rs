@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -8,7 +9,6 @@ use super::check;
 use crate::agent_guides::references::{
     Destination, GuideFiles, MAX_GUIDE_BYTES, markdown_references, resolve_reference,
 };
-use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 
 mod diagnostics;

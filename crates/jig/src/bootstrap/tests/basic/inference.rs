@@ -232,7 +232,7 @@ fn adopt_requires_an_explicit_dir_for_ambiguous_sqlx_migration_dirs() {
         no_input: true,
         no_vault: true,
         answers: AnswerOpts {
-            backend_language: Some(crate::backend::BackendLanguage::Rust),
+            backend_language: Some(jig_context::backend::BackendLanguage::Rust),
             rust_migration_dir: rust_migration_dir.map(Into::into),
             ..AnswerOpts::default()
         },

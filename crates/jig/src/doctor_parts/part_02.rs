@@ -465,7 +465,7 @@ fn required_tools_check_with_environment_and_process_control(
             continue;
         };
         executable_reference_count += 1;
-        let (present, detail) = match crate::repository_path::resolve_repository_working_directory(
+        let (present, detail) = match repository_path::resolve_repository_working_directory(
             ctx.root(),
             working_directory.as_deref(),
         ) {

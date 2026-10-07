@@ -3,6 +3,18 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use jig_context::backend::{
+    BackendLanguage, GO_POSTGRES_MIGRATION_DIR, GO_TOOLCHAIN_AUTHORITY_PATH, GoDatabase,
+};
+use jig_context::frontend_metadata::resolve_frontend_metadata;
+use jig_context::repository_path::{
+    normalize_portable_repo_path, normalize_portable_repository_directory,
+};
+use jig_context::{
+    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig,
+    RustMigrationLayout, config_app_dirs_match, default_codex_marketplace_plugins,
+    validate_gate_path_pattern, validate_schema_docs_dir, validate_web_package_manager,
+};
 use jig_contract::{TargetId, tool};
 use serde::{Deserialize, Serialize};
 
@@ -12,18 +24,6 @@ use super::repository_model::{
 use super::{
     AnswerOpts, DevApp, DevSettingsAnswers, FrontendApp, GENERATED_NODE_VERSION, ScaffoldOpts,
     ScaffoldPreset, generated_package_manager_spec, generated_package_manager_version,
-};
-use crate::backend::{
-    BackendLanguage, GO_POSTGRES_MIGRATION_DIR, GO_TOOLCHAIN_AUTHORITY_PATH, GoDatabase,
-};
-use crate::context::{
-    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig,
-    RustMigrationLayout, config_app_dirs_match, default_codex_marketplace_plugins,
-    validate_gate_path_pattern, validate_schema_docs_dir, validate_web_package_manager,
-};
-use crate::frontend_metadata::resolve_frontend_metadata;
-use crate::repository_path::{
-    normalize_portable_repo_path, normalize_portable_repository_directory,
 };
 use crate::shell::{optional_cargo_command, quote as shell_quote};
 

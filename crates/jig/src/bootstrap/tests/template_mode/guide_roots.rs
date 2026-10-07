@@ -1,5 +1,6 @@
+use jig_context::RepoContext;
+
 use super::*;
-use crate::context::RepoContext;
 use crate::policy::{PolicyCheckCommand, run_check};
 
 #[test]

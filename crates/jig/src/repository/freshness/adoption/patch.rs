@@ -6,7 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, TableLike};
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 const PATHS: [&str; 2] = [".jig.toml", ".agent/jig-contract.json"];
 
@@ -20,7 +20,7 @@ pub(super) fn prepare(
         return Ok(String::new());
     }
     let mut source: DocumentMut = before[0].parse()?;
-    let mut manifest: Value = crate::strict_json::from_slice(before[1].as_bytes())?;
+    let mut manifest: Value = jig_context::strict_json::from_slice(before[1].as_bytes())?;
     let source_actions = source
         .get_mut("repository")
         .and_then(|item| item.get_mut("actions"))

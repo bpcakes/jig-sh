@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::context::{LoopConfig, LoopWorkflowConfig, RepoContext};
+use jig_context::{LoopConfig, LoopWorkflowConfig, RepoContext};
 
 use super::schedule::ScheduleSpec;
 mod codex_task_config;

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::process::Command;
 
+use jig_context::RepoContext;
 use jig_contract::{
     ActionArguments, ActionEffect, ActionIntent, ActionRunner, ActionSpec, CargoImpactReasonV1,
     CargoImpactV1, ComponentId, ComponentSpec, ManifestTool, PlannedTarget, ProfileId, ProfileSpec,
@@ -14,7 +15,6 @@ use super::{
     MAX_SELECTION_REASONS, PlanRunRequest, PlanningPolicy, plan_run_with_source,
     plan_run_with_source_and_paths,
 };
-use crate::context::RepoContext;
 use crate::repository::RepositoryCatalog;
 
 #[path = "../planner_tests/cargo_impact.rs"]

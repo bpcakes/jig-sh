@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::repository_path::normalize_repo_relative_path;
+use jig_context::repository_path::normalize_repo_relative_path;
 
 pub(crate) const MAX_SUBMODULE_DEPTH: usize = 32;
 pub(crate) const IGNORED_DOTENV_PATHSPECS: &[&str] =

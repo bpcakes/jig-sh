@@ -2,17 +2,19 @@
 use std::{process::Command, time::Duration};
 
 use anyhow::{Result, bail};
+use jig_context::repository_path::{
+    resolve_repository_working_directory, validate_runner_environment,
+};
+use jig_context::{CommandOutputLimit, RepoContext};
 use jig_contract::{ActionRunner, PlannedTarget};
 use sha2::{Digest, Sha256};
 
 use super::{cargo_resources::CargoResourceStop, execution_resources::ResolvedResources};
 use crate::{
-    context::{CommandOutputLimit, RepoContext},
     execution::{
         ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
         run_supervised_execution_command,
     },
-    repository_path::{resolve_repository_working_directory, validate_runner_environment},
     state::{ResourceClaim, ResourceClaimMode},
 };
 

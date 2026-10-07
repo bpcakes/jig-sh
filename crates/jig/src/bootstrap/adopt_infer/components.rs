@@ -3,6 +3,9 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use clap::Args;
+use jig_context::repository_path::{
+    normalize_portable_repo_path, validate_repository_directory_path,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -10,7 +13,6 @@ use sha2::{Digest, Sha256};
 use crate::bootstrap::FrontendApp;
 use crate::bootstrap::crate_classification::non_production_crate_reason;
 use crate::bootstrap::repository_model::frontend_component_id;
-use crate::repository_path::{normalize_portable_repo_path, validate_repository_directory_path};
 
 use super::metadata::Confidence;
 use super::scan::{RepoScan, read_json_for_inference, read_limited_text, read_toml_for_inference};

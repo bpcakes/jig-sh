@@ -12,9 +12,7 @@ use jig_contract::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::context::{
-    CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext, WorkEvidenceSelector,
-};
+use jig_context::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext, WorkEvidenceSelector};
 
 pub(crate) use inspect::{InspectRequest, inspect_repository};
 pub(crate) use planner::{
@@ -255,7 +253,7 @@ impl RepositoryCatalog {
             let mut action = action.clone();
             normalize_native_configuration(contract_version, &mut action)?;
             arguments::normalize_declarations(contract_version, &mut action)?;
-            freshness::validate_inputs_policy(contract_version, &action)?;
+            jig_context::validate_inputs_policy(contract_version, &action)?;
             runners::validate(contract_version, &action)?;
             planner::resources::validate_declarations(&action)?;
             if !components.contains_key(&action.target.component) {
@@ -305,7 +303,7 @@ impl RepositoryCatalog {
             )?;
         }
         validate_action_dependencies(&actions)?;
-        crate::context::native_migration_backend(component_specs, action_specs)?;
+        jig_context::native_migration_backend(component_specs, action_specs)?;
         affected::validate_native_path_policy(&components, &actions, affected_ignore)?;
 
         let profiles = collect_profiles(profile_specs, &actions)?;
@@ -545,7 +543,7 @@ fn validate_action_working_directories(root: &Path, actions: &[ActionSpec]) -> R
             ..
         } = &action.runner
         {
-            crate::repository_path::resolve_repository_working_directory(
+            jig_context::repository_path::resolve_repository_working_directory(
                 root,
                 Some(working_directory),
             )

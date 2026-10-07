@@ -70,7 +70,7 @@ pub(crate) fn validate(version: u32, action: &ActionSpec) -> Result<()> {
                 "target '{}' requires a nonempty NUL-free literal program",
                 action.target
             );
-            crate::repository_path::validate_runner_environment(environment)?;
+            jig_context::repository_path::validate_runner_environment(environment)?;
             for value in args {
                 match value {
                     ArgvValue::Literal(value) => ensure!(
@@ -92,7 +92,7 @@ pub(crate) fn validate(version: u32, action: &ActionSpec) -> Result<()> {
                 "target '{}' shell runners accept no argument declarations or interpolation",
                 action.target
             );
-            crate::repository_path::validate_runner_environment(environment)?;
+            jig_context::repository_path::validate_runner_environment(environment)?;
         }
         _ => {}
     }

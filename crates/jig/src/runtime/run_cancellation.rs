@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 const DURABLE_CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 

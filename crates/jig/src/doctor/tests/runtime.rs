@@ -1,13 +1,13 @@
 use super::*;
 use std::time::SystemTime;
 
-use crate::context::INSTALLER_CACHE_LAYOUT_MARKER;
+use jig_context::INSTALLER_CACHE_LAYOUT_MARKER;
 
 fn generated_launcher_with_contract(contract_version: u32) -> String {
     current_generated_launcher().replace(
         &format!(
             "CONTRACT_VERSION=\"{}\"",
-            crate::context::CURRENT_CONTRACT_VERSION
+            jig_context::CURRENT_CONTRACT_VERSION
         ),
         &format!("CONTRACT_VERSION=\"{contract_version}\""),
     )
@@ -22,7 +22,7 @@ fn runtime_check_rejects_launcher_without_contract_probe() {
 
     let output = runtime_check(
         temp.path(),
-        Some(crate::context::CURRENT_CONTRACT_VERSION),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
         None,
         true,
     );
@@ -191,7 +191,7 @@ fn generated_launcher_is_recognized_by_runtime_check() {
 
     let output = runtime_check(
         temp.path(),
-        Some(crate::context::CURRENT_CONTRACT_VERSION),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
         None,
         true,
     );
@@ -200,7 +200,7 @@ fn generated_launcher_is_recognized_by_runtime_check() {
     assert_eq!(output.data["launcher_uses_contract_probe"], true);
     assert_eq!(
         output.data["launcher_contract_version"],
-        crate::context::CURRENT_CONTRACT_VERSION
+        jig_context::CURRENT_CONTRACT_VERSION
     );
 }
 
@@ -249,7 +249,7 @@ fn repaired_legacy_runtime_reports_its_seeded_cache_dependency() {
 fn pinned_runtime_does_not_report_an_inactive_repair_seed() {
     let temp = tempdir().unwrap();
     let root = temp.path();
-    let contract = crate::context::CURRENT_CONTRACT_VERSION;
+    let contract = jig_context::CURRENT_CONTRACT_VERSION;
     fs::create_dir_all(root.join("scripts")).unwrap();
     fs::write(root.join("scripts/jig"), current_generated_launcher()).unwrap();
     let installer = root.join("scripts/install-jig.sh");
@@ -301,7 +301,7 @@ fn repaired_current_runtime_exposes_a_structured_cache_rebuild_fix() {
     .unwrap();
     let default_stamp_dir = temp.path().join(format!(
         ".agent/.cache/jig/contract-{}",
-        crate::context::CURRENT_CONTRACT_VERSION
+        jig_context::CURRENT_CONTRACT_VERSION
     ));
     fs::create_dir_all(&default_stamp_dir).unwrap();
     fs::write(
@@ -317,15 +317,14 @@ fn repaired_current_runtime_exposes_a_structured_cache_rebuild_fix() {
 
     let output = runtime_check(
         temp.path(),
-        Some(crate::context::CURRENT_CONTRACT_VERSION),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
         None,
         true,
     );
 
     assert!(output.ok, "{}", output.detail);
     assert!(output.fix.is_none());
-    let advisory =
-        launcher_repair_cache_check(temp.path(), crate::context::CURRENT_CONTRACT_VERSION);
+    let advisory = launcher_repair_cache_check(temp.path(), jig_context::CURRENT_CONTRACT_VERSION);
     let fix = advisory
         .fix
         .as_deref()
@@ -423,7 +422,7 @@ fn runtime_check_rejects_contract_scripts_without_repository_epoch_enforcement()
 
     let output = runtime_check(
         temp.path(),
-        Some(crate::context::CURRENT_CONTRACT_VERSION),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
         None,
         true,
     );
@@ -453,7 +452,7 @@ fn runtime_check_does_not_recommend_launcher_repair_until_config_is_readable() {
 
     let output = runtime_check(
         temp.path(),
-        Some(crate::context::CURRENT_CONTRACT_VERSION),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
         None,
         false,
     );
@@ -488,7 +487,7 @@ fn runtime_check_rejects_unrecognizable_generated_installer() {
 
     let output = runtime_check(
         temp.path(),
-        Some(crate::context::CURRENT_CONTRACT_VERSION),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
         None,
         true,
     );

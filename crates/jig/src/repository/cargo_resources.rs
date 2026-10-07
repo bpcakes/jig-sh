@@ -8,16 +8,18 @@ use std::{
 };
 
 use anyhow::Result;
+use jig_context::repository_path::{
+    resolve_repository_working_directory, validate_runner_environment,
+};
+use jig_context::{CommandOutputLimit, RepoContext};
 use jig_contract::{ActionRunner, CargoImpactContextV1, ExecutionResourceV1, PlannedTarget};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    context::{CommandOutputLimit, RepoContext},
     execution::{
         ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
         run_supervised_execution_command,
     },
-    repository_path::{resolve_repository_working_directory, validate_runner_environment},
     state::{ResourceClaim, ResourceClaimMode},
 };
 

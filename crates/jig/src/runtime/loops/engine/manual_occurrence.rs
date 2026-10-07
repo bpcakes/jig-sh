@@ -80,7 +80,7 @@ impl ManualOccurrenceGuard {
     pub(super) fn start(
         workflow: &ResolvedWorkflow,
         item_key: &str,
-        ctx: &crate::context::RepoContext,
+        ctx: &jig_context::RepoContext,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ManualOccurrenceStart> {
         let block_retained_worktree = workflow.blocks_on_retained_worktree();

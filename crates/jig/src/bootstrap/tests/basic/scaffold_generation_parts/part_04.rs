@@ -537,7 +537,7 @@ fn assert_go_generated_runtime_files(destination: &Path) {
         &fs::read_to_string(destination.join("go.mod")).unwrap(),
         &["github.com/pressly/goose/v3/cmd/goose"],
     );
-    let context = crate::context::RepoContext::load_from(destination).unwrap();
+    let context = jig_context::RepoContext::load_from(destination).unwrap();
     assert_eq!(
         crate::doctor::go_version_selector(&context).unwrap(),
         "1.26.0"
@@ -777,7 +777,7 @@ export async function createClient({ output }) {
             ],
         );
     }
-    let context = crate::context::RepoContext::load_from(&destination).unwrap();
+    let context = jig_context::RepoContext::load_from(&destination).unwrap();
     assert_eq!(
         crate::doctor::go_version_selector(&context).unwrap(),
         "1.26.0"

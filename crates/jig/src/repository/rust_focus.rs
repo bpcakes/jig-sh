@@ -2,16 +2,14 @@
 use std::path::Path;
 
 use anyhow::{Result, bail, ensure};
+use jig_context::RepoContext;
 use jig_contract::{
     ActionRunner, CargoImpactDispositionV1, ComparisonRequestV1, PreparedRustInputV1,
     ResolvedComparisonV1, RunPlan, RustFocusV1, RustNextestConfigV1, RustScopeDispositionV1,
     TargetId,
 };
 
-use crate::{
-    context::RepoContext,
-    execution::{ExecutionCancellation, ExecutionObserver},
-};
+use crate::execution::{ExecutionCancellation, ExecutionObserver};
 
 struct Control<'a>(&'a dyn Fn() -> bool);
 impl ExecutionObserver for Control<'_> {}

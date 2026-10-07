@@ -1,9 +1,9 @@
 use std::time::Instant;
 
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::context::RepoContext;
 use crate::runtime::loops::authority::{
     ProtectedLoopAuthority, resolve_protected_loop_authority,
     resolve_protected_repository_authority,

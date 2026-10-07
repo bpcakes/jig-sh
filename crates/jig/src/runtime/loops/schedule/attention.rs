@@ -1,6 +1,6 @@
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
 use crate::state::now_ms;
 
 use super::super::occurrence::OccurrenceStore;

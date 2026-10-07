@@ -1,8 +1,8 @@
 use anyhow::Result;
+use jig_context::RepoContext;
 use serde_json::Value;
 
 use crate::command::{DevCommand, DevRecoverRequest, DevRequest, DevStatusRequest, DevStopRequest};
-use crate::context::RepoContext;
 use crate::progress::CliProgress;
 
 use super::super::{

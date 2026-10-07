@@ -3,8 +3,8 @@ use std::{borrow::Cow, collections::BTreeMap};
 use anyhow::{Result, bail};
 use jig_contract::{ActionRunner, TargetId, tool};
 
-use crate::context::RepoContext;
-use crate::repository_path::validate_runner_environment;
+use jig_context::RepoContext;
+use jig_context::repository_path::validate_runner_environment;
 
 const LEGACY_SCHEMA_DUMP_COMMAND: &str = "schema_dump_command";
 const SCHEMA_DUMP_ACTION: &str = "schema-dump";

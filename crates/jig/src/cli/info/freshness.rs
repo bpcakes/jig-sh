@@ -1,10 +1,10 @@
 use std::io::Write;
 
 use anyhow::{Context, Result};
+use jig_context::RepoContext;
 
 use super::FreshnessOpts;
 use crate::cli::output::print_json;
-use crate::context::RepoContext;
 use crate::repository::freshness::adoption;
 
 pub(super) fn run(opts: &FreshnessOpts, json_output: bool) -> Result<()> {

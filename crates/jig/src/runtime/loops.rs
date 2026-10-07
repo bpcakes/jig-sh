@@ -1,8 +1,8 @@
 use anyhow::Result;
+use jig_context::RepoContext;
 use serde_json::Value;
 
 use crate::command::{LoopCommand, LoopStatusRequest};
-use crate::context::RepoContext;
 use crate::execution::ExecutionControl;
 
 mod authority;

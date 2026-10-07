@@ -1,8 +1,8 @@
 use std::{fs, io, path::Path};
 
 use anyhow::{Context, Result};
+use jig_context::{RuntimeCacheProfile, runtime_cache_base, runtime_profile_cache_name};
 
-use crate::context::{RuntimeCacheProfile, runtime_cache_base, runtime_profile_cache_name};
 use crate::runtime_cache_lock::{RuntimeCacheLockPolicy, RuntimeCacheLocks};
 
 use super::super::{EMBEDDED_TEMPLATE_SOURCE, HarnessFootprint};
@@ -120,7 +120,7 @@ pub(in crate::bootstrap) fn retire_launcher_repair_seeded_caches_best_effort(
 pub(in crate::bootstrap) fn retire_supported_launcher_repair_seeded_caches_best_effort(
     destination: &Path,
 ) -> usize {
-    crate::context::active_contract_versions()
+    jig_context::active_contract_versions()
         .map(|contract_version| {
             retire_launcher_repair_seeded_caches_best_effort(destination, contract_version)
         })
@@ -162,10 +162,8 @@ pub(in crate::bootstrap) fn finish_full_refresh(
         }
         FullRefreshRuntimePolicy::EmbeddedTemplate => {
             progress.step("runtime cache", "publish embedded-template runtime");
-            match seed_embedded_template_runtime(
-                destination,
-                crate::context::CURRENT_CONTRACT_VERSION,
-            ) {
+            match seed_embedded_template_runtime(destination, jig_context::CURRENT_CONTRACT_VERSION)
+            {
                 Ok(publication) => {
                     publication.commit();
                     true

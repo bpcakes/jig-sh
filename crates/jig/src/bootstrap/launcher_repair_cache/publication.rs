@@ -5,10 +5,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-
-use crate::context::{
+use jig_context::{
     LAUNCHER_REPAIR_STAGING_PREFIX, RuntimeCacheProfile, runtime_profile_cache_name,
 };
+
 use crate::runtime_cache_lock::{RuntimeCacheLockPolicy, RuntimeCacheLocks};
 
 pub(in crate::bootstrap) const STALE_LAUNCHER_REPAIR_STAGING_AGE: Duration =

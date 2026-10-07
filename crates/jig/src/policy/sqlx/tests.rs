@@ -2,10 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use jig_context::RepoContext;
 use tempfile::tempdir;
 
 use super::{generate_todo, scan_sqlx_calls, sqlx_report};
-use crate::context::RepoContext;
 use crate::policy::SqlxTodoInput;
 use crate::test_env::TestRepoBuilder;
 

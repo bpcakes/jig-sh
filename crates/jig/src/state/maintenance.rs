@@ -5,13 +5,13 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_context::RepoContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 use ulid::Ulid;
 
 use crate::command::StateRestoreRequest;
-use crate::context::RepoContext;
 
 use super::MAINTENANCE_WRITER_COORDINATION_NOTE;
 use super::compression::{
