@@ -363,7 +363,7 @@ fn accepted_rust_root_requires_a_path_for_unowned_migrations() {
         ],
     );
     let accepted = |rust_migration_dir: Option<&str>| AnswerOpts {
-        backend_language: Some(crate::backend::BackendLanguage::Rust),
+        backend_language: Some(jig_context::backend::BackendLanguage::Rust),
         rust_migration_dir: rust_migration_dir.map(Into::into),
         ..AnswerOpts::default()
     };

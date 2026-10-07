@@ -1,9 +1,9 @@
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use jig_contract::ActionEffect;
 use serde_json::{Value, json};
 
 use crate::command::RepositoryRunRequest;
-use crate::context::RepoContext;
 use crate::execution::ExecutionControl;
 use crate::repository::{PlanRunRequest, RepositoryCatalog};
 

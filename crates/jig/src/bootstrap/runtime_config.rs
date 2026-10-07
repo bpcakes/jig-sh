@@ -3,11 +3,11 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use jig_context::{RepoContext, WORK_CONFIG_RETIRED_CONTRACT_VERSION, WorkConfig, WorkGate};
 
 use super::ANSWERS_FILE;
 use super::clippy_policy::is_generated_rust_clippy_command;
 use super::repository_model::{RUST_FILE_LOC_COMMAND_KEY, is_generated_rust_file_loc_command};
-use crate::context::{RepoContext, WORK_CONFIG_RETIRED_CONTRACT_VERSION, WorkConfig, WorkGate};
 use crate::tool_defs;
 
 const GENERATED_FRONTEND_COMMAND_DEFAULTS: &[(&str, &str)] = &[
@@ -526,6 +526,6 @@ fn schema_valid_work_field(field: &str, value: toml::Value) -> bool {
     let mut work = toml::Table::new();
     work.insert(field.into(), value);
     toml::Value::Table(work)
-        .try_into::<crate::context::WorkConfig>()
+        .try_into::<jig_context::WorkConfig>()
         .is_ok_and(|config| config.validate().is_ok())
 }

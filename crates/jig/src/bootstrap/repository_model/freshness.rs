@@ -26,11 +26,11 @@ pub(super) fn matches_generated_actions(
             for action in [&mut expected, &mut authored] {
                 retract_formatter_inference(
                     action,
-                    crate::context::CURRENT_CONTRACT_VERSION,
+                    jig_context::CURRENT_CONTRACT_VERSION,
                     commands,
                 );
                 super::runners::make_shell_explicit(&mut action.runner);
-                if prepare_action_inputs_policy(action, crate::context::CURRENT_CONTRACT_VERSION)
+                if prepare_action_inputs_policy(action, jig_context::CURRENT_CONTRACT_VERSION)
                     .is_err()
                 {
                     return false;
@@ -99,5 +99,5 @@ pub(in crate::bootstrap) fn prepare_action_inputs_policy(
             .entry("source_state".into())
             .or_insert(provenance);
     }
-    crate::context::validate_inputs_policy(epoch, action)
+    jig_context::validate_inputs_policy(epoch, action)
 }

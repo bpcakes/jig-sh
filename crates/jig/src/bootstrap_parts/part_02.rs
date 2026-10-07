@@ -560,7 +560,7 @@ impl ScaffoldOpts {
             scaffold::validate_go_component_root(go_component_root)?;
             let initial_migration_dir = scaffold::go_component_path(
                 go_component_root,
-                crate::backend::GO_POSTGRES_MIGRATION_DIR,
+                jig_context::backend::GO_POSTGRES_MIGRATION_DIR,
             );
             if self.db == Some(ScaffoldDb::None) && answers.migration_dir.is_some() {
                 bail!(
@@ -716,10 +716,10 @@ fn reject_newer_declared_contract(path: &Path) -> Result<()> {
         // Missing or damaged manifests remain repairable through adopt/update.
         return Ok(());
     };
-    if contract_version > crate::context::CURRENT_CONTRACT_VERSION {
+    if contract_version > jig_context::CURRENT_CONTRACT_VERSION {
         bail!(
             "Refusing to rewrite repository contract {contract_version} with this older Jig runtime, which supports contracts through {}. Install a newer compatible Jig runtime and retry; --force does not permit contract downgrades.",
-            crate::context::CURRENT_CONTRACT_VERSION
+            jig_context::CURRENT_CONTRACT_VERSION
         );
     }
     Ok(())

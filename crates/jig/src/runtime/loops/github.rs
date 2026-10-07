@@ -4,9 +4,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_context::{CommandTimeout, RepoContext};
 use serde_json::{Value, json};
 
-use crate::context::{CommandTimeout, RepoContext};
 use crate::execution::{
     ExecutionCommandError, ExecutionControl, run_authoritative_execution_command_for_duration,
 };

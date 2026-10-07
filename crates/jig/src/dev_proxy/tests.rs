@@ -6,13 +6,13 @@ use tempfile::tempdir;
 use super::*;
 
 mod contextless;
-use crate::context::DevConfig;
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::test_process::{
     TestProcessIdentity, publish_test_process_identity, read_test_process_identity,
     terminate_and_confirm_test_process,
 };
+use jig_context::DevConfig;
 
 fn write_config(root: &std::path::Path, extra: &str) {
     TestRepoBuilder::new(root).config(extra).write();

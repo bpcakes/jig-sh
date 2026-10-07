@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn report_preserves_authored_presence_across_normalized_manifest_defaults() {
-    use crate::context::RepoContext;
+    use jig_context::RepoContext;
     use jig_contract::{ComponentSpec, ProfileSpec};
     use serde_json::json;
     use std::fs;

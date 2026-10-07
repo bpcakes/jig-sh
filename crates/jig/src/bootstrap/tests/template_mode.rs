@@ -331,7 +331,7 @@ fn update_and_recopy_from_contract_eight_drop_work_and_report_it() {
             updated.get("work").is_none(),
             "[work] survived recopy={recopy}"
         );
-        let ctx = crate::context::RepoContext::load_from_root(repo.clone()).unwrap();
+        let ctx = jig_context::RepoContext::load_from_root(repo.clone()).unwrap();
         assert_eq!(ctx.contract_version(), 9);
         let launcher = fs::read_to_string(repo.join("scripts/jig")).unwrap();
         assert!(launcher.contains("CONTRACT_VERSION=\"9\""), "{launcher}");

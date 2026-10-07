@@ -12,6 +12,13 @@ use std::{sync::atomic::Ordering, time::Instant};
 
 use anyhow::anyhow;
 use anyhow::{Context, Result};
+#[cfg(test)]
+use jig_context::{
+    FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
+};
+use jig_context::{
+    JIG_REPO_ROOT_ENV, RepoContext, find_repo_root_from, find_repo_root_from_or_env,
+};
 use jig_owned_process::{
     OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output,
     run_owned_process_tree_with_output_limits,
@@ -22,13 +29,6 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use crate::cli::format_doctor_summary_for_test as format_summary;
 use crate::command::{VaultCommand, VaultStatusRequest};
-#[cfg(test)]
-use crate::context::{
-    FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
-};
-use crate::context::{
-    JIG_REPO_ROOT_ENV, RepoContext, find_repo_root_from, find_repo_root_from_or_env,
-};
 #[cfg(test)]
 use crate::tool_defs::tool;
 

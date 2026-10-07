@@ -2,7 +2,6 @@ use std::process::Command;
 
 use super::*;
 use crate::bootstrap::template_source::{TemplateRenderSource, prepare_template_source_from_base};
-use crate::context::CURRENT_CONTRACT_VERSION;
 
 #[cfg(unix)]
 #[test]

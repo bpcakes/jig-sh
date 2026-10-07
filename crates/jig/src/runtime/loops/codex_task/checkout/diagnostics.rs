@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use anyhow::Result;
+use jig_context::RepoContext;
 use serde::Serialize;
 
-use crate::context::RepoContext;
 use crate::execution::NoopExecutionObserver;
 
 use super::super::git_output;

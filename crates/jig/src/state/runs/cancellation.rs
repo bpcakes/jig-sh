@@ -1,6 +1,6 @@
 use anyhow::Result;
+use jig_context::RepoContext;
 
-use crate::context::RepoContext;
 use crate::state::jsonl::{append_jsonl_with_end_offset, try_scan_jsonl_raw_from};
 use crate::state::records::RunEventRecord;
 

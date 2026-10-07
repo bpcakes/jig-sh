@@ -1,8 +1,8 @@
 use anyhow::Result;
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
 use crate::command::SqlxCommand;
-use crate::context::RepoContext;
 use crate::execution::ExecutionControl;
 use crate::tool_defs::tool;
 

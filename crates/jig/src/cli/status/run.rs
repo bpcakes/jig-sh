@@ -1,9 +1,9 @@
 use anyhow::Result;
+use jig_context::RepoContext;
 
 use super::render;
 use super::{StatusCommand, StatusOpts};
 use crate::cli::output::emit;
-use crate::context::RepoContext;
 use crate::{status, ui};
 
 pub(in crate::cli) fn run_status_command(opts: StatusOpts, json_output: bool) -> Result<()> {
@@ -59,7 +59,7 @@ mod tests {
         TestRepoBuilder::new(temp.path())
             .required_commands(["rust_test_command"])
             .write();
-        let ctx = crate::context::RepoContext::load_from(temp.path()).unwrap();
+        let ctx = jig_context::RepoContext::load_from(temp.path()).unwrap();
         let target: jig_contract::TargetId = "repo:test".parse().unwrap();
         let plan = jig_contract::RunPlan::new(
             "run-plan_1",

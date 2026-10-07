@@ -113,7 +113,8 @@ impl RepoScan {
             if let Some(parent) = relative_path.parent()
                 && !parent.as_os_str().is_empty()
                 && !*safe_parents.entry(parent.to_path_buf()).or_insert_with(|| {
-                    crate::repository_path::validate_repository_directory_path(root, parent).is_ok()
+                    jig_context::repository_path::validate_repository_directory_path(root, parent)
+                        .is_ok()
                 })
             {
                 continue;

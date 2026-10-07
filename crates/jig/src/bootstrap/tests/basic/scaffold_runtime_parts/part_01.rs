@@ -609,7 +609,7 @@ fn go_scaffold_without_postgres_does_not_emit_migration_configuration() {
 
     plan.apply_answer_defaults(&mut answers);
 
-    assert_eq!(answers.go_database, Some(crate::backend::GoDatabase::None));
+    assert_eq!(answers.go_database, Some(jig_context::backend::GoDatabase::None));
     assert_eq!(answers.migration_dir, None);
 }
 

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
+use jig_context::RepoContext;
 use jig_contract::{
     ActionArguments, ActionEffect, ActionIntent, ActionRunner, ComparisonRequestV1,
     NativeActionConfigurationV1, PlannedTarget, ProfileId, RunPlan, SelectionReason,
@@ -9,11 +10,8 @@ use jig_contract::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    context::RepoContext,
-    source_identity::{
-        repo_changed_paths_since, repo_observed_ignored_dotenv_paths, repository_source_snapshot,
-    },
+use crate::source_identity::{
+    repo_changed_paths_since, repo_observed_ignored_dotenv_paths, repository_source_snapshot,
 };
 
 use super::cargo_impact::attach_cargo_impacts;

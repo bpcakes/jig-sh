@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use std::cell::Cell;
 use ulid::Ulid;
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 use super::jsonl::{
     JsonlWriteGuard, RawJsonlRecord, RawJsonlRewrite, append_jsonl,

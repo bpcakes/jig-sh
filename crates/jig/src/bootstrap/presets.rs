@@ -1,11 +1,11 @@
 use clap::ValueEnum;
+use jig_context::backend::BackendLanguage;
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{
     APPLICATION_BACKEND_DEV_APP_NAME, RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME, ScaffoldPreset,
 };
-use crate::backend::BackendLanguage;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct ScaffoldPresetDescriptor {

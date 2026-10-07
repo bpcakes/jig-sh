@@ -1,7 +1,6 @@
 mod agent_guides;
 mod agent_launch;
 mod agent_provider;
-mod backend;
 mod bootstrap;
 #[cfg(test)]
 #[path = "../build_identity.rs"]
@@ -11,24 +10,21 @@ mod claude;
 mod cli;
 mod codex;
 mod command;
-mod context;
 #[cfg(feature = "dev-proxy")]
 mod dev_proxy;
 mod doctor;
 mod execution;
 mod exit;
-mod frontend_metadata;
-mod strict_json;
 #[cfg(not(feature = "dev-proxy"))]
 mod dev_proxy {
     // Keep the CLI surface parseable in `--no-default-features` binaries while
     // returning a direct runtime error for commands that require proxy support.
     pub(crate) mod commands {
         use anyhow::{Result, bail};
+        use jig_context::RepoContext;
         use serde_json::Value;
 
         use crate::command::{DevCommand, ProxyCommand};
-        use crate::context::RepoContext;
 
         pub(crate) fn dev(_ctx: &RepoContext, _command: DevCommand) -> Result<Value> {
             bail!(
@@ -60,7 +56,6 @@ mod info;
 mod policy;
 mod progress;
 mod repository;
-mod repository_path;
 mod root_commands;
 mod runtime;
 mod runtime_artifacts;
@@ -74,7 +69,7 @@ mod state;
 mod status;
 mod surface;
 #[cfg(test)]
-mod test_env;
+use jig_context::test_support as test_env;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod test_process;
 mod tool_defs;
@@ -135,7 +130,7 @@ mod no_dev_proxy_feature_tests {
     fn runtime_dispatch_reports_proxy_disabled_without_dev_proxy_feature() {
         let temp = tempdir().unwrap();
         write_minimal_repo(temp.path());
-        let ctx = context::RepoContext::load_from(temp.path()).unwrap();
+        let ctx = jig_context::RepoContext::load_from(temp.path()).unwrap();
 
         let error = runtime::dispatch(
             &ctx,

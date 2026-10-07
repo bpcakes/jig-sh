@@ -5,12 +5,12 @@ use std::{
     time::Duration,
 };
 
+use jig_context::CommandOutputLimit;
 use jig_contract::RustTargetV1;
 use tempfile::{TempDir, tempdir};
 
 use super::*;
 use crate::{
-    context::CommandOutputLimit,
     execution::{NoopExecutionObserver, run_supervised_execution_command},
     test_env::TestRepoBuilder,
 };

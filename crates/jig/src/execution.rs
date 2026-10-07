@@ -10,7 +10,7 @@ use jig_owned_process::{
     run_owned_process_tree_with_output_policy_and_observer,
 };
 
-use crate::context::{CommandOutputLimit, CommandTimeout};
+use jig_context::{CommandOutputLimit, CommandTimeout};
 
 pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
 pub(crate) const EXECUTION_OUTPUT_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;

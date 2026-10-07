@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
 use super::output::{self, emit};
@@ -6,7 +7,7 @@ use super::structured_error::require_json_ok;
 use crate::command::{
     AgentBootstrapRequest, AgentCommand, CheckCommand, NamedCheck, RuntimeCommand,
 };
-use crate::{context::RepoContext, doctor, runtime};
+use crate::{doctor, runtime};
 
 pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     let ctx = RepoContext::load()?;

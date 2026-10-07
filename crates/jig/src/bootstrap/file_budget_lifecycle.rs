@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use jig_context::RepoContext;
 use jig_contract::{
     ActionId, ActionRunner, ComponentId, NativeActionConfigurationV1, RunConclusion, TargetId, tool,
 };
@@ -15,7 +16,6 @@ use sha2::{Digest, Sha256};
 use super::managed_paths;
 use super::repository_model::generated_file_budget_action;
 use super::staged_render::{FILE_BUDGET_POLICY_PATH, StagedRender};
-use crate::context::RepoContext;
 use crate::repository::{RepositoryCatalog, target_input_digest};
 
 pub(super) const LEGACY_CHECKER_PATH: &str = "scripts/check-rust-file-loc.sh";

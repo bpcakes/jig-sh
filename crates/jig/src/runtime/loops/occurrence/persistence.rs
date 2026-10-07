@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use serde::{Deserialize, Serialize};
 
-use crate::context::RepoContext;
 #[cfg(test)]
 use crate::runtime::loops::managed_path::ensure_managed_directory;
 

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
+use jig_context::RepoContext;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -8,7 +9,6 @@ use crate::cancellation::{
     ensure_status_collection_active, is_status_collection_cancellation,
     status_collection_cancellation,
 };
-use crate::context::RepoContext;
 use crate::runtime::{loop_status_snapshot_with_cancellation, refreshed_repository_context};
 use crate::state::now_ms;
 

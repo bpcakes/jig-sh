@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_context::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext};
 use jig_owned_process::{
     BoundedProcessOutput, OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError,
     ProcessOutputLimits, ProcessOutputOverflowPolicy,
@@ -15,7 +16,6 @@ use jig_owned_process::{
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 
-use crate::context::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext};
 use crate::execution::{
     EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionCommandError, ExecutionControl, ExecutionPhase,
     PhasePosition, ProcessExecutionObserver,

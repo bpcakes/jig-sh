@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
+use jig_context::repository_path::normalize_portable_repo_path;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::agent_guides::references::{
     Destination, GuideFiles, has_uri_scheme, is_missing, markdown_references, resolve_reference,
 };
-use crate::context::RepoContext;
-use crate::repository_path::normalize_portable_repo_path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -7,11 +7,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use jig_context::RepoContext;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use ulid::Ulid;
 
 use crate::cancellation::ensure_status_collection_active;
-use crate::context::RepoContext;
 use crate::state::now_ms;
 
 use super::renewal::{RenewalWorker, renewal_interval};

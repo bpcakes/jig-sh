@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use jig_ui::dashboard::{DashboardSource, RecorderMode, RecorderRequest, TimelineLimit};
 use jig_ui::terminal::{DashboardOptions, InitialTab};
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 mod source;
 

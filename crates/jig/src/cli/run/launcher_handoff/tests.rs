@@ -369,7 +369,7 @@ fn generated_launcher_handoff_validates_and_reuses_the_loaded_context() {
 
     validate_launcher_repository_scope(&cli).unwrap();
     assert_eq!(
-        std::env::var_os(crate::context::JIG_REPO_ROOT_ENV).as_deref(),
+        std::env::var_os(jig_context::JIG_REPO_ROOT_ENV).as_deref(),
         Some(std::fs::canonicalize(temp.path()).unwrap().as_os_str()),
         "descendants must inherit the launcher-authoritative repository root"
     );

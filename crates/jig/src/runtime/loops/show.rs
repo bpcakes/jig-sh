@@ -1,10 +1,10 @@
 //! `jig loop show`: one occurrence and the evidence its tick recorded.
 
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
 use crate::command::LoopShowRequest;
-use crate::context::RepoContext;
 
 use super::evidence;
 use super::occurrence::OccurrenceStore;

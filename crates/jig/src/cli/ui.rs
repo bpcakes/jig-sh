@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Args;
+use jig_context::RepoContext;
 
 use super::structured_error::{json_command_error, json_output_already_emitted};
-use crate::context::RepoContext;
 use crate::{root_commands, ui};
 
 pub(super) const UI_AFTER_HELP: &str = "\

@@ -10,7 +10,7 @@ fn options(repo: &Path, template: &Path, minimal: bool, force: bool) -> AdoptOpt
 }
 
 fn saved_formatter(repo: &Path) -> ActionSpec {
-    let ctx = crate::context::RepoContext::load_from(repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(repo).unwrap();
     ctx.authored_action_specs()
         .unwrap()
         .iter()
@@ -64,7 +64,7 @@ fn save_formatter(repo: &Path, action: &ActionSpec, command: Option<&str>) {
         serde_json::to_string_pretty(&manifest).unwrap(),
     )
     .unwrap();
-    crate::context::RepoContext::load_from(repo).unwrap();
+    jig_context::RepoContext::load_from(repo).unwrap();
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn footprint_and_capability_refresh_preserve_owned_freshness_and_its_command() {
     capability_refresh.answers.rust_migration_dir = Some("migrations".into());
     run_adopt(capability_refresh).unwrap();
     assert_eq!(saved_formatter(&repo), action);
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     let key = match &action.runner {
         ActionRunner::Shell { command, .. } | ActionRunner::Command { command, .. } => command,
         _ => unreachable!(),
@@ -251,7 +251,7 @@ fn footprint_and_capability_refresh_preserve_cargo_resource_owner_and_command() 
             action,
             "resource owner changed during capability_refresh={capability_refresh}"
         );
-        let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+        let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
         let key = match &action.runner {
             ActionRunner::Shell { command, .. } | ActionRunner::Command { command, .. } => command,
             _ => unreachable!(),
@@ -297,7 +297,7 @@ fn generated_cargo_formatter_stays_git_with_aliases_added_before_or_after_adopti
         let original = saved_formatter(&repo);
         assert_eq!(original.source_state, Some(ActionSourceState::Git));
         fs::write(repo.join(".cargo/config.toml"), alias).unwrap();
-        let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+        let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
         let report = preview(
             &ctx,
             &Request {
@@ -357,7 +357,7 @@ fn readoption_preserves_authored_browser_policy_and_public_checker_invocation() 
             refresh.answers.rust_migration_dir = Some("migrations".into());
         }
         run_adopt(refresh).unwrap();
-        let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+        let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
         assert_eq!(
             ctx.authored_action_specs()
                 .unwrap()
@@ -406,7 +406,7 @@ fn inferred_formatter_wrapper_keeps_conservative_freshness_defaults() {
         action.inputs_policy,
         Some(ActionInputsPolicy::WholeRepository)
     );
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     let key = match &action.runner {
         ActionRunner::Shell { command, .. } | ActionRunner::Command { command, .. } => command,
         _ => panic!("inferred wrapper must use a command key"),

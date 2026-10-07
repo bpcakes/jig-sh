@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_yaml_ng::Value as YamlValue;
 
-use crate::frontend_metadata::resolve_frontend_metadata;
+use jig_context::frontend_metadata::resolve_frontend_metadata;
 
 use super::super::FrontendApp;
 use super::repo::safe_name;

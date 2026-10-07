@@ -1,8 +1,9 @@
+use jig_context::backend::BackendLanguage;
+
 use super::*;
 use anyhow::Result;
 
 use super::components::{Disposition, Ecosystem};
-use crate::backend::BackendLanguage;
 
 impl AdoptInference {
     pub(in crate::bootstrap) fn warn_preserved_workspace_changes(&mut self, prior: &[String]) {

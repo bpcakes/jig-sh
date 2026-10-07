@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use jig_context::RepoContext;
 use jig_contract::{
     ComparisonPreparationV1, ComparisonRequestV1, Finding, FindingLocation, FindingSeverity,
     NativeActionResult, NativeFileBudgetConfigV1, PolicyPreparationV1, PreparedNativeInputV1,
@@ -21,7 +22,6 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 
-use crate::context::RepoContext;
 use crate::source_identity::{
     BaselineFileV1, CurrentSourceV1, ExactCurrentPathStateV1 as GitExactCurrentPathStateV1,
     FileChangeKindV1, ScopeEntryV1, ScopeIssueKindV1, ScopeSnapshotV1,

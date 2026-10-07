@@ -4,6 +4,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
+use jig_context::repository_path::{
+    resolve_repository_working_directory, validate_runner_environment,
+};
 use jig_contract::{
     ActionEffect, ActionRunner, Finding, FindingSeverity, PlannedTarget, ResultParser,
     RunConclusion, RunPlan, RunStatus, TargetId, TargetRunResult,
@@ -12,14 +16,12 @@ use jig_owned_process::OwnedProcessTreeError;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
 use crate::execution::{
     CompletedExecutionPhase, ExecutionCancellation, ExecutionControl, ExecutionEvent,
     ExecutionObserver, ExecutionPhase, ExecutionStream, PhasePosition, SupervisedExecutionError,
     run_supervised_execution_command,
 };
 use crate::repository::{RepositoryCatalog, target_input_digest};
-use crate::repository_path::{resolve_repository_working_directory, validate_runner_environment};
 #[cfg(test)]
 use crate::state::start_run;
 use crate::state::{

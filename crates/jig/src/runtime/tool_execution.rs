@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
+use jig_context::RepoContext;
 use jig_contract::{
     ActionRunner, ActionSpec, ComparisonPreparationV1, Finding, FindingLocation, FindingSeverity,
     ManifestTool, NativeActionResult, NativeToolKind, PolicyPreparationV1, PreparedNativeInputV1,
@@ -9,7 +10,6 @@ use jig_contract::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
 #[cfg(test)]
 use crate::execution::NoopExecutionObserver;
 use crate::execution::{

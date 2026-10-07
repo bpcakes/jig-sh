@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde_json::Value;
 
-use crate::backend::{GO_POSTGRES_MIGRATION_DIR, GoDatabase};
-use crate::context::validate_web_package_manager;
+use jig_context::backend::{GO_POSTGRES_MIGRATION_DIR, GoDatabase};
+use jig_context::validate_web_package_manager;
 
 use super::{
     AnswerOpts, DevApp, FrontendApp, RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME, ScaffoldDb,

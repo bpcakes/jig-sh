@@ -339,8 +339,10 @@ fn assert_resource_authority_change(
     action: ActionSpec,
     changed_resources: Vec<ExecutionResourceV1>,
 ) {
+    use jig_context::RepoContext;
+
     use crate::repository::planner::{plan_run_with_cancellation, validate_run_plan};
-    use crate::{context::RepoContext, test_env::TestRepoBuilder};
+    use crate::test_env::TestRepoBuilder;
     use std::{fs, process::Command};
 
     let temp = tempfile::tempdir().unwrap();

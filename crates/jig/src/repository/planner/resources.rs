@@ -7,7 +7,7 @@ use jig_contract::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::repository_path::normalize_portable_repo_path;
+use jig_context::repository_path::normalize_portable_repo_path;
 
 pub(in crate::repository) fn validate_declarations(action: &ActionSpec) -> Result<()> {
     if action.resources.is_empty() {

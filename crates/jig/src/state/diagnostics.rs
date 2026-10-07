@@ -16,7 +16,7 @@ use std::process::{Command, Stdio};
 use serde::de::IgnoredAny;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 use super::jsonl::scan_jsonl_raw;
 

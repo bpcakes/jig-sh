@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use jig_contract::freshness::{
     InspectedInputsPolicyV1, InspectedSourceStateV1, TARGET_FRESHNESS_CONTRACT_VERSION,
     TargetFreshnessPolicyInspectionV1, TargetFreshnessPolicyModeV1,
@@ -11,7 +12,6 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
 use crate::surface::ResponseSurface;
 
 use super::RepositoryCatalog;

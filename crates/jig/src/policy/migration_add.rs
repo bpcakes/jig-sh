@@ -17,7 +17,7 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
             )
         }
     })?;
-    if backend == crate::context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
+    if backend == jig_context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
         bail!(
             "sqlx migration add requires rust_migration_layout = \"flat_migrations\"; this repository has rust_migration_layout = \"{}\"",
             ctx.rust_migration_layout().as_str()
@@ -41,8 +41,8 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
         .join(&migration_dir)
         .join(format!("{timestamp}_{slug}"));
     match backend {
-        crate::context::MigrationBackend::Goose => goose_migration_add(&base, &slug),
-        crate::context::MigrationBackend::Sqlx => sqlx_migration_add(&base, &slug),
+        jig_context::MigrationBackend::Goose => goose_migration_add(&base, &slug),
+        jig_context::MigrationBackend::Sqlx => sqlx_migration_add(&base, &slug),
     }
 }
 

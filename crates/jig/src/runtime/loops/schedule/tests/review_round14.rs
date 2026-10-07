@@ -1,12 +1,12 @@
 use std::fs;
 
+use jig_context::RepoContext;
 use tempfile::tempdir;
 
 use super::super::super::engine::tick_with_observer;
 use super::super::super::state::LOOP_RUNTIME_DIR;
 use super::super::NoopExecutionObserver;
 use crate::command::LoopTickRequest;
-use crate::context::RepoContext;
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
 #[test]

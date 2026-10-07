@@ -3,10 +3,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-use crate::context::RepoContext;
 use crate::state::now_ms;
 
 use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, RenewalWorker, renewal_interval};

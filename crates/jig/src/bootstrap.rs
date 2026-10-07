@@ -8,6 +8,10 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
+use jig_context::RepoContext;
+use jig_context::frontend_metadata::resolve_frontend_metadata;
+#[cfg(test)]
+use jig_context::{RuntimeCacheProfile, runtime_cache_base, runtime_profile_cache_name};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::{Builder as TempFileBuilder, TempDir};
@@ -17,10 +21,6 @@ use toml::Table;
 use toml::Value as TomlValue;
 use ulid::Ulid;
 
-use crate::context::RepoContext;
-#[cfg(test)]
-use crate::context::{RuntimeCacheProfile, runtime_cache_base, runtime_profile_cache_name};
-use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::progress::CliProgress;
 #[cfg(test)]
 use crate::runtime_cache_lock::{RuntimeCacheLockPolicy, RuntimeCacheLocks};
@@ -67,7 +67,7 @@ pub use adopt_infer::ComponentSelectionOpts;
 mod adoption_file_budget;
 mod answers;
 #[cfg(test)]
-pub(crate) use crate::backend::BackendLanguage;
+pub(crate) use jig_context::backend::BackendLanguage;
 pub(crate) mod clippy_policy;
 mod crate_classification;
 mod embedded_templates;

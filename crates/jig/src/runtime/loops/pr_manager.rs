@@ -7,11 +7,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use cap_std::{ambient_authority, fs::Dir};
+use jig_context::{CommandTimeout, RepoContext};
 use jig_owned_process::ProcessOutputOverflowPolicy;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::context::{CommandTimeout, RepoContext};
 use crate::execution::{
     AdditionalCancellationControl, ExecutionCommandError, ExecutionControl, NoopExecutionObserver,
     run_authoritative_execution_command,

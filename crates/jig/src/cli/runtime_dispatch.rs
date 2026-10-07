@@ -6,12 +6,12 @@
 //! supervision, progress reporting, and output.
 
 use anyhow::Result;
+use jig_context::RepoContext;
 
 use super::output::{self, Render, emit};
 use super::run::finish_after_json_output;
 use super::structured_error::require_json_ok;
 use crate::command::RuntimeCommand;
-use crate::context::RepoContext;
 use crate::runtime;
 
 /// How a runtime result decides the exit status.

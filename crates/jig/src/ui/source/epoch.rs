@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
+use jig_context::RepoContext;
 use jig_contract::{RunConclusion, TargetOutputTailV1};
 use jig_ui::dashboard::*;
 use sha2::{Digest, Sha256};
 
-use crate::context::RepoContext;
 use crate::state::{
     CompletedTargetEvent, JsonlRecordTooLarge, RawJsonlRecord, RunHistoryEvent, run_history_event,
     scan_dashboard_jsonl_raw,

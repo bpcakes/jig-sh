@@ -1,5 +1,6 @@
+use jig_context::RepoContext;
+
 use super::*;
-use crate::context::RepoContext;
 use crate::repository::RepositoryCatalog;
 use anyhow::{Result, ensure};
 
@@ -90,7 +91,7 @@ pub(crate) fn preview(ctx: &RepoContext, request: &Request) -> Result<serde_json
                 }
             }
         }
-        crate::context::validate_inputs_policy(ctx.contract_version(), &proposed)?;
+        jig_context::validate_inputs_policy(ctx.contract_version(), &proposed)?;
         for input in &proposed.inputs {
             crate::repository::affected::compile_input(&proposed.target, input)?;
         }

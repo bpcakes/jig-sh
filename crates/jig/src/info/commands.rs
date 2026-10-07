@@ -1,6 +1,6 @@
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
 use crate::root_commands::{self, RootCommand, RootCommandId};
 use crate::tool_defs::tool;
 
@@ -429,7 +429,7 @@ fn migration_command(ctx: &RepoContext) -> Value {
             );
         }
     };
-    if migration_backend == crate::context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
+    if migration_backend == jig_context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
         return ready_command(root_commands::SQLX);
     }
     manifest_command(

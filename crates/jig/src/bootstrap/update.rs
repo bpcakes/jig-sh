@@ -284,7 +284,7 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
     let runtime_policy =
         FullRefreshRuntimePolicy::for_render(answers.harness_footprint(), update_template.source());
     let reconcile_runtime_config =
-        crate::context::RepoContext::validate_config_file(&destination).is_ok();
+        jig_context::RepoContext::validate_config_file(&destination).is_ok();
     let mut staged = stage_render(RenderStageRequest {
         template: &update_template,
         answers: &answers,

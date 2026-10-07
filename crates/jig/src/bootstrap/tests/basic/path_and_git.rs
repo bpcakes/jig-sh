@@ -197,7 +197,7 @@ marketplaces = []
 
     let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(rendered.contains("marketplaces = []"));
-    let ctx = crate::context::RepoContext::load_from(&destination).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&destination).unwrap();
     assert!(ctx.codex_marketplaces().is_empty());
 }
 
@@ -302,7 +302,7 @@ plugins = []
 
     let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(rendered.contains("plugins = []"));
-    let ctx = crate::context::RepoContext::load_from(&destination).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&destination).unwrap();
     assert_eq!(ctx.codex_marketplaces().len(), 1);
     assert!(ctx.codex_marketplaces()[0].plugins.is_empty());
 }
@@ -717,7 +717,7 @@ fn adopt_with_versioned_artifacts_omits_migration_add_capability_and_guidance() 
             repo_name: Some("demo".into()),
             sqlx_enabled: Some(true),
             rust_migration_dir: Some("schema".into()),
-            rust_migration_layout: Some(crate::context::RustMigrationLayout::VersionedArtifacts),
+            rust_migration_layout: Some(jig_context::RustMigrationLayout::VersionedArtifacts),
             rust_sqlx_metadata_dir: Some(".sqlx".into()),
             ..AnswerOpts::default()
         },

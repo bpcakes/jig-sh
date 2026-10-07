@@ -104,7 +104,7 @@ fn adopt_components_write_selected_roots_and_preserve_them_on_recopy_and_readopt
             ("workspace", ".")
         ]
     );
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let resolved: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap())
@@ -152,7 +152,7 @@ fn adopt_components_incidental_manifests_do_not_create_a_default_backend() {
     let components = components.as_array().unwrap();
     assert_eq!(components.len(), 1);
     assert_eq!(components[0]["id"].as_str(), Some("repo"));
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let answers = RenderAnswers::from_answers_file(&repo.join(".jig.toml")).unwrap();
     assert!(!answers.rust_backend_enabled());
@@ -216,7 +216,7 @@ fn adopt_components_frontend_exclusion_removes_actions_and_phantom_backend_edges
         .unwrap();
     assert_eq!(web["disposition"], "included");
     assert_eq!(admin["disposition"], "excluded");
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
     assert_eq!(ctx.frontend_apps().len(), 1);
     assert_eq!(ctx.frontend_apps()[0].dir, "apps/web");
@@ -331,7 +331,7 @@ fn assert_frontend_readoption_and_minimal_transition(
             .values()
             .all(|value| !value.as_str().unwrap().contains("scripts/check-webapps.sh"))
     );
-    let ctx = crate::context::RepoContext::load_from(repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(repo).unwrap();
     crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
     assert!(
         !ctx.action_specs()
@@ -365,7 +365,7 @@ fn adopt_components_readoption_preserves_opaque_authored_components() {
     opts.minimal = true;
     opts.force = true;
     run_adopt(opts).unwrap();
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let saved = ctx
         .component_specs()
@@ -435,7 +435,7 @@ fn adopt_components_readoption_applies_command_overrides_to_authored_alias_owner
         Some("printf second-test")
     );
     assert!(updated["commands"].get("api_test_command").is_none());
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
     fs::write(repo.join("Makefile"), "test:\n\tprintf inferred-test\n").unwrap();
     opts.answers.rust_test_command = None;
@@ -447,7 +447,7 @@ fn adopt_components_readoption_applies_command_overrides_to_authored_alias_owner
     );
     opts.minimal = true;
     run_adopt(opts.clone()).unwrap();
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
     assert!(
         ctx.action_specs()
@@ -509,6 +509,6 @@ fn adopt_components_explicit_future_rust_root_remains_supported() {
             .any(|component| component["root"].as_str() == Some("future-crate"))
     );
     assert!(!repo.join("future-crate").exists());
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
 }

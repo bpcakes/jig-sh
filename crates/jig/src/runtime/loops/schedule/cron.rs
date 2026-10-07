@@ -3,7 +3,7 @@ use chrono::{DateTime, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use croner::Cron;
 
-use crate::context::parse_five_field_cron;
+use jig_context::parse_five_field_cron;
 
 #[derive(Clone, Debug)]
 pub(in crate::runtime::loops) struct ScheduleSpec {

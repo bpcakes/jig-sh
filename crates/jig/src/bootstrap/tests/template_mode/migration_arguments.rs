@@ -1,6 +1,7 @@
+use jig_context::{CURRENT_CONTRACT_VERSION, RepoContext};
+
 use super::*;
 use crate::command::{MigrationAddRequest, RuntimeCommand};
-use crate::context::{CURRENT_CONTRACT_VERSION, RepoContext};
 
 #[test]
 fn action_arguments_update_preserves_command_migration_alias() {

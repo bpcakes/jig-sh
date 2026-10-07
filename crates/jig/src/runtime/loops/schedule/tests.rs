@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use fs4::fs_std::FileExt;
+use jig_context::RepoContext;
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -18,7 +19,6 @@ use super::{
     occurrence_from_finalization, scheduled_tick_state_errors,
 };
 use crate::command::LoopStatusRequest;
-use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 
 #[path = "tests/occurrence_evidence.rs"]

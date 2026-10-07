@@ -3,8 +3,9 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::time::Duration;
 
+use jig_context::RepoContext;
+
 use crate::command::{AgentMapCommand, CheckCommand, NamedCheck, RuntimeCommand, StateCommand};
-use crate::context::RepoContext;
 use crate::execution::{ExecutionControl, NoopExecutionObserver};
 use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,

@@ -76,8 +76,8 @@ fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Resul
         checks.push(launcher_repair_cache_check(&root, contract_version));
     }
     if let Some(contract_version) = manifest_contract_version.filter(|version| {
-        crate::context::is_supported_contract_version(*version)
-            && *version < crate::context::CURRENT_CONTRACT_VERSION
+        jig_context::is_supported_contract_version(*version)
+            && *version < jig_context::CURRENT_CONTRACT_VERSION
     }) {
         checks.push(contract_migration_check(&root, contract_version));
     }
@@ -249,7 +249,7 @@ fn output(repo: Option<Value>, checks: Vec<DoctorCheck>) -> Value {
     })
 }
 
-fn config_check(root: &Path, result: &Result<crate::context::RepoConfigProbe>) -> DoctorCheck {
+fn config_check(root: &Path, result: &Result<jig_context::RepoConfigProbe>) -> DoctorCheck {
     match result {
         Ok(probe) => check(
             "config",

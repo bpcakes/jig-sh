@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
 use crate::execution::NoopExecutionObserver;
 
 use super::{RepositoryRevisionState, git_is_dirty, git_stdout, remove_worktree};
