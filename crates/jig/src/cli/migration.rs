@@ -1,9 +1,10 @@
 use clap::{Args, Subcommand};
+use jig_commands::tool_defs;
 
 use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
+use crate::command;
 use crate::command::RuntimeCommand;
-use crate::{command, tool_defs};
 
 const MIGRATION_ADD_AFTER_HELP: &str = "\
 Examples:

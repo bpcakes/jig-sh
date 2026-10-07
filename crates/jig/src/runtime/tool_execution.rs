@@ -152,7 +152,7 @@ fn native_result(
         valid_until_ms: None,
     }
 }
-use crate::tool_defs::{args, kind, tool};
+use jig_commands::tool_defs::{args, kind, tool};
 use jig_repository::RepositoryCatalog;
 
 mod failure;

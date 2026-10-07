@@ -13,6 +13,8 @@ use std::{sync::atomic::Ordering, time::Instant};
 use anyhow::anyhow;
 use anyhow::{Context, Result};
 #[cfg(test)]
+use jig_commands::tool_defs::tool;
+#[cfg(test)]
 use jig_context::{
     FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
 };
@@ -31,8 +33,6 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use crate::cli::format_doctor_summary_for_test as format_summary;
 use crate::command::{VaultCommand, VaultStatusRequest};
-#[cfg(test)]
-use crate::tool_defs::tool;
 
 mod run_history;
 mod runtime;

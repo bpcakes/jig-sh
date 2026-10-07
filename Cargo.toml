@@ -3,6 +3,7 @@ members = [
     "crates/jig",
     "crates/jig-agents",
     "crates/jig-codex-tui",
+    "crates/jig-commands",
     "crates/jig-context",
     "crates/jig-contract",
     "crates/jig-core",
@@ -73,6 +74,7 @@ hyper = { version = "1.7.0", features = ["full"] }
 hyper-util = { version = "0.1.17", features = ["full"] }
 jig-agents = { path = "crates/jig-agents", version = "=0.7.3-dev" }
 jig-dev-proxy = { path = "crates/jig-dev-proxy", version = "=0.7.3-dev" }
+jig-commands = { path = "crates/jig-commands", version = "=0.7.3-dev" }
 jig-context = { path = "crates/jig-context", version = "=0.7.3-dev" }
 jig-contract = { path = "crates/jig-contract", version = "=0.7.3-dev" }
 jig-codex-tui = { path = "crates/jig-codex-tui", version = "=0.7.3-dev" }

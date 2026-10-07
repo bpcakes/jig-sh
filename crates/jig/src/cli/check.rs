@@ -2,10 +2,11 @@ use std::ffi::OsString;
 
 use anyhow::Result;
 use clap::{ArgGroup, Args, Subcommand};
+use jig_commands::root_commands;
+use jig_commands::tool_defs;
 use jig_contract::ComparisonRequestV1;
 
 use crate::command::{NamedCheck, RuntimeCommand};
-use crate::{root_commands, tool_defs};
 
 use super::AgentMapOpts;
 use super::comparison::{CliExactTreeProvenance, comparison_request};

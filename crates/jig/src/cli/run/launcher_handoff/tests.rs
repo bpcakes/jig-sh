@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser};
+use jig_commands::tool_defs::{kind, tool};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -8,7 +9,6 @@ use super::*;
 use crate::cli::check::CHECK_SUBCOMMAND_NAMES;
 use crate::cli::{LAUNCHER_CHECK_SUBCOMMANDS, LAUNCHER_GLOBAL_FLAGS};
 use crate::test_env::{CurrentDirGuard, TestRepoBuilder, lock_env};
-use crate::tool_defs::{kind, tool};
 
 const CURRENT_GENERATED_LAUNCHER: &str =
     include_str!("../../../bootstrap/embedded_template_snapshots/scripts/jig.jinja");

@@ -726,7 +726,7 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let error = tool_execution::execute_manifest_tool_with_observer(
         &ctx,
-        crate::tool_defs::tool::TEST,
+        jig_commands::tool_defs::tool::TEST,
         json!({}),
         &mut jig_execution::NoopExecutionObserver,
     )

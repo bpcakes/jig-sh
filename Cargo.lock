@@ -1431,6 +1431,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-commands"
+version = "0.7.3-dev"
+dependencies = [
+ "jig-contract",
+ "jig-features",
+]
+
+[[package]]
 name = "jig-context"
 version = "0.7.3-dev"
 dependencies = [
@@ -1644,6 +1652,7 @@ dependencies = [
  "globset",
  "jig-agents",
  "jig-codex-tui",
+ "jig-commands",
  "jig-context",
  "jig-contract",
  "jig-core",

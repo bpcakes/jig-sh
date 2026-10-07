@@ -18,11 +18,11 @@ use jig_owned_process::{
 };
 use serde_json::{Value, json};
 
-use crate::tool_defs::{self, kind};
 use git::{
     controlled_git_bytes, controlled_git_output, controlled_git_text, git_list_files, git_output,
     git_success, split_nul,
 };
+use jig_commands::tool_defs::{self, kind};
 
 pub(crate) struct AgentMapInput {
     pub(crate) map_path: PathBuf,

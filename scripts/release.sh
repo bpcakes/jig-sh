@@ -19,6 +19,7 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-typescript"
   "jig-go"
   "jig-features"
+  "jig-commands"
   "jig-vault"
   "jig-dev-proxy"
   "jig-context"
@@ -113,6 +114,7 @@ crate_dir_for_package() {
     jig-typescript) printf '%s\n' "crates/jig-typescript" ;;
     jig-go) printf '%s\n' "crates/jig-go" ;;
     jig-features) printf '%s\n' "crates/jig-features" ;;
+    jig-commands) printf '%s\n' "crates/jig-commands" ;;
     jig-vault) printf '%s\n' "crates/jig-vault" ;;
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
     jig-context) printf '%s\n' "crates/jig-context" ;;

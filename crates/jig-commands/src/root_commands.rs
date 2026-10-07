@@ -10,7 +10,7 @@ use std::fmt::Write;
 use LauncherScope::{CapabilityOnly, Repository};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RootCommandCategory {
+pub enum RootCommandCategory {
     GetStarted,
     Develop,
     StructuredWork,
@@ -20,7 +20,7 @@ pub(crate) enum RootCommandCategory {
 }
 
 impl RootCommandCategory {
-    pub(crate) const ALL: &[Self] = &[
+    pub const ALL: &[Self] = &[
         Self::GetStarted,
         Self::Develop,
         Self::StructuredWork,
@@ -29,7 +29,7 @@ impl RootCommandCategory {
         Self::AgentAutomation,
     ];
 
-    pub(crate) const fn id(self) -> &'static str {
+    pub const fn id(self) -> &'static str {
         match self {
             Self::GetStarted => "get_started",
             Self::Develop => "develop",
@@ -40,7 +40,7 @@ impl RootCommandCategory {
         }
     }
 
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::GetStarted => "Get started",
             Self::Develop => "Develop",
@@ -51,7 +51,7 @@ impl RootCommandCategory {
         }
     }
 
-    pub(crate) fn from_id(id: &str) -> Option<Self> {
+    pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL
             .iter()
             .copied()
@@ -63,7 +63,7 @@ impl RootCommandCategory {
 ///
 /// Every command chooses explicitly; there is no default.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LauncherScope {
+pub enum LauncherScope {
     /// Needs only a capable binary: the command accepts a caller-relative
     /// repository target, or none at all.
     CapabilityOnly,
@@ -74,15 +74,15 @@ pub(crate) enum LauncherScope {
 /// A top-level command as the generated launcher sees it. Hidden commands have
 /// no help placement, so this is their whole registry entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LauncherCommand {
-    pub(crate) name: &'static str,
-    pub(crate) scope: LauncherScope,
+pub struct LauncherCommand {
+    pub name: &'static str,
+    pub scope: LauncherScope,
 }
 
 impl LauncherCommand {
     /// The same command when one of its invocations needs only a capable
     /// binary, such as `check contract` diagnosing a broken repository.
-    pub(crate) const fn capability_only(self) -> Self {
+    pub const fn capability_only(self) -> Self {
         Self {
             name: self.name,
             scope: CapabilityOnly,
@@ -91,16 +91,16 @@ impl LauncherCommand {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RootCommand {
-    pub(crate) id: RootCommandId,
-    pub(crate) name: &'static str,
-    pub(crate) category: RootCommandCategory,
-    pub(crate) display_order: usize,
-    pub(crate) launcher_scope: LauncherScope,
+pub struct RootCommand {
+    pub id: RootCommandId,
+    pub name: &'static str,
+    pub category: RootCommandCategory,
+    pub display_order: usize,
+    pub launcher_scope: LauncherScope,
 }
 
 impl RootCommand {
-    pub(crate) const fn launcher(self) -> LauncherCommand {
+    pub const fn launcher(self) -> LauncherCommand {
         LauncherCommand {
             name: self.name,
             scope: self.launcher_scope,
@@ -115,12 +115,12 @@ macro_rules! root_commands {
         /// Identity of a visible root command, for exhaustive per-command
         /// decisions.
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub(crate) enum RootCommandId {
+        pub enum RootCommandId {
             $($id,)+
         }
 
         $(
-            pub(crate) const $constant: RootCommand = RootCommand {
+            pub const $constant: RootCommand = RootCommand {
                 id: RootCommandId::$id,
                 name: $name,
                 category: RootCommandCategory::$category,
@@ -130,7 +130,7 @@ macro_rules! root_commands {
         )+
 
         /// Every visible root command, in help order.
-        pub(crate) const ALL: &[RootCommand] = &[$($constant,)+];
+        pub const ALL: &[RootCommand] = &[$($constant,)+];
     };
 }
 
@@ -170,14 +170,14 @@ const fn hidden(name: &'static str, scope: LauncherScope) -> LauncherCommand {
     LauncherCommand { name, scope }
 }
 
-pub(crate) const MIGRATION_ADD: LauncherCommand = hidden("migration-add", Repository);
-pub(crate) const SCHEMA_DUMP: LauncherCommand = hidden("schema-dump", Repository);
-pub(crate) const GENERATE_SQLX_UNCHECKED_QUERIES_TODO: LauncherCommand =
+pub const MIGRATION_ADD: LauncherCommand = hidden("migration-add", Repository);
+pub const SCHEMA_DUMP: LauncherCommand = hidden("schema-dump", Repository);
+pub const GENERATE_SQLX_UNCHECKED_QUERIES_TODO: LauncherCommand =
     hidden("generate-sqlx-unchecked-queries-todo", Repository);
 
 /// Hidden legacy spellings that the generated launcher still classifies.
-#[cfg(test)]
-pub(crate) const LEGACY: &[LauncherCommand] = &[
+#[cfg(any(test, feature = "test-support"))]
+pub const LEGACY: &[LauncherCommand] = &[
     MIGRATION_ADD,
     SCHEMA_DUMP,
     GENERATE_SQLX_UNCHECKED_QUERIES_TODO,
@@ -185,13 +185,12 @@ pub(crate) const LEGACY: &[LauncherCommand] = &[
 
 /// The private compatibility probe. The generated launcher and installer
 /// invoke it themselves, so the launcher's command lists never classify it.
-pub(crate) const RUNTIME_COMPATIBLE: LauncherCommand =
-    hidden("__runtime-compatible", CapabilityOnly);
+pub const RUNTIME_COMPATIBLE: LauncherCommand = hidden("__runtime-compatible", CapabilityOnly);
 
 /// The names the generated launcher classifies under `scope`, in the sorted
 /// order of its marker comments.
-#[cfg(test)]
-pub(crate) fn launcher_subcommands(scope: LauncherScope) -> Vec<&'static str> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn launcher_subcommands(scope: LauncherScope) -> Vec<&'static str> {
     let mut names = ALL
         .iter()
         .map(|command| command.launcher())
@@ -203,7 +202,7 @@ pub(crate) fn launcher_subcommands(scope: LauncherScope) -> Vec<&'static str> {
     names
 }
 
-pub(crate) fn categorized_help() -> String {
+pub fn categorized_help() -> String {
     let mut help = String::from("Command groups:\n");
     for category in RootCommandCategory::ALL {
         let names = ALL
@@ -257,91 +256,6 @@ mod tests {
         let expected_names = ALL.iter().map(|command| command.name).collect::<Vec<_>>();
 
         assert_eq!(listed_names, expected_names);
-    }
-
-    const LAUNCHER_REFRESH_ENV: &str = "JIG_REFRESH_LAUNCHER_COMMAND_LISTS";
-    const LAUNCHER_REFRESH_COMMAND: &str = "JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launcher_command_lists";
-    /// Workspace-relative launcher copies; the embedded snapshot is the one
-    /// packaged with the crate.
-    const LAUNCHER_COPIES: &[&str] = &[
-        "templates/project/scripts/jig.jinja",
-        "crates/jig/src/bootstrap/embedded_template_snapshots/scripts/jig.jinja",
-        "scripts/jig",
-    ];
-
-    /// Rewrites the launcher's command-list marker comments and the `case`
-    /// arms that follow their `-begin` markers from the registry.
-    fn with_registry_command_lists(launcher: &str) -> String {
-        let lists = [
-            (
-                "jig-capability-only-subcommands",
-                launcher_subcommands(CapabilityOnly),
-            ),
-            (
-                "jig-repository-scope-subcommands",
-                launcher_subcommands(Repository),
-            ),
-        ];
-        let mut rendered = Vec::new();
-        let mut pending_arm: Option<Vec<&str>> = None;
-        let mut replaced = 0;
-        for line in launcher.lines() {
-            if let Some(names) = pending_arm.take() {
-                let indent = &line[..line.len() - line.trim_start().len()];
-                rendered.push(format!("{indent}{})", names.join(" | ")));
-                replaced += 1;
-                continue;
-            }
-            let mut marker_line = None;
-            for (marker, names) in &lists {
-                if line.starts_with(&format!("# {marker}:")) {
-                    marker_line = Some(format!("# {marker}:{}", names.join(",")));
-                    replaced += 1;
-                } else if line.trim_start() == format!("# {marker}-begin") {
-                    // `check` keeps its own arm because `check contract` alone
-                    // is capability-only.
-                    pending_arm = Some(
-                        names
-                            .iter()
-                            .copied()
-                            .filter(|name| *name != CHECK.name)
-                            .collect(),
-                    );
-                }
-            }
-            rendered.push(marker_line.unwrap_or_else(|| line.to_owned()));
-        }
-        assert_eq!(
-            replaced, 4,
-            "the launcher must declare both command-list markers and both `case` arms"
-        );
-        let mut output = rendered.join("\n");
-        if launcher.ends_with('\n') {
-            output.push('\n');
-        }
-        output
-    }
-
-    #[test]
-    fn generated_launcher_command_lists_match_the_registry() {
-        if std::env::var_os(LAUNCHER_REFRESH_ENV).is_some() {
-            let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-            for relative in LAUNCHER_COPIES {
-                let path = workspace.join(relative);
-                let launcher = std::fs::read_to_string(&path)
-                    .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-                std::fs::write(&path, with_registry_command_lists(&launcher))
-                    .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
-            }
-            return;
-        }
-
-        let launcher = include_str!("bootstrap/embedded_template_snapshots/scripts/jig.jinja");
-        assert!(
-            launcher == with_registry_command_lists(launcher),
-            "the generated launcher's command lists drifted from the root command registry; \
-             refresh every launcher copy with `{LAUNCHER_REFRESH_COMMAND}`"
-        );
     }
 
     #[test]

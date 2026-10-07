@@ -1,10 +1,10 @@
 use anyhow::Result;
+use jig_commands::tool_defs::tool;
 use jig_context::RepoContext;
 use jig_execution::ExecutionControl;
 use serde_json::{Value, json};
 
 use crate::command::SqlxCommand;
-use crate::tool_defs::tool;
 
 use super::tool_execution;
 

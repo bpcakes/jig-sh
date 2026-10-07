@@ -3,7 +3,7 @@ use jig_context::RepoContext;
 use jig_execution::ExecutionControl;
 use serde_json::{Value, json};
 
-use crate::tool_defs::{args, tool};
+use jig_commands::tool_defs::{args, tool};
 
 use super::tool_execution;
 

@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::time::Duration;
 
+use jig_commands::tool_defs::tool;
 use jig_context::RepoContext;
 use jig_execution::{ExecutionControl, NoopExecutionObserver};
 
@@ -11,7 +12,6 @@ use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     SqlxTodoInput,
 };
-use crate::tool_defs::tool;
 
 mod agent;
 mod file_budget;

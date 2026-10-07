@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use jig_commands::root_commands;
+use jig_commands::tool_defs;
 
+use crate::bootstrap;
 use crate::command::{self, RuntimeCommand};
-use crate::{bootstrap, root_commands, tool_defs};
 use runtime_dispatch::RuntimeDispatch;
 
 mod agent;

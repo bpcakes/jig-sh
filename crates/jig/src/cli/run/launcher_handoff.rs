@@ -3,10 +3,10 @@
 //! binary can serve that repository's contract and profile.
 
 use anyhow::{Context, Result, bail};
+use jig_commands::root_commands::{self, LauncherCommand, LauncherScope};
 use jig_context::RepoContext;
 
 use crate::cli::{Cli, CommandKind, RuntimeCompatibilityProfile, RuntimeCompatibleOpts};
-use crate::root_commands::{self, LauncherCommand, LauncherScope};
 
 pub(super) fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
     if matches!(&cli.command, CommandKind::Dev(opts) if opts.is_contextless()) {

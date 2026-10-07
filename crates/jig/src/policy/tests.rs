@@ -2,13 +2,13 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use jig_commands::tool_defs::{kind, tool};
 use jig_context::RepoContext;
 use serde_json::json;
 use tempfile::tempdir;
 
 use super::*;
 use crate::test_env::TestRepoBuilder;
-use crate::tool_defs::{kind, tool};
 
 mod migration_fixture;
 mod migration_layout;

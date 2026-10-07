@@ -47,9 +47,10 @@ mod dev_proxy {
     }
 }
 mod info;
+#[cfg(test)]
+mod launcher_command_lists;
 mod policy;
 mod progress;
-mod root_commands;
 mod runtime;
 mod runtime_artifacts;
 mod runtime_cache_lock;
@@ -60,7 +61,6 @@ mod status;
 use jig_context::test_support as test_env;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod test_process;
-mod tool_defs;
 mod ui;
 
 // Shared protocol between generated optional Cargo command defaults and
