@@ -5,7 +5,7 @@ use fs4::fs_std::FileExt;
 
 const MIGRATION_ADD_LOCK_PATH: &str = ".agent/.cache/migration-add.lock";
 
-pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
+pub fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
     let backend = ctx.migration_backend()?.ok_or_else(|| {
         if ctx.contract_version() >= 6 {
             anyhow::anyhow!(

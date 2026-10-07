@@ -208,7 +208,7 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
             ))?;
             progress.step("refresh agent map", "include scaffold crate guides");
             let agent_map_path = Path::new(managed_paths::AGENT_MAP_PATH);
-            let agent_map = progress.log_blocked_on_err(crate::policy::render_agent_map(
+            let agent_map = progress.log_blocked_on_err(jig_policy::render_agent_map(
                 &work_destination,
                 agent_map_path,
             ))?;

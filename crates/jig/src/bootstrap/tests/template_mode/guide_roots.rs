@@ -1,7 +1,7 @@
 use jig_context::RepoContext;
+use jig_policy::{PolicyCheckCommand, run_check};
 
 use super::*;
-use crate::policy::{PolicyCheckCommand, run_check};
 
 #[test]
 fn update_preserves_explicit_rust_guide_roots() {

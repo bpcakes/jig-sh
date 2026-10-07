@@ -1,5 +1,5 @@
 use super::*;
-use crate::policy::sqlx::check_non_test;
+use crate::sqlx::check_non_test;
 
 #[test]
 fn call_delimiters_allow_comments_and_newlines() {

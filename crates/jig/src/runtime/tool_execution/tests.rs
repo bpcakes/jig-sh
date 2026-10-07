@@ -452,9 +452,7 @@ legacy_aliases = ["jig.compat_check"]"#,
         "{error}"
     );
 
-    let contract_error = crate::policy::validate_contract(&ctx)
-        .unwrap_err()
-        .to_string();
+    let contract_error = jig_policy::validate_contract(&ctx).unwrap_err().to_string();
     assert!(
         contract_error.contains(
             "Contract-v6 tool jig.bootstrap is not mapped to a repository action through legacy_aliases"

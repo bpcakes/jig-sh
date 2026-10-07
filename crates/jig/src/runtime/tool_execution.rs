@@ -16,7 +16,7 @@ use jig_execution::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::policy::NativeToolOutput;
+use jig_policy::NativeToolOutput;
 
 pub(super) struct NativeActionContext<'a> {
     pub(super) repository: &'a RepoContext,

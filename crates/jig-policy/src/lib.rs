@@ -1,3 +1,6 @@
+//! Repository policy checks: the contract and agent-guide checks, the agent
+//! map, SQLx and schema policy, and migration helpers.
+
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -24,27 +27,27 @@ use git::{
 };
 use jig_commands::tool_defs::{self, kind};
 
-pub(crate) struct AgentMapInput {
-    pub(crate) map_path: PathBuf,
+pub struct AgentMapInput {
+    pub map_path: PathBuf,
 }
 
-pub(crate) struct MigrationImmutabilityInput {
-    pub(crate) changed_against: String,
+pub struct MigrationImmutabilityInput {
+    pub changed_against: String,
 }
 
-pub(crate) struct SqlxTodoInput {
-    pub(crate) output: Option<PathBuf>,
-}
-
-#[derive(Debug)]
-pub(crate) struct NativeToolOutput {
-    pub(crate) exit_status: i32,
-    pub(crate) stdout: String,
-    pub(crate) stderr: String,
+pub struct SqlxTodoInput {
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug)]
-pub(crate) struct ContractValidationError {
+pub struct NativeToolOutput {
+    pub exit_status: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug)]
+pub struct ContractValidationError {
     errors: Vec<String>,
 }
 
@@ -62,12 +65,12 @@ impl fmt::Display for ContractValidationError {
 
 impl Error for ContractValidationError {}
 
-pub(crate) enum PolicyDirectCommand {
+pub enum PolicyDirectCommand {
     AgentMapGenerate(AgentMapInput),
     GenerateSqlxUncheckedQueriesTodo(SqlxTodoInput),
 }
 
-pub(crate) fn run_direct(ctx: &RepoContext, command: PolicyDirectCommand) -> Result<Value> {
+pub fn run_direct(ctx: &RepoContext, command: PolicyDirectCommand) -> Result<Value> {
     match command {
         PolicyDirectCommand::AgentMapGenerate(opts) => agent_map::generate(ctx, &opts),
         PolicyDirectCommand::GenerateSqlxUncheckedQueriesTodo(opts) => {
@@ -76,14 +79,14 @@ pub(crate) fn run_direct(ctx: &RepoContext, command: PolicyDirectCommand) -> Res
     }
 }
 
-pub(crate) enum PolicyCheckCommand {
+pub enum PolicyCheckCommand {
     AgentMap(AgentMapInput),
     AgentGuides,
     MigrationImmutability(MigrationImmutabilityInput),
     SqlxUncheckedNonTest,
 }
 
-pub(crate) fn run_check(ctx: &RepoContext, command: PolicyCheckCommand) -> Result<Value> {
+pub fn run_check(ctx: &RepoContext, command: PolicyCheckCommand) -> Result<Value> {
     match command {
         PolicyCheckCommand::AgentMap(opts) => agent_map::check(ctx, &opts),
         PolicyCheckCommand::AgentGuides => agent_map::check_guides(ctx),
@@ -92,7 +95,7 @@ pub(crate) fn run_check(ctx: &RepoContext, command: PolicyCheckCommand) -> Resul
     }
 }
 
-pub(crate) fn contract_check(ctx: &RepoContext) -> NativeToolOutput {
+pub fn contract_check(ctx: &RepoContext) -> NativeToolOutput {
     if let Err(error) = validate_contract(ctx) {
         let mut stderr = String::new();
         for error in error.errors {
@@ -120,9 +123,7 @@ pub(crate) fn contract_check(ctx: &RepoContext) -> NativeToolOutput {
     }
 }
 
-pub(crate) fn validate_contract(
-    ctx: &RepoContext,
-) -> std::result::Result<(), ContractValidationError> {
+pub fn validate_contract(ctx: &RepoContext) -> std::result::Result<(), ContractValidationError> {
     let mut errors = Vec::new();
     validate_contract_basics(ctx, &mut errors);
     validate_required_commands(ctx, &mut errors);
@@ -448,10 +449,10 @@ fn validate_work_tools(
 }
 
 mod migration_add;
-pub(crate) use migration_add::migration_add;
+pub use migration_add::migration_add;
 
 #[cfg(test)]
-pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
+pub fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
     schema_check_with_observer_and_timeout(
         ctx,
         None,
@@ -461,7 +462,7 @@ pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
     .map_err(ExecutionCommandError::into_anyhow)
 }
 
-pub(crate) fn schema_check_with_observer_and_timeout(
+pub fn schema_check_with_observer_and_timeout(
     ctx: &RepoContext,
     schema_check_target: Option<&jig_contract::TargetId>,
     timeout: Duration,
@@ -474,7 +475,7 @@ pub(crate) fn schema_check_with_observer_and_timeout(
         .map_err(|error| schema_execution_error(error, timeout.as_secs()))
 }
 
-pub(crate) fn schema_check_with_control(
+pub fn schema_check_with_control(
     ctx: &RepoContext,
     schema_check_target: Option<&jig_contract::TargetId>,
     timeout: Duration,
@@ -592,11 +593,11 @@ fn controlled_bytes_text(bytes: Vec<u8>, truncated: bool) -> String {
     text
 }
 
-pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
+pub fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
     agent_map::write(root, map_path)
 }
 
-pub(crate) fn render_agent_map(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
+pub fn render_agent_map(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
     agent_map::render(root, map_path)
 }
 
@@ -690,3 +691,11 @@ mod schema;
 mod sqlx;
 #[cfg(test)]
 mod tests;
+
+pub mod agent_guides;
+pub mod rust_syntax;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
+#[cfg(test)]
+use jig_context::test_support as test_env;

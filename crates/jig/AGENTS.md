@@ -52,6 +52,7 @@
 - Change Vault TUI navigation, forms, or rendering: `crates/jig-vault-tui/`; keep scope, environment capture, external tools, and core calls in `src/runtime/vault/tui.rs`.
 - Change bounded owned-process execution or process-tree cleanup: [jig-owned-process](../jig-owned-process/AGENTS.md).
 - Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`; the legacy file-budget checker retirement evaluates `repo:file-budget` inline in `src/bootstrap/file_budget_lifecycle.rs`.
+- Change policy checks (contract, agent guides, agent map, SQLx, schema): [jig-policy](../jig-policy/AGENTS.md).
 - Change the repository action catalog, run planning, affected selection, or repository source identity: [jig-repository](../jig-repository/AGENTS.md).
 - Change `.jig.toml` or manifest loading and validation, contract-version support, or the shared test fixtures in `crate::test_env`: [jig-context](../jig-context/AGENTS.md).
 - Change Git program selection (`JIG_GIT_BIN`), known-repository `GIT_*` scrubbing, or Git metadata-file reads: [jig-git](../jig-git/AGENTS.md).

@@ -26,6 +26,7 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-execution"
   "jig-state"
   "jig-repository"
+  "jig-policy"
   "jig-tui"
   "jig-vault-tui"
   "jig-codex-tui"
@@ -121,6 +122,7 @@ crate_dir_for_package() {
     jig-execution) printf '%s\n' "crates/jig-execution" ;;
     jig-state) printf '%s\n' "crates/jig-state" ;;
     jig-repository) printf '%s\n' "crates/jig-repository" ;;
+    jig-policy) printf '%s\n' "crates/jig-policy" ;;
     jig-tui) printf '%s\n' "crates/jig-tui" ;;
     jig-vault-tui) printf '%s\n' "crates/jig-vault-tui" ;;
     jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;

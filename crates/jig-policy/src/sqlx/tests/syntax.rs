@@ -1,5 +1,5 @@
 use super::*;
-use crate::policy::sqlx::check_non_test;
+use crate::sqlx::check_non_test;
 
 #[test]
 fn ast_recognizes_split_paths_parentheses_and_nested_calls() {

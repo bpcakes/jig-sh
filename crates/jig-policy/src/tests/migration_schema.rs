@@ -186,48 +186,6 @@ fn v6_schema_check_uses_the_dump_runner_schema_output_directory() {
 }
 
 #[test]
-fn v6_repository_schema_failure_preserves_the_generator_exit_and_output() {
-    let temp = tempdir().unwrap();
-    write_v6_schema_policy_repo(
-        temp.path(),
-        "true",
-        "printf 'generator stdout'; printf 'generator stderr' >&2; exit 7",
-    );
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = crate::runtime::dispatch(
-        &ctx,
-        crate::command::RuntimeCommand::Check(crate::command::CheckCommand::Repository(
-            crate::command::RepositoryCheckRequest {
-                selectors: vec!["api:schema".into()],
-                profile: None,
-                affected_base: None,
-                comparison: None,
-                explain: false,
-                fail_fast: false,
-            },
-        )),
-    )
-    .unwrap();
-
-    assert_eq!(output["run"]["conclusion"], "failure");
-    assert_eq!(output["run"]["targets"][0]["conclusion"], "failure");
-    assert_eq!(output["run"]["targets"][0]["exit_code"], 7);
-    assert_eq!(output["results"][0]["response"]["result"]["exit_status"], 7);
-    assert_eq!(
-        output["results"][0]["response"]["result"]["stdout"],
-        "generator stdout"
-    );
-    assert_eq!(
-        output["results"][0]["response"]["result"]["stderr"],
-        "generator stderr"
-    );
-}
-
-#[test]
 fn schema_check_snapshots_dirty_worktrees_without_repository_git_identity() {
     let temp = tempdir().unwrap();
     write_schema_policy_repo(temp.path(), "cat schema-input > docs/schema/tables.sql");

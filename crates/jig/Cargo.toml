@@ -42,7 +42,6 @@ dev-proxy = ["dep:jig-dev-proxy", "jig-context/dev-proxy"]
 
 [dependencies]
 anyhow.workspace = true
-cap-fs-ext.workspace = true
 cap-std.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
@@ -66,6 +65,7 @@ jig-file-budget.workspace = true
 jig-git.workspace = true
 jig-loops.workspace = true
 jig-owned-process.workspace = true
+jig-policy.workspace = true
 jig-repository.workspace = true
 jig-rust.workspace = true
 jig-state.workspace = true
@@ -75,10 +75,7 @@ jig-ui.workspace = true
 jig-vault.workspace = true
 jig-vault-tui.workspace = true
 libc.workspace = true
-# The SQLx AST inventory retains source line numbers outside procedural macros.
-proc-macro2 = { workspace = true, features = ["span-locations"] }
 minijinja = { version = "2.19.0", features = ["custom_syntax", "json"] }
-pulldown-cmark = { version = "0.13.4", default-features = false }
 rpassword.workspace = true
 reqwest.workspace = true
 secrecy.workspace = true
@@ -95,7 +92,6 @@ tokio.workspace = true
 ulid.workspace = true
 wait-timeout.workspace = true
 zeroize.workspace = true
-toml_edit = "0.23.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework.workspace = true
@@ -105,6 +101,7 @@ unicode-normalization.workspace = true
 jig-commands = { workspace = true, features = ["test-support"] }
 jig-context = { workspace = true, features = ["test-support"] }
 jig-loops = { workspace = true, features = ["test-support"] }
+jig-policy = { workspace = true, features = ["test-support"] }
 jig-repository = { workspace = true, features = ["test-support"] }
 jig-state = { workspace = true, features = ["test-support"] }
 jig-vault = { workspace = true, features = ["test-utils"] }

@@ -11,7 +11,9 @@ pub(super) fn has_migrate_macro(text: &str) -> Result<bool> {
     if !text.contains("migrate") {
         return Ok(false);
     }
-    crate::rust_syntax::with_bounded_syntax(text, "Rust adoption", || parse_migrate_macro(text))
+    jig_policy::rust_syntax::with_bounded_syntax(text, "Rust adoption", || {
+        parse_migrate_macro(text)
+    })
 }
 
 fn parse_migrate_macro(text: &str) -> Result<bool> {

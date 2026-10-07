@@ -8,9 +8,9 @@ use cap_std::fs::Dir;
 use super::GuideFiles;
 
 #[derive(Default)]
-pub(crate) struct GuideDiscovery {
-    pub(crate) guides: BTreeSet<String>,
-    pub(crate) errors: Vec<(String, io::Error)>,
+pub struct GuideDiscovery {
+    pub guides: BTreeSet<String>,
+    pub errors: Vec<(String, io::Error)>,
 }
 
 impl GuideDiscovery {
@@ -73,7 +73,7 @@ impl GuideDiscovery {
 impl GuideFiles {
     /// Existing guides are independent of Git ignore rules. Directory handles
     /// keep discovery beneath the same pinned root used for guide reads.
-    pub(crate) fn discover(&self) -> GuideDiscovery {
+    pub fn discover(&self) -> GuideDiscovery {
         let mut discovery = GuideDiscovery::default();
         discovery.collect(&self.root, Path::new(""));
         discovery

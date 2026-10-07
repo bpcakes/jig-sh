@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::*;
-use crate::policy::sqlx::check_non_test;
+use crate::sqlx::check_non_test;
 
 pub(super) const CALL: &str = "fn example() { let _ = sqlx::query(\"SELECT 1\"); }\n";
 pub(super) const MANIFEST: &str = "[package]\nname = \"example-project\"\nversion = \"0.1.0\"\n";

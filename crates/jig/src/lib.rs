@@ -1,4 +1,3 @@
-mod agent_guides;
 mod agent_launch;
 mod bootstrap;
 #[cfg(test)]
@@ -49,12 +48,10 @@ mod dev_proxy {
 mod info;
 #[cfg(test)]
 mod launcher_command_lists;
-mod policy;
 mod progress;
 mod runtime;
 mod runtime_artifacts;
 mod runtime_cache_lock;
-mod rust_syntax;
 mod signal_supervision;
 mod status;
 #[cfg(test)]

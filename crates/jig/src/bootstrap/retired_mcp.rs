@@ -35,7 +35,7 @@ pub(super) fn stage_retirement(
         retirement_paths.remove(relative);
         return Ok(());
     }
-    let contents = jig_repository::path::read_repository_regular_file_bytes(seed, relative)?;
+    let contents = super::path::read_repository_regular_file_bytes(seed, relative)?;
     let mut value = match jig_context::strict_json::from_slice(&contents) {
         Ok(value) => value,
         Err(_) => {

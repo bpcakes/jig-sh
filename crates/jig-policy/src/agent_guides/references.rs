@@ -8,20 +8,20 @@ use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag};
 
 use jig_context::repository_path::normalize_portable_repo_path;
 
-pub(crate) const MAX_GUIDE_BYTES: u64 = 1024 * 1024;
+pub const MAX_GUIDE_BYTES: u64 = 1024 * 1024;
 
 mod discovery;
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Reference {
-    pub(crate) line: usize,
-    pub(crate) target: String,
-    pub(crate) problem: Option<&'static str>,
+pub struct Reference {
+    pub line: usize,
+    pub target: String,
+    pub problem: Option<&'static str>,
 }
 
 /// CommonMark events exclude code spans, fenced/indented code and HTML examples.
 /// Source offsets refer to the link use, including for reference-style links.
-pub(crate) fn markdown_references(text: &str) -> Vec<Reference> {
+pub fn markdown_references(text: &str) -> Vec<Reference> {
     let newlines = text
         .bytes()
         .enumerate()
@@ -79,13 +79,13 @@ pub(crate) fn markdown_references(text: &str) -> Vec<Reference> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Destination {
+pub enum Destination {
     Fragment,
     External,
     Local(String),
 }
 
-pub(crate) fn resolve_reference(guide: &Path, target: &str) -> Result<Destination> {
+pub fn resolve_reference(guide: &Path, target: &str) -> Result<Destination> {
     if target.chars().any(char::is_control) {
         bail!("reference contains control characters");
     }
@@ -139,7 +139,7 @@ pub(crate) fn resolve_reference(guide: &Path, target: &str) -> Result<Destinatio
     )?))
 }
 
-pub(crate) fn has_uri_scheme(target: &str) -> bool {
+pub fn has_uri_scheme(target: &str) -> bool {
     let Some((scheme, _)) = target.split_once(':') else {
         return false;
     };
@@ -170,12 +170,12 @@ fn percent_decode(value: &str) -> Result<String> {
 
 /// All filesystem access stays beneath this pinned root. Each ancestor is opened
 /// separately without following symlinks, so replacement cannot redirect a read.
-pub(crate) struct GuideFiles {
+pub struct GuideFiles {
     root: Dir,
 }
 
 impl GuideFiles {
-    pub(crate) fn new(root: &Path) -> Result<Self> {
+    pub fn new(root: &Path) -> Result<Self> {
         Ok(Self {
             root: Dir::open_ambient_dir(root, cap_std::ambient_authority())?,
         })
@@ -196,7 +196,7 @@ impl GuideFiles {
         Ok((directory, PathBuf::from(name)))
     }
 
-    pub(crate) fn check_target(&self, relative: &str, require_file: bool) -> Result<()> {
+    pub fn check_target(&self, relative: &str, require_file: bool) -> Result<()> {
         let (directory, name) = self.parent(relative)?;
         let metadata = directory.symlink_metadata(&name)?;
         if metadata.file_type().is_symlink() {
@@ -215,7 +215,7 @@ impl GuideFiles {
         Ok(())
     }
 
-    pub(crate) fn read(&self, relative: &str) -> Result<String> {
+    pub fn read(&self, relative: &str) -> Result<String> {
         let (directory, name) = self.parent(relative)?;
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
@@ -241,7 +241,7 @@ impl GuideFiles {
     }
 }
 
-pub(crate) fn is_missing(error: &anyhow::Error) -> bool {
+pub fn is_missing(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<io::Error>()
         .is_some_and(|e| e.kind() == io::ErrorKind::NotFound)

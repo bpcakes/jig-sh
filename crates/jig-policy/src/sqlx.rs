@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::policy::SqlxTodoInput;
+use crate::SqlxTodoInput;
 
 mod cargo_targets;
 mod module_graph;

@@ -8,7 +8,7 @@ use proc_macro2::{TokenStream, TokenTree};
 const MAX_TOKEN_PATH_COST: usize = 2_048;
 const PARSER_STACK_BYTES: usize = 64 * 1024 * 1024;
 
-pub(crate) fn with_bounded_syntax<T: Send>(
+pub fn with_bounded_syntax<T: Send>(
     text: &str,
     purpose: &str,
     parse: impl FnOnce() -> Result<T> + Send,

@@ -8,7 +8,7 @@ use anyhow::Result;
 use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::policy::agent_map::relative_string;
+use crate::agent_map::relative_string;
 
 pub(super) fn check(ctx: &RepoContext) -> Result<Value> {
     // Backend guides intentionally use this exact repo-wide heading contract so

@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use jig_context::RepoContext;
 use serde_json::{Value, json};
 
+use crate::AgentMapInput;
 use crate::agent_guides::is_ignored_guide_component;
-use crate::policy::AgentMapInput;
 use jig_repository::path::{validate_repository_regular_file_leaf, write_repository_file_atomic};
 
 pub(super) fn generate(ctx: &RepoContext, opts: &AgentMapInput) -> Result<Value> {
@@ -28,12 +28,12 @@ pub(super) fn check(ctx: &RepoContext, opts: &AgentMapInput) -> Result<Value> {
     }))
 }
 
-pub(crate) fn write(root: &Path, map_path: &Path) -> Result<()> {
+pub fn write(root: &Path, map_path: &Path) -> Result<()> {
     let body = render(root, map_path)?;
     write_rendered(root, map_path, &body)
 }
 
-pub(crate) fn render(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
+pub fn render(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
     // Normalize here as the boundary guard for both CLI generation and
     // renderer post-processing callers.
     let map_path = normalize_map_path(map_path)?;
@@ -97,7 +97,7 @@ fn encode_link_path(path: &str) -> String {
     encoded
 }
 
-pub(crate) fn write_rendered(root: &Path, map_path: &Path, body: &[u8]) -> Result<()> {
+pub fn write_rendered(root: &Path, map_path: &Path, body: &[u8]) -> Result<()> {
     let map_path = normalize_map_path(map_path)?;
     let expected_leaf = validate_repository_regular_file_leaf(root, &map_path)?;
     write_repository_file_atomic(root, &map_path, body, expected_leaf).map(|_| ())

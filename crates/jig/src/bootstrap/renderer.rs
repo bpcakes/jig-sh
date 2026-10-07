@@ -191,7 +191,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
             )
         })?;
     validate_staged_runtime_contract(&destination, staged_context.contract_version())?;
-    crate::policy::validate_contract(&staged_context).with_context(|| {
+    jig_policy::validate_contract(&staged_context).with_context(|| {
         format!(
             "Staged render produced an invalid Jig config or contract in {}",
             destination.display()

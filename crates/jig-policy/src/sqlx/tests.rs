@@ -6,7 +6,7 @@ use jig_context::RepoContext;
 use tempfile::tempdir;
 
 use super::{generate_todo, scan_sqlx_calls, sqlx_report};
-use crate::policy::SqlxTodoInput;
+use crate::SqlxTodoInput;
 use crate::test_env::TestRepoBuilder;
 
 mod boundaries;

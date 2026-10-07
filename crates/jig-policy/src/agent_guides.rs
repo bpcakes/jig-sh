@@ -1,8 +1,8 @@
-pub(crate) mod references;
+pub mod references;
 
 use std::path::Component;
 
-pub(crate) fn is_ignored_guide_component(component: Component<'_>) -> bool {
+pub fn is_ignored_guide_component(component: Component<'_>) -> bool {
     // Agent guide scans ignore repository metadata and Rust build outputs at
     // any depth, including nested submodule metadata and packaged fixture trees
     // under target/package.
