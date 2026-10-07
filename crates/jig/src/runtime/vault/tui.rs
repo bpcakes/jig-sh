@@ -618,7 +618,7 @@ fn presented_home_state(status: &jig_vault::VaultStatus) -> VaultHomeState {
 
 fn map_vault_error(error: VaultError) -> VaultUiError {
     let kind = map_vault_error_kind(error.kind());
-    VaultUiError::new(kind, error.message())
+    VaultUiError::new(kind, super::recovery::message(&error))
 }
 
 fn map_vault_error_kind(kind: VaultErrorKind) -> VaultUiErrorKind {
@@ -637,6 +637,12 @@ fn map_vault_error_kind(kind: VaultErrorKind) -> VaultUiErrorKind {
 }
 
 fn map_anyhow_error(error: anyhow::Error) -> VaultUiError {
+    if let Some(error) = error.downcast_ref::<VaultError>() {
+        return VaultUiError::new(
+            map_vault_error_kind(error.kind()),
+            super::recovery::message(error),
+        );
+    }
     VaultUiError::new(VaultUiErrorKind::Other, error.to_string())
 }
 

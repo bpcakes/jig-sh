@@ -10,15 +10,15 @@ use anyhow::{Context, Result as AnyResult, bail};
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
-use crate::VaultErrorKind;
 use crate::audit::AuditAction;
 use crate::crypto::KEY_LEN;
-use crate::error::{classified, classify_source};
+use crate::error::{classified, classified_recovery, classify_source};
 use crate::format::{AuditRoot, V1_FORMAT_VERSION, V3_FORMAT_VERSION, V3StateFields};
 use crate::store::VaultStore;
 use crate::store::witness::{
     Checkpoint, Journal, JournalPayload, TransactionKind, WitnessRecord, WitnessStore, sha256_hex,
 };
+use crate::{VaultErrorKind, VaultRecovery};
 
 use super::OpenVault;
 use super::commit::prepare_v3_mutation_event;
@@ -92,8 +92,9 @@ impl VaultStore {
             let _id = witness.lock_id(source.vault_id)?;
             let record = witness.read_record(source.vault_id)?;
             if record.as_ref().is_some_and(|record| record.pending.is_some()) {
-                return Err(classified(
+                return Err(classified_recovery(
                     VaultErrorKind::AlreadyExists,
+                    VaultRecovery::StorageConflict,
                     "an unrelated vault transaction is pending for this vault; finish it before restoring",
                 ));
             }

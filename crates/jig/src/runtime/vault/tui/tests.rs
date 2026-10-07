@@ -8,6 +8,7 @@ use crate::command::{VaultRuntimeOptions, VaultTuiRequest};
 mod core;
 mod formats;
 mod lifecycle;
+mod rekey_policy;
 
 fn request(home: std::path::PathBuf) -> VaultTuiRequest {
     VaultTuiRequest {

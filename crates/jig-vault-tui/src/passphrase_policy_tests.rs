@@ -79,7 +79,7 @@ fn initialization_reports_the_policy_without_consuming_or_showing_input() {
 }
 
 #[test]
-fn passphrase_change_reports_the_policy_before_any_backend_action() {
+fn passphrase_change_defers_policy_to_the_recovery_capable_backend() {
     let mut weak = unlocked_app();
     assert!(matches!(
         weak.activate_direct_command(UiCommand::ChangePassphrase),
@@ -87,13 +87,10 @@ fn passphrase_change_reports_the_policy_before_any_backend_action() {
     ));
     assert!(matches!(
         enter_pair(&mut weak, GUESSABLE),
-        RuntimeAction::Redraw
+        RuntimeAction::Start(BackendRequest::Execute(
+            VaultAction::ChangePassphrase { .. }
+        ))
     ));
-    assert!(matches!(weak.screen, Screen::ToolForm(_)));
-    assert_eq!(
-        weak.status.as_ref().unwrap().text,
-        NEW_VAULT_PASSPHRASE_POLICY
-    );
     assert!(!rendered(&weak).contains(GUESSABLE));
 
     let mut strong = unlocked_app();

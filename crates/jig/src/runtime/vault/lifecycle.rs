@@ -8,8 +8,7 @@ use std::sync::{Mutex, MutexGuard};
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
     BrokeredRun, SecretBytes, VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV,
-    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, VaultError, VaultErrorKind,
-    validate_new_vault_passphrase,
+    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, VaultError, validate_new_vault_passphrase,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
@@ -57,10 +56,10 @@ pub(crate) fn preflight_scoped_command(command: &mut VaultCommand) -> Result<()>
             }
             let resolved = resolve_vault_runtime(&request.vault)?;
             let target_home = concrete_vault_home(&resolved)?;
-            request.prepared = Some(Vault::preflight_backup_restore(
-                &request.input,
-                target_home,
-            )?);
+            request.prepared = Some(
+                Vault::preflight_backup_restore(&request.input, target_home)
+                    .map_err(super::recovery::vault_operator_guidance)?,
+            );
             Ok(())
         }
         VaultCommand::Passphrase(VaultPassphraseCommand::Change(request)) => {
@@ -152,7 +151,7 @@ pub(super) fn restore_backup(mut request: VaultBackupRestoreRequest) -> Result<V
     // Restore is intentionally a static operation. Calling `vault(&resolved)`
     // or `Vault::resolve` here would create the target before the core can
     // enforce its absent-home no-replace contract.
-    let result = Vault::restore_backup(&passphrase, prepared).map_err(restore_conflict_guidance)?;
+    let result = Vault::restore_backup(&passphrase, prepared)?;
     let mut output = json!({
         "ok": true,
         "command": "vault backup restore",
@@ -168,20 +167,6 @@ pub(super) fn restore_backup(mut request: VaultBackupRestoreRequest) -> Result<V
     });
     add_vault_scope_fields(&mut output, &resolved);
     Ok(output)
-}
-
-/// A restore conflict (an occupied target, a different pending archive, or
-/// an unrelated pending transaction) needs operator-owned directory changes.
-/// The guidance never suggests deleting the rollback witness or its journals.
-fn restore_conflict_guidance(error: VaultError) -> anyhow::Error {
-    if error.kind() != VaultErrorKind::AlreadyExists {
-        return error.into();
-    }
-    anyhow!(
-        "{} {} Resolve the conflict without deleting the vault rollback witness, then rerun the same restore or any authenticated vault command for this home.",
-        error.message(),
-        super::scope::VAULT_STORAGE_OPERATOR_STEP
-    )
 }
 
 fn concrete_vault_home(resolved: &ResolvedVaultRuntime) -> Result<PathBuf> {
@@ -256,7 +241,8 @@ pub(crate) fn capture_passphrase_change() -> Result<()> {
         clear_captured_passphrase()?;
         let current = prompt_passphrase(PromptKind::Unlock)?;
         let new = prompt_passphrase(PromptKind::NewVault)?;
-        validate_chosen_passphrase(&new)?;
+        // Only the core can distinguish a new credential from completion of
+        // an already recorded rekey whose strength estimate has changed.
         return set_captured_passphrase_pair(current, new);
     }
     Err(passphrase_change_prompt_unavailable())
@@ -351,10 +337,10 @@ pub(crate) fn capture_passphrase_pair_from_env() -> Result<()> {
     let new_value = std::env::var_os(NEW_PASSPHRASE_ENV).ok_or_else(incomplete_passphrase_pair)?;
     let current = passphrase_from_os(current_value, PASSPHRASE_ENV)?;
     let new = passphrase_from_os(new_value, NEW_PASSPHRASE_ENV)?;
-    // Match new-vault capture: once both values are valid UTF-8, consume the
-    // process copies before policy validation. The parent shell is unaffected.
+    // Once both values are valid UTF-8, consume the process copies. The core
+    // applies policy after distinguishing a recorded rekey retry. The parent
+    // shell is unaffected.
     strip_passphrase_environment();
-    validate_chosen_passphrase(&new)?;
     set_captured_passphrase_pair(current, new)
 }
 
@@ -719,19 +705,18 @@ mod tests {
     }
 
     #[test]
-    fn rejected_new_change_passphrase_clears_both_environment_values_and_capture() {
+    fn change_capture_defers_policy_to_authenticated_core_recovery() {
         let _env = lock_env();
         clear_captured_passphrase().unwrap();
         let _current = EnvVarGuard::set(PASSPHRASE_ENV, "correct horse battery staple");
         let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "short");
 
-        let error = capture_passphrase_pair_from_env().unwrap_err().to_string();
-
-        assert!(error.contains(jig_vault::NEW_VAULT_PASSPHRASE_POLICY));
-        assert_operator_guidance(&error);
-        assert!(!error.contains("short"));
+        capture_passphrase_pair_from_env().unwrap();
         assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
         assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
+        let (current, new) = passphrase_pair().unwrap();
+        assert_eq!(current.expose_secret(), "correct horse battery staple");
+        assert_eq!(new.expose_secret(), "short");
         assert!(passphrase_pair().is_err());
     }
 

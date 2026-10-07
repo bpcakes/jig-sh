@@ -24,6 +24,7 @@ const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
 const VAULT_FILE_NAME: &str = "vault.json";
 
 mod lifecycle;
+mod recovery;
 mod scope;
 pub(super) mod tui;
 
@@ -88,6 +89,7 @@ fn dispatch_with_resolver(command: VaultCommand, resolver: VaultResolver) -> Res
         },
         VaultCommand::Run(request) => run(request, resolver),
     }
+    .map_err(recovery::operator_guidance)
 }
 
 pub(crate) fn dispatch_raw(command: VaultCommand) -> Result<VaultRawOutcome> {
@@ -97,6 +99,7 @@ pub(crate) fn dispatch_raw(command: VaultCommand) -> Result<VaultRawOutcome> {
         VaultCommand::Read(request) => read_field(request).map(|()| VaultRawOutcome::Complete),
         _ => bail!("internal error: structured vault command reached the raw dispatcher"),
     }
+    .map_err(recovery::operator_guidance)
 }
 
 pub(crate) fn prepare_raw_input(command: &mut VaultCommand) -> Result<()> {

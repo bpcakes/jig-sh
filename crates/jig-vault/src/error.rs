@@ -16,9 +16,18 @@ pub enum VaultErrorKind {
     Internal,
 }
 
+/// Operator-owned action required to recover a vault operation.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultRecovery {
+    StorageConflict,
+    Credential,
+}
+
 #[derive(Debug)]
 pub struct VaultError {
     kind: VaultErrorKind,
+    recovery: Option<VaultRecovery>,
     message: String,
     source: Option<anyhow::Error>,
 }
@@ -27,6 +36,7 @@ impl VaultError {
     pub fn new(kind: VaultErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
+            recovery: None,
             message: message.into(),
             source: None,
         }
@@ -36,18 +46,26 @@ impl VaultError {
         self.kind
     }
 
+    pub const fn recovery(&self) -> Option<VaultRecovery> {
+        self.recovery
+    }
+
     pub fn message(&self) -> &str {
         &self.message
     }
 
     pub(crate) fn from_anyhow(kind: VaultErrorKind, error: anyhow::Error) -> Self {
         let message = error.to_string();
+        let recovery = error
+            .downcast_ref::<ClassifiedVaultError>()
+            .and_then(|error| error.recovery);
         let has_distinct_source = error
             .downcast_ref::<ClassifiedVaultError>()
             .is_none_or(|error| error.source.is_some());
         let source = has_distinct_source.then_some(error);
         Self {
             kind,
+            recovery,
             message,
             source,
         }
@@ -56,11 +74,13 @@ impl VaultError {
     pub(crate) fn into_classified_anyhow(self) -> anyhow::Error {
         let Self {
             kind,
+            recovery,
             message,
             source,
         } = self;
         ClassifiedVaultError {
             kind,
+            recovery,
             message,
             source,
         }
@@ -85,6 +105,7 @@ impl std::error::Error for VaultError {
 #[derive(Debug)]
 pub(crate) struct ClassifiedVaultError {
     kind: VaultErrorKind,
+    recovery: Option<VaultRecovery>,
     message: String,
     source: Option<anyhow::Error>,
 }
@@ -93,6 +114,7 @@ impl ClassifiedVaultError {
     fn new(kind: VaultErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
+            recovery: None,
             message: message.into(),
             source: None,
         }
@@ -105,6 +127,9 @@ impl ClassifiedVaultError {
     ) -> Self {
         Self {
             kind,
+            recovery: source
+                .downcast_ref::<Self>()
+                .and_then(|error| error.recovery),
             message: message.into(),
             source: Some(source),
         }
@@ -131,6 +156,28 @@ impl std::error::Error for ClassifiedVaultError {
 
 pub(crate) fn classified(kind: VaultErrorKind, message: impl Into<String>) -> anyhow::Error {
     ClassifiedVaultError::new(kind, message).into()
+}
+
+pub(crate) fn classified_recovery(
+    kind: VaultErrorKind,
+    recovery: VaultRecovery,
+    message: impl Into<String>,
+) -> anyhow::Error {
+    let mut error = ClassifiedVaultError::new(kind, message);
+    error.recovery = Some(recovery);
+    error.into()
+}
+
+pub(crate) fn classify_recovery_source(
+    kind: VaultErrorKind,
+    recovery: VaultRecovery,
+    message: impl Into<String>,
+    source: anyhow::Error,
+) -> anyhow::Error {
+    let mut error = ClassifiedVaultError::with_source(kind, message, source);
+    // A specific storage conflict takes precedence over generic retry guidance.
+    error.recovery = error.recovery.or(Some(recovery));
+    error.into()
 }
 
 pub(crate) fn classify_source(
@@ -183,5 +230,31 @@ mod tests {
         assert_eq!(source.to_string(), "failed to parse vault file");
         let cause = source.source().expect("classified cause should be kept");
         assert_eq!(cause.to_string(), "expected value");
+    }
+
+    #[test]
+    fn recovery_metadata_survives_context_wrapping_and_public_error_roundtrip() {
+        use super::{
+            VaultRecovery, classified_recovery, classify_recovery_source, vault_error_from_anyhow,
+        };
+
+        let conflict = classified_recovery(
+            VaultErrorKind::AlreadyExists,
+            VaultRecovery::StorageConflict,
+            "restore target occupied",
+        );
+        let pending = classify_recovery_source(
+            VaultErrorKind::Io,
+            VaultRecovery::Credential,
+            "restore did not finish",
+            conflict.context("installation failed"),
+        );
+        let error = vault_error_from_anyhow(VaultErrorKind::Internal, pending);
+        assert_eq!(error.kind(), VaultErrorKind::Io);
+        assert_eq!(error.recovery(), Some(VaultRecovery::StorageConflict));
+        let error =
+            vault_error_from_anyhow(VaultErrorKind::Internal, error.into_classified_anyhow());
+        assert_eq!(error.kind(), VaultErrorKind::Io);
+        assert_eq!(error.recovery(), Some(VaultRecovery::StorageConflict));
     }
 }

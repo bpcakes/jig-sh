@@ -15,6 +15,9 @@ use secrecy::SecretString;
 
 const PASSPHRASE: &str = "test-only-recovery-passphrase";
 
+#[path = "vault_recovery_parts/rekey_policy.rs"]
+mod rekey_policy;
+
 fn passphrase() -> SecretString {
     SecretString::from(PASSPHRASE.to_owned())
 }

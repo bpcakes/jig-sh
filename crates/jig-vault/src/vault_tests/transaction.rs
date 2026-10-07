@@ -10,6 +10,8 @@ mod capacity;
 mod locking;
 #[path = "transaction/publication.rs"]
 mod publication;
+#[path = "transaction/rekey_policy.rs"]
+mod rekey_policy;
 
 fn field(reference: &str) -> VaultReference {
     VaultReference::parse(reference).unwrap()

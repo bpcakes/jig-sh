@@ -13,16 +13,16 @@ use anyhow::{Result as AnyResult, bail};
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
-use crate::VaultErrorKind;
 use crate::audit::{PreparedAuditAppend, verify_exact_prefix};
 use crate::crypto::KEY_LEN;
-use crate::error::{classified, classify_source};
+use crate::error::{classified, classified_recovery, classify_recovery_source, classify_source};
 use crate::store::witness::{
     AuditTransition, Checkpoint, InPlacePayload, JOURNAL_SCHEMA, Journal, JournalPayload,
     JournalTarget, PendingMarker, TargetJournal, TransactionKind, WitnessRecord, WitnessStore,
     directory_identity, sha256_hex,
 };
 use crate::store::{FaultPoint, VaultStore};
+use crate::{VaultErrorKind, VaultRecovery};
 
 use super::envelope::ParsedVaultEnvelope;
 
@@ -63,8 +63,9 @@ impl VaultStore {
             .as_ref()
             .is_some_and(|record| record.pending.is_some())
         {
-            return Err(classified(
+            return Err(classified_recovery(
                 VaultErrorKind::AlreadyExists,
+                VaultRecovery::StorageConflict,
                 "another vault transaction is pending for this vault; finish it before starting a new one",
             ));
         }
@@ -230,6 +231,25 @@ impl VaultStore {
         &self,
         credentials: &[&SecretString],
     ) -> AnyResult<Option<Recovered>> {
+        self.recover_pending_kind_unlocked(credentials, None)
+    }
+
+    /// A credential rejected by today's new-passphrase policy may only
+    /// finish the already recorded rekey that it authenticates. In particular,
+    /// it cannot finish an unrelated mutation or authorize orphan cleanup.
+    pub(super) fn recover_pending_passphrase_change_unlocked(
+        &self,
+        new: &SecretString,
+    ) -> AnyResult<bool> {
+        self.recover_pending_kind_unlocked(&[new], Some(TransactionKind::PassphraseChange))
+            .map(|recovered| recovered.is_some())
+    }
+
+    fn recover_pending_kind_unlocked(
+        &self,
+        credentials: &[&SecretString],
+        required_kind: Option<TransactionKind>,
+    ) -> AnyResult<Option<Recovered>> {
         let Some(witness) = self.witness().open_existing()? else {
             return Ok(None);
         };
@@ -247,8 +267,9 @@ impl VaultStore {
         if let Some(pending) = &header_pending
             && pending.target_key != target_key
         {
-            return Err(classified(
+            return Err(classified_recovery(
                 VaultErrorKind::AlreadyExists,
+                VaultRecovery::StorageConflict,
                 format!(
                     "a vault {} for this vault is pending at another vault home; finish it there before using this copy",
                     pending.operation.label()
@@ -261,7 +282,9 @@ impl VaultStore {
         {
             TargetJournal::Absent => return Ok(None),
             TargetJournal::Orphan(orphan) => {
-                witness.delete_orphan_journal(orphan)?;
+                if required_kind.is_none() {
+                    witness.delete_orphan_journal(orphan)?;
+                }
                 return Ok(None);
             }
             TargetJournal::Referenced {
@@ -270,6 +293,9 @@ impl VaultStore {
                 journal,
             } => (vault_id, *record, journal),
         };
+        if required_kind.is_some_and(|kind| kind != journal.operation) {
+            return Ok(None);
+        }
         let _id = witness.lock_id(&vault_id)?;
         // Only this target's lock holder may change a marker naming it;
         // re-reading under the ID lock confirms nothing else did.
@@ -370,8 +396,9 @@ pub(super) fn pending_credential_error(kind: TransactionKind) -> anyhow::Error {
         TransactionKind::Restore => "the backup's passphrase",
         _ => "the passphrase it started with",
     };
-    classified(
+    classified_recovery(
         VaultErrorKind::Authentication,
+        VaultRecovery::Credential,
         format!(
             "a vault {} is pending for this home; unlock with {credential} to finish it",
             kind.label()
@@ -408,8 +435,9 @@ pub(crate) fn pending_publication_error(
         }
         _ => "retry the same operation with the same passphrase",
     };
-    classify_source(
+    classify_recovery_source(
         VaultErrorKind::Io,
+        VaultRecovery::Credential,
         format!(
             "the vault {} may have been recorded, but its durability could not be confirmed; {retry}",
             kind.label()
@@ -420,13 +448,14 @@ pub(crate) fn pending_publication_error(
 
 /// Failures after the pending marker is durable never roll back.
 pub(super) fn pending_error(kind: TransactionKind, error: anyhow::Error) -> anyhow::Error {
-    let credential = if kind == TransactionKind::PassphraseChange {
-        " with the new passphrase"
-    } else {
-        ""
+    let credential = match kind {
+        TransactionKind::PassphraseChange => " with the new passphrase",
+        TransactionKind::Restore => " with the backup's passphrase",
+        _ => "",
     };
-    classify_source(
+    classify_recovery_source(
         VaultErrorKind::Io,
+        VaultRecovery::Credential,
         format!(
             "the vault {} was recorded but did not finish; run an authenticated vault command again{credential} to finish it",
             kind.label()

@@ -31,7 +31,7 @@ pub use backup::{
     BackupRestoreResult, MAX_BACKUP_ARCHIVE_BYTES,
 };
 pub use broker::{BrokeredEnv, BrokeredFile, BrokeredRun};
-pub use error::{Result, VaultError, VaultErrorKind};
+pub use error::{Result, VaultError, VaultErrorKind, VaultRecovery};
 pub use exec::{
     ExecEnvBinding, ExecOutcome, MAX_EXEC_ARGUMENT_BYTES, MAX_EXEC_ARGUMENTS,
     MAX_EXEC_ENV_BINDINGS, MAX_EXEC_ENV_TOTAL_BYTES, MAX_EXEC_ENV_VALUE_LEN,
@@ -62,6 +62,7 @@ pub use vault::{
 #[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
 pub mod test_support {
+    pub use crate::passphrase_policy::with_passphrase_estimate_for_test;
     pub use crate::store::FaultPoint as TransactionFaultPoint;
     pub use crate::store::durable::recording::{
         FsOp, Publication, fail_next_sync_of, fail_sync_after, fail_sync_after_publication,

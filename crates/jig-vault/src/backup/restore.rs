@@ -10,10 +10,10 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::acl;
-use crate::error::{classified, classify_source};
+use crate::error::{classified, classified_recovery, classify_recovery_source, classify_source};
 use crate::store::VaultStore;
 use crate::store::witness::WitnessStore;
-use crate::{VaultError, VaultErrorKind};
+use crate::{VaultError, VaultErrorKind, VaultRecovery};
 
 use super::payload::DecodedBackupArchive;
 use super::{BackupRestoreResult, MAX_BACKUP_ARCHIVE_BYTES, RestoreTarget};
@@ -341,8 +341,9 @@ fn revalidate_target(target: &RestoreTarget) -> AnyResult<()> {
 
 fn require_absent(path: &Path) -> AnyResult<()> {
     match fs::symlink_metadata(path) {
-        Ok(_) => Err(classified(
+        Ok(_) => Err(classified_recovery(
             VaultErrorKind::AlreadyExists,
+            VaultRecovery::StorageConflict,
             format!(
                 "restore target already exists at {}; choose an entirely absent vault home",
                 path.display()
@@ -472,8 +473,9 @@ fn atomic_rename_noreplace(source: &Path, destination: &Path) -> AnyResult<()> {
         return Ok(());
     };
     match error.raw_os_error() {
-        Some(libc::EEXIST | libc::ENOTEMPTY) => Err(classify_source(
+        Some(libc::EEXIST | libc::ENOTEMPTY) => Err(classify_recovery_source(
             VaultErrorKind::AlreadyExists,
+            VaultRecovery::StorageConflict,
             "restore target appeared before atomic installation; nothing was overwritten",
             error.into(),
         )),

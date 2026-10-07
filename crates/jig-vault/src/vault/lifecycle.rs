@@ -144,8 +144,22 @@ impl VaultStore {
         new: &SecretString,
         kdf: KdfParams,
     ) -> Result<()> {
-        validate_new_vault_passphrase_inner(new)
-            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        if let Err(policy_error) = validate_new_vault_passphrase_inner(new) {
+            return self
+                .with_lock(
+                    || match self.recover_pending_passphrase_change_unlocked(new) {
+                        Ok(true) => Ok(()),
+                        Ok(false) => Err(policy_error),
+                        Err(error)
+                            if classified_kind(&error) == Some(VaultErrorKind::Authentication) =>
+                        {
+                            Err(policy_error)
+                        }
+                        Err(error) => Err(error),
+                    },
+                )
+                .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error));
+        }
         self.with_lock(|| self.change_passphrase_unlocked(current, new, kdf))
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }

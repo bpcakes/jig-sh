@@ -3,7 +3,9 @@
 //! The policy applies only where an operator chooses a new credential:
 //! initialization and passphrase change. Unlock, migration, backup, and
 //! restore never revalidate an existing credential, so vaults created under
-//! an older, weaker floor stay usable.
+//! an older, weaker floor stay usable. Completing an authenticated, recorded
+//! passphrase change also uses its existing credential, even if the current
+//! estimator would reject choosing it for a new change.
 //!
 //! A candidate must be at least [`MIN_MASTER_PASSPHRASE_LEN`] UTF-8 bytes and
 //! the pinned zxcvbn 3.1.1 estimator must report at least
@@ -83,9 +85,32 @@ fn check_new_passphrase(passphrase: &str) -> AnyResult<()> {
 /// Returns only the guess count; the estimator's match tokens and feedback
 /// are dropped before this function returns and never formatted.
 fn estimated_guesses(passphrase: &str) -> u64 {
+    #[cfg(any(test, feature = "test-utils"))]
+    if let Some(guesses) = TEST_ESTIMATE.with(std::cell::Cell::get) {
+        return guesses;
+    }
     // Empty contextual inputs keep repository and user labels away from the
     // estimator.
     zxcvbn::zxcvbn(passphrase, &[]).guesses()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
+    static TEST_ESTIMATE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Models a changed estimator result without changing the clock or policy
+/// threshold. Scoped to the calling test thread and restored even on panic.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn with_passphrase_estimate_for_test<T>(guesses: u64, operation: impl FnOnce() -> T) -> T {
+    struct Reset(Option<u64>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_ESTIMATE.with(|estimate| estimate.set(self.0));
+        }
+    }
+    let _reset = Reset(TEST_ESTIMATE.with(|estimate| estimate.replace(Some(guesses))));
+    operation()
 }
 
 const fn meets_guess_floor(guesses: u64) -> bool {

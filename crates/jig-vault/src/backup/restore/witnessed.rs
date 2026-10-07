@@ -16,8 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result as AnyResult, bail};
 use secrecy::SecretString;
 
-use crate::VaultErrorKind;
-use crate::error::classified;
+use crate::error::{classified, classified_recovery};
 use crate::format::V2_FORMAT_VERSION;
 use crate::store::witness::{
     self, JOURNAL_SCHEMA, Journal, JournalPayload, JournalTarget, PendingMarker, RestorePayload,
@@ -29,6 +28,7 @@ use crate::vault::{
     RestoreSource, authenticate_restore_candidate_text, fail_closed, pending_publication_error,
     restore_pending_error,
 };
+use crate::{VaultErrorKind, VaultRecovery};
 
 use super::super::payload::DecodedBackupArchive;
 use super::super::{BackupRestoreResult, RestoreTarget};
@@ -208,14 +208,16 @@ fn resume_matching_retry(
         ));
     }
     let JournalPayload::Restore(payload) = &journal.payload else {
-        return Err(classified(
+        return Err(classified_recovery(
             VaultErrorKind::AlreadyExists,
+            VaultRecovery::StorageConflict,
             "a different vault transaction is pending for this restore target; finish it with an authenticated vault command first",
         ));
     };
     if payload.archive_sha256 != decoded.archive_sha256 || vault_id != decoded.source_vault_id {
-        return Err(classified(
+        return Err(classified_recovery(
             VaultErrorKind::AlreadyExists,
+            VaultRecovery::StorageConflict,
             "a restore of a different archive is pending for this target; retry with the same archive or finish it with an authenticated vault command",
         ));
     }
@@ -275,8 +277,9 @@ pub(crate) fn finish_pending_restore(
     match fs::symlink_metadata(home) {
         Ok(metadata) => {
             if !installed_successor(journal, payload, home, &metadata)? {
-                return Err(classified(
+                return Err(classified_recovery(
                     VaultErrorKind::AlreadyExists,
+                    VaultRecovery::StorageConflict,
                     "the restore target is occupied by different contents; the pending restore stays in its staging directory until the target is free",
                 ));
             }
