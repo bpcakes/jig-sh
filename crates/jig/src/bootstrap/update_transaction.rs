@@ -13,8 +13,8 @@ use super::file_budget_lifecycle::{
     LEGACY_CHECKER_PATH, LifecycleProof, revalidate_lifecycle_proof,
 };
 use super::git::git_stdout;
-use super::path::{self, RepositoryFileLeaf};
 use super::staged_render::StagedRender;
+use jig_repository::path::{self, RepositoryFileLeaf};
 
 mod filesystem;
 use filesystem::*;

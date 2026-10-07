@@ -1,22 +1,22 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
+use jig_context::RepoContext;
 use jig_contract::{
     ActionRunner, ActionSpec, ComparisonPreparationV1, Finding, FindingLocation, FindingSeverity,
     ManifestTool, NativeActionResult, NativeToolKind, PolicyPreparationV1, PreparedNativeInputV1,
     RunConclusion, TargetId,
 };
-use serde::Serialize;
-use serde_json::{Value, json};
-
-use crate::context::RepoContext;
 #[cfg(test)]
-use crate::execution::NoopExecutionObserver;
-use crate::execution::{
+use jig_execution::NoopExecutionObserver;
+use jig_execution::{
     ExecutionCommandError, ExecutionControl, ExecutionPhase, PhasePosition,
     SupervisedExecutionError, run_supervised_execution_command,
 };
-use crate::policy::NativeToolOutput;
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use jig_policy::NativeToolOutput;
 
 pub(super) struct NativeActionContext<'a> {
     pub(super) repository: &'a RepoContext,
@@ -148,12 +148,12 @@ fn native_result(
         findings,
         finding_count,
         evidence,
-        evaluated_at_ms: crate::state::now_ms(),
+        evaluated_at_ms: jig_state::now_ms(),
         valid_until_ms: None,
     }
 }
-use crate::repository::RepositoryCatalog;
-use crate::tool_defs::{args, kind, tool};
+use jig_commands::tool_defs::{args, kind, tool};
+use jig_repository::RepositoryCatalog;
 
 mod failure;
 
@@ -371,7 +371,7 @@ fn bind_alias_arguments(
     {
         return Ok(args);
     }
-    Ok(json!(crate::repository::arguments::bind(
+    Ok(json!(jig_repository::arguments::bind(
         ctx.contract_version(),
         action,
         serde_json::from_value(args)?
@@ -415,7 +415,7 @@ fn execute_action_alias(
     args: Value,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
-    repository_execution: crate::state::RepositoryExecutionLease,
+    repository_execution: jig_state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
     if !action.resources.is_empty() {
         return resource_alias::execute(ctx, tool, action, args, observer, repository_execution);

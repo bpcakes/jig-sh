@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use jig_context::RepoContext;
 use jig_contract::{
     ComparisonPreparationV1, ComparisonRequestV1, Finding, FindingLocation, FindingSeverity,
     NativeActionResult, NativeFileBudgetConfigV1, PolicyPreparationV1, PreparedNativeInputV1,
@@ -21,8 +22,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 
-use crate::context::RepoContext;
-use crate::source_identity::{
+use jig_repository::source_identity::{
     BaselineFileV1, CurrentSourceV1, ExactCurrentPathStateV1 as GitExactCurrentPathStateV1,
     FileChangeKindV1, ScopeEntryV1, ScopeIssueKindV1, ScopeSnapshotV1,
     capture_all_current_scope_v1_with_cancellation, capture_scope_v1_with_cancellation,
@@ -61,7 +61,7 @@ pub(crate) fn run_direct_file_budget(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeActionResult> {
     let prepared =
-        crate::repository::prepare_file_budget_input_v1(repository, request, configuration)?;
+        jig_repository::prepare_file_budget_input_v1(repository, request, configuration)?;
     if let PolicyPreparationV1::InvalidPolicy {
         diagnostics_count,
         diagnostics_digest,
@@ -80,7 +80,7 @@ pub(crate) fn run_direct_file_budget(
                 )
             })
             .collect::<Vec<_>>();
-        let evaluated_at_ms = crate::state::now_ms();
+        let evaluated_at_ms = jig_state::now_ms();
         let mut result = result_with_findings(
             RunConclusion::Failure,
             findings,
@@ -105,7 +105,7 @@ pub(crate) fn run_direct_file_budget(
         return Ok(result);
     }
     if let ComparisonPreparationV1::ComparisonUnavailable { reason, .. } = &prepared.comparison {
-        let evaluated_at_ms = crate::state::now_ms();
+        let evaluated_at_ms = jig_state::now_ms();
         return Ok(terminal_result(
             RunConclusion::Blocked,
             "file_budget.baseline_unavailable",

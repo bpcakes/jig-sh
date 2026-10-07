@@ -402,7 +402,7 @@ fn invalid_runtime_config_is_repaired_without_dropping_tracker_ownership() {
             .unwrap()
             .insert("commands".into(), toml::Value::String("invalid".into()));
         fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
-        assert!(crate::context::RepoContext::validate_config_file(&repo).is_err());
+        assert!(jig_context::RepoContext::validate_config_file(&repo).is_err());
 
         if update {
             run_update(update_opts(&repo, template.path(), false)).unwrap();
@@ -416,7 +416,7 @@ fn invalid_runtime_config_is_repaired_without_dropping_tracker_ownership() {
         assert!(repaired["commands"].as_table().is_some());
         assert!(repaired["commands"]["api_test_command"].as_str().is_some());
         assert_tracker_ownership(&repaired);
-        crate::context::RepoContext::load_from(&repo).unwrap();
+        jig_context::RepoContext::load_from(&repo).unwrap();
     }
 }
 
@@ -472,7 +472,7 @@ fn minimal_adoption_expands_to_full_without_force() {
             .unwrap();
     assert_eq!(config["harness_footprint"].as_str(), Some("full"));
     assert_project_runtime_tables(&config);
-    crate::context::RepoContext::load_from(&repo).unwrap();
+    jig_context::RepoContext::load_from(&repo).unwrap();
 }
 
 #[test]
@@ -501,7 +501,7 @@ fn update_preserves_project_runtime_tables_for_minimal_and_full_harnesses() {
                 config["harness_footprint"].as_str(),
                 Some(if minimal { "minimal" } else { "full" })
             );
-            crate::context::RepoContext::load_from(&repo).unwrap();
+            jig_context::RepoContext::load_from(&repo).unwrap();
         }
     }
 }
@@ -524,7 +524,7 @@ fn update_does_not_enable_tracker_ownership_when_it_was_never_declared() {
                 .unwrap();
         assert!(config.get("work").is_none());
         assert!(config["repository"].get("tracker").is_none());
-        crate::context::RepoContext::load_from(&repo).unwrap();
+        jig_context::RepoContext::load_from(&repo).unwrap();
     }
 }
 
@@ -613,10 +613,10 @@ fn update_from_contract_eight_moves_tracker_ownership_and_drops_work() {
             &output["warnings"],
             &["Retired [work] settings are dropped from .jig.toml: `checks`; `tracker`."],
         );
-        let ctx = crate::context::RepoContext::load_from_root(repo.clone()).unwrap();
+        let ctx = jig_context::RepoContext::load_from_root(repo.clone()).unwrap();
         assert_eq!(
             ctx.contract_version(),
-            crate::context::CURRENT_CONTRACT_VERSION
+            jig_context::CURRENT_CONTRACT_VERSION
         );
     }
 }
@@ -694,6 +694,6 @@ fn minimal_expansion_adds_generated_frontend_commands_around_project_overrides()
     ] {
         assert!(config["commands"][key].as_str().is_some(), "missing {key}");
     }
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
-    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
+    assert_eq!(jig_policy::contract_check(&ctx).exit_status, 0);
 }

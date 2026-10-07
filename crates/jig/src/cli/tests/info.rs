@@ -8,7 +8,10 @@ fn parses_top_level_info_command_and_explain_alias() {
     match cli.command {
         CommandKind::Info(opts) => {
             assert!(!opts.commands);
-            assert_eq!(opts.projection, crate::surface::ResponseSurface::Standard);
+            assert_eq!(
+                opts.projection,
+                jig_repository::surface::ResponseSurface::Standard
+            );
         }
         other => panic!("expected info command, got {other:?}"),
     }
@@ -108,7 +111,10 @@ fn parses_explicit_agent_surfaces_and_rejects_unknown_values() {
     let CommandKind::Info(opts) = info.command else {
         panic!("expected info command")
     };
-    assert_eq!(opts.projection, crate::surface::ResponseSurface::AgentV1);
+    assert_eq!(
+        opts.projection,
+        jig_repository::surface::ResponseSurface::AgentV1
+    );
     opts.validate_projection().unwrap();
 
     assert!(

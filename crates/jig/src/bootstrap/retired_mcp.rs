@@ -36,7 +36,7 @@ pub(super) fn stage_retirement(
         return Ok(());
     }
     let contents = super::path::read_repository_regular_file_bytes(seed, relative)?;
-    let mut value = match crate::strict_json::from_slice(&contents) {
+    let mut value = match jig_context::strict_json::from_slice(&contents) {
         Ok(value) => value,
         Err(_) => {
             retirement_paths.remove(relative);

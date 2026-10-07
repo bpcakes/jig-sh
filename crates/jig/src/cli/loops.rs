@@ -1,9 +1,9 @@
 use clap::{Args, Subcommand};
+use jig_commands::tool_defs;
 
 use super::output;
 use super::runtime_dispatch::RuntimeDispatch;
 use crate::command::RuntimeCommand;
-use crate::tool_defs;
 
 mod convert;
 pub(super) mod render;

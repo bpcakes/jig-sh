@@ -20,7 +20,7 @@ fn named_v6_checks_preserve_feature_specific_unavailable_diagnostics() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let mut observer = crate::execution::NoopExecutionObserver;
+    let mut observer = jig_execution::NoopExecutionObserver;
 
     let direct_error = dispatch_named_check(&ctx, NamedCheck::SQLC, &mut observer)
         .unwrap_err()
@@ -336,9 +336,9 @@ fn dispatch_routes_state_summary() {
 fn runtime_state_summary_polls_operation_cancellation_during_collection() {
     struct CancelAfterBoundary(std::cell::Cell<usize>);
 
-    impl crate::execution::ExecutionObserver for CancelAfterBoundary {}
+    impl jig_execution::ExecutionObserver for CancelAfterBoundary {}
 
-    impl crate::execution::ExecutionCancellation for CancelAfterBoundary {
+    impl jig_execution::ExecutionCancellation for CancelAfterBoundary {
         fn cancelled(&self) -> bool {
             let polls = self.0.get() + 1;
             self.0.set(polls);
@@ -548,7 +548,7 @@ checks = ["jig.fmt_check", "jig.test"]
     .unwrap();
     let run_id = output["run"]["run_id"].as_str().unwrap();
 
-    let durable = crate::state::run_by_id(&ctx, run_id).unwrap();
+    let durable = jig_state::run_by_id(&ctx, run_id).unwrap();
     assert_eq!(durable.result.status, jig_contract::RunStatus::Completed);
     assert_eq!(
         durable.result.conclusion,
@@ -594,10 +594,9 @@ checks = ["jig.test"]
         .write();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
-            .unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
+        .unwrap();
     fs::write(temp.path().join("changed-after-plan.txt"), "changed\n").unwrap();
 
     let error = super::run_execution::execute_check_run(
@@ -624,5 +623,6 @@ mod common;
 mod foreground_run;
 mod legacy_loc;
 mod loops;
+mod policy_checks;
 mod repository_execution;
 mod validation_contexts;

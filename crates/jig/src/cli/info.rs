@@ -2,12 +2,12 @@ use std::io::Write;
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
+use jig_context::RepoContext;
+use jig_repository::InspectRequest;
 
 use super::output::{emit, print_json};
 use super::run::finish_after_json_output;
 use super::structured_error::require_json_ok;
-use crate::context::RepoContext;
-use crate::repository::InspectRequest;
 use crate::{doctor, info};
 
 mod freshness;
@@ -50,14 +50,14 @@ pub(crate) struct InfoOpts {
         default_value_t,
         help = "Select the standard or opt-in agent-v1 inspection projection"
     )]
-    pub(crate) projection: crate::surface::ResponseSurface,
+    pub(crate) projection: jig_repository::surface::ResponseSurface,
     #[command(subcommand)]
     pub(crate) subject: Option<InfoCommand>,
 }
 
 impl InfoOpts {
     pub(crate) fn validate_projection(&self) -> anyhow::Result<()> {
-        if self.projection == crate::surface::ResponseSurface::Standard
+        if self.projection == jig_repository::surface::ResponseSurface::Standard
             || matches!(
                 self.subject.as_ref(),
                 Some(

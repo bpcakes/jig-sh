@@ -71,6 +71,6 @@ fn minimal_expansion_adds_generated_frontend_commands_around_project_overrides()
     ] {
         assert!(config["commands"][key].as_str().is_some(), "missing {key}");
     }
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
-    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
+    let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
+    assert_eq!(jig_policy::contract_check(&ctx).exit_status, 0);
 }

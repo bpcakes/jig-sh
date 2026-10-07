@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -9,6 +8,10 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
+use jig_context::RepoContext;
+use jig_context::frontend_metadata::resolve_frontend_metadata;
+#[cfg(test)]
+use jig_context::{RuntimeCacheProfile, runtime_cache_base, runtime_profile_cache_name};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::{Builder as TempFileBuilder, TempDir};
@@ -18,10 +21,6 @@ use toml::Table;
 use toml::Value as TomlValue;
 use ulid::Ulid;
 
-use crate::context::RepoContext;
-#[cfg(test)]
-use crate::context::{RuntimeCacheProfile, runtime_cache_base, runtime_profile_cache_name};
-use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::progress::CliProgress;
 #[cfg(test)]
 use crate::runtime_cache_lock::{RuntimeCacheLockPolicy, RuntimeCacheLocks};
@@ -30,9 +29,6 @@ use answers::{AnswerInput, RenderAnswers};
 use file_copy::create_symlink;
 #[cfg(test)]
 use git::{git, git_stdout};
-pub(crate) use git::{
-    scrub_git_repository_environment_except, scrub_known_repository_git_environment,
-};
 use init_transaction::InitMutationTransaction;
 #[cfg(test)]
 use init_transaction::{
@@ -52,7 +48,9 @@ use initial_template::{
     official_template_ref_for_version, resolve_initial_template_request_with_policy,
 };
 use initial_template::{prepare_initial_template_source, resolve_initial_template_request};
-use path::{absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors};
+use jig_repository::path::{
+    self, absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors,
+};
 #[cfg(test)]
 use preview_seed::seed_preview_workspace;
 use renderer::{RenderStageRequest, stage_render, stage_selected_render};
@@ -71,7 +69,7 @@ pub use adopt_infer::ComponentSelectionOpts;
 mod adoption_file_budget;
 mod answers;
 #[cfg(test)]
-pub(crate) use crate::backend::BackendLanguage;
+pub(crate) use jig_context::backend::BackendLanguage;
 pub(crate) mod clippy_policy;
 mod crate_classification;
 mod embedded_templates;
@@ -86,7 +84,6 @@ mod initial_template;
 mod launcher_repair_cache;
 mod managed_paths;
 mod opts;
-pub(crate) mod path;
 mod presets;
 mod preview_seed;
 mod renderer;
@@ -143,7 +140,6 @@ const LAUNCHER_ONLY_MANAGED_PATHS: [&str; 2] = ["scripts/install-jig.sh", "scrip
 const ADOPT_RECEIPT_PATH: &str = ".agent/.cache/adopt/adopt-last.json";
 const LEGACY_ADOPT_RECEIPT_PATH: &str = ".agent/state/adopt-last.json";
 const ADOPT_RECEIPT_PATHS: [&str; 2] = [ADOPT_RECEIPT_PATH, LEGACY_ADOPT_RECEIPT_PATH];
-pub(crate) const GIT_BIN_ENV: &str = "JIG_GIT_BIN";
 const BUILD_TEMPLATE_PIN_RELEASED: &str = "released";
 const BUILD_TEMPLATE_PIN_UNRELEASED: &str = "unreleased";
 const OFFICIAL_TEMPLATE_SOURCE: &str = "https://github.com/bpcakes/jig-sh.git";
@@ -160,7 +156,6 @@ pub(crate) const RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME: &str = "admin-api";
 
 include!("bootstrap_parts/part_01.rs");
 include!("bootstrap_parts/part_02.rs");
-include!("bootstrap_parts/part_03.rs");
 
 #[cfg(test)]
 mod tests;

@@ -4,7 +4,7 @@ use jig_ui::dashboard::{
     DashboardSource, RecorderEpochId, RecorderMode, RecorderRefresh, RecorderRequest, SourceError,
 };
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 mod epoch;
 

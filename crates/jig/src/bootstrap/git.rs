@@ -12,7 +12,9 @@ use jig_owned_process::run_checked_output;
 use jig_owned_process::{require_success, run_checked_stdout_trimmed};
 use tempfile::Builder as TempDirBuilder;
 
-use super::{GIT_BIN_ENV, external_program};
+use jig_git::{
+    git_program, scrub_git_repository_environment_except, scrub_known_repository_git_environment,
+};
 
 pub(super) fn is_git_work_tree(path: &Path) -> bool {
     git_command(path, ["rev-parse", "--is-inside-work-tree"])
@@ -52,8 +54,7 @@ pub(super) fn git_stdout(
 }
 
 pub(super) fn git_command(path: &Path, args: impl IntoIterator<Item = impl AsRef<str>>) -> Command {
-    let git_program = external_program(GIT_BIN_ENV, "git");
-    let mut command = Command::new(git_program);
+    let mut command = Command::new(git_program());
     command.current_dir(path).arg("--no-replace-objects");
     scrub_known_repository_git_environment(&mut command);
     for arg in args {
@@ -104,10 +105,10 @@ pub(super) fn init_git_repo_with_validation(
             destination.display()
         )
     })?;
-    let staged_destination = crate::shell::git_env_path(staged.path())?;
+    let staged_destination = jig_repository::shell::git_env_path(staged.path())?;
     let staged_git = staged_destination.join(".git");
 
-    let git_program = external_program(GIT_BIN_ENV, "git");
+    let git_program = git_program();
     let initialization = (|| {
         staged.require_identity("before preparing the private Git template")?;
         let template_dir =
@@ -215,7 +216,7 @@ pub(super) fn init_git_repo_with_validation(
                 return close_staging_directory(staged, &staged_destination, Err(error));
             }
         };
-    let metadata_stage_path = crate::shell::git_env_path(metadata_stage.path())?;
+    let metadata_stage_path = jig_repository::shell::git_env_path(metadata_stage.path())?;
 
     let transfer = (|| {
         staged.require_identity("before transferring initialized Git metadata")?;
@@ -471,8 +472,7 @@ fn existing_git_command(
     destination: &Path,
     args: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> Command {
-    let git_program = external_program(GIT_BIN_ENV, "git");
-    let mut command = Command::new(git_program);
+    let mut command = Command::new(git_program());
     command.current_dir(destination).arg("--no-replace-objects");
     scrub_git_repository_environment(&mut command);
     command
@@ -815,25 +815,6 @@ fn scrub_git_repository_environment_for_ambient_config(command: &mut Command) {
     scrub_git_repository_environment_except(command, ALLOWED_GIT_ENVIRONMENT);
 }
 
-pub(crate) fn scrub_known_repository_git_environment(command: &mut Command) {
-    // Keep the user's ordinary environment, read-only config sources, and the
-    // authentication knobs needed by remote template fetches. Repository
-    // discovery/redirection, alternate object/index paths, quarantine state,
-    // replacement refs, namespaces, and command-scoped config are stripped so
-    // a command aimed at a known repository cannot escape to ambient metadata.
-    const ALLOWED_GIT_ENVIRONMENT: &[&str] = &[
-        "GIT_ASKPASS",
-        "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_NOSYSTEM",
-        "GIT_CONFIG_SYSTEM",
-        "GIT_SSH",
-        "GIT_SSH_COMMAND",
-        "GIT_SSH_VARIANT",
-        "GIT_TERMINAL_PROMPT",
-    ];
-    scrub_git_repository_environment_except(command, ALLOWED_GIT_ENVIRONMENT);
-}
-
 pub(super) fn scrub_remote_template_git_environment(command: &mut Command) {
     // Remote template resolution must retain the caller's explicit transport
     // and authentication policy. Keep this allowlist separate from repository
@@ -876,22 +857,6 @@ pub(super) fn disable_git_worktree_integrations(command: &mut Command) {
         .env("GIT_CONFIG_VALUE_1", "false");
 }
 
-pub(crate) fn scrub_git_repository_environment_except(command: &mut Command, allowed: &[&str]) {
-    let explicitly_configured = command
-        .get_envs()
-        .map(|(name, _)| name.to_os_string())
-        .collect::<Vec<_>>();
-    for name in env::vars_os()
-        .map(|(name, _)| name)
-        .chain(explicitly_configured)
-    {
-        let normalized = name.to_string_lossy().to_ascii_uppercase();
-        if normalized.starts_with("GIT_") && !allowed.contains(&normalized.as_str()) {
-            command.env_remove(name);
-        }
-    }
-}
-
 #[cfg(unix)]
 fn null_git_config_path() -> &'static OsStr {
     OsStr::new("/dev/null")
@@ -930,7 +895,7 @@ fn prepare_private_git_template(
         require_absent_git_template_redirect(&private.join(relative))?;
     }
     require_empty_or_absent_alternates(&private.join("objects/info/alternates"))?;
-    Ok(Some(crate::shell::git_env_path(&private)?))
+    Ok(Some(jig_repository::shell::git_env_path(&private)?))
 }
 
 fn inherited_git_template_dir() -> Option<std::ffi::OsString> {

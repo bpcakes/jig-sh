@@ -4,6 +4,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use jig_context::{DevAppConfig, RepoContext};
+use jig_repository::shell::quote as shell_quote;
 use serde_json::Value;
 
 use crate::command::{
@@ -16,9 +18,7 @@ use crate::command::{
     ProxyCertUntrustRequest, ProxyListRequest, ProxyPruneRequest, ProxyRunRequest,
     ProxyServiceInstallRequest, ProxyServiceRuntimeRequest, ProxyStopRequest,
 };
-use crate::context::{DevAppConfig, RepoContext};
 use crate::progress::CliProgress;
-use crate::shell::quote as shell_quote;
 
 mod settings;
 use settings::*;
@@ -502,7 +502,7 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
     for (key, value) in command_environment {
         command.env(key, value);
     }
-    crate::shell::sanitize_bash_environment(&mut command);
+    jig_owned_process::sanitize_bash_environment(&mut command);
     let output = match jig_owned_process::run_owned_process_tree_with_output(
         &mut command,
         timeout,

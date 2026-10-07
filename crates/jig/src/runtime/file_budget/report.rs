@@ -4,7 +4,7 @@ pub(super) fn engine_error_result(
     context: &FileBudgetEngineContext<'_>,
     error: anyhow::Error,
 ) -> NativeActionResult {
-    let evaluated_at_ms = crate::state::now_ms();
+    let evaluated_at_ms = jig_state::now_ms();
     let (conclusion, code, message) = if let Some(stop) = classify_stop(context, &error) {
         match stop {
             EngineStopV1::Cancelled => (
@@ -534,7 +534,7 @@ pub(super) const fn comparison_kind(comparison: &ResolvedComparisonV1) -> &'stat
     }
 }
 
-pub(super) fn scope_issue_json(issue: &crate::source_identity::ScopeIssueV1) -> Value {
+pub(super) fn scope_issue_json(issue: &jig_repository::source_identity::ScopeIssueV1) -> Value {
     json!({
         "kind": format!("{:?}", issue.kind).to_ascii_lowercase(),
         "path": issue.path,

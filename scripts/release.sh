@@ -12,18 +12,27 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-contract"
   "jig-core"
   "jig-file-budget"
+  "jig-git"
   "jig-owned-process"
   "jig-rust"
   "jig-sqlx"
   "jig-typescript"
   "jig-go"
   "jig-features"
+  "jig-commands"
   "jig-vault"
   "jig-dev-proxy"
+  "jig-context"
+  "jig-execution"
+  "jig-state"
+  "jig-repository"
+  "jig-policy"
   "jig-tui"
   "jig-vault-tui"
   "jig-codex-tui"
   "jig-ui"
+  "jig-agents"
+  "jig-loops"
   "$PACKAGE_NAME"
 )
 BIN_NAME="jig"
@@ -99,18 +108,27 @@ crate_dir_for_package() {
     jig-contract) printf '%s\n' "crates/jig-contract" ;;
     jig-core) printf '%s\n' "crates/jig-core" ;;
     jig-file-budget) printf '%s\n' "crates/jig-file-budget" ;;
+    jig-git) printf '%s\n' "crates/jig-git" ;;
     jig-owned-process) printf '%s\n' "crates/jig-owned-process" ;;
     jig-rust) printf '%s\n' "crates/jig-rust" ;;
     jig-sqlx) printf '%s\n' "crates/jig-sqlx" ;;
     jig-typescript) printf '%s\n' "crates/jig-typescript" ;;
     jig-go) printf '%s\n' "crates/jig-go" ;;
     jig-features) printf '%s\n' "crates/jig-features" ;;
+    jig-commands) printf '%s\n' "crates/jig-commands" ;;
     jig-vault) printf '%s\n' "crates/jig-vault" ;;
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
+    jig-context) printf '%s\n' "crates/jig-context" ;;
+    jig-execution) printf '%s\n' "crates/jig-execution" ;;
+    jig-state) printf '%s\n' "crates/jig-state" ;;
+    jig-repository) printf '%s\n' "crates/jig-repository" ;;
+    jig-policy) printf '%s\n' "crates/jig-policy" ;;
     jig-tui) printf '%s\n' "crates/jig-tui" ;;
     jig-vault-tui) printf '%s\n' "crates/jig-vault-tui" ;;
     jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;
     jig-ui) printf '%s\n' "crates/jig-ui" ;;
+    jig-agents) printf '%s\n' "crates/jig-agents" ;;
+    jig-loops) printf '%s\n' "crates/jig-loops" ;;
     jig-sh) printf '%s\n' "crates/jig" ;;
     *)
       echo "Unknown publish package: $1" >&2

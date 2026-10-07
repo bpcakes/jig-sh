@@ -87,7 +87,7 @@ fn foreground_run_default_profile_records_successful_target_outcomes() {
         assert_eq!(target["conclusion"], "success");
         assert_eq!(target["exit_code"], 0);
     }
-    let run = crate::state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
+    let run = jig_state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
     assert_eq!(serde_json::to_value(run.result).unwrap(), output["run"]);
 }
 
@@ -120,12 +120,12 @@ struct CancelOnOutput {
     durable_ready: Option<std::sync::mpsc::Sender<()>>,
     output: Vec<u8>,
 }
-impl crate::execution::ExecutionObserver for CancelOnOutput {
-    fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+impl jig_execution::ExecutionObserver for CancelOnOutput {
+    fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
         if self.cancelled {
             return;
         }
-        let crate::execution::ExecutionEvent::Output { bytes, .. } = event else {
+        let jig_execution::ExecutionEvent::Output { bytes, .. } = event else {
             return;
         };
         self.output.extend_from_slice(bytes);
@@ -138,7 +138,7 @@ impl crate::execution::ExecutionObserver for CancelOnOutput {
         self.cancelled = true;
     }
 }
-impl crate::execution::ExecutionCancellation for CancelOnOutput {
+impl jig_execution::ExecutionCancellation for CancelOnOutput {
     fn cancelled(&self) -> bool {
         self.cancelled && self.durable_ready.is_none()
     }
@@ -178,7 +178,7 @@ fn foreground_run_cancellation_stops_running_and_unstarted_targets() {
                     .find(|event| event["event"] == "target_started")
                     .unwrap();
                 let run_id = started["run_id"].as_str().unwrap().to_owned();
-                let run = crate::state::request_run_cancel(&ctx, &run_id).unwrap();
+                let run = jig_state::request_run_cancel(&ctx, &run_id).unwrap();
                 assert!(run.cancel_requested);
                 run_id
             })
@@ -203,7 +203,7 @@ fn foreground_run_cancellation_stops_running_and_unstarted_targets() {
         assert_eq!(output["run"]["targets"][1]["conclusion"], "cancelled");
         assert_eq!(output["run"]["targets"][1]["started_at_ms"], Value::Null);
         // Reacquisition proves foreground execution released its ownership after cleanup.
-        let lease = crate::state::acquire_repository_execution_lease_without_wait(
+        let lease = jig_state::acquire_repository_execution_lease_without_wait(
             &ctx,
             &[jig_contract::ActionEffect::Worktree],
         )
@@ -273,8 +273,8 @@ fn foreground_run_rejects_comparison_authority_on_v6_before_state_changes() {
 }
 
 struct AlreadyCancelled;
-impl crate::execution::ExecutionObserver for AlreadyCancelled {}
-impl crate::execution::ExecutionCancellation for AlreadyCancelled {
+impl jig_execution::ExecutionObserver for AlreadyCancelled {}
+impl jig_execution::ExecutionCancellation for AlreadyCancelled {
     fn cancelled(&self) -> bool {
         true
     }
@@ -287,11 +287,11 @@ fn foreground_prestart_cancellation_keeps_existing_check_run_evidence() {
         write_v6_evidence_fixture_repo(temp.path(), "");
         init_git_repo(temp.path());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-        let plan = crate::repository::plan_action_run(
+        let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+        let plan = jig_repository::plan_action_run(
             &ctx,
             &catalog,
-            crate::repository::PlanRunRequest {
+            jig_repository::PlanRunRequest {
                 selectors: vec!["api:test".into()],
                 ..Default::default()
             },
@@ -398,7 +398,7 @@ fn foreground_run_and_check_record_run_history_without_receipts() {
             assert!(prepared.get("work_plan_id").is_none(), "{prepared:#}");
         }
         let durable =
-            crate::state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
+            jig_state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
         assert_eq!(
             durable.result.targets[0].conclusion,
             Some(jig_contract::RunConclusion::Success)

@@ -2,10 +2,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Args;
+use jig_commands::root_commands;
+use jig_context::RepoContext;
 
 use super::structured_error::{json_command_error, json_output_already_emitted};
-use crate::context::RepoContext;
-use crate::{root_commands, ui};
+use crate::ui;
 
 pub(super) const UI_AFTER_HELP: &str = "\
 Opens a read-only terminal dashboard over repository status and .agent/state:

@@ -8,7 +8,6 @@
 
 mod agent;
 mod check;
-mod loops;
 mod migration;
 mod proxy;
 mod repository_run;
@@ -21,7 +20,7 @@ pub(crate) use check::{
     AgentMapCommand, AgentMapRequest, CheckCommand, MigrationImmutabilityRequest, NamedCheck,
     RepositoryCheckRequest, SqlxTodoRequest,
 };
-pub(crate) use loops::{
+pub(crate) use jig_loops::{
     LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopCommand, LoopDispatchRequest,
     LoopRunRequest, LoopShowRequest, LoopStatusRequest, LoopTickRequest,
 };
@@ -46,7 +45,6 @@ pub(crate) use vault::{
     VaultPassphraseCommand, VaultReadRequest, VaultRepoScope, VaultRunRequest, VaultRuntimeOptions,
     VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest, VaultSecretRemoveRequest,
     VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest, VaultTuiRequest,
-    is_valid_vault_scope_id,
 };
 
 #[derive(Debug)]

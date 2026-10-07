@@ -6,7 +6,7 @@ pub(in crate::runtime) fn block_started_check_run(
     error: &anyhow::Error,
 ) -> Result<()> {
     let message = format!("repository run worker stopped unexpectedly: {error:#}");
-    crate::state::block_nonterminal_run(ctx, run_id, &message)
+    jig_state::block_nonterminal_run(ctx, run_id, &message)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -44,7 +44,7 @@ pub(super) struct TargetFinisher<'a> {
     pub(super) alias_override: Option<&'a ExecutionAliasOverride>,
     pub(super) ctx: &'a RepoContext,
     pub(super) catalog: &'a RepositoryCatalog,
-    pub(super) run: &'a crate::state::DurableRun,
+    pub(super) run: &'a jig_state::DurableRun,
 }
 
 pub(super) struct CompletedTargetCapture {

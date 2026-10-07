@@ -12,7 +12,7 @@ import sys
 source = pathlib.Path(sys.argv[1]).read_text()
 name = re.escape(sys.argv[2])
 match = re.search(
-    rf'(?m)^[ \t]*(?:pub\(crate\)[ \t]+)?const[ \t]+{name}[ \t]*:[ \t]*&str[ \t]*=[ \t\r\n]*"([^"\n]*)"[ \t]*;',
+    rf'(?m)^[ \t]*(?:pub(?:\(crate\))?[ \t]+)?const[ \t]+{name}[ \t]*:[ \t]*&str[ \t]*=[ \t\r\n]*"([^"\n]*)"[ \t]*;',
     source,
 )
 if match:
@@ -36,8 +36,8 @@ if [[ -z "$launcher_contract_version" || "$launcher_contract_version" != "$manif
   echo "scripts/jig contract version ${launcher_contract_version:-<unreadable>} does not match .agent/jig-contract.json contract $manifest_contract_version." >&2
   exit 1
 fi
-rust_current_contract="$(sed -n 's/^pub(crate) const CURRENT_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig/src/context.rs")"
-rust_min_contract="$(sed -n 's/^pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig/src/context/runtime.rs")"
+rust_current_contract="$(sed -n 's/^pub const CURRENT_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig-context/src/lib.rs")"
+rust_min_contract="$(sed -n 's/^pub const MIN_SUPPORTED_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig-context/src/runtime.rs")"
 if [[ -z "$rust_min_contract" || -z "$rust_current_contract" \
   || "$manifest_contract_version" -lt "$rust_min_contract" \
   || "$manifest_contract_version" -gt "$rust_current_contract" ]]; then
@@ -174,14 +174,14 @@ if [[ -z "$launcher_scope_marker" || -z "$installer_scope_marker" \
 fi
 
 installer_cache_layout="$(sed -n 's/^# jig-runtime-cache-layout://p' "$ROOT_DIR/scripts/install-jig.sh")"
-rust_cache_layout_value="$(rust_string_const "$ROOT_DIR/crates/jig/src/context.rs" INSTALLER_CACHE_LAYOUT_MARKER)"
+rust_cache_layout_value="$(rust_string_const "$ROOT_DIR/crates/jig-context/src/lib.rs" INSTALLER_CACHE_LAYOUT_MARKER)"
 if [[ -z "$rust_cache_layout_value" ]]; then
-  echo "Could not read INSTALLER_CACHE_LAYOUT_MARKER from crates/jig/src/context.rs." >&2
+  echo "Could not read INSTALLER_CACHE_LAYOUT_MARKER from crates/jig-context/src/lib.rs." >&2
   exit 1
 fi
 if [[ -z "$installer_cache_layout" \
   || "$installer_cache_layout" != "$rust_cache_layout_value" ]]; then
-  echo "Installer cache layout '${installer_cache_layout:-<unreadable>}' does not match Rust's shared layout '${rust_cache_layout_value:-<unreadable>}' in crates/jig/src/context.rs." >&2
+  echo "Installer cache layout '${installer_cache_layout:-<unreadable>}' does not match Rust's shared layout '${rust_cache_layout_value:-<unreadable>}' in crates/jig-context/src/lib.rs." >&2
   exit 1
 fi
 installer_cache_lock="$(sed -n 's/^# jig-runtime-cache-lock://p' "$ROOT_DIR/scripts/install-jig.sh")"
@@ -261,7 +261,7 @@ then
 fi
 
 legacy_cutoff="$(sed -n 's/^LEGACY_VERSION_LOCK_CUTOFF=\([0-9][0-9]*\)$/\1/p' "$ROOT_DIR/scripts/install-jig.sh")"
-rust_last_locked="$(sed -n 's/^pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig/src/context.rs")"
+rust_last_locked="$(sed -n 's/^pub const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig-context/src/lib.rs")"
 if [[ -z "$legacy_cutoff" || -z "$rust_last_locked" \
   || "$legacy_cutoff" -ne $((rust_last_locked + 1)) ]]; then
   echo "Installer legacy cutoff ${legacy_cutoff:-<unreadable>} does not follow Rust's last version-locked contract ${rust_last_locked:-<unreadable>}." >&2

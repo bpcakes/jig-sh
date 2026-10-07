@@ -1433,6 +1433,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jig-agents"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "jig-context",
+ "jig-owned-process",
+ "jig-tui",
+ "libc",
+ "reqwest",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "unicode-normalization",
+ "zeroize",
+]
+
+[[package]]
 name = "jig-codex-tui"
 version = "0.7.3-dev"
 dependencies = [
@@ -1441,6 +1463,36 @@ dependencies = [
  "jig-tui",
  "ratatui",
  "serde_json",
+]
+
+[[package]]
+name = "jig-commands"
+version = "0.7.3-dev"
+dependencies = [
+ "jig-contract",
+ "jig-features",
+]
+
+[[package]]
+name = "jig-context"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "croner",
+ "globset",
+ "jig-contract",
+ "jig-core",
+ "jig-dev-proxy",
+ "jig-features",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+ "ulid",
 ]
 
 [[package]]
@@ -1497,6 +1549,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-execution"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "jig-context",
+ "jig-owned-process",
+]
+
+[[package]]
 name = "jig-features"
 version = "0.7.3-dev"
 dependencies = [
@@ -1520,10 +1581,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-git"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "cap-fs-ext",
+ "cap-std",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "jig-go"
 version = "0.7.3-dev"
 dependencies = [
  "jig-contract",
+]
+
+[[package]]
+name = "jig-loops"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "cap-fs-ext",
+ "cap-std",
+ "chrono",
+ "chrono-tz",
+ "croner",
+ "fs4",
+ "jig-agents",
+ "jig-context",
+ "jig-execution",
+ "jig-git",
+ "jig-owned-process",
+ "jig-state",
+ "jig-ui",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "ulid",
 ]
 
 [[package]]
@@ -1534,6 +1632,62 @@ dependencies = [
  "libc",
  "tempfile",
  "wait-timeout",
+]
+
+[[package]]
+name = "jig-policy"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "cap-fs-ext",
+ "cap-std",
+ "fs4",
+ "jig-commands",
+ "jig-context",
+ "jig-contract",
+ "jig-execution",
+ "jig-features",
+ "jig-git",
+ "jig-owned-process",
+ "jig-repository",
+ "jig-rust",
+ "jig-sqlx",
+ "jig-vault",
+ "libc",
+ "proc-macro2",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "syn 2.0.117",
+ "tempfile",
+ "time",
+ "toml",
+]
+
+[[package]]
+name = "jig-repository"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "globset",
+ "jig-context",
+ "jig-contract",
+ "jig-execution",
+ "jig-file-budget",
+ "jig-git",
+ "jig-owned-process",
+ "jig-rust",
+ "jig-state",
+ "libc",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "toml",
+ "toml_edit",
 ]
 
 [[package]]
@@ -1550,7 +1704,6 @@ name = "jig-sh"
 version = "0.7.3-dev"
 dependencies = [
  "anyhow",
- "cap-fs-ext",
  "cap-std",
  "chrono",
  "chrono-tz",
@@ -1561,14 +1714,23 @@ dependencies = [
  "flate2",
  "fs4",
  "globset",
+ "jig-agents",
  "jig-codex-tui",
+ "jig-commands",
+ "jig-context",
  "jig-contract",
  "jig-core",
  "jig-dev-proxy",
+ "jig-execution",
  "jig-features",
  "jig-file-budget",
+ "jig-git",
+ "jig-loops",
  "jig-owned-process",
+ "jig-policy",
+ "jig-repository",
  "jig-rust",
+ "jig-state",
  "jig-tui",
  "jig-typescript",
  "jig-ui",
@@ -1576,8 +1738,6 @@ dependencies = [
  "jig-vault-tui",
  "libc",
  "minijinja",
- "proc-macro2",
- "pulldown-cmark",
  "reqwest",
  "rpassword",
  "schemars",
@@ -1592,7 +1752,6 @@ dependencies = [
  "time",
  "tokio",
  "toml",
- "toml_edit",
  "ulid",
  "unicode-normalization",
  "wait-timeout",
@@ -1604,6 +1763,26 @@ name = "jig-sqlx"
 version = "0.7.3-dev"
 dependencies = [
  "jig-contract",
+]
+
+[[package]]
+name = "jig-state"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "fs4",
+ "jig-context",
+ "jig-contract",
+ "libc",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "ulid",
+ "wait-timeout",
 ]
 
 [[package]]

@@ -2,7 +2,6 @@ use std::process::Command;
 
 use super::*;
 use crate::bootstrap::template_source::{TemplateRenderSource, prepare_template_source_from_base};
-use crate::context::CURRENT_CONTRACT_VERSION;
 
 #[cfg(unix)]
 #[test]
@@ -504,7 +503,7 @@ exec git "$@"
     fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
     let remote = format!("file://{}", template.path().display());
 
-    let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &wrapper);
+    let _git_bin = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &wrapper);
     let _ca = EnvVarGuard::set("GIT_SSL_CAINFO", "/trusted/ca.pem");
     let _proxy = EnvVarGuard::set("GIT_PROXY_COMMAND", "/trusted/proxy-command");
     let _proxy_auth = EnvVarGuard::set("GIT_HTTP_PROXY_AUTHMETHOD", "basic");
@@ -768,7 +767,7 @@ exit 0
         fs::set_permissions(&git_path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &git_path);
+    let _git_bin = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git_path);
 
     let error = run_adopt(AdoptOpts {
         components: Default::default(),

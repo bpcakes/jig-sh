@@ -41,7 +41,7 @@ fn recopy_preserves_legacy_check_policy_and_tracker_in_pinned_templates() {
             no_vault: true,
             answers: AnswerOpts {
                 repo_name: Some("ExampleProject".into()),
-                backend_language: Some(crate::backend::BackendLanguage::Rust),
+                backend_language: Some(jig_context::backend::BackendLanguage::Rust),
                 sqlx_enabled: Some(false),
                 ..AnswerOpts::default()
             },
@@ -139,7 +139,7 @@ fn recopy_preserves_legacy_check_policy_and_tracker_in_pinned_templates() {
         let refreshed = RepoContext::load_from(&repo).unwrap();
         assert_eq!(refreshed.contract_version(), contract_version);
         if contract_version == 5 {
-            let catalog = crate::repository::RepositoryCatalog::from_context(&refreshed).unwrap();
+            let catalog = jig_repository::RepositoryCatalog::from_context(&refreshed).unwrap();
             let targets = &catalog
                 .profile(catalog.default_check_profile().unwrap())
                 .unwrap()
@@ -149,7 +149,7 @@ fn recopy_preserves_legacy_check_policy_and_tracker_in_pinned_templates() {
                 ["repo:contract", "repo:test", "repo:test-locked"]
             );
         }
-        assert_eq!(crate::policy::contract_check(&refreshed).exit_status, 0);
+        assert_eq!(jig_policy::contract_check(&refreshed).exit_status, 0);
         assert!(output["warnings"].as_array().unwrap().is_empty());
     }
 }

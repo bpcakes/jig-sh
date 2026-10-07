@@ -4,6 +4,42 @@ use super::*;
 #[path = "budget_tests.rs"]
 mod budget_tests;
 
+pub(super) fn sqlx_migration_preflight(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    planned: &PlannedTarget,
+    control: &TargetExecutionControl<'_>,
+) -> Option<TargetCapture> {
+    let action = catalog.action(&planned.target)?;
+    let sqlx_check = action
+        .legacy_aliases
+        .iter()
+        .any(|alias| alias == jig_contract::tool::SQLX_CHECK)
+        || (action.target.action.as_str() == "sqlx"
+            && catalog
+                .component(&action.target.component)
+                .is_some_and(|component| {
+                    component.adapters.iter().any(|adapter| adapter == "sqlx")
+                }));
+    if !sqlx_check {
+        return None;
+    }
+    if let Err(stop) = control.remaining() {
+        return Some(stopped_before_start(planned, stop));
+    }
+    jig_policy::migration_versions::check(ctx)
+        .err()
+        .map(|error| {
+            TargetCapture::failed_with_output(
+                format!("{error:#}"),
+                "sqlx.migration_versions",
+                Vec::new(),
+                Vec::new(),
+            )
+            .with_maybe_executed(false)
+        })
+}
+
 pub(super) fn native_runner_error_capture(
     planned: &PlannedTarget,
     operation: &str,
@@ -38,7 +74,7 @@ pub(super) struct TargetExecutionControl<'a> {
     budget: TargetBudget,
     run_control: &'a mut dyn RepositoryRunControl,
     poll_failure: Mutex<Option<String>>,
-    resource_lease: Option<&'a crate::state::ResourceLease>,
+    resource_lease: Option<&'a jig_state::ResourceLease>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,7 +110,7 @@ impl<'a> TargetExecutionControl<'a> {
     pub(super) fn with_budget(
         budget: TargetBudget,
         run_control: &'a mut dyn RepositoryRunControl,
-        resource_lease: Option<&'a crate::state::ResourceLease>,
+        resource_lease: Option<&'a jig_state::ResourceLease>,
     ) -> Self {
         Self {
             budget,
@@ -252,7 +288,7 @@ pub(super) fn run_process_target(
     if matches!(
         planned.runner,
         ActionRunner::Argv { .. } | ActionRunner::RustNextestV1 { .. }
-    ) && let Err(error) = crate::repository::runners::prepare_literal_exec(&mut command)
+    ) && let Err(error) = jig_repository::runners::prepare_literal_exec(&mut command)
     {
         return TargetCapture::blocked(format!(
             "target '{}' literal process could not be prepared: {error}",

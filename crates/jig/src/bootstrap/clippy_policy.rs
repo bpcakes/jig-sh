@@ -57,7 +57,8 @@ pub(super) fn classify_generated_rust_clippy_command(
         });
     }
 
-    if let Some((cargo_command, fallback)) = crate::shell::optional_cargo_command_branches(command)
+    if let Some((cargo_command, fallback)) =
+        jig_repository::shell::optional_cargo_command_branches(command)
         && fallback == expected_fallback()
         && let Some(adds_all_features) = root_command_adds_all_features(cargo_command)
     {
@@ -86,7 +87,9 @@ pub(super) fn is_generated_rust_clippy_command(command: &str) -> bool {
 }
 
 pub(super) fn clippy_command_enforces_mod_module_files(command: &str) -> bool {
-    if let Some((cargo_command, _)) = crate::shell::optional_cargo_command_branches(command) {
+    if let Some((cargo_command, _)) =
+        jig_repository::shell::optional_cargo_command_branches(command)
+    {
         return direct_clippy_command_enforces_mod_module_files(cargo_command);
     }
     if let Some(entries) = nested_command_entries(command) {
@@ -100,18 +103,21 @@ pub(super) fn clippy_command_enforces_mod_module_files(command: &str) -> bool {
 fn optional_root_command() -> String {
     format!(
         "{}{}{}{}{}",
-        crate::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
+        jig_repository::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
         DEFAULT_RUST_CLIPPY_COMMAND,
-        crate::shell::OPTIONAL_CARGO_COMMAND_ELSE,
+        jig_repository::shell::OPTIONAL_CARGO_COMMAND_ELSE,
         expected_fallback(),
-        crate::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
+        jig_repository::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
     )
 }
 
 fn expected_fallback() -> String {
     format!(
         "printf '%s\\n' {}",
-        crate::shell::quote(&format!("{}clippy.", crate::CARGO_SKIP_OUTPUT_PREFIX))
+        jig_repository::shell::quote(&format!(
+            "{}clippy.",
+            jig_repository::shell::CARGO_SKIP_OUTPUT_PREFIX
+        ))
     )
 }
 
@@ -300,11 +306,11 @@ mod tests {
 
             let wrapped = format!(
                 "{}{}{}{}{}",
-                crate::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
+                jig_repository::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
                 command,
-                crate::shell::OPTIONAL_CARGO_COMMAND_ELSE,
+                jig_repository::shell::OPTIONAL_CARGO_COMMAND_ELSE,
                 expected_fallback(),
-                crate::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
+                jig_repository::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
             );
             let generated = classify_generated_rust_clippy_command(&wrapped).unwrap();
             assert_eq!(generated.upgraded_command(), optional_root_command());
@@ -316,11 +322,11 @@ mod tests {
         assert!(
             classify_generated_rust_clippy_command(&format!(
                 "{}{}{}{}{}",
-                crate::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
+                jig_repository::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
                 without_all_features,
-                crate::shell::OPTIONAL_CARGO_COMMAND_ELSE,
+                jig_repository::shell::OPTIONAL_CARGO_COMMAND_ELSE,
                 expected_fallback(),
-                crate::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
+                jig_repository::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
             ))
             .is_none()
         );
@@ -373,10 +379,10 @@ mod tests {
 
         let custom_fallback = format!(
             "{}{}{}printf custom{}",
-            crate::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
+            jig_repository::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
             DEFAULT_RUST_CLIPPY_COMMAND,
-            crate::shell::OPTIONAL_CARGO_COMMAND_ELSE,
-            crate::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
+            jig_repository::shell::OPTIONAL_CARGO_COMMAND_ELSE,
+            jig_repository::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
         );
         assert!(classify_generated_rust_clippy_command(&custom_fallback).is_none());
 
@@ -468,7 +474,7 @@ mod tests {
         let mut command = NESTED_COMMAND_PREFIX.to_string();
         for manifest in manifests {
             command.push_str(NESTED_ENTRY_PREFIX);
-            command.push_str(&crate::shell::quote(manifest));
+            command.push_str(&jig_repository::shell::quote(manifest));
             command.push_str(NESTED_COMMAND_SEPARATOR);
             command.push_str(cargo_command);
             command.push_str(NESTED_ENTRY_SUFFIX);

@@ -197,7 +197,7 @@ marketplaces = []
 
     let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(rendered.contains("marketplaces = []"));
-    let ctx = crate::context::RepoContext::load_from(&destination).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&destination).unwrap();
     assert!(ctx.codex_marketplaces().is_empty());
 }
 
@@ -302,7 +302,7 @@ plugins = []
 
     let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(rendered.contains("plugins = []"));
-    let ctx = crate::context::RepoContext::load_from(&destination).unwrap();
+    let ctx = jig_context::RepoContext::load_from(&destination).unwrap();
     assert_eq!(ctx.codex_marketplaces().len(), 1);
     assert!(ctx.codex_marketplaces()[0].plugins.is_empty());
 }
@@ -330,7 +330,7 @@ fn run_init_falls_back_only_for_unsupported_git_branch_flag() {
         fs::set_permissions(&git_path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &git_path);
+    let _git_bin = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git_path);
 
     let template = materialize_template_worktree();
     let destination = temp.path().join("repo");
@@ -383,7 +383,7 @@ fn run_init_surfaces_git_branch_init_failures() {
         fs::set_permissions(&git_path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &git_path);
+    let _git_bin = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git_path);
 
     let template = materialize_template_worktree();
     let error = run_init(InitOpts {
@@ -717,7 +717,7 @@ fn adopt_with_versioned_artifacts_omits_migration_add_capability_and_guidance() 
             repo_name: Some("demo".into()),
             sqlx_enabled: Some(true),
             rust_migration_dir: Some("schema".into()),
-            rust_migration_layout: Some(crate::context::RustMigrationLayout::VersionedArtifacts),
+            rust_migration_layout: Some(jig_context::RustMigrationLayout::VersionedArtifacts),
             rust_sqlx_metadata_dir: Some(".sqlx".into()),
             ..AnswerOpts::default()
         },

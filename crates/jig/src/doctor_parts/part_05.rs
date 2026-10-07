@@ -301,7 +301,7 @@ fn required_command_programs(root: &Path, command: &str) -> RequiredCommandProgr
 }
 
 fn active_optional_cargo_branch(root: &Path, command: &str) -> Option<String> {
-    let (then_branch, else_branch) = crate::shell::optional_cargo_command_branches(command)?;
+    let (then_branch, else_branch) = shell::optional_cargo_command_branches(command)?;
     Some(
         if root.join("Cargo.toml").exists() {
             then_branch

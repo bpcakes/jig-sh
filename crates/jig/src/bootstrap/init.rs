@@ -7,7 +7,6 @@ use super::git::init_git_repo_with_validation;
 use super::init_transaction::InitMutationTransaction;
 use super::initial_copy::{BootstrapCopyRequest, render_and_copy_bootstrap_template};
 use super::initial_template::{prepare_initial_template_source, resolve_initial_template_request};
-use super::path::bootstrap_invocation_cwd;
 use super::template_source::PreparedTemplateSource;
 use super::{
     ANSWERS_FILE, AnswerOpts, InitOpts, InitReport, InitialCommand,
@@ -16,6 +15,7 @@ use super::{
     validate_init_destination,
 };
 use crate::progress::CliProgress;
+use jig_repository::path::bootstrap_invocation_cwd;
 
 struct PreparedInit {
     destination: PathBuf,
@@ -208,7 +208,7 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
             ))?;
             progress.step("refresh agent map", "include scaffold crate guides");
             let agent_map_path = Path::new(managed_paths::AGENT_MAP_PATH);
-            let agent_map = progress.log_blocked_on_err(crate::policy::render_agent_map(
+            let agent_map = progress.log_blocked_on_err(jig_policy::render_agent_map(
                 &work_destination,
                 agent_map_path,
             ))?;

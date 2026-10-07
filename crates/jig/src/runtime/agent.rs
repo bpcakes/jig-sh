@@ -5,6 +5,11 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use jig_context::{CodexMarketplaceConfig, RepoContext};
+use jig_execution::{
+    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionControl, ExecutionPhase, PhasePosition,
+    ProcessExecutionObserver,
+};
 use jig_owned_process::{
     OwnedProcessTreeError, ProcessOutputLimits, ProcessOutputOverflowPolicy, format_exit_status,
     require_success, run_owned_process_tree_with_output,
@@ -13,11 +18,6 @@ use jig_owned_process::{
 use serde_json::{Value as JsonValue, json};
 
 use crate::command::{AgentBootstrapRequest, AgentCommand};
-use crate::context::{CodexMarketplaceConfig, RepoContext};
-use crate::execution::{
-    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionControl, ExecutionPhase, PhasePosition,
-    ProcessExecutionObserver,
-};
 use crate::progress::CliProgress;
 use crate::runtime::CodexSupportProbeResult;
 
@@ -84,7 +84,7 @@ fn doctor_with_progress(
 ) -> JsonValue {
     progress.header("inspect local Codex tooling");
     progress.info("repo", ctx.root().display());
-    let codex_bin = crate::codex::codex_bin();
+    let codex_bin = jig_agents::codex::codex_bin();
     let codex_bin_display = codex_bin.to_string_lossy().into_owned();
     progress.step("resolve codex", &codex_bin_display);
     let configured_marketplaces = ctx.codex_marketplaces();
@@ -112,7 +112,7 @@ fn doctor_with_progress(
         }
         None => (None, None, true),
     };
-    let config_path = crate::codex::codex_config_path();
+    let config_path = jig_agents::codex::codex_config_path();
     progress.step(
         "read codex config",
         config_path
@@ -202,7 +202,7 @@ fn bootstrap(
     let progress = CliProgress::new("agent bootstrap");
     progress.header("install Codex marketplace");
     progress.info("repo", ctx.root().display());
-    let codex_bin = crate::codex::codex_bin();
+    let codex_bin = jig_agents::codex::codex_bin();
     let codex_bin_display = codex_bin.to_string_lossy().into_owned();
     progress.step("resolve codex", &codex_bin_display);
     let marketplace_source =
@@ -621,7 +621,7 @@ fn codex_supports_plugin_marketplaces_with_environment_and_cancellation(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .envs(environment.iter().map(|(key, value)| (key, value)));
-    crate::shell::sanitize_bash_environment(&mut command);
+    jig_owned_process::sanitize_bash_environment(&mut command);
     let output = match run_owned_process_tree_with_output(&mut command, timeout, cancelled) {
         Ok(output) => output,
         Err(OwnedProcessTreeError::Start(_)) => return Ok(false),

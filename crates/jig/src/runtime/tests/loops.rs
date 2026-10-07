@@ -5,6 +5,7 @@ use std::path::Path;
 #[cfg(unix)]
 use std::process::Command;
 
+use jig_state::now_ms;
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -15,7 +16,6 @@ use crate::command::{
 #[cfg(unix)]
 use crate::runtime::tests::common::write_codex_stub;
 use crate::runtime::tests::common::write_fixture_repo;
-use crate::state::now_ms;
 #[cfg(unix)]
 use crate::test_env::{EnvVarGuard, lock_env};
 
@@ -25,9 +25,9 @@ struct CancelAfterEntryObserver {
     checks: Cell<usize>,
 }
 
-impl crate::execution::ExecutionObserver for CancelAfterEntryObserver {}
+impl jig_execution::ExecutionObserver for CancelAfterEntryObserver {}
 
-impl crate::execution::ExecutionCancellation for CancelAfterEntryObserver {
+impl jig_execution::ExecutionCancellation for CancelAfterEntryObserver {
     fn cancelled(&self) -> bool {
         let checks = self.checks.get();
         self.checks.set(checks + 1);

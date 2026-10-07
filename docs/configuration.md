@@ -117,6 +117,20 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 - `rust_migration_layout`: closed migration representation. Use `flat_migrations` for ordinary timestamped SQLx migration files or `versioned_artifacts` for complete versioned schema trees. Older configs that omit the key default to `flat_migrations`.
 - `rust_sqlx_metadata_dir`: committed SQLx metadata directory
 
+For `flat_migrations`, SQLx checks validate numeric migration versions before
+running the configured command. The migration-immutability policy check also
+reports these conflicts, including newly added and uncommitted files. Prefixes
+are parsed as SQLx `i64` versions, so `1_first.sql` and `01_second.sql` conflict.
+One `.up.sql` and one `.down.sql` may share a version; duplicate forward or
+rollback files and simple/reversible collisions fail with every conflicting path.
+
+Validation reads only direct files in the canonical `migration_dir` (with the
+legacy `rust_migration_dir` fallback). It does not combine child directories or
+independent database migration sources. `versioned_artifacts` and a canonical
+Goose-owned migration directory retain their existing policies. Repositories
+with additional SQLx sources should validate each source in their project-owned
+check command; Jig currently declares one repository-wide migration directory.
+
 For contracts through version 5, `backend_language = "go"` with `go_database = "postgres"` requires `migration_dir`, and Go backend identity cannot be combined with `sqlx_enabled = true`. Contract 6 does not persist that singular backend identity: components carry composable adapters, so one authored repository may contain Go and Rust/SQLx components. Recopy derives its compatibility-only singular fields from the complete component model rather than letting stale legacy fields reject that valid mixed model. A complete authored model and its string-valued `[commands]` map remain authoritative when loaded through answers-file init or footprint-changing re-adoption. Generated models are recognized against their stored compatibility projection so a footprint change can add or retire generated capabilities, while a structurally customized or mixed-backend model is retained. Explicit answers files with a malformed command map fail closed; automatic re-adoption can still repair malformed generated configuration.
 
 Generated Go repositories use the root `go.mod` as their Go toolchain authority. For contract-v6 repositories, doctor and managed Go CI start at each `go` component root and use the nearest ancestor `go.mod` within the repository, deduplicating components that share a module. Every existing component-root directory segment must be a real directory rather than a symlink, so module discovery cannot escape repository authority. Doctor reads each module's required `go` directive, honors a newer optional `toolchain` directive, and requires the active Go runtime to satisfy the highest discovered version. CI asks Jig for the selector through the same bounded parser before `setup-go`, while its cache watches root and nested module, workspace, and vendor authority. Jig does not generate a second checked-in `.go-version` authority.

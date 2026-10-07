@@ -28,7 +28,7 @@ exit 0
         fs::set_permissions(&git_path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &git_path);
+    let _git_bin = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git_path);
 
     let error = run_adopt(AdoptOpts {
         components: Default::default(),

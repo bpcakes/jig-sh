@@ -3,7 +3,7 @@
 
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 
-use crate::root_commands;
+use jig_commands::root_commands;
 
 pub(super) const TEMPLATE_ERROR_HINT: &str = "\
 Templates:

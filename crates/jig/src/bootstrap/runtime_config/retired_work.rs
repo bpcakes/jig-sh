@@ -1,8 +1,9 @@
 //! Tracker ownership follows the rendered contract epoch. Contract 9 retires
 //! `[work]`, moves ownership to `[repository] tracker`, and reports dropped settings.
 
+use jig_context::{RepositoryTracker, WORK_CONFIG_RETIRED_CONTRACT_VERSION};
+
 use super::*;
-use crate::context::{RepositoryTracker, WORK_CONFIG_RETIRED_CONTRACT_VERSION};
 
 pub(super) fn apply_retained_tracker(existing: &toml::Table, destination: &Path) -> Result<()> {
     let Some(tracker) = retained_tracker(existing)? else {

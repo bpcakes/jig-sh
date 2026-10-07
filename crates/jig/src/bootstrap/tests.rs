@@ -14,7 +14,7 @@ const CURRENT_GENERATED_INSTALLER: &str =
 fn current_generated_launcher() -> String {
     CURRENT_GENERATED_LAUNCHER_TEMPLATE.replace(
         "<<[ _jig.contract_version ]>>",
-        &crate::context::CURRENT_CONTRACT_VERSION.to_string(),
+        &jig_context::CURRENT_CONTRACT_VERSION.to_string(),
     )
 }
 
@@ -66,11 +66,11 @@ fn launcher_repair_cache_publication_restores_all_prior_caches_on_late_failure()
 fn repair_seed_retirement_preserves_ordinary_cache_provenance() {
     let repo = tempdir().unwrap();
     let default_cache = runtime_cache_base(repo.path()).join(runtime_profile_cache_name(
-        crate::context::CURRENT_CONTRACT_VERSION,
+        jig_context::CURRENT_CONTRACT_VERSION,
         RuntimeCacheProfile::Default,
     ));
     let runtime_cache = runtime_cache_base(repo.path()).join(runtime_profile_cache_name(
-        crate::context::CURRENT_CONTRACT_VERSION,
+        jig_context::CURRENT_CONTRACT_VERSION,
         RuntimeCacheProfile::Runtime,
     ));
     for cache in [&default_cache, &runtime_cache] {
@@ -90,7 +90,7 @@ fn repair_seed_retirement_preserves_ordinary_cache_provenance() {
     .unwrap();
 
     let outcome =
-        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+        retire_launcher_repair_seeded_caches(repo.path(), jig_context::CURRENT_CONTRACT_VERSION);
     assert_eq!(outcome.retired, 1);
     assert!(outcome.errors.is_empty());
 
@@ -108,7 +108,7 @@ fn repair_seed_retirement_preserves_ordinary_cache_provenance() {
 fn repair_seed_retirement_preserves_embedded_runtime_provenance() {
     let repo = tempdir().unwrap();
     let cache = runtime_cache_base(repo.path()).join(runtime_profile_cache_name(
-        crate::context::CURRENT_CONTRACT_VERSION,
+        jig_context::CURRENT_CONTRACT_VERSION,
         RuntimeCacheProfile::Runtime,
     ));
     fs::create_dir_all(cache.join("bin")).unwrap();
@@ -120,7 +120,7 @@ fn repair_seed_retirement_preserves_embedded_runtime_provenance() {
     .unwrap();
 
     let outcome =
-        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+        retire_launcher_repair_seeded_caches(repo.path(), jig_context::CURRENT_CONTRACT_VERSION);
 
     assert_eq!(outcome.retired, 0);
     assert!(outcome.errors.is_empty());
@@ -134,7 +134,7 @@ fn repair_seed_retirement_preserves_embedded_runtime_provenance() {
 fn repair_seed_retirement_does_not_block_or_fail_committed_harness_changes() {
     let repo = tempdir().unwrap();
     let cache = runtime_cache_base(repo.path()).join(runtime_profile_cache_name(
-        crate::context::CURRENT_CONTRACT_VERSION,
+        jig_context::CURRENT_CONTRACT_VERSION,
         RuntimeCacheProfile::Default,
     ));
     fs::create_dir_all(cache.join("bin")).unwrap();
@@ -151,7 +151,7 @@ fn repair_seed_retirement_does_not_block_or_fail_committed_harness_changes() {
     .unwrap();
 
     let blocked =
-        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+        retire_launcher_repair_seeded_caches(repo.path(), jig_context::CURRENT_CONTRACT_VERSION);
     assert_eq!(blocked.retired, 0);
     assert_eq!(blocked.errors.len(), 1);
     let warning = launcher_repair_retirement_warning(&blocked.errors[0]);
@@ -169,7 +169,7 @@ fn repair_seed_retirement_does_not_block_or_fail_committed_harness_changes() {
 
     drop(active_runtime);
     let outcome =
-        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+        retire_launcher_repair_seeded_caches(repo.path(), jig_context::CURRENT_CONTRACT_VERSION);
     assert_eq!(outcome.retired, 1);
     assert!(outcome.errors.is_empty());
 }
@@ -179,11 +179,11 @@ fn repair_seed_retirement_reports_completed_work_before_a_later_cache_error() {
     let repo = tempdir().unwrap();
     let cache_base = runtime_cache_base(repo.path());
     let default_cache = cache_base.join(runtime_profile_cache_name(
-        crate::context::CURRENT_CONTRACT_VERSION,
+        jig_context::CURRENT_CONTRACT_VERSION,
         RuntimeCacheProfile::Default,
     ));
     let runtime_cache = cache_base.join(runtime_profile_cache_name(
-        crate::context::CURRENT_CONTRACT_VERSION,
+        jig_context::CURRENT_CONTRACT_VERSION,
         RuntimeCacheProfile::Runtime,
     ));
     for cache in [&default_cache, &runtime_cache] {
@@ -198,7 +198,7 @@ fn repair_seed_retirement_reports_completed_work_before_a_later_cache_error() {
     fs::create_dir(runtime_cache.join(".jig-source-metadata-stamp")).unwrap();
 
     let outcome =
-        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+        retire_launcher_repair_seeded_caches(repo.path(), jig_context::CURRENT_CONTRACT_VERSION);
 
     assert_eq!(outcome.retired, 1);
     assert_eq!(outcome.errors.len(), 1);
@@ -419,7 +419,7 @@ fn adopt_and_update_guard_rejects_newer_declared_contracts_only() {
         &manifest,
         format!(
             "{{\"contract_version\": {}}}\n",
-            crate::context::CURRENT_CONTRACT_VERSION + 1
+            jig_context::CURRENT_CONTRACT_VERSION + 1
         ),
     )
     .unwrap();
@@ -435,7 +435,7 @@ fn adopt_and_update_guard_rejects_newer_declared_contracts_only() {
         &manifest,
         format!(
             "{{\"contract_version\": {}}}\n",
-            crate::context::CURRENT_CONTRACT_VERSION
+            jig_context::CURRENT_CONTRACT_VERSION
         ),
     )
     .unwrap();
@@ -565,7 +565,7 @@ fn staged_current_contract_requires_repository_scoped_runtime_scripts() {
         repo.path().join("scripts/jig"),
         format!(
             "#!/bin/sh\nCONTRACT_VERSION=\"{}\"\n",
-            crate::context::CURRENT_CONTRACT_VERSION
+            jig_context::CURRENT_CONTRACT_VERSION
         ),
     )
     .unwrap();
@@ -577,7 +577,7 @@ fn staged_current_contract_requires_repository_scoped_runtime_scripts() {
 
     let error = renderer::validate_staged_runtime_contract(
         repo.path(),
-        crate::context::CURRENT_CONTRACT_VERSION,
+        jig_context::CURRENT_CONTRACT_VERSION,
     )
     .unwrap_err()
     .to_string();
@@ -599,7 +599,7 @@ fn staged_current_contract_requires_repository_scoped_runtime_scripts() {
     .unwrap();
     let error = renderer::validate_staged_runtime_contract(
         repo.path(),
-        crate::context::CURRENT_CONTRACT_VERSION,
+        jig_context::CURRENT_CONTRACT_VERSION,
     )
     .unwrap_err()
     .to_string();
@@ -614,11 +614,8 @@ fn staged_current_contract_requires_repository_scoped_runtime_scripts() {
         CURRENT_GENERATED_INSTALLER,
     )
     .unwrap();
-    renderer::validate_staged_runtime_contract(
-        repo.path(),
-        crate::context::CURRENT_CONTRACT_VERSION,
-    )
-    .unwrap();
+    renderer::validate_staged_runtime_contract(repo.path(), jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
 }
 
 #[test]

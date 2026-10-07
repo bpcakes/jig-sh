@@ -9,7 +9,7 @@ pub(in crate::bootstrap) fn validate_staged_runtime_contract(
     manifest_contract_version: u32,
 ) -> Result<()> {
     let requires_repository_scoped_runtime =
-        manifest_contract_version > crate::context::LAST_VERSION_LOCKED_CONTRACT_VERSION;
+        manifest_contract_version > jig_context::LAST_VERSION_LOCKED_CONTRACT_VERSION;
     let launcher_path = destination.join("scripts/jig");
     let launcher = match fs::read_to_string(&launcher_path) {
         Ok(launcher) => Some(launcher),

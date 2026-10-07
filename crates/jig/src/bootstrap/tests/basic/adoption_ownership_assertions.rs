@@ -110,8 +110,8 @@ pub(super) fn assert_minimal_guidance(output: &serde_json::Value) {
 }
 
 pub(super) fn assert_minimal_contract(repo: &Path) {
-    let ctx = crate::context::RepoContext::load_from(repo).unwrap();
+    let ctx = jig_context::RepoContext::load_from(repo).unwrap();
     assert_eq!(ctx.repo_name(), "demo");
     assert!(!ctx.required_commands().is_empty());
-    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
+    assert_eq!(jig_policy::contract_check(&ctx).exit_status, 0);
 }

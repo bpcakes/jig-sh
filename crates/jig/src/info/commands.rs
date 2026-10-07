@@ -1,8 +1,8 @@
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
-use crate::root_commands::{self, RootCommand, RootCommandId};
-use crate::tool_defs::tool;
+use jig_commands::root_commands::{self, RootCommand, RootCommandId};
+use jig_commands::tool_defs::tool;
 
 use super::VaultCapability;
 
@@ -429,7 +429,7 @@ fn migration_command(ctx: &RepoContext) -> Value {
             );
         }
     };
-    if migration_backend == crate::context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
+    if migration_backend == jig_context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
         return ready_command(root_commands::SQLX);
     }
     manifest_command(
@@ -631,7 +631,7 @@ fn command_status_label(status: &str) -> &'static str {
 
 pub(super) fn command_prefix(ctx: &RepoContext) -> String {
     if repo_launcher_available(ctx) {
-        crate::shell::quote(&ctx.root().join("scripts/jig").display().to_string())
+        jig_repository::shell::quote(&ctx.root().join("scripts/jig").display().to_string())
     } else {
         "jig".into()
     }
@@ -663,7 +663,7 @@ fn is_executable_file(path: &std::path::Path) -> bool {
 }
 
 fn adopt_command(ctx: &RepoContext) -> String {
-    let destination = crate::shell::quote(&ctx.root().display().to_string());
+    let destination = jig_repository::shell::quote(&ctx.root().display().to_string());
     let mut command = format!("{} adopt {destination}", command_prefix(ctx));
     let stored_source = ctx.source_path().trim();
     let local_source = ctx.template_local_path().trim();
@@ -684,7 +684,7 @@ fn adopt_command(ctx: &RepoContext) -> String {
     };
     if !source.is_empty() {
         command.push_str(" --template ");
-        command.push_str(&crate::shell::quote(&source));
+        command.push_str(&jig_repository::shell::quote(&source));
         let is_remote =
             source.contains("://") || (source.starts_with("git@") && source.contains(':'));
         let is_embedded = source.starts_with("embedded:");
@@ -694,11 +694,11 @@ fn adopt_command(ctx: &RepoContext) -> String {
         let commit = ctx.source_commit().trim();
         if !commit.is_empty() && !is_embedded {
             command.push_str(" --vcs-ref ");
-            command.push_str(&crate::shell::quote(commit));
+            command.push_str(&jig_repository::shell::quote(commit));
         }
         if use_local_source && !stored_source.is_empty() && stored_source != source {
             command.push_str(" --template-source-url ");
-            command.push_str(&crate::shell::quote(stored_source));
+            command.push_str(&jig_repository::shell::quote(stored_source));
         }
     }
     if ctx.is_minimal_footprint() {

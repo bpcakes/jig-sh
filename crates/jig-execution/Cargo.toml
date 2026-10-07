@@ -1,0 +1,21 @@
+[package]
+name = "jig-execution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Supervised command execution with bounded output, cancellation, and phase observers for Jig."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lib]
+name = "jig_execution"
+
+[dependencies]
+anyhow.workspace = true
+jig-context.workspace = true
+jig-owned-process.workspace = true
+
+[lints]
+workspace = true

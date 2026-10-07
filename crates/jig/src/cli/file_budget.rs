@@ -3,16 +3,16 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::{ArgGroup, Args, Subcommand};
+use jig_context::RepoContext;
 use jig_contract::{
     ComparisonRequestV1, MissingComparisonV1, NativeFileBudgetConfigV1, RunConclusion,
     StrictInventoryReasonV1,
 };
-
-use crate::context::RepoContext;
-use crate::exit::CliExit;
-use crate::repository::{
+use jig_repository::{
     FILE_BUDGET_MAX_CANDIDATES_HARD_CAP_V1, FILE_BUDGET_MAX_TOTAL_BYTES_HARD_CAP_V1,
 };
+
+use crate::exit::CliExit;
 use crate::runtime::{FileBudgetEvaluationMode, run_direct_file_budget};
 
 use super::comparison::{CliExactTreeProvenance, comparison_request};

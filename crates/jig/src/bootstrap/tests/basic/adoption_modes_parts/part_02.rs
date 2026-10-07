@@ -57,7 +57,7 @@ fn forced_full_to_minimal_adoption_retires_full_harness_paths() {
         toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
             .unwrap();
     assert_project_runtime_tables(&config);
-    crate::context::RepoContext::load_from(&repo).unwrap();
+    jig_context::RepoContext::load_from(&repo).unwrap();
 }
 
 #[cfg(unix)]

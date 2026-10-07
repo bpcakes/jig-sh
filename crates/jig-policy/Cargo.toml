@@ -1,0 +1,52 @@
+[package]
+name = "jig-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Repository policy checks, agent guides, and the agent map for Jig."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lib]
+name = "jig_policy"
+
+[features]
+# Repository fixtures shared with dependents' tests.
+test-support = ["jig-context/test-support"]
+
+[dependencies]
+anyhow.workspace = true
+cap-fs-ext.workspace = true
+cap-std.workspace = true
+fs4.workspace = true
+jig-commands.workspace = true
+jig-context.workspace = true
+jig-contract.workspace = true
+jig-execution.workspace = true
+jig-features.workspace = true
+jig-git.workspace = true
+jig-owned-process.workspace = true
+jig-repository.workspace = true
+jig-rust.workspace = true
+jig-sqlx.workspace = true
+jig-vault.workspace = true
+# The SQLx AST inventory retains source line numbers outside procedural macros.
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+syn = { workspace = true, features = ["visit"] }
+tempfile.workspace = true
+time.workspace = true
+toml.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+jig-context = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

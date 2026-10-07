@@ -465,7 +465,7 @@ fn required_tools_check_with_environment_and_process_control(
             continue;
         };
         executable_reference_count += 1;
-        let (present, detail) = match crate::repository_path::resolve_repository_working_directory(
+        let (present, detail) = match repository_path::resolve_repository_working_directory(
             ctx.root(),
             working_directory.as_deref(),
         ) {
@@ -475,7 +475,7 @@ fn required_tools_check_with_environment_and_process_control(
                     .map(OsStr::new)
                     .or(environment.search_path.as_deref())
                     .unwrap_or_else(|| {
-                        OsStr::new(crate::repository::runners::DEFAULT_ARGV_SEARCH_PATH)
+                        OsStr::new(jig_repository::runners::DEFAULT_ARGV_SEARCH_PATH)
                     });
                 let resolved = resolve_program(&cwd, program, Some(search_path));
                 program_presence(

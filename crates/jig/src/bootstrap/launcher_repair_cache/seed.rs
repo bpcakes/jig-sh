@@ -8,7 +8,7 @@ use anyhow::{Result, bail};
 #[cfg(not(test))]
 use std::path::PathBuf;
 
-use crate::context::{LAUNCHER_REPAIR_STAGING_PREFIX, RuntimeCacheProfile, runtime_cache_base};
+use jig_context::{LAUNCHER_REPAIR_STAGING_PREFIX, RuntimeCacheProfile, runtime_cache_base};
 
 #[cfg(not(test))]
 use super::publication::reap_stale_launcher_repair_staging;
@@ -225,8 +225,8 @@ fn seed_launcher_repair_profile(
         .env("JIG_DEV_BIN", executable)
         .env("PATH", tool_environment.helper_path)
         .current_dir(destination);
-    crate::shell::sanitize_bash_environment(&mut command);
-    super::super::scrub_git_repository_environment_except(&mut command, &[]);
+    jig_owned_process::sanitize_bash_environment(&mut command);
+    jig_git::scrub_git_repository_environment_except(&mut command, &[]);
     sanitize_launcher_repair_environment(&mut command);
     let output = command.output().with_context(|| {
         format!(

@@ -712,7 +712,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
 
 fn recognized_prior_answers(destination: &Path) -> Option<RenderAnswers> {
     let answers = RenderAnswers::from_answers_file(&destination.join(ANSWERS_FILE)).ok()?;
-    crate::context::RepoContext::validate_config_file(destination).ok()?;
+    jig_context::RepoContext::validate_config_file(destination).ok()?;
     Some(answers)
 }
 

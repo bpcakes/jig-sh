@@ -7,7 +7,7 @@ use std::fs;
 use tempfile::tempdir;
 
 fn discoverable_command_names() -> Vec<&'static str> {
-    crate::root_commands::ALL
+    jig_commands::root_commands::ALL
         .iter()
         .map(|command| command.name)
         .collect()

@@ -3,8 +3,9 @@
 
 use std::collections::BTreeMap;
 
+use jig_repository::{PlanRunRequest, plan_action_run_with_cancellation};
+
 use super::*;
-use crate::repository::{PlanRunRequest, plan_action_run_with_cancellation};
 use crate::runtime::run_execution::{
     ExecuteCheckRunRequest, ExecutionAliasOverride, execute_freshly_planned_check_run_with_lease,
 };
@@ -16,7 +17,7 @@ pub(super) fn execute(
     action: ActionSpec,
     args: Value,
     observer: &mut dyn ExecutionControl,
-    repository_execution: crate::state::RepositoryExecutionLease,
+    repository_execution: jig_state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
     let catalog = RepositoryCatalog::from_context(ctx)?;
     let target = action.target;

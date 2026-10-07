@@ -16,9 +16,9 @@ fn parallel_read_only_layer_fails_closed_and_reports_failure_on_a_source_mutatio
     fs::write(config_path, config).unwrap();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+        jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
             .unwrap();
     let mut observer = PhaseRecordingObserver::default();
 
@@ -82,9 +82,9 @@ fn cancelled_parallel_target_keeps_not_started_evidence_after_a_sibling_mutation
     write_wide_v6_evidence_fixture_repo(temp.path(), &commands);
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+        jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
             .unwrap();
     let ninth_planned_digest = plan.targets[8].input_digest.clone();
     let mut observer = MarkerCancellationObserver {
@@ -130,9 +130,9 @@ fn parallel_target_that_fails_authority_before_start_keeps_specific_evidence() {
     write_wide_v6_evidence_fixture_repo(temp.path(), &commands);
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+        jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
             .unwrap();
     let mut observer = PhaseRecordingObserver::default();
 
@@ -222,11 +222,11 @@ depends_on = [{ component = "api", action = "generate" }]
     .unwrap();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan = crate::repository::plan_action_run(
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_action_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: vec!["api:verify-generated".into(), "web:verify-generated".into()],
             profile: None,
             affected_base: None,
@@ -300,9 +300,9 @@ checks = ["jig.first", "jig.second"]
         .write();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+        jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
             .unwrap();
 
     let execution = super::run_execution::execute_check_run(
@@ -409,20 +409,20 @@ fn command_tool_streams_both_outputs_through_execution_observer() {
         finished: bool,
     }
 
-    impl crate::execution::ExecutionObserver for RecordingObserver {
-        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+    impl jig_execution::ExecutionObserver for RecordingObserver {
+        fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
             match event {
-                crate::execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
-                crate::execution::ExecutionEvent::Output { bytes, .. } => {
+                jig_execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
+                jig_execution::ExecutionEvent::Output { bytes, .. } => {
                     self.output.extend_from_slice(bytes)
                 }
-                crate::execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
-                crate::execution::ExecutionEvent::Heartbeat { .. } => {}
+                jig_execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
+                jig_execution::ExecutionEvent::Heartbeat { .. } => {}
             }
         }
     }
 
-    impl crate::execution::ExecutionCancellation for RecordingObserver {}
+    impl jig_execution::ExecutionCancellation for RecordingObserver {}
 
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
@@ -468,20 +468,20 @@ fn plain_v6_named_test_routes_through_repository_planning_for_every_component() 
         finished: bool,
     }
 
-    impl crate::execution::ExecutionObserver for RecordingObserver {
-        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+    impl jig_execution::ExecutionObserver for RecordingObserver {
+        fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
             match event {
-                crate::execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
-                crate::execution::ExecutionEvent::Output { bytes, .. } => {
+                jig_execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
+                jig_execution::ExecutionEvent::Output { bytes, .. } => {
                     self.output.extend_from_slice(bytes);
                 }
-                crate::execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
-                crate::execution::ExecutionEvent::Heartbeat { .. } => {}
+                jig_execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
+                jig_execution::ExecutionEvent::Heartbeat { .. } => {}
             }
         }
     }
 
-    impl crate::execution::ExecutionCancellation for RecordingObserver {}
+    impl jig_execution::ExecutionCancellation for RecordingObserver {}
 
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
@@ -726,9 +726,9 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let error = tool_execution::execute_manifest_tool_with_observer(
         &ctx,
-        crate::tool_defs::tool::TEST,
+        jig_commands::tool_defs::tool::TEST,
         json!({}),
-        &mut crate::execution::NoopExecutionObserver,
+        &mut jig_execution::NoopExecutionObserver,
     )
     .unwrap_err()
     .to_string();

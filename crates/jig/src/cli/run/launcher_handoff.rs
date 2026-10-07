@@ -3,10 +3,10 @@
 //! binary can serve that repository's contract and profile.
 
 use anyhow::{Context, Result, bail};
+use jig_commands::root_commands::{self, LauncherCommand, LauncherScope};
+use jig_context::RepoContext;
 
 use crate::cli::{Cli, CommandKind, RuntimeCompatibilityProfile, RuntimeCompatibleOpts};
-use crate::context::RepoContext;
-use crate::root_commands::{self, LauncherCommand, LauncherScope};
 
 pub(super) fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
     if matches!(&cli.command, CommandKind::Dev(opts) if opts.is_contextless()) {
@@ -29,14 +29,14 @@ pub(super) fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
             request.profile.as_str()
         )
     })?;
-    if let Some(configured_root) = std::env::var_os(crate::context::JIG_REPO_ROOT_ENV) {
+    if let Some(configured_root) = std::env::var_os(jig_context::JIG_REPO_ROOT_ENV) {
         let configured_root = std::path::PathBuf::from(configured_root);
         if !configured_root.as_os_str().is_empty()
             && std::fs::canonicalize(&configured_root).ok().as_deref() != Some(ctx.root())
         {
             eprintln!(
                 "jig ignored {}={} because the generated launcher root {} is authoritative",
-                crate::context::JIG_REPO_ROOT_ENV,
+                jig_context::JIG_REPO_ROOT_ENV,
                 configured_root.display(),
                 ctx.root().display()
             );
@@ -48,7 +48,7 @@ pub(super) fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
     // can create worker threads. Descendants must inherit the same canonical
     // root that this process has already validated as launcher-authoritative.
     unsafe {
-        std::env::set_var(crate::context::JIG_REPO_ROOT_ENV, authoritative_root);
+        std::env::set_var(jig_context::JIG_REPO_ROOT_ENV, authoritative_root);
     }
     Ok(())
 }
@@ -140,10 +140,10 @@ struct RuntimeCompatibilityRequest<'a> {
 
 impl RuntimeCompatibilityRequest<'_> {
     fn validate_active_contract_version(self, contract_version: u32) -> Result<()> {
-        if !crate::context::is_active_contract_version(contract_version) {
+        if !jig_context::is_active_contract_version(contract_version) {
             bail!(
                 "Inactive Jig contract version {contract_version}; this runtime cache supports active versions {}",
-                crate::context::active_contract_versions_label()
+                jig_context::active_contract_versions_label()
             );
         }
         Ok(())
@@ -231,7 +231,7 @@ fn validate_repository_runtime_compatibility(
     }
     let ctx = RepoContext::load_from_root(repo_root)?;
     request.validate_active_contract_version(ctx.contract_version())?;
-    crate::policy::validate_contract(&ctx)?;
+    jig_policy::validate_contract(&ctx)?;
     request.validate_profile()?;
     Ok(ctx)
 }

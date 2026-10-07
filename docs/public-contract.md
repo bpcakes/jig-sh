@@ -257,6 +257,14 @@ SQLx-specific tools are stable when `sqlx_enabled` rendered them into the manife
 
 A generated repo may omit optional tools that do not apply to its configuration. Clients must discover available tools from `.agent/jig-contract.json` instead of assuming SQLx or schema-dump support.
 
+SQLx check actions and the legacy `jig.sqlx_check` tool reject duplicate numeric
+migration versions before executing their configured runner. The
+`migration-immutability` policy check includes the same conflicts in its existing
+`violations` array and exits nonzero. This applies to direct files in the declared
+flat SQLx migration directory, including uncommitted additions; one reversible
+up/down pair may share a version. See [migration configuration](configuration.md#required-keys)
+for scope, alternate layouts, and repositories with multiple sources.
+
 ## Stable JSON Behavior
 
 All successful stable CLI JSON command responses are JSON objects unless a runtime-owned command explicitly documents a human-output flag. Stable response fields are additive: existing fields should keep their names, types, and meanings for the current contract version, and new fields may be added.

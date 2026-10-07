@@ -99,14 +99,6 @@ pub(crate) struct VaultRepoScope {
     pub(crate) repo_root: PathBuf,
 }
 
-pub(crate) fn is_valid_vault_scope_id(scope_id: &str) -> bool {
-    !scope_id.is_empty()
-        && scope_id.len() <= 128
-        && scope_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-}
-
 #[derive(Debug)]
 pub(crate) struct VaultInitRequest {
     pub(crate) vault: VaultRuntimeOptions,
@@ -400,17 +392,8 @@ mod tests {
     use super::{
         VaultExecAssignment, VaultExecEnvironment, VaultExecRequest, VaultExecValue,
         VaultImportAssignment, VaultImportEnvironment, VaultImportOnePasswordRequest,
-        VaultImportValueSource, VaultRuntimeOptions, is_valid_vault_scope_id,
+        VaultImportValueSource, VaultRuntimeOptions,
     };
-
-    #[test]
-    fn vault_scope_id_validator_rejects_path_and_length_boundaries() {
-        assert!(is_valid_vault_scope_id("abc_123-XYZ"));
-        assert!(!is_valid_vault_scope_id(""));
-        assert!(!is_valid_vault_scope_id("../shared"));
-        assert!(!is_valid_vault_scope_id("scope/child"));
-        assert!(!is_valid_vault_scope_id(&"a".repeat(129)));
-    }
 
     #[test]
     fn exec_request_debug_redacts_literals_and_argv() {

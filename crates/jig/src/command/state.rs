@@ -1,6 +1,6 @@
 //! Runtime state command DTOs.
 
-use std::path::PathBuf;
+pub(crate) use jig_state::{StateArchiveRequest, StateRestoreRequest};
 
 #[derive(Debug)]
 pub(crate) enum StateCommand {
@@ -8,15 +8,4 @@ pub(crate) enum StateCommand {
     Diagnose,
     Restore(StateRestoreRequest),
     Archive(StateArchiveRequest),
-}
-
-#[derive(Debug)]
-pub(crate) struct StateRestoreRequest {
-    pub(crate) backup: PathBuf,
-}
-
-#[derive(Debug)]
-pub(crate) struct StateArchiveRequest {
-    pub(crate) before: String,
-    pub(crate) dry_run: bool,
 }

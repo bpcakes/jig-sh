@@ -1,9 +1,9 @@
+use jig_context::RepoContext;
 use jig_contract::TargetOutputTailV1;
 use jig_ui::dashboard::{CollectionDomain, DashboardSource, LimitId, RecorderMode, TimelineLimit};
 use serde_json::json;
 use tempfile::tempdir;
 
-use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 
 use super::super::{MAX_AGGREGATION_KEYS, RepoDashboardSource};

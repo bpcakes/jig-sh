@@ -14,7 +14,7 @@ use crate::cli::{Cli, CommandKind};
 
 pub(super) fn hint(args: &[OsString], error: &clap::Error) -> Option<String> {
     let executable = recovery_executable(args)?;
-    let quoted_executable = crate::shell::quote(&executable);
+    let quoted_executable = jig_repository::shell::quote(&executable);
     let Some(root) = root_subcommand_index(args) else {
         return (error.kind() == ErrorKind::UnknownArgument && invalid_option(error, "--summary"))
             .then(|| {
@@ -124,7 +124,7 @@ fn suggestion(args: Vec<String>, help: &str) -> String {
     if valid {
         let command = args
             .iter()
-            .map(|arg| crate::shell::quote(arg))
+            .map(|arg| jig_repository::shell::quote(arg))
             .collect::<Vec<_>>()
             .join(" ");
         format!("Suggested retry (not executed):\n  {command}")

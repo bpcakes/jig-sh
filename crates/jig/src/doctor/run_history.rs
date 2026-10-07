@@ -67,7 +67,7 @@ fn git_path_matches(
     cancelled: Option<&dyn Fn() -> bool>,
 ) -> Result<bool> {
     let mut command = Command::new("git");
-    crate::bootstrap::scrub_known_repository_git_environment(&mut command);
+    jig_git::scrub_known_repository_git_environment(&mut command);
     command
         .current_dir(root)
         .args(args)

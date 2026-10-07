@@ -3,19 +3,18 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::time::Duration;
 
-use crate::command::{AgentMapCommand, CheckCommand, NamedCheck, RuntimeCommand, StateCommand};
-use crate::context::RepoContext;
-use crate::execution::{ExecutionControl, NoopExecutionObserver};
-use crate::policy::{
+use jig_commands::tool_defs::tool;
+use jig_context::RepoContext;
+use jig_execution::{ExecutionControl, NoopExecutionObserver};
+use jig_policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     SqlxTodoInput,
 };
-use crate::tool_defs::tool;
+
+use crate::command::{AgentMapCommand, CheckCommand, NamedCheck, RuntimeCommand, StateCommand};
 
 mod agent;
 mod file_budget;
-mod git_path;
-mod loops;
 mod migration;
 mod repository_run;
 mod run_cancellation;
@@ -31,10 +30,8 @@ pub(crate) use file_budget::{FileBudgetEvaluationMode, run_direct_file_budget};
 #[cfg(test)]
 pub(crate) use vault_withholding::VAULT_PASSPHRASE_WITHHELD_ENV;
 pub(crate) use vault_withholding::{
-    vault_passphrase_operator_guidance, withhold_vault_passphrase,
-    withhold_vault_passphrase_environment,
+    vault_passphrase_operator_guidance, withhold_vault_passphrase_environment,
 };
-mod worker_runner;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum VaultRawOutcome {
@@ -91,13 +88,13 @@ pub(crate) fn dispatch_with_observer(
         RuntimeCommand::Run(request) => repository_run::dispatch(ctx, request, observer),
         RuntimeCommand::MigrationAdd(request) => migration::add(ctx, request, observer),
         RuntimeCommand::Sqlx(command) => sqlx::dispatch_with_observer(ctx, command, observer),
-        RuntimeCommand::AgentMap(AgentMapCommand::Generate(opts)) => crate::policy::run_direct(
+        RuntimeCommand::AgentMap(AgentMapCommand::Generate(opts)) => jig_policy::run_direct(
             ctx,
             PolicyDirectCommand::AgentMapGenerate(AgentMapInput {
                 map_path: opts.map_path,
             }),
         ),
-        RuntimeCommand::GenerateSqlxUncheckedQueriesTodo(opts) => crate::policy::run_direct(
+        RuntimeCommand::GenerateSqlxUncheckedQueriesTodo(opts) => jig_policy::run_direct(
             ctx,
             PolicyDirectCommand::GenerateSqlxUncheckedQueriesTodo(SqlxTodoInput {
                 output: opts.output,
@@ -106,7 +103,7 @@ pub(crate) fn dispatch_with_observer(
         RuntimeCommand::Dev(opts) => crate::dev_proxy::commands::dev(ctx, opts),
         RuntimeCommand::Proxy(command) => crate::dev_proxy::commands::proxy(ctx, command),
         RuntimeCommand::Agent(command) => agent::dispatch_with_observer(ctx, command, observer),
-        RuntimeCommand::Loop(command) => loops::dispatch_with_observer(ctx, command, observer),
+        RuntimeCommand::Loop(command) => jig_loops::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::State(command) => dispatch_state(ctx, command, observer),
     }
 }
@@ -118,16 +115,16 @@ fn dispatch_state(
 ) -> Result<Value> {
     match command {
         StateCommand::Summary => {
-            crate::state::state_summary_with_cancellation(ctx, &|| observer.cancelled()).map(
+            jig_state::state_summary_with_cancellation(ctx, &|| observer.cancelled()).map(
                 |mut value| {
                     value["command"] = json!("state summary");
                     value
                 },
             )
         }
-        StateCommand::Diagnose => Ok(crate::state::state_diagnose(ctx)),
-        StateCommand::Restore(request) => crate::state::restore_backup(ctx, request),
-        StateCommand::Archive(request) => crate::state::state_archive(ctx, request),
+        StateCommand::Diagnose => Ok(jig_state::state_diagnose(ctx)),
+        StateCommand::Restore(request) => jig_state::restore_backup(ctx, request),
+        StateCommand::Archive(request) => jig_state::state_archive(ctx, request),
     }
 }
 
@@ -149,7 +146,7 @@ pub(crate) fn loop_status_snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
-    loops::status_with_cancellation(
+    jig_loops::status_with_cancellation(
         ctx,
         crate::command::LoopStatusRequest { workflow: None },
         cancelled,
@@ -160,7 +157,7 @@ pub(crate) fn typed_loop_status_snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<jig_ui::dashboard::StatusLoopObservation> {
-    loops::typed_status_with_cancellation(
+    jig_loops::typed_status_with_cancellation(
         ctx,
         crate::command::LoopStatusRequest { workflow: None },
         cancelled,
@@ -277,21 +274,21 @@ fn dispatch_check_with_observer(
     match command {
         CheckCommand::Repository(request) => dispatch_repository_check(ctx, request, observer),
         CheckCommand::Named(check) => dispatch_named_check(ctx, check, observer),
-        CheckCommand::AgentMap(opts) => crate::policy::run_check(
+        CheckCommand::AgentMap(opts) => jig_policy::run_check(
             ctx,
             PolicyCheckCommand::AgentMap(AgentMapInput {
                 map_path: opts.map_path,
             }),
         ),
-        CheckCommand::AgentGuides => crate::policy::run_check(ctx, PolicyCheckCommand::AgentGuides),
-        CheckCommand::MigrationImmutability(opts) => crate::policy::run_check(
+        CheckCommand::AgentGuides => jig_policy::run_check(ctx, PolicyCheckCommand::AgentGuides),
+        CheckCommand::MigrationImmutability(opts) => jig_policy::run_check(
             ctx,
             PolicyCheckCommand::MigrationImmutability(MigrationImmutabilityInput {
                 changed_against: opts.changed_against,
             }),
         ),
         CheckCommand::SqlxUncheckedNonTest => {
-            crate::policy::run_check(ctx, PolicyCheckCommand::SqlxUncheckedNonTest)
+            jig_policy::run_check(ctx, PolicyCheckCommand::SqlxUncheckedNonTest)
         }
     }
 }
@@ -302,7 +299,7 @@ fn dispatch_named_check(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     if ctx.contract_version() >= 6 {
-        let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
+        let catalog = jig_repository::RepositoryCatalog::from_context(ctx)?;
         dispatch_repository_check_with_catalog(
             ctx,
             &catalog,
@@ -331,28 +328,28 @@ fn dispatch_repository_check(
     request: crate::command::RepositoryCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
+    let catalog = jig_repository::RepositoryCatalog::from_context(ctx)?;
     dispatch_repository_check_with_catalog(ctx, &catalog, request, observer)
 }
 
 fn dispatch_repository_check_with_catalog(
     ctx: &RepoContext,
-    catalog: &crate::repository::RepositoryCatalog,
+    catalog: &jig_repository::RepositoryCatalog,
     request: crate::command::RepositoryCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     preserve_named_check_availability_diagnostic(ctx, catalog, &request.selectors)?;
     if request.comparison.is_some()
-        && catalog.contract_version() < crate::repository::FILE_BUDGET_CONTRACT_VERSION
+        && catalog.contract_version() < jig_repository::FILE_BUDGET_CONTRACT_VERSION
     {
         anyhow::bail!(
             "explicit check comparison authority requires repository contract version 7 or later"
         );
     }
-    let plan = crate::repository::plan_run_with_cancellation(
+    let plan = jig_repository::plan_run_with_cancellation(
         ctx,
         catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: request.selectors,
             profile: request.profile,
             affected_base: request.affected_base,
@@ -374,7 +371,7 @@ fn dispatch_repository_check_with_catalog(
 
 fn preserve_named_check_availability_diagnostic(
     ctx: &RepoContext,
-    catalog: &crate::repository::RepositoryCatalog,
+    catalog: &jig_repository::RepositoryCatalog,
     selectors: &[String],
 ) -> Result<()> {
     let [selector] = selectors else {
@@ -397,7 +394,7 @@ fn preserve_named_check_availability_diagnostic(
 
 fn execute_repository_check_plan(
     ctx: &RepoContext,
-    catalog: &crate::repository::RepositoryCatalog,
+    catalog: &jig_repository::RepositoryCatalog,
     plan: jig_contract::RunPlan,
     fail_fast: bool,
     observer: &mut dyn ExecutionControl,

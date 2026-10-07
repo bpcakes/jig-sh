@@ -1,11 +1,11 @@
 use clap::ValueEnum;
+use jig_context::backend::BackendLanguage;
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{
     APPLICATION_BACKEND_DEV_APP_NAME, RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME, ScaffoldPreset,
 };
-use crate::backend::BackendLanguage;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct ScaffoldPresetDescriptor {
@@ -91,7 +91,7 @@ pub fn scaffold_presets_report() -> Value {
         .collect::<Vec<_>>();
     json!({
         "ok": true,
-        "command": crate::root_commands::PRESETS.name,
+        "command": jig_commands::root_commands::PRESETS.name,
         "presets": presets
     })
 }

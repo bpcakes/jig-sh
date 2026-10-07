@@ -21,7 +21,7 @@ fn oversized_run_record_is_a_recorder_partial_error_outside_status() {
         json!({"id": "oversized-run-event", "event": "x".repeat(1024 * 1024)})
     )
     .unwrap();
-    let _clock = crate::state::set_test_now_ms(1_900_000_000_000);
+    let _clock = jig_state::set_test_now_ms(1_900_000_000_000);
 
     let legacy = crate::status::snapshot_with_cancellation(&source.context, &|| false).unwrap();
     let refresh = source

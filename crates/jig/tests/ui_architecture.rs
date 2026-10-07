@@ -99,7 +99,7 @@ fn external_status_subsystem_is_absent() {
     for relative in [
         "crates/jig-contract/src/status_provider.rs",
         "crates/jig-contract/contracts/status-provider",
-        "crates/jig/src/context/status_config.rs",
+        "crates/jig-context/src/status_config.rs",
         "crates/jig/src/status/summary.rs",
         "crates/jig-ui/src/terminal/model/package_detail.rs",
         "crates/jig-ui/src/terminal/model/typed.rs",

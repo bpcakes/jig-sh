@@ -10,7 +10,7 @@ fn initial_next_steps(
         .unwrap_or_else(|_| destination.to_path_buf());
     let mut steps = vec![format!(
         "cd {}",
-        crate::shell::quote(&destination_for_cd.display().to_string())
+        jig_repository::shell::quote(&destination_for_cd.display().to_string())
     )];
     if command == InitialCommand::Adopt && result.apply_report.dry_run {
         steps.push("Review the adoption preview and managed-file diff.".into());
@@ -560,7 +560,7 @@ impl ScaffoldOpts {
             scaffold::validate_go_component_root(go_component_root)?;
             let initial_migration_dir = scaffold::go_component_path(
                 go_component_root,
-                crate::backend::GO_POSTGRES_MIGRATION_DIR,
+                jig_context::backend::GO_POSTGRES_MIGRATION_DIR,
             );
             if self.db == Some(ScaffoldDb::None) && answers.migration_dir.is_some() {
                 bail!(
@@ -716,10 +716,10 @@ fn reject_newer_declared_contract(path: &Path) -> Result<()> {
         // Missing or damaged manifests remain repairable through adopt/update.
         return Ok(());
     };
-    if contract_version > crate::context::CURRENT_CONTRACT_VERSION {
+    if contract_version > jig_context::CURRENT_CONTRACT_VERSION {
         bail!(
             "Refusing to rewrite repository contract {contract_version} with this older Jig runtime, which supports contracts through {}. Install a newer compatible Jig runtime and retry; --force does not permit contract downgrades.",
-            crate::context::CURRENT_CONTRACT_VERSION
+            jig_context::CURRENT_CONTRACT_VERSION
         );
     }
     Ok(())

@@ -1,11 +1,11 @@
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use jig_contract::ActionEffect;
+use jig_execution::ExecutionControl;
+use jig_repository::{PlanRunRequest, RepositoryCatalog};
 use serde_json::{Value, json};
 
 use crate::command::RepositoryRunRequest;
-use crate::context::RepoContext;
-use crate::execution::ExecutionControl;
-use crate::repository::{PlanRunRequest, RepositoryCatalog};
 
 use super::run_execution::{ExecuteCheckRunRequest, execute_foreground_action_run};
 
@@ -22,11 +22,11 @@ pub(super) fn dispatch(
     }
     let catalog = RepositoryCatalog::from_context(&current)?;
     if request.comparison.is_some()
-        && current.contract_version() < crate::repository::FILE_BUDGET_CONTRACT_VERSION
+        && current.contract_version() < jig_repository::FILE_BUDGET_CONTRACT_VERSION
     {
         bail!("explicit run comparison authority requires repository contract version 7 or later");
     }
-    let plan = crate::repository::plan_action_run_with_cancellation(
+    let plan = jig_repository::plan_action_run_with_cancellation(
         &current,
         &catalog,
         PlanRunRequest {

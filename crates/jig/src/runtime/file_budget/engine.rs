@@ -22,9 +22,9 @@ pub(super) fn execute_ready_file_budget(
         }
     };
 
-    let evaluated_at_ms = crate::state::now_ms();
+    let evaluated_at_ms = jig_state::now_ms();
     let current_date = policy_date_at_ms(evaluated_at_ms)?;
-    let policy_bytes = crate::repository::read_policy_bytes(context.repository, prepared.view)
+    let policy_bytes = jig_repository::read_policy_bytes(context.repository, prepared.view)
         .map_err(anyhow::Error::msg)?
         .ok_or_else(|| {
             anyhow::anyhow!("authenticated file-budget policy is missing at execution")
@@ -250,7 +250,7 @@ pub(super) fn execute_ready_file_budget(
         .map(normalize_diagnostic)
         .collect::<Vec<_>>();
     let valid_until_ms = earliest_valid_until_ms(&policy)?;
-    if valid_until_ms.is_some_and(|boundary| crate::state::now_ms() >= boundary) {
+    if valid_until_ms.is_some_and(|boundary| jig_state::now_ms() >= boundary) {
         findings.push(file_budget_finding(
             FindingSeverity::Error,
             "file_budget.waiver_expired",

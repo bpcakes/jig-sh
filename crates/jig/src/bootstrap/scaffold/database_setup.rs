@@ -23,7 +23,7 @@ pub(super) fn render(
         render_scaffold_template(
             "database/setup.sh.jinja",
             &json!({
-                "backend_root": crate::shell::quote(backend.root),
+                "backend_root": jig_repository::shell::quote(backend.root),
                 "database_config_guard": DATABASE_CONFIG_GUARD,
                 "database_setup_command": command,
             }),

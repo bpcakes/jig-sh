@@ -2,8 +2,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
+use jig_execution::ExecutionStream;
+
 use super::*;
-use crate::execution::ExecutionStream;
 
 const MAX_PARALLEL_LAYER_TARGETS: usize = 8;
 const PARALLEL_EVENT_QUEUE_CAPACITY: usize = 64;
@@ -87,7 +88,7 @@ impl ParallelTargetExecution {
 pub(super) fn execute_parallel_read_only_layer(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    run: &crate::state::DurableRun,
+    run: &jig_state::DurableRun,
     control: &mut dyn RepositoryRunControl,
     source_epoch: &mut ExecutionSourceEpoch,
     targets: &[(&PlannedTarget, PhasePosition)],
@@ -102,7 +103,7 @@ pub(super) fn execute_parallel_read_only_layer(
     source_epoch.begin_read_only_layer();
     if source_may_be_observed {
         if let Err(error) =
-            crate::repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
+            jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
         {
             let outcomes = targets
                 .iter()
@@ -261,7 +262,7 @@ pub(super) fn execute_parallel_read_only_layer(
 fn execute_parallel_target(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    run: &crate::state::DurableRun,
+    run: &jig_state::DurableRun,
     (planned, position): (&PlannedTarget, PhasePosition),
     control: &mut dyn RepositoryRunControl,
     queued_source_epoch: Option<&Mutex<&mut ExecutionSourceEpoch>>,
@@ -290,10 +291,9 @@ fn execute_parallel_target(
             )),
         ),
         Ok(false) => {
-            if let Err(error) = crate::repository::validate_current_repository_authority(
-                ctx,
-                &run.plan.config_digest,
-            ) {
+            if let Err(error) =
+                jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
+            {
                 let message = format!(
                     "target '{}' could not start because repository execution authority could not be verified: {error:#}",
                     planned.target

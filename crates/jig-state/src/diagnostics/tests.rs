@@ -1,0 +1,242 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+
+use jig_context::test_support::TestRepoBuilder;
+use tempfile::tempdir;
+
+use super::*;
+
+fn fixture_context(root: &Path) -> RepoContext {
+    TestRepoBuilder::new(root).write();
+    RepoContext::load_from_root(root.to_path_buf()).unwrap()
+}
+
+#[test]
+fn diagnose_missing_state_is_strictly_read_only() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture_context(temp.path());
+    let before = fixture_paths(temp.path());
+
+    let output = state_diagnose(&ctx);
+
+    assert_eq!(output["state_dir_exists"], false);
+    assert_eq!(output["totals"]["stream_bytes"], 0);
+    assert!(output.get("sessions").is_none());
+    assert_eq!(before, fixture_paths(temp.path()));
+    assert!(!ctx.state_dir().exists());
+    assert!(!temp.path().join(".git").exists());
+}
+
+fn assert_stream_diagnostics(output: &serde_json::Value, sessions: &str, recursive: &str) {
+    assert_eq!(
+        output["streams"]["sessions"]["bytes"],
+        sessions.len() as u64
+    );
+    assert_eq!(output["streams"]["sessions"]["records"], 2);
+    assert_eq!(
+        output["streams"]["sessions"]["max_line_bytes"],
+        recursive.len() as u64 + 1
+    );
+    assert_eq!(
+        output["streams"]["sessions"]["max_record_bytes"],
+        recursive.len() as u64
+    );
+    assert_eq!(output["streams"]["sessions"]["max_record_line"], 1);
+    assert_eq!(output["streams"]["plans"]["records"], 2);
+    assert_eq!(output["streams"]["plans"]["malformed_records"], 1);
+    assert_eq!(
+        output["streams"]["plans"]["malformed_record_samples"][0]["line"],
+        2
+    );
+    assert_eq!(output["streams"]["plans"]["torn_tail"], true);
+}
+
+fn assert_archive_diagnostics(output: &serde_json::Value) {
+    assert_eq!(output["legacy_archive"]["files"], 2);
+    assert_eq!(output["legacy_archive"]["bytes"], 8);
+    assert_eq!(output["totals"]["legacy_archive_bytes"], 8);
+    assert!(output.get("receipts").is_none());
+    assert!(output.get("run_linkage").is_none());
+    assert!(output.get("deep").is_none());
+}
+
+#[test]
+fn diagnose_reports_exact_stream_and_archive_facts() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture_context(temp.path());
+    fs::create_dir_all(ctx.state_dir().join("archive/nested")).unwrap();
+
+    let nested_summary = r#"{"recent_sessions":[{"summary":"braces } ] in a string"}]}"#;
+    let recursive = [
+            r#"{"id":"outer","session_id":"s2","event":"start","timestamp_ms":2,"summary":{"recent_sessions":[{"id":"inner","session_id":"s1","event":"start","timestamp_ms":1,"summary":"#,
+            nested_summary,
+            r#"}]}}"#,
+        ]
+        .concat();
+    let ordinary = r#"{"id":"end","session_id":"s1","event":"end","timestamp_ms":3}"#;
+    let sessions = format!("{recursive}\n{ordinary}\n");
+    fs::write(ctx.state_file("sessions.jsonl"), sessions.as_bytes()).unwrap();
+
+    let malformed_plans = b"{}\n{\"broken\":";
+    fs::write(ctx.state_file("plans.jsonl"), malformed_plans).unwrap();
+
+    fs::write(ctx.state_file("receipts.jsonl"), b"{\"id\":\"r\"}\n").unwrap();
+    fs::write(ctx.state_dir().join("archive/old.jsonl"), b"abc").unwrap();
+    fs::write(ctx.state_dir().join("archive/nested/older.jsonl"), b"12345").unwrap();
+
+    let output = state_diagnose(&ctx);
+
+    assert_stream_diagnostics(&output, &sessions, &recursive);
+    assert!(output.get("sessions").is_none());
+    assert_eq!(output["streams"]["receipts"]["records"], 1);
+    assert_archive_diagnostics(&output);
+}
+
+#[test]
+fn diagnose_reports_tracking_ignore_and_union_merge_facts() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture_context(temp.path());
+    fs::create_dir_all(ctx.state_dir()).unwrap();
+    fs::write(ctx.state_file("sessions.jsonl"), b"{}\n").unwrap();
+    fs::write(
+        temp.path().join(".gitattributes"),
+        b".agent/state/*.jsonl merge=union\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join(".gitignore"),
+        b".agent/state/decisions.jsonl\n",
+    )
+    .unwrap();
+    git(temp.path(), &["init", "-q"]);
+    git(
+        temp.path(),
+        &["add", ".gitattributes", ".agent/state/sessions.jsonl"],
+    );
+
+    let output = state_diagnose(&ctx);
+
+    assert_eq!(output["git"]["repository"], true);
+    assert_eq!(output["git"]["paths"]["sessions"]["tracked"], true);
+    assert_eq!(output["git"]["paths"]["sessions"]["ignored"], false);
+    assert_eq!(
+        output["git"]["paths"]["sessions"]["merge_attribute"],
+        "union"
+    );
+    assert_eq!(output["git"]["paths"]["decisions"]["tracked"], false);
+    assert_eq!(output["git"]["paths"]["decisions"]["ignored"], true);
+    assert_eq!(
+        output["git"]["paths"]["decisions"]["merge_attribute"],
+        "union"
+    );
+}
+
+#[test]
+fn diagnose_includes_local_maintenance_cache_usage() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture_context(temp.path());
+    let backups = temp.path().join(".agent/.cache/state-backups/session-1");
+    let archives = temp.path().join(".agent/.cache/state-archives");
+    fs::create_dir_all(&backups).unwrap();
+    fs::create_dir_all(&archives).unwrap();
+    fs::write(backups.join("sessions.jsonl.gz"), b"backup").unwrap();
+    fs::write(backups.join("manifest.json"), b"manifest").unwrap();
+    fs::write(archives.join("receipts.jsonl.gz"), b"archive").unwrap();
+
+    let output = state_diagnose(&ctx);
+
+    assert_eq!(output["maintenance_cache"]["exists"], true);
+    assert_eq!(output["maintenance_cache"]["files"], 3);
+    assert_eq!(output["maintenance_cache"]["bytes"], 21);
+    assert_eq!(output["maintenance_cache"]["state_backups"]["bytes"], 14);
+    assert_eq!(output["maintenance_cache"]["state_archives"]["bytes"], 7);
+    assert_eq!(output["totals"]["maintenance_cache_bytes"], 21);
+    assert_eq!(
+        output["totals"]["local_disk_bytes"],
+        output["totals"]["checkout_state_bytes"].as_u64().unwrap() + 21
+    );
+    assert!(output["recommendations"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["kind"] == "review_maintenance_cache")
+    }));
+}
+
+#[test]
+fn diagnose_recommends_run_archival_and_names_legacy_streams() {
+    let mut streams = BTreeMap::new();
+    streams.insert(
+        "receipts".into(),
+        StreamDiagnostics {
+            path: ".agent/state/receipts.jsonl".into(),
+            bytes: 10,
+            ..StreamDiagnostics::default()
+        },
+    );
+    streams.insert(
+        "sessions".into(),
+        StreamDiagnostics {
+            path: ".agent/state/sessions.jsonl".into(),
+            bytes: 5,
+            ..StreamDiagnostics::default()
+        },
+    );
+    streams.insert(
+        "runs".into(),
+        StreamDiagnostics {
+            bytes: RUN_RETENTION_RECOMMENDATION_BYTES,
+            ..StreamDiagnostics::default()
+        },
+    );
+
+    let recommendations = recommendations(
+        &streams,
+        &LegacyArchiveDiagnostics::default(),
+        &MaintenanceCacheDiagnostics::default(),
+    );
+
+    assert!(recommendations.iter().any(|recommendation| {
+        recommendation["kind"] == "archive_runs"
+            && recommendation["command"] == "jig state archive --before <YYYY-MM-DD> --dry-run"
+    }));
+    let legacy = recommendations
+        .iter()
+        .find(|recommendation| recommendation["kind"] == "legacy_state_streams")
+        .unwrap();
+    let reason = legacy["reason"].as_str().unwrap();
+    assert!(reason.starts_with("15 bytes"), "{reason}");
+    assert!(reason.contains(".agent/state/receipts.jsonl"), "{reason}");
+    assert!(reason.contains(".agent/state/sessions.jsonl"), "{reason}");
+    assert!(
+        recommendations
+            .iter()
+            .all(|recommendation| recommendation["kind"] != "archive_receipts")
+    );
+}
+
+fn fixture_paths(root: &Path) -> BTreeSet<PathBuf> {
+    let mut paths = BTreeSet::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            paths.insert(path.strip_prefix(root).unwrap().to_path_buf());
+            if entry.file_type().unwrap().is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    paths
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?} failed");
+}

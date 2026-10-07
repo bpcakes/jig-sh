@@ -15,16 +15,16 @@ pub(in crate::runtime) fn run_native_tool_with_control(
     let output = match jig_features::native_tool_kind(tool_name)
         .ok_or_else(|| anyhow!("Unsupported native tool: {tool_name}"))?
     {
-        NativeToolKind::ContractCheck => Ok(crate::policy::contract_check(ctx)),
+        NativeToolKind::ContractCheck => Ok(jig_policy::contract_check(ctx)),
         NativeToolKind::MigrationAdd => {
             let name = args_value
                 .get(args::NAME)
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("{} requires a name argument", tool::MIGRATION_ADD))?;
-            crate::policy::migration_add(ctx, name)
+            jig_policy::migration_add(ctx, name)
         }
         NativeToolKind::SchemaCheck => {
-            crate::policy::schema_check_with_control(ctx, target, timeout, cancelled)
+            jig_policy::schema_check_with_control(ctx, target, timeout, cancelled)
         }
         _ => bail!("Unsupported native tool kind for {tool_name}"),
     }?;
@@ -62,19 +62,18 @@ fn run_native_tool(
         .ok_or_else(|| anyhow!("Unsupported native tool: {operation}"))?
     {
         NativeToolKind::ContractCheck => {
-            Ok(NativeToolRun::Completed(crate::policy::contract_check(ctx)))
+            Ok(NativeToolRun::Completed(jig_policy::contract_check(ctx)))
         }
         NativeToolKind::MigrationAdd => {
             let name = args_value
                 .get(args::NAME)
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("{} requires a name argument", tool::MIGRATION_ADD))?;
-            crate::policy::migration_add(ctx, name).map(NativeToolRun::Completed)
+            jig_policy::migration_add(ctx, name).map(NativeToolRun::Completed)
         }
         NativeToolKind::SchemaCheck => {
-            match crate::policy::schema_check_with_observer_and_timeout(
-                ctx, target, timeout, observer,
-            ) {
+            match jig_policy::schema_check_with_observer_and_timeout(ctx, target, timeout, observer)
+            {
                 Ok(output) => Ok(NativeToolRun::Completed(output)),
                 Err(ExecutionCommandError::CancelledBeforeStart) => {
                     Ok(NativeToolRun::CancelledBeforeStart)

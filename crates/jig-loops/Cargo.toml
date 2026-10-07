@@ -1,0 +1,49 @@
+[package]
+name = "jig-loops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Scheduled and manual agent loops, occurrences, and the PR manager for Jig."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lib]
+name = "jig_loops"
+
+[features]
+# Blocking dispatch, lease revocation, and evidence-path helpers for
+# dependents' tests.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+cap-fs-ext.workspace = true
+cap-std.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+croner.workspace = true
+fs4.workspace = true
+jig-agents.workspace = true
+jig-context.workspace = true
+jig-execution.workspace = true
+jig-git.workspace = true
+jig-owned-process.workspace = true
+jig-state.workspace = true
+jig-ui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+ulid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+jig-context = { workspace = true, features = ["test-support"] }
+jig-state = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

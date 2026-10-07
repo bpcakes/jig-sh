@@ -1,9 +1,10 @@
-use super::*;
-use crate::repository::{
+use jig_repository::{
     cargo_resources,
     execution_resources::{self, ResolvedResources},
 };
-use crate::state::ResourceLease;
+use jig_state::ResourceLease;
+
+use super::*;
 use target::TargetBudget;
 mod execution;
 pub(super) use execution::capture_admitted;
@@ -147,7 +148,7 @@ pub(super) fn revalidate_authority(
     resolved: &ResolvedResources,
 ) -> std::result::Result<(), TargetStop> {
     control.remaining()?;
-    crate::repository::validate_current_repository_authority(
+    jig_repository::validate_current_repository_authority(
         finisher.ctx,
         &finisher.run.plan.config_digest,
     )
@@ -234,9 +235,10 @@ fn fingerprint(
     ctx: &RepoContext,
     control: &TargetExecutionControl<'_>,
 ) -> std::result::Result<String, String> {
-    crate::source_identity::repository_source_snapshot_with_cancellation(ctx.root(), &|| {
-        control.remaining().is_err()
-    })
+    jig_repository::source_identity::repository_source_snapshot_with_cancellation(
+        ctx.root(),
+        &|| control.remaining().is_err(),
+    )
     .map(|snapshot| snapshot.worktree_fingerprint)
     .map_err(|_| {
         "source authority could not be established within the resource target budget".into()

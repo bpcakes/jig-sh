@@ -66,7 +66,7 @@ pub(super) fn preview_adoption_file_budget(
             "Adoption file-budget preview found more than {MAX_PREVIEW_FILES} repository files; narrow the repository or author policy explicitly"
         );
     }
-    let head = crate::source_identity::resolve_git_commit(destination, "HEAD").ok();
+    let head = jig_repository::source_identity::resolve_git_commit(destination, "HEAD").ok();
     let mut extensions = BTreeMap::<String, u64>::new();
     let mut candidate_count = 0_u64;
     let mut candidate_bytes = 0_u64;
@@ -193,7 +193,7 @@ pub(super) fn preview_adoption_file_budget(
 }
 
 fn baseline_measurement(root: &Path, head: &str, path: &str) -> Result<Option<MeasurementV1>> {
-    let bytes = crate::source_identity::read_tree_path_blob_v1_with_cancellation(
+    let bytes = jig_repository::source_identity::read_tree_path_blob_v1_with_cancellation(
         root,
         head,
         path,

@@ -2,10 +2,10 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::process::Command;
 
+use jig_agents::agent_provider::{Choice, Metadata};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::agent_provider::{Choice, Metadata};
 use crate::cli::claude::render;
 
 #[derive(Debug, Eq, PartialEq)]

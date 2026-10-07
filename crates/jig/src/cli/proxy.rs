@@ -2,9 +2,9 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
+use jig_commands::tool_defs;
 
 use super::output;
-use crate::tool_defs;
 
 mod convert;
 pub(super) mod render;

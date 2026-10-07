@@ -4,11 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use jig_git::GIT_BIN_ENV;
 use tempfile::tempdir;
 
-use super::{
-    GIT_BIN_ENV, init_git_repo, init_git_repo_with_validation, validate_staged_git_repository,
-};
+use super::{init_git_repo, init_git_repo_with_validation, validate_staged_git_repository};
 
 const HELPER_DESTINATION: &str = "JIG_GIT_INIT_AMBIENT_HELPER_DESTINATION";
 const HELPER_EXPECT_EXISTING_GIT_PRESERVED: &str =

@@ -1,0 +1,73 @@
+//! State helpers that are independent of durable record schemas and JSONL mechanics.
+
+use std::fs::{self, File};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::Result;
+use fs4::fs_std::FileExt;
+use ulid::Ulid;
+
+use jig_context::RepoContext;
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static TEST_NOW_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub struct TestNowGuard(Option<u64>);
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for TestNowGuard {
+    fn drop(&mut self) {
+        TEST_NOW_MS.set(self.0);
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_test_now_ms(value: u64) -> TestNowGuard {
+    let previous = TEST_NOW_MS.replace(Some(value));
+    TestNowGuard(previous)
+}
+
+pub(super) struct AdvisoryLeaseFile(File);
+
+impl AdvisoryLeaseFile {
+    pub(super) fn new(file: File) -> Self {
+        Self(file)
+    }
+
+    #[cfg(test)]
+    pub(super) fn try_clone(&self) -> std::io::Result<File> {
+        self.0.try_clone()
+    }
+}
+
+impl Drop for AdvisoryLeaseFile {
+    fn drop(&mut self) {
+        // flock locks survive dup/fork as references to the same lock. Unlock
+        // explicitly so a short-lived inherited descriptor cannot extend a
+        // finished owner's lease until the child closes or execs it.
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
+pub fn now_ms() -> u64 {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(value) = TEST_NOW_MS.get() {
+        return value;
+    }
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+pub(super) fn new_id(prefix: &str) -> String {
+    format!("{prefix}_{}", Ulid::new())
+}
+
+pub(super) fn ensure_state_layout(ctx: &RepoContext) -> Result<()> {
+    fs::create_dir_all(ctx.state_dir())?;
+    Ok(())
+}

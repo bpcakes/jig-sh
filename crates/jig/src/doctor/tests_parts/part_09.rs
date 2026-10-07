@@ -2,7 +2,7 @@ fn write_doctor_fixture(root: &Path) {
     fs::create_dir_all(root.join("scripts")).unwrap();
     TestRepoBuilder::new(root)
         .jig_version(env!("CARGO_PKG_VERSION"))
-        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .contract_version(jig_context::CURRENT_CONTRACT_VERSION)
         .config(
             r#"
 bootstrap_command = "printf bootstrap"

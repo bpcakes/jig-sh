@@ -13,15 +13,15 @@ use super::ANSWERS_FILE;
 use super::answers::RenderAnswers;
 use super::embedded_templates::EMBEDDED_TEMPLATE_FILES;
 use super::managed_paths;
-use super::path::{
-    validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
-};
 use super::preview_seed::seed_preview_workspace;
 use super::repository_model::RepositoryRenderModel;
 use super::staged_render::FILE_BUDGET_POLICY_PATH;
 use super::staged_render::StagedRender;
 use super::template_source::{PreparedTemplateSource, TemplateRenderSource};
 use crate::progress::CliProgress;
+use jig_repository::path::{
+    validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
+};
 
 mod runtime_contract;
 pub(super) use runtime_contract::validate_staged_runtime_contract;
@@ -183,7 +183,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
         request.progress,
     )?;
 
-    let staged_context = crate::context::RepoContext::load_from_root(destination.clone())
+    let staged_context = jig_context::RepoContext::load_from_root(destination.clone())
         .with_context(|| {
             format!(
                 "Staged render produced an invalid Jig config or contract in {}",
@@ -191,7 +191,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
             )
         })?;
     validate_staged_runtime_contract(&destination, staged_context.contract_version())?;
-    crate::policy::validate_contract(&staged_context).with_context(|| {
+    jig_policy::validate_contract(&staged_context).with_context(|| {
         format!(
             "Staged render produced an invalid Jig config or contract in {}",
             destination.display()

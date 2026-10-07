@@ -18,7 +18,7 @@ const CURRENT_GENERATED_INSTALLER: &str =
 fn current_generated_launcher() -> String {
     CURRENT_GENERATED_LAUNCHER_TEMPLATE.replace(
         "<<[ _jig.contract_version ]>>",
-        &crate::context::CURRENT_CONTRACT_VERSION.to_string(),
+        &jig_context::CURRENT_CONTRACT_VERSION.to_string(),
     )
 }
 

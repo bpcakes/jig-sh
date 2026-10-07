@@ -14,10 +14,10 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
     let database_setup = next_steps.iter().position(|step| step.as_str() == Some("bash scripts/setup-database.sh")).unwrap();
     assert!(setup < database_config);
     assert!(database_config < database_setup);
-    let context = crate::context::RepoContext::load_from(destination).unwrap();
-    let agent_map_check = crate::policy::run_check(
+    let context = jig_context::RepoContext::load_from(destination).unwrap();
+    let agent_map_check = jig_policy::run_check(
         &context,
-        crate::policy::PolicyCheckCommand::AgentMap(crate::policy::AgentMapInput {
+        jig_policy::PolicyCheckCommand::AgentMap(jig_policy::AgentMapInput {
             map_path: PathBuf::from("agent-map.md"),
         }),
     )
@@ -37,7 +37,7 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
             .is_empty()
     );
     let agent_guides_check =
-        crate::policy::run_check(&context, crate::policy::PolicyCheckCommand::AgentGuides).unwrap();
+        jig_policy::run_check(&context, jig_policy::PolicyCheckCommand::AgentGuides).unwrap();
     assert_eq!(agent_guides_check["ok"], true);
     assert_eq!(agent_guides_check["guide_count"], 8);
     assert!(

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
-use crate::tool_defs;
+use jig_commands::tool_defs;
 
 pub(super) mod render;
 pub(super) mod run;

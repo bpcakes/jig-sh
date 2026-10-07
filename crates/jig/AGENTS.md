@@ -8,7 +8,7 @@
 
 - `src/main.rs`: binary entrypoint.
 - `src/lib.rs`: library entrypoint and module wiring.
-- `src/root_commands.rs`: the single registry of top-level commands: name, help placement, and generated-launcher scope.
+- `crates/jig-commands/src/root_commands.rs`: the single registry of top-level commands: name, help placement, and generated-launcher scope. `src/launcher_command_lists.rs` keeps the generated launcher in step with it.
 - `src/cli.rs`: clap command definitions.
 - `src/cli/run.rs`: CLI startup boundaries and top-level command dispatch, one line per command.
 - `src/cli/run/launcher_handoff.rs`: generated-launcher handoff validation and the runtime compatibility probe.
@@ -17,8 +17,6 @@
 - `src/cli/proxy/run.rs`: `jig dev` and `jig proxy` dispatch, including the private dev-worker handoff whose worker owns the existing dev lifecycle and output; `src/cli/proxy/run_unavailable.rs` replaces it in builds without the `dev-proxy` feature.
 - `src/cli/run/vault_environment.rs`: CLI-startup boundary that withholds the reserved vault passphrase variables from commands that cannot capture them.
 - `src/runtime.rs`: command-backed tool execution.
-- `src/state.rs`: run history under `.agent/state`, with its diagnosis, archive, and restore maintenance.
-- `src/runtime/loops/evidence.rs`: per-occurrence loop evidence recorded under Git metadata; `src/runtime/loops/show.rs` reports it for `jig loop show`.
 - `src/ui.rs`: `jig ui` and `jig status --tui` CLI adapter for the separately owned `jig-ui` terminal crate.
 - `src/ui/source.rs`: typed recorder and status source with retained local epochs.
 - `src/status.rs`: read-only local repository and loop aggregate snapshots.
@@ -31,24 +29,22 @@
 - Change CLI flags or nested subcommands: the command family's `src/cli/<family>.rs`; `src/cli.rs` wires the top-level commands. Convert its options to runtime requests in `src/cli/<family>/convert.rs`, or in the root file when the conversion is a few lines.
 - Change a command's argument rules (argv normalization, conflicts with global flags, usage hints): that command's module under `src/cli/`. `src/cli/run/argument_parsing.rs` is the generic pipeline that asks each owner; hints read Clap's structured error context, never its rendered text.
 - Add a top-level command, in this order; the compiler or a test enforces each step:
-  1. Declare it once in the `root_commands!` table in `src/root_commands.rs`.
+  1. Declare it once in the `root_commands!` table in `crates/jig-commands/src/root_commands.rs`.
   2. Add its `CommandKind` variant in `src/cli.rs`, taking `name` and `display_order` from the registry.
   3. Add the arms the compiler now requires: `launcher_command` in `src/cli/run/launcher_handoff.rs`, `run_command` in `src/cli/run.rs`, `may_capture_vault_passphrase` in `src/cli/run/vault_environment.rs`, and both availability matches in `src/info/commands.rs`.
   4. Regenerate the launcher's command lists with `JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launcher_command_lists`.
 - Run a command through the runtime: implement `into_dispatch` beside its clap type, returning a `RuntimeDispatch` that names its renderer and whether `ok: false` fails the command. A command with its own flow gets a `run_<name>_command` in its own `src/cli/` module; keep `run_command` to one line per command.
 - Add a named `jig check` subcommand: `NamedCheck` in `src/command/check.rs` ties its selector to its legacy manifest tool, and `NamedCheckCommand` in `src/cli/check.rs` is its clap variant.
 - Change which commands may keep the reserved vault passphrase variables past startup: `src/cli/run/vault_environment.rs` (read the vault runtime guide first).
-- Add an agent provider: `src/agent_provider.rs` defines the internal contract; `src/claude/provider.rs` and `src/codex/provider.rs` are implementations. Keep home identity and credential policy provider-owned; `src/cli/agent_run.rs` owns common homes/launch orchestration. See [agent providers](../../docs/agent-providers.md).
-- Change shared Claude/Codex path primitives: `src/home_paths.rs`; keep discovery and default-home policy in the provider modules.
-- Change Claude credential lookup and read-only subscription usage: `src/claude/usage/`; keep secrets, HTTP, and platform storage out of the TUI and output renderers.
+- Add an agent provider, or change Claude/Codex home discovery, credentials, or usage: [jig-agents](../jig-agents/AGENTS.md). `src/cli/agent_run.rs` owns common homes/launch orchestration and signal supervision. See [agent providers](../../docs/agent-providers.md).
 - Change shared operation signal supervision: `src/signal_supervision.rs`, with the process-wide signal session in `src/signal_supervision/session.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
 - Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
 - Change how a command's result is shown to people: its formatter in `src/cli/<family>/render.rs`, or in `src/cli/output.rs` for the summaries that still live there (check, run, setup, migration, agent-map and manifest tools). The command passes that function to `emit` (or names it in its `RuntimeDispatch`); there is no central output table to extend.
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
 - Propagate a child status or an already-reported failure: return `CliExit` from `src/exit.rs`. `src/cli/structured_error.rs` owns only the `--json` error protocol; do not add per-command marker error types there.
 - Change manifest-tool behavior around command execution: `src/runtime.rs`.
-- Change run history, state maintenance, or `jig state summary`: `src/state.rs` and `src/state/`.
-- Change loop occurrence evidence, its retention, or `jig loop show`: `src/runtime/loops/evidence.rs` and `src/runtime/loops/show.rs`.
+- Change run history, state maintenance, or `jig state summary`: [jig-state](../jig-state/AGENTS.md); `src/cli/state.rs` is the CLI adapter.
+- Change loop scheduling, occurrences and their evidence, `jig loop show`, Codex task workers, or the PR manager: [jig-loops](../jig-loops/AGENTS.md); `src/cli/loops.rs` is the CLI adapter.
 - Change the data exposed by the unified dashboard, including its run-history timeline and health aggregates: `src/ui/source/`.
 - Change dashboard navigation, scheduling, or rendering: `crates/jig-ui/`.
 - Change local status aggregation: `src/status.rs` and `src/status/`.
@@ -56,7 +52,10 @@
 - Change Vault TUI navigation, forms, or rendering: `crates/jig-vault-tui/`; keep scope, environment capture, external tools, and core calls in `src/runtime/vault/tui.rs`.
 - Change bounded owned-process execution or process-tree cleanup: [jig-owned-process](../jig-owned-process/AGENTS.md).
 - Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`; the legacy file-budget checker retirement evaluates `repo:file-budget` inline in `src/bootstrap/file_budget_lifecycle.rs`.
-- Change repository source identity: `src/source_identity.rs`.
+- Change policy checks (contract, agent guides, agent map, SQLx, schema): [jig-policy](../jig-policy/AGENTS.md).
+- Change the repository action catalog, run planning, affected selection, or repository source identity: [jig-repository](../jig-repository/AGENTS.md).
+- Change `.jig.toml` or manifest loading and validation, contract-version support, or the shared test fixtures in `crate::test_env`: [jig-context](../jig-context/AGENTS.md).
+- Change Git program selection (`JIG_GIT_BIN`), known-repository `GIT_*` scrubbing, or Git metadata-file reads: [jig-git](../jig-git/AGENTS.md).
 
 ## Invariants
 
@@ -68,7 +67,7 @@
 - Before changing bootstrap entrypoints, toolchain checks, or templates, read the [bootstrap guide](src/bootstrap/AGENTS.md).
 - Before changing vault entrypoints or dispatch, read the [vault runtime guide](src/runtime/vault/AGENTS.md).
 - New top-level commands must choose a branch in the exhaustive `CommandKind::may_capture_vault_passphrase` match; commands that never unlock the vault withhold the passphrase. Do not add per-spawn passphrase plumbing.
-- A top-level command's name and generated-launcher scope are declared only in `src/root_commands.rs`. Never repeat a root command name as a string elsewhere, and regenerate rather than hand-edit the launcher's command-list markers and `case` arms.
+- A top-level command's name and generated-launcher scope are declared only in `crates/jig-commands/src/root_commands.rs`. Never repeat a root command name as a string elsewhere, and regenerate rather than hand-edit the launcher's command-list markers and `case` arms.
 - Modules outside `src/cli/` do not depend on `crate::cli`: they take their own request types and return errors the CLI maps to its output protocol.
 - Before changing process supervision or Bash probes, read the [process reference](../../docs/process-supervision.md) and [owned-process guide](../jig-owned-process/AGENTS.md).
 - Use `scripts/jig` with the repository's selected release for routine checks. Validate edited runtime behavior with `scripts/jig-dev ...`, which incrementally builds the current source before invoking the launcher. `repo:source-runtime-check` is available for current-source contract validation; select checks for the affected behavior.

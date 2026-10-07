@@ -1,10 +1,10 @@
 use anyhow::Result;
+use jig_context::{DevAppConfig, REPO_CONTEXT_NOT_FOUND, RepoContext, WorkGate};
 use serde_json::{Value, json};
 
 #[cfg(test)]
 use crate::cli::format_info_summary_for_test as format_summary;
 use crate::command::{VaultCommand, VaultStatusRequest};
-use crate::context::{DevAppConfig, REPO_CONTEXT_NOT_FOUND, RepoContext, WorkGate};
 
 const COMMAND: &str = "info";
 
@@ -13,8 +13,8 @@ mod commands;
 pub(crate) fn run(
     commands: bool,
     json_output: bool,
-    request: Option<crate::repository::InspectRequest>,
-    projection: crate::surface::ResponseSurface,
+    request: Option<jig_repository::InspectRequest>,
+    projection: jig_repository::surface::ResponseSurface,
 ) -> Result<Value> {
     if commands && request.is_some() {
         anyhow::bail!("--commands cannot be combined with an info subject");
@@ -72,7 +72,7 @@ pub(crate) fn run(
     }
     let ctx = RepoContext::load()?;
     match request {
-        Some(request) => crate::repository::inspect_repository(&ctx, request, projection),
+        Some(request) => jig_repository::inspect_repository(&ctx, request, projection),
         None => Ok(repo_info(&ctx)),
     }
 }
@@ -156,7 +156,7 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
         "dev_apps": dev_apps,
     });
     // `[work]` settings exist only through contract 8.
-    if ctx.contract_version() <= crate::context::LAST_WORK_CONFIG_CONTRACT_VERSION {
+    if ctx.contract_version() <= jig_context::LAST_WORK_CONFIG_CONTRACT_VERSION {
         value["check_tools"] = json!(ctx.work_check_tools());
         value["work_gates"] = json!(
             ctx.work_gates()
@@ -242,10 +242,10 @@ fn work_gate_value(gate: &WorkGate) -> Value {
         }),
         WorkGate::Evidence(gate) => {
             let (target, profile) = match &gate.selector {
-                crate::context::WorkEvidenceSelector::Target(target) => {
+                jig_context::WorkEvidenceSelector::Target(target) => {
                     (Some(target.to_string()), None)
                 }
-                crate::context::WorkEvidenceSelector::Profile(profile) => {
+                jig_context::WorkEvidenceSelector::Profile(profile) => {
                     (None, Some(profile.to_string()))
                 }
             };
@@ -277,9 +277,10 @@ fn work_gate_value(gate: &WorkGate) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use jig_commands::tool_defs::tool;
+
     use super::*;
     use crate::test_env::TestRepoBuilder;
-    use crate::tool_defs::tool;
     use serde_json::json;
     use std::path::Path;
     use tempfile::tempdir;

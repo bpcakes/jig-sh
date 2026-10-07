@@ -1,6 +1,6 @@
 # Runtime process supervision
 
-Read this reference before changing [signal sessions](../crates/jig/src/signal_supervision/session.rs), [shared signal supervision](../crates/jig/src/signal_supervision.rs), or [Jig-owned Bash probes](../crates/jig/src/shell.rs). Generic process-tree execution belongs to [jig-owned-process](../crates/jig-owned-process/AGENTS.md).
+Read this reference before changing [signal sessions](../crates/jig/src/signal_supervision/session.rs), [shared signal supervision](../crates/jig/src/signal_supervision.rs), or [Jig-owned Bash probes](../crates/jig-owned-process/src/bash_environment.rs). Generic process-tree execution belongs to [jig-owned-process](../crates/jig-owned-process/AGENTS.md).
 
 ## Signal sessions
 
