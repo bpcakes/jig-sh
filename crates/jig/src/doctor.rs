@@ -18,6 +18,7 @@ use jig_context::{
 };
 use jig_context::{
     JIG_REPO_ROOT_ENV, RepoContext, find_repo_root_from, find_repo_root_from_or_env,
+    repository_path,
 };
 use jig_owned_process::{
     OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output,
