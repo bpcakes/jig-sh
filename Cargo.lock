@@ -1656,6 +1656,7 @@ dependencies = [
  "jig-owned-process",
  "jig-repository",
  "jig-rust",
+ "jig-sqlx",
  "jig-state",
  "jig-tui",
  "jig-typescript",

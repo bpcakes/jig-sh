@@ -67,6 +67,7 @@ jig-loops.workspace = true
 jig-owned-process.workspace = true
 jig-repository.workspace = true
 jig-rust.workspace = true
+jig-sqlx.workspace = true
 jig-state.workspace = true
 jig-typescript.workspace = true
 jig-tui.workspace = true

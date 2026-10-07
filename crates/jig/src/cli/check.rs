@@ -318,7 +318,7 @@ pub(crate) enum CheckCommand {
     /// Validate guide links and owner guides (v9+); check guide structure on older contracts.
     #[command(name = tool_defs::cli_command::CHECK_AGENT_GUIDES)]
     AgentGuides,
-    /// Verify existing migrations were not mutated.
+    /// Verify migration immutability and unique SQLx numeric versions.
     #[command(name = tool_defs::cli_command::CHECK_MIGRATION_IMMUTABILITY)]
     MigrationImmutability(CheckMigrationImmutabilityOpts),
     /// Verify non-test SQLx queries use compile-time checked macros.

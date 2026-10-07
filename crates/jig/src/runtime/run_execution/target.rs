@@ -4,6 +4,42 @@ use super::*;
 #[path = "budget_tests.rs"]
 mod budget_tests;
 
+pub(super) fn sqlx_migration_preflight(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    planned: &PlannedTarget,
+    control: &TargetExecutionControl<'_>,
+) -> Option<TargetCapture> {
+    let action = catalog.action(&planned.target)?;
+    let sqlx_check = action
+        .legacy_aliases
+        .iter()
+        .any(|alias| alias == jig_contract::tool::SQLX_CHECK)
+        || (action.target.action.as_str() == "sqlx"
+            && catalog
+                .component(&action.target.component)
+                .is_some_and(|component| {
+                    component.adapters.iter().any(|adapter| adapter == "sqlx")
+                }));
+    if !sqlx_check {
+        return None;
+    }
+    if let Err(stop) = control.remaining() {
+        return Some(stopped_before_start(planned, stop));
+    }
+    crate::policy::migration_versions::check(ctx)
+        .err()
+        .map(|error| {
+            TargetCapture::failed_with_output(
+                format!("{error:#}"),
+                "sqlx.migration_versions",
+                Vec::new(),
+                Vec::new(),
+            )
+            .with_maybe_executed(false)
+        })
+}
+
 pub(super) fn native_runner_error_capture(
     planned: &PlannedTarget,
     operation: &str,
