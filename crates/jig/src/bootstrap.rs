@@ -48,7 +48,9 @@ use initial_template::{
     official_template_ref_for_version, resolve_initial_template_request_with_policy,
 };
 use initial_template::{prepare_initial_template_source, resolve_initial_template_request};
-use path::{absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors};
+use jig_repository::path::{
+    self, absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors,
+};
 #[cfg(test)]
 use preview_seed::seed_preview_workspace;
 use renderer::{RenderStageRequest, stage_render, stage_selected_render};
@@ -82,7 +84,6 @@ mod initial_template;
 mod launcher_repair_cache;
 mod managed_paths;
 mod opts;
-pub(crate) mod path;
 mod presets;
 mod preview_seed;
 mod renderer;

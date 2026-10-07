@@ -251,7 +251,7 @@ fn git_metadata_transfer_rejects_entries_added_after_its_sorted_snapshot() {
     fs::create_dir(&source).unwrap();
     fs::write(source.join("z-last"), b"last").unwrap();
     fs::write(source.join("a-first"), b"first").unwrap();
-    let source_commit = super::super::path::repository_directory_commit_at(&source).unwrap();
+    let source_commit = jig_repository::path::repository_directory_commit_at(&source).unwrap();
 
     let error = super::move_directory_contents_with(
         &source,

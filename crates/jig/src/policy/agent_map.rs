@@ -8,8 +8,8 @@ use jig_context::RepoContext;
 use serde_json::{Value, json};
 
 use crate::agent_guides::is_ignored_guide_component;
-use crate::bootstrap::path::{validate_repository_regular_file_leaf, write_repository_file_atomic};
 use crate::policy::AgentMapInput;
+use jig_repository::path::{validate_repository_regular_file_leaf, write_repository_file_atomic};
 
 pub(super) fn generate(ctx: &RepoContext, opts: &AgentMapInput) -> Result<Value> {
     let map_path = normalize_map_path(&opts.map_path)?;

@@ -13,11 +13,11 @@ use super::git::{
     disable_git_worktree_integrations, ensure_clean_git_work_tree, git_stdout, is_git_work_tree,
     scrub_remote_template_git_environment,
 };
-use super::path::absolute_path_from;
 use super::{
     ANSWERS_FILE, REMOTE_TEMPLATE_MODE_ERROR, TEMPLATE_LOCAL_PATH_KEY, TEMPLATE_MODE_KEY,
     TemplateMode, UpdateOpts, read_answers_toml,
 };
+use jig_repository::path::absolute_path_from;
 const COMMIT_KEY: &str = "_commit";
 const SRC_PATH_KEY: &str = "_src_path";
 // Keep this sentinel in sync with templates/project/scripts/install-jig.sh.jinja.

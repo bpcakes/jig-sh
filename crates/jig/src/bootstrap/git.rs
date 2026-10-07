@@ -165,7 +165,7 @@ pub(super) fn init_git_repo_with_validation(
             default_branch,
         )?;
         staged.require_identity("after validating initialized Git metadata")?;
-        let git_directory = super::path::repository_directory_commit_at(&staged_git)
+        let git_directory = jig_repository::path::repository_directory_commit_at(&staged_git)
             .context("Failed to retain initialized Git metadata directory identity")?;
         require_staged_git_directory_identity(
             &staged,
@@ -287,8 +287,8 @@ pub(super) fn init_git_repo_with_validation(
 }
 
 enum ExistingGitMetadataCommit {
-    Directory(super::path::RepositoryDirectoryCommit),
-    GitFile(super::path::RepositoryFileCommit),
+    Directory(jig_repository::path::RepositoryDirectoryCommit),
+    GitFile(jig_repository::path::RepositoryFileCommit),
 }
 
 impl ExistingGitMetadataCommit {
@@ -297,7 +297,7 @@ impl ExistingGitMetadataCommit {
             format!("Failed to inspect existing Git metadata {}", path.display())
         })?;
         if metadata.file_type().is_dir() {
-            return super::path::repository_directory_commit_at(path)
+            return jig_repository::path::repository_directory_commit_at(path)
                 .map(Self::Directory)
                 .with_context(|| {
                     format!(
@@ -306,8 +306,8 @@ impl ExistingGitMetadataCommit {
                     )
                 });
         }
-        if super::path::repository_metadata_is_real_regular_file(&metadata) {
-            return super::path::repository_file_fingerprint_at(path)
+        if jig_repository::path::repository_metadata_is_real_regular_file(&metadata) {
+            return jig_repository::path::repository_file_fingerprint_at(path)
                 .map(Self::GitFile)
                 .with_context(|| {
                     format!(
@@ -325,10 +325,10 @@ impl ExistingGitMetadataCommit {
     fn require_matches_path(&self, path: &Path, action: &str) -> Result<()> {
         let matches = match self {
             Self::Directory(commit) => {
-                super::path::repository_directory_commit_matches_path(commit, path)?
+                jig_repository::path::repository_directory_commit_matches_path(commit, path)?
             }
             Self::GitFile(commit) => {
-                super::path::repository_file_commit_matches_path(commit, path)?
+                jig_repository::path::repository_file_commit_matches_path(commit, path)?
             }
         };
         if !matches {
@@ -487,7 +487,7 @@ fn existing_git_command(
 
 struct StagingDirectory {
     path: PathBuf,
-    commit: super::path::RepositoryDirectoryCommit,
+    commit: jig_repository::path::RepositoryDirectoryCommit,
     preserve_for_recovery: Cell<bool>,
 }
 
@@ -513,7 +513,7 @@ impl StagingDirectory {
                 path.display()
             );
         }
-        if !super::path::repository_directory_commit_matches_path(&self.commit, path)? {
+        if !jig_repository::path::repository_directory_commit_matches_path(&self.commit, path)? {
             bail!(
                 "Git staging directory {} was replaced concurrently {action}; preserving the foreign replacement",
                 path.display()
@@ -527,7 +527,9 @@ impl StagingDirectory {
     }
 }
 
-fn require_new_staging_directory(path: &Path) -> Result<super::path::RepositoryDirectoryCommit> {
+fn require_new_staging_directory(
+    path: &Path,
+) -> Result<jig_repository::path::RepositoryDirectoryCommit> {
     let metadata = fs::symlink_metadata(path).with_context(|| {
         format!(
             "Failed to inspect newly created Git staging directory {}; preserving it for manual recovery",
@@ -540,7 +542,7 @@ fn require_new_staging_directory(path: &Path) -> Result<super::path::RepositoryD
             path.display()
         );
     }
-    super::path::repository_directory_commit_at(path).with_context(|| {
+    jig_repository::path::repository_directory_commit_at(path).with_context(|| {
         format!(
             "Failed to retain newly created Git staging directory {}; preserving it for manual recovery",
             path.display()
@@ -575,7 +577,7 @@ fn move_directory_contents(
     source: &Path,
     destination: &Path,
     source_root: &StagingDirectory,
-    source_commit: &super::path::RepositoryDirectoryCommit,
+    source_commit: &jig_repository::path::RepositoryDirectoryCommit,
     destination_root: &StagingDirectory,
 ) -> Result<()> {
     move_directory_contents_with(
@@ -592,7 +594,7 @@ fn move_directory_contents_with(
     source: &Path,
     destination: &Path,
     source_root: &StagingDirectory,
-    source_commit: &super::path::RepositoryDirectoryCommit,
+    source_commit: &jig_repository::path::RepositoryDirectoryCommit,
     destination_root: &StagingDirectory,
     after_snapshot: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
@@ -659,14 +661,15 @@ fn move_directory_contents_with(
             "before moving an initialized Git metadata entry",
         )?;
         destination_root.require_identity("before receiving an initialized Git metadata entry")?;
-        if let Err(error) = super::path::rename_entry_noreplace(&source_entry, &destination_entry)
-            .with_context(|| {
-                format!(
-                    "Failed to transfer staged git metadata {} to {}",
-                    source_entry.display(),
-                    destination_entry.display()
-                )
-            })
+        if let Err(error) =
+            jig_repository::path::rename_entry_noreplace(&source_entry, &destination_entry)
+                .with_context(|| {
+                    format!(
+                        "Failed to transfer staged git metadata {} to {}",
+                        source_entry.display(),
+                        destination_entry.display()
+                    )
+                })
         {
             source_root.preserve_for_recovery();
             return Err(error).context(
@@ -739,11 +742,11 @@ fn move_directory_contents_with(
 
 fn require_staged_git_directory_identity(
     staging_root: &StagingDirectory,
-    expected: &super::path::RepositoryDirectoryCommit,
+    expected: &jig_repository::path::RepositoryDirectoryCommit,
     path: &Path,
     action: &str,
 ) -> Result<()> {
-    match super::path::repository_directory_commit_matches_path(expected, path) {
+    match jig_repository::path::repository_directory_commit_matches_path(expected, path) {
         Ok(true) => Ok(()),
         Ok(false) => {
             staging_root.preserve_for_recovery();
@@ -1091,7 +1094,7 @@ fn copy_git_template_entries(
 struct GitTemplateEntrySnapshot {
     relative: PathBuf,
     kind: GitTemplateEntryKind,
-    identity: super::path::RepositoryEntryIdentity,
+    identity: jig_repository::path::RepositoryEntryIdentity,
     length: u64,
     modified: Option<std::time::SystemTime>,
     permission_identity: u32,
@@ -1145,7 +1148,7 @@ fn snapshot_git_template_entry(
     snapshot.push(GitTemplateEntrySnapshot {
         relative: relative.to_path_buf(),
         kind,
-        identity: super::path::repository_path_identity(&path)?,
+        identity: jig_repository::path::repository_path_identity(&path)?,
         length: metadata.len(),
         modified: metadata.modified().ok(),
         permission_identity: git_template_permission_identity(&metadata),
@@ -1183,7 +1186,7 @@ fn git_template_permission_identity(metadata: &fs::Metadata) -> u32 {
 fn copy_verified_git_template_file(
     source: &Path,
     destination: &Path,
-    expected_identity: &super::path::RepositoryEntryIdentity,
+    expected_identity: &jig_repository::path::RepositoryEntryIdentity,
     permissions: &fs::Permissions,
 ) -> Result<()> {
     let mut source_file = open_verified_git_template_file(source, expected_identity)?;
@@ -1239,9 +1242,9 @@ fn copy_verified_git_template_file(
 
 fn open_verified_git_template_file(
     path: &Path,
-    expected_identity: &super::path::RepositoryEntryIdentity,
+    expected_identity: &jig_repository::path::RepositoryEntryIdentity,
 ) -> Result<File> {
-    if super::path::repository_path_identity(path)? != *expected_identity {
+    if jig_repository::path::repository_path_identity(path)? != *expected_identity {
         bail!(
             "Git template entry changed before it could be opened: {}",
             path.display()
@@ -1270,8 +1273,8 @@ fn open_verified_git_template_file(
             )
         })?
         .is_file()
-        || super::path::repository_file_identity(&file)? != *expected_identity
-        || super::path::repository_path_identity(path)? != *expected_identity
+        || jig_repository::path::repository_file_identity(&file)? != *expected_identity
+        || jig_repository::path::repository_path_identity(path)? != *expected_identity
     {
         bail!(
             "Git template entry changed while it was being opened: {}",
@@ -1844,7 +1847,7 @@ fn publish_staged_git_directory(
         })?;
         staged.require_identity("after restoring final Git metadata permissions")?;
         staged.require_identity("immediately before Git metadata publication")?;
-        match super::path::rename_entry_noreplace(&staged_path, destination) {
+        match jig_repository::path::rename_entry_noreplace(&staged_path, destination) {
             Ok(()) => {
                 publication_committed = true;
                 validate_published_staging_directory(destination, &staged)?;
@@ -1903,7 +1906,10 @@ fn validate_published_staging_directory(
         )
     })?;
     if metadata.file_type().is_dir()
-        && super::path::repository_directory_commit_matches_path(&staged.commit, destination)?
+        && jig_repository::path::repository_directory_commit_matches_path(
+            &staged.commit,
+            destination,
+        )?
     {
         return Ok(());
     }
@@ -1966,7 +1972,7 @@ fn rename_to_unique_sibling(source: &Path, prefix: &str) -> Result<PathBuf> {
             "{prefix}{:x}-{timestamp:x}-{sequence:x}-{attempt:x}",
             std::process::id()
         ));
-        match super::path::rename_entry_noreplace(source, &candidate) {
+        match jig_repository::path::rename_entry_noreplace(source, &candidate) {
             Ok(()) => return Ok(candidate),
             Err(error) => match fs::symlink_metadata(&candidate) {
                 Ok(_) => {}

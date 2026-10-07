@@ -8,26 +8,26 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use tempfile::Builder as TempFileBuilder;
 
-pub(super) const INVOCATION_CWD_ENV: &str = "JIG_INVOKE_CWD";
+pub const INVOCATION_CWD_ENV: &str = "JIG_INVOKE_CWD";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RepositoryFileLeaf {
+pub enum RepositoryFileLeaf {
     Missing,
     RegularFile,
     Symlink,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RepositoryEntryIdentity {
+pub struct RepositoryEntryIdentity {
     platform: RepositoryEntryPlatformIdentity,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RepositoryDirectoryCommit {
-    pub(crate) identity: RepositoryEntryIdentity,
+pub struct RepositoryDirectoryCommit {
+    pub identity: RepositoryEntryIdentity,
     // Retaining the directory handle prevents reuse of its device/inode
     // identity for the lifetime of the transaction.
-    pub(crate) handle: Arc<File>,
+    pub handle: Arc<File>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,26 +39,26 @@ enum RepositoryEntryPlatformIdentity {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RepositoryFileCommit {
-    pub(crate) identity: RepositoryEntryIdentity,
-    pub(crate) content_length: u64,
-    pub(crate) content_sha256: [u8; 32],
-    pub(crate) permission_identity: u32,
+pub struct RepositoryFileCommit {
+    pub identity: RepositoryEntryIdentity,
+    pub content_length: u64,
+    pub content_sha256: [u8; 32],
+    pub permission_identity: u32,
     // Keeping the published inode open prevents identity reuse during the
     // transaction. Ownership still compares the complete fingerprint after
     // quarantine, so same-inode in-place writes are never accepted.
-    pub(crate) handle: Arc<File>,
+    pub handle: Arc<File>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RepositorySymlinkCommit {
-    pub(crate) identity: RepositoryEntryIdentity,
-    pub(crate) target: PathBuf,
-    pub(crate) target_is_directory: bool,
-    pub(crate) handle: Arc<File>,
+pub struct RepositorySymlinkCommit {
+    pub identity: RepositoryEntryIdentity,
+    pub target: PathBuf,
+    pub target_is_directory: bool,
+    pub handle: Arc<File>,
 }
 
-pub(crate) fn validate_portable_planned_file_collisions<I, P>(paths: I) -> Result<()>
+pub fn validate_portable_planned_file_collisions<I, P>(paths: I) -> Result<()>
 where
     I: IntoIterator<Item = P>,
     P: AsRef<Path>,
@@ -129,7 +129,7 @@ fn component_prefix(prefix: &[Vec<u8>], path: &[Vec<u8>]) -> bool {
     prefix.len() <= path.len() && prefix.iter().zip(path).all(|(left, right)| left == right)
 }
 
-pub(crate) fn validate_repository_regular_file_leaf(
+pub fn validate_repository_regular_file_leaf(
     root: &Path,
     relative: &Path,
 ) -> Result<RepositoryFileLeaf> {
@@ -143,13 +143,13 @@ pub(crate) fn validate_repository_regular_file_leaf(
     }
 }
 
-pub(crate) fn read_repository_regular_file(root: &Path, relative: &Path) -> Result<String> {
+pub fn read_repository_regular_file(root: &Path, relative: &Path) -> Result<String> {
     let contents = read_repository_regular_file_bytes(root, relative)?;
     String::from_utf8(contents)
         .with_context(|| format!("Failed to read {} as UTF-8", root.join(relative).display()))
 }
 
-pub(crate) fn read_repository_regular_file_bytes(root: &Path, relative: &Path) -> Result<Vec<u8>> {
+pub fn read_repository_regular_file_bytes(root: &Path, relative: &Path) -> Result<Vec<u8>> {
     let mut file = open_verified_repository_regular_file(root, relative)?;
     let path = root.join(relative);
     let mut contents = Vec::new();
@@ -304,7 +304,7 @@ fn repository_symlink_handle_at(path: &Path) -> Result<(RepositoryEntryIdentity,
     Ok((identity, Arc::new(handle)))
 }
 
-pub(crate) fn repository_symlink_commit_at(path: &Path) -> Result<RepositorySymlinkCommit> {
+pub fn repository_symlink_commit_at(path: &Path) -> Result<RepositorySymlinkCommit> {
     let (identity, handle) = repository_symlink_handle_at(path)?;
     let target = fs::read_link(path)
         .with_context(|| format!("Failed to read symlink {}", path.display()))?;
@@ -339,7 +339,7 @@ const fn repository_symlink_is_directory(_metadata: &fs::Metadata) -> bool {
     false
 }
 
-pub(crate) fn repository_directory_commit_at(path: &Path) -> Result<RepositoryDirectoryCommit> {
+pub fn repository_directory_commit_at(path: &Path) -> Result<RepositoryDirectoryCommit> {
     let directory = open_directory_no_follow(path)?;
     let identity = repository_file_identity(&directory)?;
     if repository_path_identity(path)? != identity {
@@ -354,7 +354,7 @@ pub(crate) fn repository_directory_commit_at(path: &Path) -> Result<RepositoryDi
     })
 }
 
-pub(crate) fn repository_directory_commit_matches_path(
+pub fn repository_directory_commit_matches_path(
     commit: &RepositoryDirectoryCommit,
     path: &Path,
 ) -> Result<bool> {
@@ -373,11 +373,11 @@ fn repository_metadata_is_real_directory(metadata: &fs::Metadata) -> bool {
     metadata.is_dir() && !metadata.file_type().is_symlink()
 }
 
-pub(crate) fn repository_metadata_is_real_regular_file(metadata: &fs::Metadata) -> bool {
+pub fn repository_metadata_is_real_regular_file(metadata: &fs::Metadata) -> bool {
     metadata.is_file() && !metadata.file_type().is_symlink()
 }
 
-pub(crate) fn write_repository_file_atomic(
+pub fn write_repository_file_atomic(
     root: &Path,
     relative: &Path,
     bytes: &[u8],
@@ -405,7 +405,7 @@ pub(crate) fn write_repository_file_atomic(
     )
 }
 
-pub(crate) fn write_repository_file_atomic_guarded(
+pub fn write_repository_file_atomic_guarded(
     root: &Path,
     relative: &Path,
     bytes: &[u8],
@@ -435,7 +435,7 @@ pub(crate) fn write_repository_file_atomic_guarded(
     )
 }
 
-pub(crate) fn write_repository_file_atomic_staged(
+pub fn write_repository_file_atomic_staged(
     root: &Path,
     relative: &Path,
     bytes: &[u8],
@@ -464,7 +464,7 @@ pub(crate) fn write_repository_file_atomic_staged(
     )
 }
 
-pub(crate) fn copy_repository_regular_file_atomic_with_permissions(
+pub fn copy_repository_regular_file_atomic_with_permissions(
     root: &Path,
     relative: &Path,
     source: &Path,
@@ -496,7 +496,7 @@ pub(crate) fn copy_repository_regular_file_atomic_with_permissions(
     )
 }
 
-pub(crate) fn copy_repository_regular_file_atomic_with_permissions_guarded(
+pub fn copy_repository_regular_file_atomic_with_permissions_guarded(
     root: &Path,
     relative: &Path,
     source: &Path,
@@ -529,7 +529,7 @@ pub(crate) fn copy_repository_regular_file_atomic_with_permissions_guarded(
     )
 }
 
-pub(crate) fn copy_repository_regular_file_atomic_with_permissions_staged(
+pub fn copy_repository_regular_file_atomic_with_permissions_staged(
     root: &Path,
     relative: &Path,
     source: &Path,
@@ -562,7 +562,7 @@ pub(crate) fn copy_repository_regular_file_atomic_with_permissions_staged(
     )
 }
 
-pub(crate) fn copy_repository_symlink_atomic(
+pub fn copy_repository_symlink_atomic(
     root: &Path,
     relative: &Path,
     source: &Path,
@@ -570,7 +570,7 @@ pub(crate) fn copy_repository_symlink_atomic(
     copy_repository_symlink_atomic_with(root, relative, source, true, None, || Ok(()))
 }
 
-pub(crate) fn copy_repository_symlink_atomic_guarded(
+pub fn copy_repository_symlink_atomic_guarded(
     root: &Path,
     relative: &Path,
     source: &Path,
@@ -587,7 +587,7 @@ pub(crate) fn copy_repository_symlink_atomic_guarded(
     )
 }
 
-pub(crate) fn copy_repository_symlink_atomic_staged(
+pub fn copy_repository_symlink_atomic_staged(
     root: &Path,
     relative: &Path,
     source: &Path,
@@ -1018,7 +1018,7 @@ fn hash_open_repository_file(file: &mut File) -> Result<[u8; 32]> {
     Ok(digest.finalize().into())
 }
 
-pub(crate) fn repository_file_fingerprint_at(path: &Path) -> Result<RepositoryFileCommit> {
+pub fn repository_file_fingerprint_at(path: &Path) -> Result<RepositoryFileCommit> {
     let mut file = open_file_no_follow(path)?;
     let fingerprint = repository_file_fingerprint(&mut file)?;
     let path_identity = repository_path_identity(path)?;
@@ -1037,7 +1037,7 @@ pub(crate) fn repository_file_fingerprint_at(path: &Path) -> Result<RepositoryFi
     })
 }
 
-pub(crate) fn repository_file_commits_match(
+pub fn repository_file_commits_match(
     left: &RepositoryFileCommit,
     right: &RepositoryFileCommit,
 ) -> bool {
@@ -1047,7 +1047,7 @@ pub(crate) fn repository_file_commits_match(
         && left.permission_identity == right.permission_identity
 }
 
-pub(crate) fn repository_file_commit_matches_path(
+pub fn repository_file_commit_matches_path(
     commit: &RepositoryFileCommit,
     path: &Path,
 ) -> Result<bool> {
@@ -1124,7 +1124,7 @@ fn same_open_file_identity(left: &File, right: &File) -> Result<bool> {
 }
 
 #[cfg(unix)]
-pub(crate) fn repository_file_identity(file: &File) -> Result<RepositoryEntryIdentity> {
+pub fn repository_file_identity(file: &File) -> Result<RepositoryEntryIdentity> {
     use std::os::unix::fs::MetadataExt;
 
     let metadata = file.metadata().context("Failed to inspect opened file")?;
@@ -1137,12 +1137,12 @@ pub(crate) fn repository_file_identity(file: &File) -> Result<RepositoryEntryIde
 }
 
 #[cfg(not(unix))]
-pub(crate) fn repository_file_identity(_file: &File) -> Result<RepositoryEntryIdentity> {
+pub fn repository_file_identity(_file: &File) -> Result<RepositoryEntryIdentity> {
     bail!("stable repository file identity is unsupported on this platform")
 }
 
 #[cfg(unix)]
-pub(crate) fn repository_path_identity(path: &Path) -> Result<RepositoryEntryIdentity> {
+pub fn repository_path_identity(path: &Path) -> Result<RepositoryEntryIdentity> {
     use std::os::unix::fs::MetadataExt;
 
     let metadata = fs::symlink_metadata(path)
@@ -1156,18 +1156,18 @@ pub(crate) fn repository_path_identity(path: &Path) -> Result<RepositoryEntryIde
 }
 
 #[cfg(not(unix))]
-pub(crate) fn repository_path_identity(_path: &Path) -> Result<RepositoryEntryIdentity> {
+pub fn repository_path_identity(_path: &Path) -> Result<RepositoryEntryIdentity> {
     bail!("stable repository path identity is unsupported on this platform")
 }
 
 #[cfg(unix)]
-pub(crate) fn repository_permission_identity(permissions: &fs::Permissions) -> u32 {
+pub fn repository_permission_identity(permissions: &fs::Permissions) -> u32 {
     use std::os::unix::fs::PermissionsExt;
 
     permissions.mode()
 }
 
-pub(crate) fn repository_paths_same_filesystem(left: &Path, right: &Path) -> Result<bool> {
+pub fn repository_paths_same_filesystem(left: &Path, right: &Path) -> Result<bool> {
     let left = repository_path_identity(left)?;
     let right = repository_path_identity(right)?;
     Ok(match (&left.platform, &right.platform) {
@@ -1182,11 +1182,11 @@ pub(crate) fn repository_paths_same_filesystem(left: &Path, right: &Path) -> Res
 }
 
 #[cfg(not(unix))]
-pub(crate) fn repository_permission_identity(permissions: &fs::Permissions) -> u32 {
+pub fn repository_permission_identity(permissions: &fs::Permissions) -> u32 {
     u32::from(permissions.readonly())
 }
 
-pub(super) fn validate_no_reserved_git_metadata_components(relative: &Path) -> Result<()> {
+pub fn validate_no_reserved_git_metadata_components(relative: &Path) -> Result<()> {
     if let Some(component) = reserved_git_metadata_component(relative) {
         bail!(
             "Unsafe repository path {}: component {component:?} aliases the reserved Git metadata component \".git\" under Git's HFS path rules",
@@ -1206,7 +1206,7 @@ fn reserved_git_metadata_component(relative: &Path) -> Option<&str> {
     })
 }
 
-pub(super) fn validate_repository_relative_ancestors(root: &Path, relative: &Path) -> Result<()> {
+pub fn validate_repository_relative_ancestors(root: &Path, relative: &Path) -> Result<()> {
     if relative.is_absolute()
         || relative
             .components()
@@ -1272,7 +1272,7 @@ pub(super) fn validate_repository_relative_ancestors(root: &Path, relative: &Pat
     Ok(())
 }
 
-pub(super) fn validate_repository_relative_file_leaf(
+pub fn validate_repository_relative_file_leaf(
     root: &Path,
     relative: &Path,
 ) -> Result<RepositoryFileLeaf> {
@@ -1309,7 +1309,7 @@ pub(super) fn validate_repository_relative_file_leaf(
     )
 }
 
-pub(super) fn absolute_path_from(path: &Path, base: &Path) -> Result<PathBuf> {
+pub fn absolute_path_from(path: &Path, base: &Path) -> Result<PathBuf> {
     let resolved = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -1323,7 +1323,7 @@ pub(super) fn absolute_path_from(path: &Path, base: &Path) -> Result<PathBuf> {
     }
 }
 
-pub(super) fn split_existing_ancestor(destination: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
+pub fn split_existing_ancestor(destination: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
     let mut existing = destination.to_path_buf();
     let mut missing = Vec::new();
     loop {
@@ -1368,7 +1368,7 @@ pub(super) fn split_existing_ancestor(destination: &Path) -> Result<(PathBuf, Ve
     }
 }
 
-pub(super) fn resolve_init_destination(path: &Path, base: &Path) -> Result<PathBuf> {
+pub fn resolve_init_destination(path: &Path, base: &Path) -> Result<PathBuf> {
     if path.as_os_str().is_empty() {
         bail!("Init destination must not be empty");
     }
@@ -1443,7 +1443,7 @@ const fn ensure_atomic_noreplace_publication_supported_on_platform() -> Result<(
     }
 }
 
-pub(crate) fn ensure_atomic_noreplace_publication_supported(parent: &Path) -> Result<()> {
+pub fn ensure_atomic_noreplace_publication_supported(parent: &Path) -> Result<()> {
     ensure_atomic_noreplace_publication_supported_on_platform()?;
     ensure_atomic_noreplace_publication_supported_with(parent, rename_entry_noreplace)
 }
@@ -1649,7 +1649,7 @@ fn ensure_atomic_noreplace_publication_supported_with(
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub(crate) fn rename_entry_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
+pub fn rename_entry_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
@@ -1681,7 +1681,7 @@ pub(crate) fn rename_entry_noreplace(source: &Path, destination: &Path) -> io::R
     target_os = "watchos",
     target_os = "visionos"
 ))]
-pub(crate) fn rename_entry_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
+pub fn rename_entry_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
@@ -1706,14 +1706,14 @@ pub(crate) fn rename_entry_noreplace(source: &Path, destination: &Path) -> io::R
     target_os = "watchos",
     target_os = "visionos"
 )))]
-pub(crate) fn rename_entry_noreplace(_source: &Path, _destination: &Path) -> io::Result<()> {
+pub fn rename_entry_noreplace(_source: &Path, _destination: &Path) -> io::Result<()> {
     Err(io::Error::new(
         ErrorKind::Unsupported,
         "atomic no-replace init publication is unsupported on this platform",
     ))
 }
 
-pub(super) fn bootstrap_invocation_cwd() -> Result<PathBuf> {
+pub fn bootstrap_invocation_cwd() -> Result<PathBuf> {
     let Some(value) = env::var_os(INVOCATION_CWD_ENV) else {
         let cwd = env::current_dir().context("Failed to resolve current directory")?;
         return fs::canonicalize(&cwd).with_context(|| {

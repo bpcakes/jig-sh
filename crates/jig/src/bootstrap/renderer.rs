@@ -13,15 +13,15 @@ use super::ANSWERS_FILE;
 use super::answers::RenderAnswers;
 use super::embedded_templates::EMBEDDED_TEMPLATE_FILES;
 use super::managed_paths;
-use super::path::{
-    validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
-};
 use super::preview_seed::seed_preview_workspace;
 use super::repository_model::RepositoryRenderModel;
 use super::staged_render::FILE_BUDGET_POLICY_PATH;
 use super::staged_render::StagedRender;
 use super::template_source::{PreparedTemplateSource, TemplateRenderSource};
 use crate::progress::CliProgress;
+use jig_repository::path::{
+    validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
+};
 
 mod runtime_contract;
 pub(super) use runtime_contract::validate_staged_runtime_contract;

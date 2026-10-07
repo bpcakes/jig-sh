@@ -14,7 +14,10 @@ use super::file_copy::{
     copy_file_or_symlink_with_permissions, path_exists, prepare_copy_destination_and_read_metadata,
 };
 use super::managed_paths::{self, ManagedBlockSpec};
-use super::path::{
+use super::staged_render::StagedRender;
+use super::update_transaction::RepositoryUpdateTransaction;
+use crate::progress::CliProgress;
+use jig_repository::path::{
     RepositoryFileCommit, RepositoryFileLeaf, RepositorySymlinkCommit,
     copy_repository_regular_file_atomic_with_permissions,
     copy_repository_regular_file_atomic_with_permissions_guarded,
@@ -22,9 +25,6 @@ use super::path::{
     copy_repository_symlink_atomic_guarded, copy_repository_symlink_atomic_staged,
     validate_portable_planned_file_collisions, validate_repository_relative_file_leaf,
 };
-use super::staged_render::StagedRender;
-use super::update_transaction::RepositoryUpdateTransaction;
-use crate::progress::CliProgress;
 
 mod pinned_runtime;
 
