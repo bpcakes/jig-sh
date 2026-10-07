@@ -17,15 +17,15 @@ use self::home::{
     user_home,
 };
 use self::inspection::{inspect_home, inspection_failure};
-pub(crate) use self::resume::{normalize_session_id, resolve_resume_home_with_progress};
+pub use self::resume::{normalize_session_id, resolve_resume_home_with_cancellation};
 
 mod app_server;
 mod home;
 mod inspection;
-pub(crate) mod provider;
+pub mod provider;
 mod resume;
 
-pub(crate) const CODEX_HOME_ENV: &str = "CODEX_HOME";
+pub const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const MAX_PARALLEL_HOME_WORKERS: usize = 4;
 const SESSION_LOOKUP_CANCELLED: &str = "Codex session lookup was cancelled";
 
@@ -70,17 +70,17 @@ impl DiscoveredHomes {
 }
 
 /// Exact discovered homes plus the inputs needed for background inspection.
-pub(crate) struct CodexHomeInspection {
+pub struct CodexHomeInspection {
     discovered: DiscoveredHomes,
     current: PathBuf,
     codex_bin: OsString,
 }
 
 /// Inexpensive display metadata for one exact discovered home.
-pub(crate) struct CodexHomeCandidate {
-    pub(crate) path: PathBuf,
-    pub(crate) name: String,
-    pub(crate) current: bool,
+pub struct CodexHomeCandidate {
+    pub path: PathBuf,
+    pub name: String,
+    pub current: bool,
 }
 
 #[derive(Debug)]
@@ -217,7 +217,7 @@ where
     Ok((report, discovered.paths))
 }
 
-pub(crate) fn discover_home_inspection() -> Result<CodexHomeInspection> {
+pub fn discover_home_inspection() -> Result<CodexHomeInspection> {
     Ok(CodexHomeInspection {
         discovered: discover_homes()?,
         current: current_codex_home()?,
@@ -226,7 +226,7 @@ pub(crate) fn discover_home_inspection() -> Result<CodexHomeInspection> {
 }
 
 impl CodexHomeInspection {
-    pub(crate) fn discovery_warnings(&self) -> Vec<String> {
+    pub fn discovery_warnings(&self) -> Vec<String> {
         self.discovered
             .issues
             .iter()
@@ -234,7 +234,7 @@ impl CodexHomeInspection {
             .collect()
     }
 
-    pub(crate) fn candidates(&self) -> Vec<CodexHomeCandidate> {
+    pub fn candidates(&self) -> Vec<CodexHomeCandidate> {
         self.discovered
             .paths
             .iter()
@@ -246,11 +246,7 @@ impl CodexHomeInspection {
             .collect()
     }
 
-    pub(crate) fn inspect<F>(
-        &self,
-        cancelled: &(dyn Fn() -> bool + Sync),
-        mut emit: F,
-    ) -> Result<()>
+    pub fn inspect<F>(&self, cancelled: &(dyn Fn() -> bool + Sync), mut emit: F) -> Result<()>
     where
         F: FnMut(usize, JsonValue) -> Result<()>,
     {
@@ -415,7 +411,7 @@ fn inspected_home_errors(homes: &[JsonValue]) -> Vec<JsonValue> {
     errors
 }
 
-pub(crate) fn resolve_launch_home(input: &Path) -> Result<PathBuf> {
+pub fn resolve_launch_home(input: &Path) -> Result<PathBuf> {
     resolve_launch_home_with_sources(
         input,
         || env::current_dir().context("Failed to resolve the current directory"),
@@ -427,10 +423,7 @@ pub(crate) fn resolve_launch_home(input: &Path) -> Result<PathBuf> {
     )
 }
 
-pub(crate) fn resolve_configured_home_from_dir(
-    input: &Path,
-    current_dir: &Path,
-) -> Result<PathBuf> {
+pub fn resolve_configured_home_from_dir(input: &Path, current_dir: &Path) -> Result<PathBuf> {
     if is_bare_home_name(input) && !has_tilde_prefix(input) {
         let user_home = user_home()?;
         let requested = input.as_os_str();
@@ -535,11 +528,11 @@ fn resolve_launch_home_from(
     )
 }
 
-pub(crate) fn dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
+pub fn dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
     command_dry_run_report("codex launch", home, args)
 }
 
-pub(crate) fn resume_dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
+pub fn resume_dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
     command_dry_run_report("codex resume", home, args)
 }
 
@@ -560,17 +553,17 @@ fn command_dry_run_report(command: &str, home: &Path, args: &[OsString]) -> Json
     })
 }
 
-pub(crate) fn configured_codex_home() -> Option<PathBuf> {
+pub fn configured_codex_home() -> Option<PathBuf> {
     env::var_os(CODEX_HOME_ENV)
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
 }
 
-pub(crate) fn codex_config_path() -> Option<PathBuf> {
+pub fn codex_config_path() -> Option<PathBuf> {
     configured_codex_home().map(|home| home.join("config.toml"))
 }
 
-pub(crate) fn codex_bin() -> OsString {
+pub fn codex_bin() -> OsString {
     <provider::Codex as crate::agent_provider::AgentProvider>::METADATA.executable()
 }
 

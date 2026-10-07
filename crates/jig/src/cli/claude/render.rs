@@ -1,8 +1,8 @@
 use jig_tui::sanitize_text;
 use serde_json::Value;
 
-use crate::agent_provider::AgentProvider;
-use crate::claude::provider::Claude;
+use jig_agents::agent_provider::AgentProvider;
+use jig_agents::claude::provider::Claude;
 
 use crate::cli::output::command_display::CommandDisplay;
 

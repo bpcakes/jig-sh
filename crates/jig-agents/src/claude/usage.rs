@@ -11,20 +11,20 @@ mod normalize;
 #[cfg(test)]
 mod tests;
 
-pub(crate) struct Inspection {
+pub struct Inspection {
     homes: Vec<Home>,
     allow_keychain_prompt: bool,
 }
 
 impl Inspection {
-    pub(crate) fn new(homes: Vec<Home>, allow_keychain_prompt: bool) -> Self {
+    pub fn new(homes: Vec<Home>, allow_keychain_prompt: bool) -> Self {
         Self {
             homes,
             allow_keychain_prompt,
         }
     }
 
-    pub(crate) fn inspect(
+    pub fn inspect(
         &self,
         emit: &mut dyn FnMut(usize, Value) -> Result<(), String>,
         cancelled: &(dyn Fn() -> bool + Sync),
@@ -81,7 +81,7 @@ fn inspected(credential: &credentials::Credential, usage: Result<Vec<Value>, Str
     })
 }
 
-pub(crate) fn report(homes: Homes, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Value> {
+pub fn report(homes: Homes, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Value> {
     let mut report = homes.report();
     report["usage_included"] = json!(true);
     let inspection = Inspection::new(homes.selections(), false);

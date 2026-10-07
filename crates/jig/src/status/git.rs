@@ -195,7 +195,7 @@ fn git_output_with_cancellation(
 }
 
 fn configure_git_environment(command: &mut Command) {
-    crate::shell::sanitize_bash_environment(command);
+    jig_owned_process::sanitize_bash_environment(command);
     jig_git::scrub_git_repository_environment_except(command, &[]);
     // `git status` may otherwise take an optional lock and refresh stat data
     // in the index. Status collection is observational, so explicitly disable

@@ -10,12 +10,14 @@
 - `src/pipe.rs`: child stdout/stderr preparation and nonblocking reads shared by generic and secret-aware runners.
 - `src/process.rs`: bounded output, cancellation, timeout, and platform process-tree supervision.
 - `src/process/interaction.rs`: cooperative stdin/stdout interaction with an owned child process.
+- `src/bash_environment.rs`: environment hygiene for Jig-owned Bash probes.
 
 ## Edit here for X
 
 - Change checked command-output helpers: `src/process.rs`.
 - Change process-tree identity, waiting, or cleanup: `src/process.rs`.
 - Change long-lived child protocol interaction: `src/process/interaction.rs`.
+- Change which inherited Bash controls a Jig-owned probe drops: `src/bash_environment.rs`.
 
 ## Invariants
 

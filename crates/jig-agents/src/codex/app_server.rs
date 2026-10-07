@@ -125,7 +125,7 @@ fn run_app_server<T>(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::shell::sanitize_bash_environment(&mut command);
+    jig_owned_process::sanitize_bash_environment(&mut command);
 
     run_owned_process_tree_with_cooperative_interaction(&mut command, timeout, interaction)
         .map_err(|error| app_server_error(&error, timeout))

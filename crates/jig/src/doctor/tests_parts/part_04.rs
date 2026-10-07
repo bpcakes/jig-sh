@@ -696,7 +696,7 @@ fn proxy_list_command_preserves_the_portable_launcher_plan() {
 
     assert!(launcher.is_absolute());
     assert_eq!(command.get_current_dir(), Some(temp.path()));
-    for key in crate::shell::BASH_CONTROL_ENVIRONMENT_KEYS {
+    for key in jig_owned_process::BASH_CONTROL_ENVIRONMENT_KEYS {
         assert!(
             command
                 .get_envs()

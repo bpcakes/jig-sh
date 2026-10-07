@@ -502,7 +502,7 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
     for (key, value) in command_environment {
         command.env(key, value);
     }
-    crate::shell::sanitize_bash_environment(&mut command);
+    jig_owned_process::sanitize_bash_environment(&mut command);
     let output = match jig_owned_process::run_owned_process_tree_with_output(
         &mut command,
         timeout,

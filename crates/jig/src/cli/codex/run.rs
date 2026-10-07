@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use crate::agent_provider::{AgentProvider, SessionProvider};
-use crate::codex::provider::Codex;
 use anyhow::{Result, bail};
+use jig_agents::agent_provider::{AgentProvider, SessionProvider};
+use jig_agents::codex::provider::Codex;
 
 use super::{CodexCommand, CodexLaunchOpts, CodexResumeOpts, render};
 use crate::cli::agent_run;
@@ -25,16 +25,18 @@ fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
     if json_output && !opts.dry_run {
         bail!("--json can be used with `jig codex resume` only when --dry-run is present");
     }
-    let session_id = crate::codex::normalize_session_id(&opts.session_id)?;
+    let session_id = jig_agents::codex::normalize_session_id(&opts.session_id)?;
     let home = match opts.home {
         Some(home) => Codex.resolve(&home)?,
-        None if json_output => Codex.resolve_session(&session_id, &mut |_, _| {})?,
+        None if json_output => {
+            resolve_session_with_signal_supervision(&session_id, &mut |_, _| {})?
+        }
         None => resolve_resume_home_with_cli_progress(&session_id)?,
     };
     let codex_args = resume_codex_args(session_id, opts.codex_args);
 
     let mut prepared = Codex.prepare(&home, &codex_args)?;
-    prepared.report = crate::codex::resume_dry_run_report(&home, &codex_args);
+    prepared.report = jig_agents::codex::resume_dry_run_report(&home, &codex_args);
     agent_run::finish::<Codex>(
         prepared,
         opts.dry_run,
@@ -46,12 +48,23 @@ fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
 fn resolve_resume_home_with_cli_progress(session_id: &str) -> Result<PathBuf> {
     let progress = CliProgress::new("codex resume");
     progress.header("find the Codex home containing the session");
-    let result = Codex.resolve_session(session_id, &mut |completed, total| {
+    let result = resolve_session_with_signal_supervision(session_id, &mut |completed, total| {
         progress.step("inspect homes", format!("{completed}/{total}"))
     });
     let home = progress.log_blocked_on_err(result)?;
     progress.done("found the session's Codex home");
     Ok(home)
+}
+
+fn resolve_session_with_signal_supervision(
+    session_id: &str,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<PathBuf> {
+    crate::signal_supervision::supervise(
+        "Codex session lookup was not started because the process-wide signal session is unavailable",
+        "Codex session lookup signal supervision could not retire safely",
+        |cancelled| Codex.resolve_session(session_id, &cancelled, progress),
+    )
 }
 
 fn resume_codex_args(

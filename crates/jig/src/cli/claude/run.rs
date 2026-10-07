@@ -1,5 +1,6 @@
+use jig_agents::claude::provider::Claude;
+
 use super::{ClaudeCommand, render};
-use crate::claude::provider::Claude;
 use crate::cli::agent_run;
 use anyhow::Result;
 

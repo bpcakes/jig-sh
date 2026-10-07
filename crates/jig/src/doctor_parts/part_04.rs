@@ -709,7 +709,7 @@ fn proxy_list_command(root: &Path) -> Result<(PathBuf, Command)> {
     })?;
     let launcher = root.join("scripts/jig");
     let mut command = Command::new(&launcher);
-    crate::shell::sanitize_bash_environment(&mut command);
+    jig_owned_process::sanitize_bash_environment(&mut command);
     command.args(["proxy", "list", "--json"]).current_dir(&root);
     Ok((launcher, command))
 }

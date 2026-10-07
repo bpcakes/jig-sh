@@ -1,8 +1,8 @@
 # Agent providers
 
 Claude and Codex implement the internal `AgentProvider` interface in
-`crates/jig/src/agent_provider.rs`. Their CLI parsers dispatch homes and launch
-requests to `crates/jig/src/cli/agent_run.rs`. The common workflow checks usage
+`crates/jig-agents/src/agent_provider.rs`. Their CLI parsers dispatch homes and
+launch requests to `crates/jig/src/cli/agent_run.rs`. The common workflow checks usage
 support and JSON/launch combinations, supervises inspection, builds the picker,
 revalidates the selected configuration, emits dry runs, and executes prepared
 commands through the transparent child launcher.
@@ -28,7 +28,8 @@ access. Claude's picker permits bounded Keychain prompting; its headless report
 never does. These policies remain in provider adapters rather than the common CLI.
 
 `SessionProvider` is an optional extension implemented by Codex for session-home
-lookup. Other providers do not need a dummy implementation. Provider-specific
+lookup; like `homes_report`, it takes a cancellation callback, and the CLI owns
+the process-wide signal supervision around it. Other providers do not need a dummy implementation. Provider-specific
 resume argument construction and session validation remain with the Codex CLI.
 
 ## Identity and lifetime rules

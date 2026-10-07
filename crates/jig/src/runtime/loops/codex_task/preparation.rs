@@ -144,7 +144,7 @@ pub(super) fn run_preparation(
             ));
         }
     };
-    let mut command = Command::new(crate::codex::codex_bin());
+    let mut command = Command::new(jig_agents::codex::codex_bin());
     command
         .current_dir(checkout)
         .args([
@@ -158,7 +158,7 @@ pub(super) fn run_preparation(
         ])
         .args(argv);
     if let Some(codex_home) = codex_home {
-        command.env(crate::codex::CODEX_HOME_ENV, codex_home);
+        command.env(jig_agents::codex::CODEX_HOME_ENV, codex_home);
     }
     let timeout = ctx.command_timeout();
     let output_limit = internal_execution_output_limit();

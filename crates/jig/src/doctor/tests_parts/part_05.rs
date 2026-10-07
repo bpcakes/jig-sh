@@ -42,7 +42,7 @@ fn proxy_list_output_executes_the_launcher_through_a_clean_bash_environment() {
         .env("JIG_DOCTOR_PROXY_POISON_MARKER", &poison_marker)
         .env("JIG_DOCTOR_PROXY_TRACE_MARKER", &trace_marker)
         .env("JIG_DOCTOR_PROXY_ORDINARY", "preserved");
-    crate::shell::sanitize_bash_environment(&mut command);
+    jig_owned_process::sanitize_bash_environment(&mut command);
 
     let output = proxy_list_output_with_timeout(&mut command, Duration::from_secs(2)).unwrap();
 

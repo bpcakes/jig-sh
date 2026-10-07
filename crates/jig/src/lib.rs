@@ -1,13 +1,10 @@
 mod agent_guides;
 mod agent_launch;
-mod agent_provider;
 mod bootstrap;
 #[cfg(test)]
 #[path = "../build_identity.rs"]
 mod build_identity;
-mod claude;
 mod cli;
-mod codex;
 mod command;
 #[cfg(feature = "dev-proxy")]
 mod dev_proxy;
@@ -50,7 +47,6 @@ mod dev_proxy {
         }
     }
 }
-mod home_paths;
 mod info;
 mod policy;
 mod progress;
