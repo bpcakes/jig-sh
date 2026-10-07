@@ -137,52 +137,7 @@ fn a_pending_absent_restore_target_is_presented_for_unlock_and_finished() {
             .contains("incorrect credential sentinel")
     );
     assert!(!target.exists());
-    let referent = temp.path().join("collision-referent");
-    std::fs::write(&referent, b"unchanged referent").unwrap();
-    for symlink in [false, true] {
-        if symlink {
-            std::os::unix::fs::symlink(&referent, &target).unwrap();
-        } else {
-            std::fs::write(&target, b"unchanged collision").unwrap();
-        }
-        let startup = VaultTuiBackend::new(request(target.clone()))
-            .err()
-            .expect("a non-directory restore collision must refuse startup");
-        let core = startup.downcast_ref::<VaultError>().unwrap();
-        assert_eq!(core.kind(), VaultErrorKind::Io);
-        assert_eq!(
-            core.recovery(),
-            Some(jig_vault::VaultRecovery::StorageConflict)
-        );
-        assert!(
-            startup
-                .to_string()
-                .contains(crate::runtime::vault::scope::VAULT_STORAGE_OPERATOR_STEP)
-        );
-        for error in [
-            backend.home_state().unwrap_err(),
-            backend
-                .unlock(SecretBytes::new(PASSPHRASE.as_bytes().to_vec()))
-                .unwrap_err(),
-        ] {
-            assert_eq!(error.kind(), VaultUiErrorKind::Io);
-            assert!(
-                error
-                    .message()
-                    .contains(crate::runtime::vault::scope::VAULT_STORAGE_OPERATOR_STEP)
-            );
-            assert!(!error.message().contains(PASSPHRASE));
-        }
-        assert_eq!(std::fs::read(&referent).unwrap(), b"unchanged referent");
-        if symlink {
-            assert_eq!(std::fs::read_link(&target).unwrap(), referent);
-        } else {
-            assert!(std::fs::symlink_metadata(&target).unwrap().is_file());
-            assert_eq!(std::fs::read(&target).unwrap(), b"unchanged collision");
-        }
-        // Only the known fixture leaf is removed; never follow its symlink.
-        std::fs::remove_file(&target).unwrap();
-    }
+    assert_non_directory_collisions(&backend, &target, temp.path());
     std::fs::create_dir(&target).unwrap();
     let occupant = target.join("occupied");
     std::fs::write(&occupant, b"existing contents").unwrap();
@@ -281,4 +236,68 @@ fn pending_rekey_errors_route_credentials_to_operator_in_tui() {
         .unlock(SecretBytes::new(new_passphrase.to_vec()))
         .unwrap();
     assert!(!Vault::status(Some(home)).unwrap().pending_transaction);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_non_directory_collision(
+    backend: &VaultTuiBackend,
+    target: &std::path::Path,
+    referent: &std::path::Path,
+    symlink: bool,
+) {
+    if symlink {
+        std::os::unix::fs::symlink(referent, target).unwrap();
+    } else {
+        std::fs::write(target, b"unchanged collision").unwrap();
+    }
+    let startup = VaultTuiBackend::new(request(target.to_path_buf()))
+        .err()
+        .expect("a non-directory restore collision must refuse startup");
+    let core = startup.downcast_ref::<VaultError>().unwrap();
+    assert_eq!(core.kind(), VaultErrorKind::Io);
+    assert_eq!(
+        core.recovery(),
+        Some(jig_vault::VaultRecovery::StorageConflict)
+    );
+    assert!(
+        startup
+            .to_string()
+            .contains(crate::runtime::vault::scope::VAULT_STORAGE_OPERATOR_STEP)
+    );
+    for error in [
+        backend.home_state().unwrap_err(),
+        backend
+            .unlock(SecretBytes::new(PASSPHRASE.as_bytes().to_vec()))
+            .unwrap_err(),
+    ] {
+        assert_eq!(error.kind(), VaultUiErrorKind::Io);
+        assert!(
+            error
+                .message()
+                .contains(crate::runtime::vault::scope::VAULT_STORAGE_OPERATOR_STEP)
+        );
+        assert!(!error.message().contains(PASSPHRASE));
+    }
+    assert_eq!(std::fs::read(referent).unwrap(), b"unchanged referent");
+    if symlink {
+        assert_eq!(std::fs::read_link(target).unwrap(), referent);
+    } else {
+        assert!(std::fs::symlink_metadata(target).unwrap().is_file());
+        assert_eq!(std::fs::read(target).unwrap(), b"unchanged collision");
+    }
+    // Only the known fixture leaf is removed; never follow its symlink.
+    std::fs::remove_file(target).unwrap();
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_non_directory_collisions(
+    backend: &VaultTuiBackend,
+    target: &std::path::Path,
+    root: &std::path::Path,
+) {
+    let referent = root.join("collision-referent");
+    std::fs::write(&referent, b"unchanged referent").unwrap();
+    for symlink in [false, true] {
+        assert_non_directory_collision(backend, target, &referent, symlink);
+    }
 }
