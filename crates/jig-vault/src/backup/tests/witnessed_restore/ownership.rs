@@ -72,11 +72,14 @@ fn an_orphan_journal_naming_any_directory_never_changes_it() {
             point_staging_at(&journal, &victim);
             let before = staged_bytes(&victim);
 
+            // Promotion finished the transaction. The orphan remains visible
+            // to preflight, but status must not advertise pending recovery.
             assert!(
-                Vault::status(Some(target.clone()))
+                !Vault::status(Some(target.clone()))
                     .unwrap()
                     .pending_transaction
             );
+            assert!(crate::store::pending_transaction_recorded(&target));
             let error = if retry {
                 restore(&archive, &target).unwrap_err()
             } else {
