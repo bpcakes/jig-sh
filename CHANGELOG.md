@@ -83,6 +83,10 @@
   rule in existing repositories.
 
 ### Fixed
+- Report uncertain pending-marker publication with recovery guidance, including
+  retaining both passphrases after an interrupted credential change.
+- Retry complete output alias scans after transient witness entry disappearance,
+  while retaining fail-closed checks and a bounded retry limit.
 - Remove the lifetime witness entry-count cliff from authenticated vault
   access and existing-file output checks. Scans still validate complete
   authority, retain bounded state, and preserve witness history; their

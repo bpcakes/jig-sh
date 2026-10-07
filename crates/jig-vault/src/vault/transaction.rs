@@ -103,7 +103,9 @@ impl VaultStore {
             journal_sha256,
             next,
         });
-        witness.write_record(&pending).map_err(record_error)?;
+        witness
+            .write_record(&pending)
+            .map_err(|error| pending_publication_error(kind, error))?;
         // The transaction is now irrevocable: report failures as pending.
         self.fault(FaultPoint::AfterPending)
             .and_then(|()| self.finish_in_place(&witness, &journal, pending, None))
@@ -386,6 +388,32 @@ pub(crate) fn fail_closed(error: anyhow::Error) -> anyhow::Error {
     classify_source(
         VaultErrorKind::AuditTampered,
         "the vault transaction state for this home could not be established; refusing to guess its outcome",
+        error,
+    )
+}
+
+/// A failed marker write may already have renamed it into place. Do not
+/// claim either absence or durability: recovery can make a visible marker
+/// durable, and a retry must retain the credentials for its candidate.
+pub(crate) fn pending_publication_error(
+    kind: TransactionKind,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let retry = match kind {
+        TransactionKind::PassphraseChange => {
+            "keep both passphrases and retry the passphrase change with the same current and new passphrases; a pending change requires the new passphrase"
+        }
+        TransactionKind::Restore => {
+            "keep the archive and retry restore to the same target with the same archive and passphrase"
+        }
+        _ => "retry the same operation with the same passphrase",
+    };
+    classify_source(
+        VaultErrorKind::Io,
+        format!(
+            "the vault {} may have been recorded, but its durability could not be confirmed; {retry}",
+            kind.label()
+        ),
         error,
     )
 }

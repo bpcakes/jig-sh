@@ -26,7 +26,8 @@ use crate::store::witness::{
 };
 use crate::store::{AUDIT_TEXT_READ_LIMIT, FaultPoint, VaultStore};
 use crate::vault::{
-    RestoreSource, authenticate_restore_candidate_text, fail_closed, restore_pending_error,
+    RestoreSource, authenticate_restore_candidate_text, fail_closed, pending_publication_error,
+    restore_pending_error,
 };
 
 use super::super::payload::DecodedBackupArchive;
@@ -158,7 +159,9 @@ fn restore_transactional(
             journal_sha256,
             next: journal.next.clone(),
         });
-        witness.write_record(&record)?;
+        witness
+            .write_record(&record)
+            .map_err(|error| pending_publication_error(TransactionKind::Restore, error))?;
         crate::store::fault(FaultPoint::AfterPending)
             .and_then(|()| finish_pending_restore(witness, &journal, record, &target.home))
             .map_err(restore_pending_error)?;

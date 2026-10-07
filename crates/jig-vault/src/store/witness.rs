@@ -26,6 +26,8 @@ use anyhow::{Context, Result as AnyResult, bail};
 use fs4::fs_std::FileExt;
 use sha2::{Digest, Sha256};
 
+#[cfg(unix)]
+mod aliases;
 mod journal;
 mod record;
 mod target;
@@ -168,25 +170,7 @@ impl WitnessLocation {
         let Some(witness) = self.open_existing()? else {
             return Ok(false);
         };
-        for child in [IDS_DIR, JOURNALS_DIR, LOCKS_DIR] {
-            let directory = witness.root.join(child);
-            let entries = match fs::read_dir(&directory) {
-                Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!("failed to inspect vault witness {}", directory.display())
-                    });
-                }
-            };
-            for entry in entries {
-                let metadata = fs::symlink_metadata(entry?.path())?;
-                if metadata.dev() == output.dev() && metadata.ino() == output.ino() {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
+        aliases::check(&witness.root, output)
     }
 
     /// Opens an existing witness without creating, chmodding, or locking

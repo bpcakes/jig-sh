@@ -149,7 +149,9 @@ fn a_pending_marker_whose_sync_failed_is_made_durable_before_installing() {
     let ids = layout.witness.join("ids");
     // The first record published is the pending marker.
     fail_sync_after_publication(&ids, Publication::Rename, 0);
-    restore(&layout.archive, &layout.target).unwrap_err();
+    let error = restore(&layout.archive, &layout.target).unwrap_err();
+    assert!(error.to_string().contains("may have been recorded"));
+    assert!(error.to_string().contains("same archive and passphrase"));
     assert!(pending_marker_visible(&layout));
     assert!(!layout.target.exists());
     assert_eq!(staging_dirs(&layout.targets).len(), 1);

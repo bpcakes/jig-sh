@@ -6,6 +6,8 @@ use crate::store::witness::{JournalPayload, TransactionKind, WitnessStore};
 
 #[path = "transaction/capacity.rs"]
 mod capacity;
+#[path = "transaction/publication.rs"]
+mod publication;
 
 fn field(reference: &str) -> VaultReference {
     VaultReference::parse(reference).unwrap()

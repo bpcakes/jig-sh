@@ -59,6 +59,8 @@ pub(crate) use restore_txn::{
     RestoreSource, authenticate_restore_candidate_text, restore_pending_error,
 };
 pub(crate) use transaction::fail_closed;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use transaction::pending_publication_error;
 
 pub const MAX_SECRET_VALUE_LEN: usize = 1024 * 1024;
 const MAX_IMPORT_FIELDS: usize = 1_024;
