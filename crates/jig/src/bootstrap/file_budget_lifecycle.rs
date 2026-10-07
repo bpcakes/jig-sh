@@ -327,11 +327,11 @@ fn native_proof_with_context(ctx: &RepoContext) -> Result<LifecycleProof> {
         .context("file-budget action disappeared")?;
     let configuration = action_file_budget_configuration(action)?;
     let source = jig_repository::source_identity::repository_source_snapshot(root)?;
-    let result = crate::runtime::run_direct_file_budget(
+    let result = jig_repository::file_budget::run_direct_file_budget(
         ctx,
         None,
         configuration,
-        crate::runtime::FileBudgetEvaluationMode::Check,
+        jig_repository::file_budget::FileBudgetEvaluationMode::Check,
         Instant::now() + NATIVE_EVALUATION_DEADLINE,
         &|| false,
     )?;

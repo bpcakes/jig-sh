@@ -101,13 +101,15 @@ pub(super) fn run_prepared_native_action(
             Some(evidence),
         ));
     }
-    super::file_budget::execute_prepared_file_budget(super::file_budget::FileBudgetEngineContext {
-        repository: context.repository,
-        prepared_input: context.prepared_input,
-        deadline: context.deadline,
-        cancelled: context.cancelled,
-        mode: super::file_budget::FileBudgetEvaluationMode::Check,
-    })
+    jig_repository::file_budget::execute_prepared_file_budget(
+        jig_repository::file_budget::FileBudgetEngineContext {
+            repository: context.repository,
+            prepared_input: context.prepared_input,
+            deadline: context.deadline,
+            cancelled: context.cancelled,
+            mode: jig_repository::file_budget::FileBudgetEvaluationMode::Check,
+        },
+    )
 }
 
 fn native_terminal_result(

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use jig_execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
+use crate::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
 
 const CLI_PROGRESS_OUTPUT_LIMIT: usize = 64 * 1024;
 const CLI_PROGRESS_STRUCTURE_LIMIT: usize = 16 * 1024;
@@ -13,7 +13,7 @@ const CLI_PROGRESS_DELIVERY_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_PROGRESS_COMBINED_FAILURE: &str = "Execution progress also failed to flush";
 static CLI_STDERR_DELIVERY_ABANDONED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn stderr_delivery_abandoned() -> bool {
+pub fn stderr_delivery_abandoned() -> bool {
     CLI_STDERR_DELIVERY_ABANDONED.load(Ordering::Acquire)
 }
 
@@ -22,7 +22,7 @@ pub(crate) fn stderr_delivery_abandoned() -> bool {
 /// Kept `Copy` so one progress value can be passed through request structs while
 /// preserving the original elapsed-time origin.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CliProgress {
+pub struct CliProgress {
     command: &'static str,
     enabled: bool,
     color: bool,
@@ -30,7 +30,7 @@ pub(crate) struct CliProgress {
 }
 
 impl CliProgress {
-    pub(crate) fn new(command: &'static str) -> Self {
+    pub fn new(command: &'static str) -> Self {
         let enabled = io::stderr().is_terminal();
         Self {
             command,
@@ -40,7 +40,7 @@ impl CliProgress {
         }
     }
 
-    pub(crate) fn disabled(command: &'static str) -> Self {
+    pub fn disabled(command: &'static str) -> Self {
         Self {
             command,
             enabled: false,
@@ -49,7 +49,7 @@ impl CliProgress {
         }
     }
 
-    pub(crate) fn for_human_output(command: &'static str, json_output: bool) -> Self {
+    pub fn for_human_output(command: &'static str, json_output: bool) -> Self {
         let enabled = !json_output;
         Self {
             command,
@@ -59,7 +59,7 @@ impl CliProgress {
         }
     }
 
-    pub(crate) fn header(&self, action: impl fmt::Display) {
+    pub fn header(&self, action: impl fmt::Display) {
         if !self.enabled || stderr_delivery_abandoned() {
             return;
         }
@@ -71,33 +71,33 @@ impl CliProgress {
         );
     }
 
-    pub(crate) fn header_for_path(&self, action: impl fmt::Display, destination: &Path) {
+    pub fn header_for_path(&self, action: impl fmt::Display, destination: &Path) {
         self.header(action);
         self.info("target", destination.display());
     }
 
-    pub(crate) fn info(&self, label: &str, detail: impl fmt::Display) {
+    pub fn info(&self, label: &str, detail: impl fmt::Display) {
         if !self.enabled {
             return;
         }
         self.line(label, detail, Status::Info);
     }
 
-    pub(crate) fn step(&self, label: &str, detail: impl fmt::Display) {
+    pub fn step(&self, label: &str, detail: impl fmt::Display) {
         if !self.enabled {
             return;
         }
         self.line(label, detail, Status::Working);
     }
 
-    pub(crate) fn blocked(&self, detail: impl fmt::Display) {
+    pub fn blocked(&self, detail: impl fmt::Display) {
         if !self.enabled {
             return;
         }
         self.line("blocked", detail, Status::Blocked);
     }
 
-    pub(crate) fn done(&self, detail: impl fmt::Display) {
+    pub fn done(&self, detail: impl fmt::Display) {
         if !self.enabled {
             return;
         }
@@ -108,7 +108,7 @@ impl CliProgress {
         );
     }
 
-    pub(crate) fn log_blocked_on_err<T, E>(
+    pub fn log_blocked_on_err<T, E>(
         &self,
         result: std::result::Result<T, E>,
     ) -> std::result::Result<T, E>
@@ -198,7 +198,7 @@ fn color_enabled() -> bool {
         && std::env::var("TERM").map_or(true, |term| term != "dumb")
 }
 
-pub(crate) struct CliExecutionObserver {
+pub struct CliExecutionObserver {
     enabled: bool,
     pending: Vec<ProgressChunk>,
     output_bytes: usize,
@@ -221,8 +221,7 @@ struct ProgressChunk {
 }
 
 impl CliExecutionObserver {
-    #[cfg(any(not(unix), test))]
-    pub(crate) fn for_human_output(json_output: bool) -> Self {
+    pub fn for_human_output(json_output: bool) -> Self {
         Self {
             enabled: !json_output,
             pending: Vec::new(),
@@ -235,11 +234,7 @@ impl CliExecutionObserver {
         }
     }
 
-    #[cfg(all(unix, not(test)))]
-    pub(crate) fn with_cancellation(
-        json_output: bool,
-        cancellation: impl Fn() -> bool + 'static,
-    ) -> Self {
+    pub fn with_cancellation(json_output: bool, cancellation: impl Fn() -> bool + 'static) -> Self {
         Self {
             enabled: !json_output,
             pending: Vec::new(),
@@ -299,7 +294,7 @@ impl CliExecutionObserver {
         self.queue_structure(format!("{line}\n").as_bytes());
     }
 
-    pub(crate) fn finish_with<T>(&mut self, outcome: anyhow::Result<T>) -> anyhow::Result<T> {
+    pub fn finish_with<T>(&mut self, outcome: anyhow::Result<T>) -> anyhow::Result<T> {
         self.deliver_pending(outcome)
     }
 
@@ -437,7 +432,7 @@ fn independent_stderr_writer() -> io::Result<io::Stderr> {
     Ok(io::stderr())
 }
 
-pub(crate) fn combine_progress_delivery<T, E>(
+pub fn combine_progress_delivery<T, E>(
     outcome: anyhow::Result<T>,
     delivery: Result<(), E>,
     combined_failure_context: &str,
@@ -500,7 +495,7 @@ mod tests {
     use std::io::{self, Write};
     use std::time::Duration;
 
-    use jig_execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
+    use crate::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
 
     use super::{
         CLI_PROGRESS_OUTPUT_LIMIT, CLI_PROGRESS_STRUCTURE_LIMIT, CliExecutionObserver, CliProgress,

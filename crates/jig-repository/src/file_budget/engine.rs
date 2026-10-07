@@ -1,7 +1,7 @@
 use super::report::*;
 use super::*;
 
-pub(super) fn execute_ready_file_budget(
+pub fn execute_ready_file_budget(
     context: &FileBudgetEngineContext<'_>,
 ) -> Result<NativeActionResult> {
     ensure_active(context)?;
@@ -24,7 +24,7 @@ pub(super) fn execute_ready_file_budget(
 
     let evaluated_at_ms = jig_state::now_ms();
     let current_date = policy_date_at_ms(evaluated_at_ms)?;
-    let policy_bytes = jig_repository::read_policy_bytes(context.repository, prepared.view)
+    let policy_bytes = crate::read_policy_bytes(context.repository, prepared.view)
         .map_err(anyhow::Error::msg)?
         .ok_or_else(|| {
             anyhow::anyhow!("authenticated file-budget policy is missing at execution")

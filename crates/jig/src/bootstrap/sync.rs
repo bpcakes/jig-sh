@@ -4,6 +4,15 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use jig_execution::progress::CliProgress;
+use jig_repository::path::{
+    RepositoryFileCommit, RepositoryFileLeaf, RepositorySymlinkCommit,
+    copy_repository_regular_file_atomic_with_permissions,
+    copy_repository_regular_file_atomic_with_permissions_guarded,
+    copy_repository_regular_file_atomic_with_permissions_staged, copy_repository_symlink_atomic,
+    copy_repository_symlink_atomic_guarded, copy_repository_symlink_atomic_staged,
+    validate_portable_planned_file_collisions, validate_repository_relative_file_leaf,
+};
 use serde::Serialize;
 
 #[cfg(test)]
@@ -16,15 +25,6 @@ use super::file_copy::{
 use super::managed_paths::{self, ManagedBlockSpec};
 use super::staged_render::StagedRender;
 use super::update_transaction::RepositoryUpdateTransaction;
-use crate::progress::CliProgress;
-use jig_repository::path::{
-    RepositoryFileCommit, RepositoryFileLeaf, RepositorySymlinkCommit,
-    copy_repository_regular_file_atomic_with_permissions,
-    copy_repository_regular_file_atomic_with_permissions_guarded,
-    copy_repository_regular_file_atomic_with_permissions_staged, copy_repository_symlink_atomic,
-    copy_repository_symlink_atomic_guarded, copy_repository_symlink_atomic_staged,
-    validate_portable_planned_file_collisions, validate_repository_relative_file_leaf,
-};
 
 mod pinned_runtime;
 

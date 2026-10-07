@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 
-use jig_repository::source_identity::{
+use crate::source_identity::{
     BaselineFileV1, CurrentSourceV1, ExactCurrentPathStateV1 as GitExactCurrentPathStateV1,
     FileChangeKindV1, ScopeEntryV1, ScopeIssueKindV1, ScopeSnapshotV1,
     capture_all_current_scope_v1_with_cancellation, capture_scope_v1_with_cancellation,
@@ -36,23 +36,23 @@ const EVIDENCE_ISSUE_PREVIEW_LIMIT_V1: usize = 64;
 const HUMAN_OUTPUT_BYTES_V1: usize = 64 * 1024;
 const POLICY_PATH_V1: &str = ".jig/file-budget.toml";
 
-pub(super) struct FileBudgetEngineContext<'a> {
-    pub(super) repository: &'a RepoContext,
-    pub(super) prepared_input: &'a PreparedNativeInputV1,
-    pub(super) deadline: Instant,
-    pub(super) cancelled: &'a dyn Fn() -> bool,
-    pub(super) mode: FileBudgetEvaluationMode<'a>,
+pub struct FileBudgetEngineContext<'a> {
+    pub repository: &'a RepoContext,
+    pub prepared_input: &'a PreparedNativeInputV1,
+    pub deadline: Instant,
+    pub cancelled: &'a dyn Fn() -> bool,
+    pub mode: FileBudgetEvaluationMode<'a>,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum FileBudgetEvaluationMode<'a> {
+pub enum FileBudgetEvaluationMode<'a> {
     Check,
     Audit { tracked_only: bool },
     Explain { path: &'a str },
     Validate,
 }
 
-pub(crate) fn run_direct_file_budget(
+pub fn run_direct_file_budget(
     repository: &RepoContext,
     request: Option<ComparisonRequestV1>,
     configuration: NativeFileBudgetConfigV1,
@@ -60,8 +60,7 @@ pub(crate) fn run_direct_file_budget(
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeActionResult> {
-    let prepared =
-        jig_repository::prepare_file_budget_input_v1(repository, request, configuration)?;
+    let prepared = crate::prepare_file_budget_input_v1(repository, request, configuration)?;
     if let PolicyPreparationV1::InvalidPolicy {
         diagnostics_count,
         diagnostics_digest,
@@ -164,7 +163,7 @@ enum EngineStopV1 {
     TimedOut,
 }
 
-pub(super) fn execute_prepared_file_budget(
+pub fn execute_prepared_file_budget(
     context: FileBudgetEngineContext<'_>,
 ) -> Result<NativeActionResult> {
     match execute_ready_file_budget(&context) {

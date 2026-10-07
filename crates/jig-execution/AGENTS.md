@@ -6,6 +6,7 @@
 
 ## Key entrypoints
 
+- `src/progress.rs`: human-mode CLI progress (`CliProgress`, `CliExecutionObserver`), buffered and delivered to stderr with a bounded best effort.
 - `src/lib.rs`: `run_supervised_execution_command`, `run_authoritative_execution_command`, the `ExecutionObserver`/`ExecutionCancellation`/`ExecutionControl` traits, `ExecutionPhase`, and `HeartbeatSchedule`.
 
 ## Edit here for X

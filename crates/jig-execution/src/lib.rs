@@ -1,6 +1,8 @@
 //! Supervised execution of Jig-owned commands: bounded output capture,
 //! timeouts, cancellation, heartbeats, and phase observers.
 
+pub mod progress;
+
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::process::{Command, ExitStatus, Stdio};

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use jig_context::{CodexMarketplaceConfig, RepoContext};
+use jig_execution::progress::CliProgress;
 use jig_execution::{
     EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionControl, ExecutionPhase, PhasePosition,
     ProcessExecutionObserver,
@@ -18,7 +19,6 @@ use jig_owned_process::{
 use serde_json::{Value as JsonValue, json};
 
 use crate::command::{AgentBootstrapRequest, AgentCommand};
-use crate::progress::CliProgress;
 use crate::runtime::CodexSupportProbeResult;
 
 const JIG_SKILLS_MARKETPLACE_ENV: &str = "JIG_SKILLS_MARKETPLACE";

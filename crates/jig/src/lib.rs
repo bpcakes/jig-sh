@@ -48,7 +48,6 @@ mod dev_proxy {
 mod info;
 #[cfg(test)]
 mod launcher_command_lists;
-mod progress;
 mod runtime;
 mod runtime_artifacts;
 mod runtime_cache_lock;
@@ -95,7 +94,7 @@ pub fn error_exit_code(error: &anyhow::Error) -> Option<i32> {
 /// Returns whether human stderr delivery was abandoned after its shutdown
 /// deadline. Callers must not perform another blocking stderr write afterward.
 pub fn stderr_delivery_abandoned() -> bool {
-    progress::stderr_delivery_abandoned()
+    jig_execution::progress::stderr_delivery_abandoned()
 }
 
 #[cfg(all(test, not(feature = "dev-proxy")))]

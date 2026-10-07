@@ -5,6 +5,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use jig_execution::progress::CliProgress;
+use jig_repository::path::{
+    validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
+};
 use minijinja::{Environment, UndefinedBehavior, syntax::SyntaxConfig};
 use serde_json::{Value as JsonValue, json};
 use tempfile::TempDir;
@@ -18,10 +22,6 @@ use super::repository_model::RepositoryRenderModel;
 use super::staged_render::FILE_BUDGET_POLICY_PATH;
 use super::staged_render::StagedRender;
 use super::template_source::{PreparedTemplateSource, TemplateRenderSource};
-use crate::progress::CliProgress;
-use jig_repository::path::{
-    validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
-};
 
 mod runtime_contract;
 pub(super) use runtime_contract::validate_staged_runtime_contract;
