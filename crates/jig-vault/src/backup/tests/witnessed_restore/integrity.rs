@@ -160,7 +160,7 @@ fn independent_profiles_diverge_and_recover_through_an_authenticated_backup() {
         backup(&home, &archive, &test_passphrase());
     }
     let _profile = crate::store::witness::override_root_for_test(profile_a);
-    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+    let vault = Vault::resolve_for_test(Some(home)).unwrap();
     let error = vault.list_fields(&test_passphrase()).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::AuditTampered);
     for expected in [
