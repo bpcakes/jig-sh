@@ -2,10 +2,10 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use jig_agents::agent_provider::{AgentProvider, Discovery, HomeInspection, PreparedLaunch};
 use jig_codex_tui::{ConfigurationHome, Home, HomeUpdate, InspectionSource};
 
 use super::output::{Render, emit};
-use crate::agent_provider::{AgentProvider, Discovery, HomeInspection, PreparedLaunch};
 
 pub(super) fn homes<P: AgentProvider>(
     provider: &P,

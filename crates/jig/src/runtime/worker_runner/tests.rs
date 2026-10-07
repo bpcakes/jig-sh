@@ -92,7 +92,7 @@ mod tests {
             ]
         );
         assert!(command.get_envs().any(|(key, value)| {
-            key == crate::codex::CODEX_HOME_ENV && value == Some(OsStr::new("/tmp/codex-home"))
+            key == jig_agents::codex::CODEX_HOME_ENV && value == Some(OsStr::new("/tmp/codex-home"))
         }));
 
         request.codex_home = None;
@@ -101,7 +101,7 @@ mod tests {
         assert!(
             inherited_command
                 .get_envs()
-                .all(|(key, _)| key != crate::codex::CODEX_HOME_ENV)
+                .all(|(key, _)| key != jig_agents::codex::CODEX_HOME_ENV)
         );
     }
 

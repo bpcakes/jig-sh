@@ -10,7 +10,7 @@ use super::{
     canonical_or, codex_bin, discover_homes, execute_homes_parallel,
 };
 
-pub(crate) fn normalize_session_id(input: &str) -> Result<String> {
+pub fn normalize_session_id(input: &str) -> Result<String> {
     let bytes = input.as_bytes();
     let valid = bytes.len() == 36
         && bytes.iter().enumerate().all(|(index, byte)| match index {
@@ -26,7 +26,7 @@ pub(crate) fn normalize_session_id(input: &str) -> Result<String> {
     Ok(input.to_ascii_lowercase())
 }
 
-pub(crate) fn resolve_resume_home_with_cancellation<F>(
+pub fn resolve_resume_home_with_cancellation<F>(
     thread_id: &str,
     cancelled: &(dyn Fn() -> bool + Sync),
     progress: F,

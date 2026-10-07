@@ -12,23 +12,23 @@ use crate::home_paths::{
     is_bare_home_name, prefixed_home, same_path,
 };
 
-pub(crate) const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
+pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 
-pub(crate) mod provider;
-pub(crate) mod usage;
+pub mod provider;
+pub mod usage;
 
-pub(crate) struct Homes {
-    pub(crate) paths: Vec<PathBuf>,
-    pub(crate) current: PathBuf,
-    pub(crate) warnings: Vec<String>,
+pub struct Homes {
+    pub paths: Vec<PathBuf>,
+    pub current: PathBuf,
+    pub warnings: Vec<String>,
     default: PathBuf,
     current_is_default: bool,
 }
 
 #[derive(Clone)]
-pub(crate) struct Home {
-    pub(crate) path: PathBuf,
-    pub(crate) default_config: bool,
+pub struct Home {
+    pub path: PathBuf,
+    pub default_config: bool,
 }
 
 fn user_home() -> Result<PathBuf> {
@@ -43,7 +43,7 @@ fn current_home() -> Result<PathBuf> {
     std::path::absolute(path).context("Failed to resolve CLAUDE_CONFIG_DIR")
 }
 
-pub(crate) fn discover_homes() -> Result<Homes> {
+pub fn discover_homes() -> Result<Homes> {
     let root = user_home()?;
     let current = current_home()?;
     let current_is_default = env::var_os(CONFIG_DIR_ENV).is_none_or(|value| value.is_empty());
@@ -113,7 +113,7 @@ pub(crate) fn discover_homes() -> Result<Homes> {
     })
 }
 
-pub(crate) fn validate_home(path: &Path) -> Result<Home> {
+pub fn validate_home(path: &Path) -> Result<Home> {
     if !path.is_dir() {
         bail!(
             "Claude home does not exist or is not a directory: {}",
@@ -129,7 +129,7 @@ pub(crate) fn validate_home(path: &Path) -> Result<Home> {
     })
 }
 
-pub(crate) fn resolve_home(input: &Path) -> Result<Home> {
+pub fn resolve_home(input: &Path) -> Result<Home> {
     if input.as_os_str().is_empty() {
         bail!("Claude home must not be empty");
     }
@@ -178,11 +178,11 @@ fn claude_bin() -> OsString {
 }
 
 impl Homes {
-    pub(crate) fn is_current(&self, home: &Home) -> bool {
+    pub fn is_current(&self, home: &Home) -> bool {
         home.default_config == self.current_is_default && same_path(&home.path, &self.current)
     }
 
-    pub(crate) fn selections(&self) -> Vec<Home> {
+    pub fn selections(&self) -> Vec<Home> {
         // Native configuration is a launch mode, available even before Claude creates its directory.
         let mut homes = vec![Home {
             path: self.default.clone(),
@@ -210,7 +210,7 @@ impl Homes {
         homes
     }
 
-    pub(crate) fn report(&self) -> Value {
+    pub fn report(&self) -> Value {
         let homes = self.selections();
         json!({
             "schema_version": 1,
@@ -230,7 +230,7 @@ impl Homes {
     }
 }
 
-pub(crate) fn dry_run_report(home: &Home, args: &[OsString]) -> Value {
+pub fn dry_run_report(home: &Home, args: &[OsString]) -> Value {
     let bin = claude_bin();
     json!({
         "schema_version": 1,

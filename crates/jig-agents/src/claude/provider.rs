@@ -9,7 +9,7 @@ use crate::agent_provider::{
     AgentProvider, Choice, Discovery, HomeInspection, Metadata, PreparedLaunch,
 };
 
-pub(crate) struct Claude;
+pub struct Claude;
 
 impl AgentProvider for Claude {
     type Home = super::Home;

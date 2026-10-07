@@ -1398,6 +1398,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jig-agents"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "jig-context",
+ "jig-owned-process",
+ "jig-tui",
+ "libc",
+ "reqwest",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "unicode-normalization",
+ "zeroize",
+]
+
+[[package]]
 name = "jig-codex-tui"
 version = "0.7.3-dev"
 dependencies = [
@@ -1559,6 +1581,7 @@ dependencies = [
  "flate2",
  "fs4",
  "globset",
+ "jig-agents",
  "jig-codex-tui",
  "jig-context",
  "jig-contract",

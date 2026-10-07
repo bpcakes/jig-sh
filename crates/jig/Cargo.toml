@@ -53,6 +53,7 @@ dotenvy.workspace = true
 fs4.workspace = true
 flate2.workspace = true
 globset.workspace = true
+jig-agents.workspace = true
 jig-context.workspace = true
 jig-contract.workspace = true
 jig-codex-tui.workspace = true

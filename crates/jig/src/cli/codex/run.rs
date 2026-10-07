@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use crate::agent_provider::{AgentProvider, SessionProvider};
-use crate::codex::provider::Codex;
 use anyhow::{Result, bail};
+use jig_agents::agent_provider::{AgentProvider, SessionProvider};
+use jig_agents::codex::provider::Codex;
 
 use super::{CodexCommand, CodexLaunchOpts, CodexResumeOpts, render};
 use crate::cli::agent_run;
@@ -25,7 +25,7 @@ fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
     if json_output && !opts.dry_run {
         bail!("--json can be used with `jig codex resume` only when --dry-run is present");
     }
-    let session_id = crate::codex::normalize_session_id(&opts.session_id)?;
+    let session_id = jig_agents::codex::normalize_session_id(&opts.session_id)?;
     let home = match opts.home {
         Some(home) => Codex.resolve(&home)?,
         None if json_output => {
@@ -36,7 +36,7 @@ fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
     let codex_args = resume_codex_args(session_id, opts.codex_args);
 
     let mut prepared = Codex.prepare(&home, &codex_args)?;
-    prepared.report = crate::codex::resume_dry_run_report(&home, &codex_args);
+    prepared.report = jig_agents::codex::resume_dry_run_report(&home, &codex_args);
     agent_run::finish::<Codex>(
         prepared,
         opts.dry_run,

@@ -244,7 +244,7 @@ fn run_codex_exec_inner(
     let output_file = NamedTempFile::new().context("Failed to create Codex output file")?;
 
     let mut command = build_codex_command(
-        crate::codex::codex_bin(),
+        jig_agents::codex::codex_bin(),
         request,
         schema_file.as_ref().map(NamedTempFile::path),
         output_file.path(),
@@ -303,7 +303,7 @@ fn build_codex_command(
     let mut command = Command::new(bin);
     command.current_dir(request.root);
     if let Some(codex_home) = request.codex_home {
-        command.env(crate::codex::CODEX_HOME_ENV, codex_home);
+        command.env(jig_agents::codex::CODEX_HOME_ENV, codex_home);
     }
     if let Some(approval_policy) = request.approval_policy {
         command.arg("--ask-for-approval").arg(approval_policy);

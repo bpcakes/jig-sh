@@ -9,6 +9,7 @@ If the owning area is already clear, read its nearest guide directly.
 
 ## Nested guides
 
+- [crates/jig-agents](./crates/jig-agents/AGENTS.md)
 - [crates/jig-codex-tui](./crates/jig-codex-tui/AGENTS.md)
 - [crates/jig-context](./crates/jig-context/AGENTS.md)
 - [crates/jig-contract](./crates/jig-contract/AGENTS.md)

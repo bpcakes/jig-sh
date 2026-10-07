@@ -8,7 +8,7 @@ pub(super) fn pr_manager_tick(
     let codex_home = match workflow
         .codex_home_configured
         .as_deref()
-        .map(|home| crate::codex::resolve_configured_home_from_dir(home, ctx.root()))
+        .map(|home| jig_agents::codex::resolve_configured_home_from_dir(home, ctx.root()))
         .transpose()
     {
         Ok(home) => home,

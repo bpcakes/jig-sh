@@ -1,11 +1,11 @@
+use jig_agents::agent_provider::AgentProvider;
+use jig_agents::codex::provider::Codex;
 use jig_tui::sanitize_text;
 
-use crate::agent_provider::AgentProvider;
 #[cfg(test)]
 use crate::cli::output::usage::{
     format_reset_from as format_codex_reset_from, format_window as format_codex_window,
 };
-use crate::codex::provider::Codex;
 
 use crate::cli::output::command_display::CommandDisplay;
 use crate::cli::output::{value_bool, value_str};

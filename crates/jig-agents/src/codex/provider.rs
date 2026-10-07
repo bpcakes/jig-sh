@@ -9,7 +9,7 @@ use crate::agent_provider::{
     AgentProvider, Choice, Discovery, HomeInspection, Metadata, PreparedLaunch, SessionProvider,
 };
 
-pub(crate) struct Codex;
+pub struct Codex;
 
 impl AgentProvider for Codex {
     type Home = PathBuf;
