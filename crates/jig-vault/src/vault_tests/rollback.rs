@@ -412,7 +412,8 @@ fn status_propagates_damaged_witness_discovery_without_writing() {
     let unrelated = store_at(&temp, "unrelated");
     unrelated.init(&passphrase()).unwrap();
     let damaged = record_path(&temp, &unrelated);
-    std::fs::write(&damaged, b"invalid witness record").unwrap();
+    let malformed = br#"{"schema":"ExamplePrivateRecordSentinel"}"#;
+    std::fs::write(&damaged, malformed).unwrap();
     let reported_path = format!("{:?}", std::fs::canonicalize(&damaged).unwrap());
     let journal = witness(&pending)
         .read_journal(&pending.target_key())
@@ -426,13 +427,17 @@ fn status_propagates_damaged_witness_discovery_without_writing() {
     assert!(error.to_string().contains("pending vault transactions"));
     assert!(error.to_string().contains(&reported_path), "{error}");
     assert!(error.to_string().contains("Operator step:"), "{error}");
-    assert!(!error.to_string().contains("invalid witness record"));
+    // Both text and JSON CLI errors render the complete anyhow source chain.
+    let message = format!("{:#}", anyhow::Error::new(error));
+    assert!(!message.contains("ExamplePrivateRecordSentinel"));
     let error = unrelated.list_fields(&passphrase()).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::AuditTampered);
     assert!(error.to_string().contains(&reported_path), "{error}");
+    let message = format!("{:#}", anyhow::Error::new(error));
+    assert!(!message.contains("ExamplePrivateRecordSentinel"));
     assert!(operations.is_empty());
     assert!(!pending.vault_path().exists());
-    assert_eq!(std::fs::read(&damaged).unwrap(), b"invalid witness record");
+    assert_eq!(std::fs::read(&damaged).unwrap(), malformed);
     assert_eq!(
         witness(&pending)
             .read_journal(&pending.target_key())

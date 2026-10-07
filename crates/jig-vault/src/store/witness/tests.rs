@@ -194,8 +194,12 @@ fn scanned_record_failures_identify_the_record_without_echoing_its_contents() {
     invalid.schema = 2;
     let mut misfiled = committed_record(1);
     misfiled.vault_id = "ExampleOtherVault".into();
+    let mut unknown_field = serde_json::to_value(committed_record(1)).unwrap();
+    unknown_field["ExamplePrivateFieldSentinel"] = serde_json::json!(true);
     let cases = [
         b"ExamplePrivateMalformedContents".to_vec(),
+        br#"{"schema":"ExamplePrivateRecordSentinel"}"#.to_vec(),
+        serde_json::to_vec(&unknown_field).unwrap(),
         serde_json::to_vec(&invalid).unwrap(),
         serde_json::to_vec(&misfiled).unwrap(),
         vec![b'x'; RECORD_READ_LIMIT as usize + 1],
@@ -207,11 +211,13 @@ fn scanned_record_failures_identify_the_record_without_echoing_its_contents() {
             store.target_has_pending_marker(&key).unwrap_err(),
             store.read_record(VAULT_ID).unwrap_err(),
         ] {
-            let message = error.to_string();
+            let message = format!("{error:#}");
             assert!(message.contains(&format!("{path:?}")), "{message}");
             assert!(message.contains("Operator step:"), "{message}");
             assert!(message.contains("never delete or edit"), "{message}");
             assert!(!message.contains("ExamplePrivateMalformedContents"));
+            assert!(!message.contains("ExamplePrivateRecordSentinel"));
+            assert!(!message.contains("ExamplePrivateFieldSentinel"));
             assert!(!message.contains("ExampleOtherVault"));
         }
         assert_eq!(fs::read(&path).unwrap(), contents);

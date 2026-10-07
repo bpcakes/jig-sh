@@ -305,8 +305,15 @@ impl WitnessStore {
         let Some(bytes) = read_protected(path, RECORD_READ_LIMIT)? else {
             return Ok(None);
         };
-        let record = serde_json::from_slice(&bytes)
-            .context("vault witness record is malformed; refusing to treat it as absent")?;
+        // Serde errors can quote record values and unknown field names. Keep
+        // location metadata, but never retain that error in the CLI source chain.
+        let record = serde_json::from_slice(&bytes).map_err(|error| {
+            anyhow::anyhow!(
+                "vault witness record is malformed at line {}, column {}; refusing to treat it as absent",
+                error.line(),
+                error.column()
+            )
+        })?;
         Ok(Some(record))
     }
 
