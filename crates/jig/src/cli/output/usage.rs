@@ -3,7 +3,7 @@ use jig_tui::{format_countdown, format_percent, sanitize_text};
 
 use super::value_str;
 
-pub(super) fn format_limits(
+pub(in crate::cli) fn format_limits(
     value: &serde_json::Value,
     subscription_bucket: Option<&str>,
 ) -> String {
@@ -67,7 +67,7 @@ fn format_window_with_duration_role(window: &serde_json::Value) -> String {
     }
 }
 
-pub(super) fn format_window(window: &serde_json::Value) -> Option<String> {
+pub(in crate::cli) fn format_window(window: &serde_json::Value) -> Option<String> {
     let object = window.as_object()?;
     let remaining = valid_used_percent(
         object
@@ -100,7 +100,7 @@ fn format_reset(timestamp: i64) -> Option<String> {
     format_reset_from(timestamp, now)
 }
 
-pub(super) fn format_reset_from(timestamp: u64, now: u64) -> Option<String> {
+pub(in crate::cli) fn format_reset_from(timestamp: u64, now: u64) -> Option<String> {
     let remaining = timestamp
         .checked_sub(now)
         .filter(|remaining| *remaining > 0)?;

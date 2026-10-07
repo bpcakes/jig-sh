@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use crate::command::RuntimeCommand;
+use crate::command::{self, RuntimeCommand};
 use crate::{bootstrap, root_commands, tool_defs};
 use runtime_dispatch::RuntimeDispatch;
 
@@ -12,13 +12,12 @@ mod bootstrap_hints;
 mod bootstrap_run;
 mod check;
 mod claude;
-mod claude_run;
 mod codex;
-mod codex_run;
 mod comparison;
+mod doctor;
 mod file_budget;
 mod home_picker;
-mod info_run;
+mod info;
 mod init_wizard;
 mod loops;
 mod migration;
@@ -28,46 +27,46 @@ mod runtime_dispatch;
 mod setup_run;
 mod sqlx;
 mod state;
-mod status_opts;
-mod status_run;
-mod ui_run;
+mod status;
+mod ui;
 mod vault;
 
-pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
-#[cfg(test)]
-pub(crate) use check::NamedCheckCommand;
-pub(crate) use check::{
-    CheckCommand, CheckComparisonOpts, CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts,
-};
+pub(crate) use agent::AgentCommand;
+pub(crate) use check::{CheckComparisonOpts, CheckOpts};
 pub(crate) use claude::ClaudeCommand;
 pub(crate) use codex::CodexCommand;
 pub(crate) use comparison::CliExactTreeProvenance;
 pub(crate) use file_budget::FileBudgetCommand;
-pub(crate) use loops::{
-    LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts,
-    LoopRunOpts, LoopStatusOpts, LoopTickOpts,
-};
+pub(crate) use info::InfoOpts;
+pub(crate) use loops::LoopCommand;
 pub(crate) use migration::{MigrationAddOpts, MigrationCommand};
-pub(crate) use proxy::{
-    DevLaunchOpts, DevOpts, DevRecoverOpts, DevStatusOpts, DevStopOpts, DevSubcommand,
-    ProxyAliasOpts, ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts,
-    ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts,
-    ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
-    ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts,
-};
+pub(crate) use proxy::{DevOpts, ProxyCommand};
 pub(crate) use sqlx::SqlxCommand;
+pub(crate) use state::StateCommand;
+pub(crate) use status::StatusOpts;
+pub(crate) use vault::VaultCommand;
+
+// Tests build parsed commands directly, so they also reach the families'
+// option and subcommand types.
 #[cfg(test)]
-pub(crate) use sqlx::{SqlxMigrationCommand, SqlxSchemaCommand};
-pub(crate) use state::{StateArchiveOpts, StateCommand, StateRestoreOpts};
-pub(crate) use status_opts::{StatusCommand, StatusOpts};
-pub(crate) use vault::{
-    VaultAuditCommand, VaultAuditVerifyOpts, VaultBackupCommand, VaultBackupCreateOpts,
-    VaultBackupRestoreOpts, VaultCommand, VaultExecOpts, VaultFieldCommand, VaultFieldListOpts,
-    VaultFieldRemoveOpts, VaultFieldSetOpts, VaultImportCommand, VaultImportOnePasswordOpts,
-    VaultInitOpts, VaultInjectOpts, VaultMigrateOpts, VaultPassphraseChangeOpts,
-    VaultPassphraseCommand, VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand,
-    VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts, VaultTuiOpts,
+pub(crate) use {
+    agent::AgentBootstrapOpts,
+    check::{CheckCommand, CheckTargetOpts, NamedCheckCommand},
+    info::InfoCommand,
+    proxy::{
+        DevLaunchOpts, DevStatusOpts, DevStopOpts, DevSubcommand, ProxyCertCommand, ProxyListOpts,
+        ProxyServiceCommand,
+    },
+    sqlx::{SqlxMigrationCommand, SqlxSchemaCommand},
+    status::StatusCommand,
+    vault::{
+        VaultAuditCommand, VaultBackupCommand, VaultFieldCommand, VaultImportCommand,
+        VaultPassphraseCommand, VaultSecretCommand,
+    },
 };
+// Only tests of the built-in dev proxy construct its runtime options.
+#[cfg(all(test, feature = "dev-proxy"))]
+pub(crate) use proxy::ProxyRuntimeOpts;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -114,39 +113,6 @@ fn root_after_help() -> String {
     )
 }
 
-const DOCTOR_AFTER_HELP: &str = "\
-Runs the read-only readiness checks that are otherwise split across bootstrap,
-agent doctor, check contract, proxy status, and vault status.
-
-Human-readable output is the default. Pass --json for structured automation output.
-
-Examples:
-  jig doctor
-  jig doctor --json";
-
-const INFO_AFTER_HELP: &str = "\
-Summarizes what Jig believes about the current repo from .jig.toml and the
-generated contract manifest.
-
-Use --commands for repository-specific command availability. Status describes
-each root command's primary workflow; setup and diagnostic subcommands or flags
-may still work when that status is not ready. Invocation still runs
-command-specific preflight.
-Stable JSON status codes are ready, not_configured, needs_setup, and unavailable.
-When Codex marketplaces are configured, this view checks machine-local Codex
-readiness and may wait up to five seconds for that probe.
-
-Human-readable output is the default. Pass --json for structured automation output.
-
-Examples:
-  jig info
-  jig info --json
-  jig info components
-  jig info target api:test --json
-  jig info --commands
-  jig info --commands --json  # also works before adoption
-  jig explain --json";
-
 const STATUS_AFTER_HELP: &str = "\
 Collects local Git state and loop leases and attempts.
 The command is read-only and does not fetch remotes.
@@ -172,18 +138,6 @@ Examples:
   jig init ./my-cli --preset rust-cli --no-input --no-vault
   jig init ./my-app --preset rust-react
   jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin";
-
-const UI_AFTER_HELP: &str = "\
-Opens a read-only terminal dashboard over repository status and .agent/state:
-run history, loops, repository state, and activity.
-Interactive mode requires terminal stdin and stdout.
-
-Pass --json for one local recorder snapshot.
-
-Examples:
-  jig ui
-  jig ui --timeline-limit 120
-  jig ui --json";
 
 const VAULT_AFTER_HELP: &str = "\
 Jig Vault stores encrypted project fields outside the repository. References
@@ -260,7 +214,7 @@ pub(crate) enum CommandKind {
     #[command(
         name = root_commands::DOCTOR.name,
         display_order = root_commands::DOCTOR.display_order,
-        after_help = DOCTOR_AFTER_HELP
+        after_help = doctor::DOCTOR_AFTER_HELP
     )]
     Doctor,
     /// Summarize repo Jig configuration, capabilities, gates, and dev apps.
@@ -268,7 +222,7 @@ pub(crate) enum CommandKind {
         name = root_commands::INFO.name,
         display_order = root_commands::INFO.display_order,
         visible_alias = "explain",
-        after_help = INFO_AFTER_HELP
+        after_help = info::INFO_AFTER_HELP
     )]
     Info(InfoOpts),
     /// Run and manage configured development app sessions.
@@ -305,9 +259,9 @@ pub(crate) enum CommandKind {
     #[command(
         name = root_commands::UI.name,
         display_order = root_commands::UI.display_order,
-        after_help = UI_AFTER_HELP
+        after_help = ui::UI_AFTER_HELP
     )]
-    Ui(UiOpts),
+    Ui(ui::UiOpts),
     /// Run and inspect automated orchestration workflows.
     #[command(
         name = root_commands::LOOP.name,
@@ -441,6 +395,22 @@ impl AgentMapCommand {
     }
 }
 
+impl From<AgentMapCommand> for command::AgentMapCommand {
+    fn from(command: AgentMapCommand) -> Self {
+        match command {
+            AgentMapCommand::Generate(opts) => Self::Generate(opts.into()),
+        }
+    }
+}
+
+impl From<AgentMapOpts> for command::AgentMapRequest {
+    fn from(opts: AgentMapOpts) -> Self {
+        Self {
+            map_path: opts.map_path,
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 pub(crate) struct AgentMapOpts {
     #[arg(
@@ -451,92 +421,18 @@ pub(crate) struct AgentMapOpts {
     pub(crate) map_path: PathBuf,
 }
 
-#[derive(Args, Debug, Default)]
-pub(crate) struct InfoOpts {
-    #[arg(
-        long,
-        help = "Show root commands with repository-specific availability and remediation"
-    )]
-    pub(crate) commands: bool,
-    #[arg(
-        long,
-        global = true,
-        value_enum,
-        default_value_t,
-        help = "Select the standard or opt-in agent-v1 inspection projection"
-    )]
-    pub(crate) projection: crate::surface::ResponseSurface,
-    #[command(subcommand)]
-    pub(crate) subject: Option<InfoCommand>,
-}
-
-impl InfoOpts {
-    pub(crate) fn validate_projection(&self) -> anyhow::Result<()> {
-        if self.projection == crate::surface::ResponseSurface::Standard
-            || matches!(
-                self.subject.as_ref(),
-                Some(
-                    InfoCommand::Workspace
-                        | InfoCommand::Component { .. }
-                        | InfoCommand::Targets
-                        | InfoCommand::Target { .. }
-                )
-            )
-        {
-            return Ok(());
-        }
-        anyhow::bail!(
-            "--projection agent-v1 requires a target-bearing info subject: workspace, component, targets, or target"
-        )
-    }
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum InfoCommand {
-    /// Preview freshness policies and conservative adoption recommendations.
-    Freshness(FreshnessOpts),
-    /// Print the highest Go module toolchain selector used by managed CI.
-    #[command(name = "go-version", hide = true)]
-    GoVersion,
-    /// Inspect the normalized workspace catalog.
-    Workspace,
-    /// List addressable repository components.
-    Components,
-    /// Inspect one component and its targets.
-    Component { id: String },
-    /// List executable component/action targets.
-    Targets,
-    /// Inspect one target by its component:action address.
-    Target { id: String },
-    /// List checked-in target profiles.
-    Profiles,
-    /// Inspect one checked-in profile.
-    Profile { id: String },
-}
-
-#[derive(Args, Debug, Default)]
-pub(crate) struct FreshnessOpts {
-    /// Limit the preview to an exact component:action target (repeatable).
-    #[arg(long = "target")]
-    pub(crate) targets: Vec<jig_contract::TargetId>,
-    /// Assert selected command checks are independent of staging, commits and branches.
-    #[arg(long, requires = "targets")]
-    pub(crate) assert_worktree: bool,
-    /// Assert the reviewed inputs cover every repository file selected checks read.
-    #[arg(long, requires = "targets")]
-    pub(crate) assert_exhaustive: bool,
-    /// Add a repository-relative input glob to each explicitly selected check.
-    #[arg(long = "input", requires = "assert_exhaustive")]
-    pub(crate) inputs: Vec<String>,
-    /// Print a paired unified patch; with --json, include it in the report.
-    #[arg(long)]
-    pub(crate) patch: bool,
-}
-
 #[derive(Args, Debug)]
 pub(crate) struct GenerateSqlxUncheckedQueriesTodoOpts {
     /// Optional output path for the generated TODO report.
     pub(crate) output: Option<PathBuf>,
+}
+
+impl From<GenerateSqlxUncheckedQueriesTodoOpts> for command::SqlxTodoRequest {
+    fn from(opts: GenerateSqlxUncheckedQueriesTodoOpts) -> Self {
+        Self {
+            output: opts.output,
+        }
+    }
 }
 
 impl GenerateSqlxUncheckedQueriesTodoOpts {
@@ -547,65 +443,18 @@ impl GenerateSqlxUncheckedQueriesTodoOpts {
     }
 }
 
-#[derive(Args, Debug)]
-pub(crate) struct UiOpts {
-    #[arg(
-        long,
-        value_name = "SECONDS",
-        value_parser = clap::value_parser!(u64).range(1..=3600),
-        help = "Read-only dashboard refresh interval; defaults to 10 seconds"
-    )]
-    pub(crate) refresh_seconds: Option<u64>,
-    #[arg(
-        long,
-        value_name = "ROWS",
-        value_parser = clap::value_parser!(u64).range(1..=1000),
-        help = "Initial activity rows for the TUI or recorder JSON; defaults to 120"
-    )]
-    pub(crate) timeline_limit: Option<u64>,
-    #[arg(long = "port", hide = true)]
-    pub(crate) retired_port: Option<u16>,
-}
-
-impl UiOpts {
-    /// Option combinations Clap cannot reject because they involve the
-    /// global `--json` flag or a retired option that still parses.
-    pub(crate) const fn usage_conflict(&self, json: bool) -> Option<&'static str> {
-        if self.retired_port.is_some() {
-            Some(
-                "the `jig ui` browser server and `--port` option were removed in 0.3.0; use `jig ui` for the terminal dashboard or `jig ui --json` for one-shot data (`--port` will stop parsing in 0.4.0)",
-            )
-        } else if json && self.refresh_seconds.is_some() {
-            Some("`--refresh-seconds` cannot be combined with `--json`")
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn effective_refresh_seconds(&self) -> u64 {
-        self.refresh_seconds.unwrap_or(10)
-    }
-
-    pub(crate) fn effective_timeline_limit(&self) -> u64 {
-        self.timeline_limit.unwrap_or(120)
-    }
-}
-
-mod command_conversion;
-
 mod output;
 mod run;
 mod structured_error;
-mod vault_run;
 
 #[cfg(test)]
 pub(crate) fn format_doctor_summary_for_test(value: &serde_json::Value) -> String {
-    output::format_doctor_summary(value)
+    doctor::render::format_doctor_summary(value)
 }
 
 #[cfg(test)]
 pub(crate) fn format_info_summary_for_test(value: &serde_json::Value) -> String {
-    output::format_info_summary(value)
+    info::render::format_info_summary(value)
 }
 
 pub(crate) use run::run;

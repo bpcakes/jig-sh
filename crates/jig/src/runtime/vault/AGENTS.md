@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Own vault scope, passphrase capture, raw-output dispatch, lifecycle, and the CLI-owned Vault TUI adapter. These rules also cover the sibling [vault.rs](../vault.rs), [vault_env.rs](../vault_env.rs), [vault_withholding.rs](../vault_withholding.rs), vault dispatch in [runtime.rs](../../runtime.rs), CLI scope application in [vault_run.rs](../../cli/vault_run.rs), and the CLI startup boundary in [vault_environment.rs](../../cli/run/vault_environment.rs); they do not apply to unrelated runtime modules.
+Own vault scope, passphrase capture, raw-output dispatch, lifecycle, and the CLI-owned Vault TUI adapter. These rules also cover the sibling [vault.rs](../vault.rs), [vault_env.rs](../vault_env.rs), [vault_withholding.rs](../vault_withholding.rs), vault dispatch in [runtime.rs](../../runtime.rs), CLI scope application in [vault/run.rs](../../cli/vault/run.rs), and the CLI startup boundary in [vault_environment.rs](../../cli/run/vault_environment.rs); they do not apply to unrelated runtime modules.
 
 ## Key entrypoints
 

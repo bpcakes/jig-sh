@@ -1,14 +1,14 @@
 use jig_tui::sanitize_text;
 
+use crate::agent_provider::AgentProvider;
 #[cfg(test)]
-use super::usage::{
+use crate::cli::output::usage::{
     format_reset_from as format_codex_reset_from, format_window as format_codex_window,
 };
-use crate::agent_provider::AgentProvider;
 use crate::codex::provider::Codex;
 
-use super::command_display::CommandDisplay;
-use super::{value_bool, value_str};
+use crate::cli::output::command_display::CommandDisplay;
+use crate::cli::output::{value_bool, value_str};
 
 pub(in crate::cli) fn format_codex_homes_summary(value: &serde_json::Value) -> String {
     format_codex_homes(value)
@@ -70,7 +70,7 @@ fn format_codex_home_fields(home: &serde_json::Value, usage_included: bool) -> S
     let usage_error = value_str(home, "usage_error");
     let mut fields = vec![name, account, plan];
     if usage_included && account_observed && inspection_error.is_none() && usage_error.is_none() {
-        fields.push(super::usage::format_limits(
+        fields.push(crate::cli::output::usage::format_limits(
             &home["rate_limits"],
             Codex::METADATA.subscription_bucket,
         ));

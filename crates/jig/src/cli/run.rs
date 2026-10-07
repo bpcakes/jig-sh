@@ -3,19 +3,18 @@ use anyhow::Result;
 use super::bootstrap_run::{
     run_adopt_command, run_init_command, run_presets_command, run_update_command,
 };
-use super::codex_run::run_codex_command;
-use super::output::{self, emit, print_json};
+use super::codex::run::run_codex_command;
+use super::output::print_json;
 use super::setup_run::run_setup_command;
 use super::structured_error::{
     is_json_output_already_emitted, is_structured_json_failure, json_error_payload,
-    json_output_already_emitted, json_reported_error, require_json_ok,
+    json_output_already_emitted, json_reported_error,
 };
-use super::ui_run::{name_ui_error, run_ui_command};
-use super::vault_run::run_vault_command;
+use super::ui::{name_ui_error, run_ui_command};
+use super::vault::run::run_vault_command;
 use super::{Cli, CommandKind};
 use crate::cli::runtime_dispatch::{RuntimeDispatch, dispatch_runtime};
 use crate::command::RuntimeCommand;
-use crate::doctor;
 
 pub(crate) fn run() -> Result<()> {
     let cli = parse_cli();
@@ -54,15 +53,11 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Adopt(opts) => run_adopt_command(opts, json_output),
         CommandKind::Update(opts) => run_update_command(opts, json_output),
         CommandKind::Ui(opts) => run_ui_command(opts, json_output),
-        CommandKind::Doctor => {
-            let output = doctor::run()?;
-            emit(json_output, output::format_doctor_summary, &output)?;
-            finish_after_json_output(require_json_ok(true, &output), json_output)
-        }
-        CommandKind::Info(opts) => super::info_run::run_info_command(opts, json_output),
-        CommandKind::Status(opts) => super::status_run::run_status_command(opts, json_output),
-        CommandKind::Dev(opts) => run_dev_command(opts, json_output),
-        CommandKind::Proxy(command) => run_proxy_command(command, json_output),
+        CommandKind::Doctor => super::doctor::run_doctor_command(json_output),
+        CommandKind::Info(opts) => super::info::run_info_command(opts, json_output),
+        CommandKind::Status(opts) => super::status::run::run_status_command(opts, json_output),
+        CommandKind::Dev(opts) => super::proxy::run::run_dev_command(opts, json_output),
+        CommandKind::Proxy(command) => super::proxy::run::run_proxy_command(command, json_output),
         CommandKind::Bootstrap => dispatch_runtime(
             RuntimeDispatch::tool(RuntimeCommand::Bootstrap),
             json_output,
@@ -85,7 +80,9 @@ fn run_command(cli: Cli) -> Result<()> {
         }
         CommandKind::Vault(command) => run_vault_command(command, json_output),
         CommandKind::Agent(command) => dispatch_runtime(command.into_dispatch(), json_output),
-        CommandKind::Claude(command) => super::claude_run::run_claude_command(command, json_output),
+        CommandKind::Claude(command) => {
+            super::claude::run::run_claude_command(command, json_output)
+        }
         CommandKind::Codex(command) => run_codex_command(command, json_output),
         // Argument parsing rejects the retired namespace before dispatch.
         CommandKind::Loop(command) => dispatch_runtime(command.into_dispatch(), json_output),
@@ -136,17 +133,6 @@ use argument_parsing::parse_cli;
 pub(super) use argument_parsing::post_parse_usage_error;
 use launcher_handoff::{run_runtime_compatible, validate_launcher_repository_scope};
 use vault_environment::enforce_vault_passphrase_startup_boundary;
-// `jig dev` and `jig proxy` have one implementation per build: the real one,
-// or a stub reporting that the `dev-proxy` feature is not built.
-#[cfg(feature = "dev-proxy")]
-mod dev_launch;
-#[cfg(feature = "dev-proxy")]
-use dev_launch::{run_dev_command, run_proxy_command};
-#[cfg(not(feature = "dev-proxy"))]
-mod dev_unavailable;
-#[cfg(not(feature = "dev-proxy"))]
-use dev_unavailable::{run_dev_command, run_proxy_command};
-
 #[cfg(test)]
 #[path = "run_tests.rs"]
 mod tests;

@@ -1,6 +1,7 @@
 use clap::Parser;
 
 use super::run::post_parse_usage_error;
+use super::ui::UiOpts;
 use super::*;
 
 fn parse_ui(args: &[&str]) -> Cli {

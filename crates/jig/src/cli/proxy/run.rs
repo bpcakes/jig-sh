@@ -5,8 +5,8 @@ use std::process;
 
 use anyhow::Result;
 
-use super::finish_after_json_output;
-use crate::cli::output::{self, emit, print_json};
+use crate::cli::output::{emit, print_json};
+use crate::cli::run::finish_after_json_output;
 use crate::cli::structured_error::{
     json_error_payload, json_reported_error, require_foreground_status,
 };
@@ -16,7 +16,7 @@ use crate::context::RepoContext;
 use crate::dev_proxy::commands::{can_run_without_context, dev_contextless, proxy_without_context};
 use crate::{root_commands, runtime};
 
-pub(super) fn run_dev_command(opts: DevOpts, json_output: bool) -> Result<()> {
+pub(in crate::cli) fn run_dev_command(opts: DevOpts, json_output: bool) -> Result<()> {
     let render = opts.renderer();
     if opts.is_contextless() {
         let output = dev_contextless(opts.into())?;
@@ -49,7 +49,7 @@ pub(super) fn run_dev_command(opts: DevOpts, json_output: bool) -> Result<()> {
     finish_after_json_output(require_foreground_status(&output), json_output)
 }
 
-pub(super) fn run_proxy_command(command: ProxyCommand, json_output: bool) -> Result<()> {
+pub(in crate::cli) fn run_proxy_command(command: ProxyCommand, json_output: bool) -> Result<()> {
     let runtime_command: crate::command::ProxyCommand = command.into();
     let output = if can_run_without_context(&runtime_command) {
         if let Some(ctx) = RepoContext::load_optional()? {
@@ -61,13 +61,13 @@ pub(super) fn run_proxy_command(command: ProxyCommand, json_output: bool) -> Res
         let ctx = RepoContext::load()?;
         runtime::dispatch(&ctx, RuntimeCommand::Proxy(runtime_command))?
     };
-    emit(json_output, output::format_proxy_summary, &output)?;
+    emit(json_output, super::render::format_proxy_summary, &output)?;
     finish_after_json_output(require_foreground_status(&output), json_output)
 }
 
 /// Whether a dev launch already carries its project identity; `None` for
 /// management actions, which never re-exec.
-pub(super) fn dev_launch_identity_present(opts: &DevOpts) -> Option<bool> {
+pub(in crate::cli) fn dev_launch_identity_present(opts: &DevOpts) -> Option<bool> {
     opts.command
         .is_none()
         .then_some(opts.launch.jig_project.is_some())

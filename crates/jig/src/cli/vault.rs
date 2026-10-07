@@ -6,6 +6,10 @@ use jig_vault::{VaultItem, VaultReference};
 
 use crate::tool_defs;
 
+mod convert;
+pub(super) mod render;
+pub(super) mod run;
+
 const VAULT_RUN_AFTER_HELP: &str = "\
 The brokered command must come after --. Each mapping source is a legacy secret
 name or a canonical jig://ITEM/FIELD reference in the selected vault; both

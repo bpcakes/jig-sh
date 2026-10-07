@@ -5,6 +5,9 @@ use super::runtime_dispatch::RuntimeDispatch;
 use crate::command::RuntimeCommand;
 use crate::tool_defs;
 
+mod convert;
+pub(super) mod render;
+
 pub(super) const LOOP_AFTER_HELP: &str = "\
 `jig loop` runs runtime-owned orchestration ticks. Workflow kinds are compiled
 into Jig; .jig.toml can parameterize them but cannot define arbitrary step
@@ -189,13 +192,13 @@ pub(crate) struct LoopTuningOpts {
 impl LoopCommand {
     pub(super) fn into_dispatch(self) -> RuntimeDispatch {
         let render: output::Render = match &self {
-            Self::Tick(_) => output::format_loop_tick_summary,
-            Self::Dispatch(_) => output::format_loop_dispatch_summary,
-            Self::Status(_) => output::format_loop_status_summary,
-            Self::Show(_) => output::format_loop_show_summary,
-            Self::Run(_) => output::format_loop_run_summary,
-            Self::ClearAttempt(_) => output::format_loop_clear_attempt_summary,
-            Self::AcknowledgeOccurrence(_) => output::format_loop_acknowledge_occurrence_summary,
+            Self::Tick(_) => render::format_loop_tick_summary,
+            Self::Dispatch(_) => render::format_loop_dispatch_summary,
+            Self::Status(_) => render::format_loop_status_summary,
+            Self::Show(_) => render::format_loop_show_summary,
+            Self::Run(_) => render::format_loop_run_summary,
+            Self::ClearAttempt(_) => render::format_loop_clear_attempt_summary,
+            Self::AcknowledgeOccurrence(_) => render::format_loop_acknowledge_occurrence_summary,
         };
         // Tick, dispatch and run do work, so `ok: false` fails them. The
         // others are diagnostic reports: their JSON may carry `ok: false`, but

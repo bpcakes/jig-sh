@@ -1,4 +1,4 @@
-use super::{value_bool, value_str, value_u64};
+use crate::cli::output::{value_bool, value_str, value_u64};
 
 pub(in crate::cli) fn format_state_summary(value: &serde_json::Value) -> String {
     let counts = &value["counts"];

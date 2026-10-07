@@ -1,15 +1,16 @@
 use anyhow::Result;
 
-use super::output::{self, emit};
+use super::render;
 use super::{StatusCommand, StatusOpts};
+use crate::cli::output::emit;
 use crate::context::RepoContext;
 use crate::{status, ui};
 
-pub(super) fn run_status_command(opts: StatusOpts, json_output: bool) -> Result<()> {
+pub(in crate::cli) fn run_status_command(opts: StatusOpts, json_output: bool) -> Result<()> {
     let ctx = RepoContext::load()?;
     if let Some(StatusCommand::Run { run_id }) = &opts.command {
         let output = status_run_output(&ctx, run_id)?;
-        return emit(json_output, output::format_run_status_summary, &output);
+        return emit(json_output, render::format_run_status_summary, &output);
     }
     if opts.tui {
         return ui::run_status(
@@ -34,7 +35,7 @@ pub(super) fn run_status_command(opts: StatusOpts, json_output: bool) -> Result<
     #[cfg(any(not(unix), test))]
     let outcome = status::snapshot_with_cancellation(&ctx, &|| false);
     let output = outcome?;
-    emit(json_output, output::format_status_summary, &output)
+    emit(json_output, render::format_summary, &output)
 }
 
 fn status_run_output(ctx: &RepoContext, run_id: &str) -> Result<serde_json::Value> {
