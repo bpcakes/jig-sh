@@ -5,12 +5,34 @@
 Choose checks for the affected behavior. For example, run a focused Rust regression:
 
 ```sh
-cargo test -p jig-sh --lib repository::freshness::tests
+cargo test -p jig-context inputs_policy
 ```
 
 Use `scripts/jig info targets` to discover configured checks, then run the relevant
 `scripts/jig check COMPONENT:ACTION` targets directly. Broaden validation when
 shared behavior, failures, or unresolved risks warrant it.
+
+To run every Rust test a change can affect, and only those, use the
+dependency-scoped selection:
+
+```sh
+scripts/jig check repo:source-affected-test
+# or directly, with a different comparison base or a dry run:
+scripts/test-rust-affected.py --base HEAD --print
+```
+
+A file counts as changed when a commit since the merge base of `origin/master`
+touched it, even if the working tree has since restored its original contents,
+or when it is staged, unstaged, or untracked. Each changed workspace package
+selects its own tests and those of every package that depends on it, through
+nextest's `rdeps()`. Packages whose tests read another package's files without
+depending on it are listed in the script's `EXTRA_CONSUMERS` table; a guard test
+in `scripts/tests/test_jig_rust_affected.py` fails when a crate names another
+crate's directory without such an edge. Notes that no test reads (`.beads/`,
+`.agent/plans/`, `.agent/notes/`, `docs/plans/`) and Python `__pycache__`
+directories are ignored. Any other change outside a crate, such as `Cargo.lock`,
+`templates/`, `scripts/`, or `.config/nextest.toml`, runs the whole suite.
+`jig-sh` depends on every crate, so its tests run for any Rust change.
 
 ## Before handing off a broad change
 
