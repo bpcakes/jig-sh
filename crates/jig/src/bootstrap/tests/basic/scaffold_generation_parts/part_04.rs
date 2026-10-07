@@ -538,10 +538,7 @@ fn assert_go_generated_runtime_files(destination: &Path) {
         &["github.com/pressly/goose/v3/cmd/goose"],
     );
     let context = jig_context::RepoContext::load_from(destination).unwrap();
-    assert_eq!(
-        crate::doctor::go_version_selector(&context).unwrap(),
-        "1.26.0"
-    );
+    assert_go_module_authority_declares(&context, "1.26.0");
     assert_contains_all(
         &fs::read_to_string(destination.join("internal/httpapi/httpapi.go")).unwrap(),
         &["config.CreateHooks = nil"],
@@ -778,10 +775,7 @@ export async function createClient({ output }) {
         );
     }
     let context = jig_context::RepoContext::load_from(&destination).unwrap();
-    assert_eq!(
-        crate::doctor::go_version_selector(&context).unwrap(),
-        "1.26.0"
-    );
+    assert_go_module_authority_declares(&context, "1.26.0");
     let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
     assert_contains_all(
         &browser_e2e,
@@ -794,4 +788,13 @@ export async function createClient({ output }) {
     let go_tests = fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
     assert_contains_all(&go_tests, &["scripts/jig check api:sqlc"]);
     assert_contains_none(&go_tests, &["postgres-integration:"]);
+}
+
+/// The repository's resolved Go module authority declares exactly `version`.
+fn assert_go_module_authority_declares(context: &jig_context::RepoContext, version: &str) {
+    let authority = context.go_module_authority_paths().unwrap();
+    assert_eq!(authority.len(), 1, "{authority:?}");
+    let go_mod = fs::read_to_string(&authority[0]).unwrap();
+    let directive = format!("go {version}");
+    assert!(go_mod.lines().any(|line| line.trim() == directive), "{go_mod}");
 }

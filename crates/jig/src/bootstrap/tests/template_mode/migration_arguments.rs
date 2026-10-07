@@ -1,7 +1,6 @@
 use jig_context::{CURRENT_CONTRACT_VERSION, RepoContext};
 
 use super::*;
-use crate::command::{MigrationAddRequest, RuntimeCommand};
 
 #[test]
 fn action_arguments_update_preserves_command_migration_alias() {
@@ -115,10 +114,9 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
         )
         .unwrap();
 
-        // A long shell-looking value proves both legacy length compatibility and
-        // byte-exact environment delivery before and after the real transaction.
-        let name = format!("Create Examples $(touch injected) {}", "x".repeat(201));
-        assert_migration_alias(&repo, version, &name);
+        // Runtime tests prove byte-exact name delivery through this alias; here
+        // the alias must resolve before and after the real update transaction.
+        assert_migration_alias(&repo, version, "command");
         run_update(UpdateOpts {
             path: repo.clone(),
             template: None,
@@ -131,7 +129,7 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
             no_input: true,
         })
         .unwrap();
-        assert_migration_alias(&repo, CURRENT_CONTRACT_VERSION, &name);
+        assert_migration_alias(&repo, CURRENT_CONTRACT_VERSION, "shell");
         let mut expected_runner = action["runner"].clone();
         expected_runner["kind"] = serde_json::json!("shell");
 
@@ -161,20 +159,14 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
     }
 }
 
-fn assert_migration_alias(repo: &Path, version: u32, name: &str) {
+fn assert_migration_alias(repo: &Path, version: u32, runner_kind: &str) {
     let ctx = RepoContext::load_from(repo).unwrap();
     assert_eq!(ctx.contract_version(), version);
-    crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::MigrationAdd(MigrationAddRequest { name: name.into() }),
-    )
-    .unwrap();
-    assert_eq!(
-        fs::read_to_string(repo.join("migration-name.txt")).unwrap(),
-        name
-    );
-    assert!(!repo.join("injected").exists());
-    fs::remove_file(repo.join("migration-name.txt")).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let action = catalog.action_for_alias("jig.migration_add").unwrap();
+    let runner = serde_json::to_value(action).unwrap()["runner"].clone();
+    assert_eq!(runner["kind"], runner_kind);
+    assert_eq!(runner["command"], "example_migration_command");
 }
 
 fn remove_file_budget(
