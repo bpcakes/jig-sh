@@ -1,10 +1,10 @@
 use anyhow::{Result, bail};
 use jig_context::RepoContext;
 use jig_contract::ActionEffect;
+use jig_execution::ExecutionControl;
 use serde_json::{Value, json};
 
 use crate::command::RepositoryRunRequest;
-use crate::execution::ExecutionControl;
 use crate::repository::{PlanRunRequest, RepositoryCatalog};
 
 use super::run_execution::{ExecuteCheckRunRequest, execute_foreground_action_run};

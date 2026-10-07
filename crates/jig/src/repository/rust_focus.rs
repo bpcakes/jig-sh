@@ -9,7 +9,7 @@ use jig_contract::{
     TargetId,
 };
 
-use crate::execution::{ExecutionCancellation, ExecutionObserver};
+use jig_execution::{ExecutionCancellation, ExecutionObserver};
 
 struct Control<'a>(&'a dyn Fn() -> bool);
 impl ExecutionObserver for Control<'_> {}

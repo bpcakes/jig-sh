@@ -25,9 +25,9 @@ struct CancelAfterEntryObserver {
     checks: Cell<usize>,
 }
 
-impl crate::execution::ExecutionObserver for CancelAfterEntryObserver {}
+impl jig_execution::ExecutionObserver for CancelAfterEntryObserver {}
 
-impl crate::execution::ExecutionCancellation for CancelAfterEntryObserver {
+impl jig_execution::ExecutionCancellation for CancelAfterEntryObserver {
     fn cancelled(&self) -> bool {
         let checks = self.checks.get();
         self.checks.set(checks + 1);

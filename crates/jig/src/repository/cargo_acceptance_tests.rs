@@ -4,11 +4,11 @@ use jig_contract::{
     CargoImpactContextV1, CargoImpactDispositionV1, CargoImpactReasonV1, CargoImpactV1,
     CargoRuntimeTestFilterV1, ComponentId,
 };
+use jig_execution::NoopExecutionObserver;
 use jig_rust::{CargoMetadataGraphV1, select_cargo_impact_v1};
 use tempfile::tempdir;
 
 use super::*;
-use crate::execution::NoopExecutionObserver;
 
 fn write_fixture_file(root: &Path, relative: &str, contents: &[u8]) {
     let path = root.join(relative);

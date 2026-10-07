@@ -16,12 +16,10 @@ use jig_context::RepoContext;
 use jig_contract::{
     CargoImpactContextV1, CargoImpactReasonV1, CargoImpactV1, ComponentId, RunPlan,
 };
+use jig_execution::{ExecutionCancellation, ExecutionControl, ExecutionObserver};
 use jig_rust::select_cargo_impact_v1;
 
-use crate::{
-    execution::{ExecutionCancellation, ExecutionControl, ExecutionObserver},
-    repository::{RepositoryCatalog, cargo_discovery},
-};
+use crate::repository::{RepositoryCatalog, cargo_discovery};
 
 /// Keep one Cargo acquisition per distinct authored component root.
 pub(super) const MAX_CARGO_DISCOVERY_ROOTS_V1: usize = 32;

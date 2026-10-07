@@ -1,0 +1,197 @@
+use std::path::{Path, PathBuf};
+
+use jig_context::RepoContext;
+use serde_json::{Value, json};
+
+use jig_execution::NoopExecutionObserver;
+
+use super::{RepositoryRevisionState, git_is_dirty, git_stdout, remove_worktree};
+
+mod diagnostics;
+use diagnostics::CheckoutDiagnostics;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TaskOutcome {
+    Succeeded,
+    Failed,
+}
+
+pub(super) enum PreparedCheckout {
+    Repo {
+        path: PathBuf,
+        initial_head: String,
+    },
+    Worktree {
+        repo_root: PathBuf,
+        path: PathBuf,
+        initial_head: String,
+    },
+}
+
+pub(super) struct CheckoutCompletion {
+    pub(super) report: CheckoutReport,
+    pub(super) error: Option<String>,
+}
+
+pub(super) enum CheckoutReport {
+    Repository {
+        path: PathBuf,
+        dirty: Option<bool>,
+        head_changed: Option<bool>,
+        diagnostics: CheckoutDiagnostics,
+    },
+    Worktree {
+        path: PathBuf,
+        retained: bool,
+        dirty: Option<bool>,
+        head_changed: Option<bool>,
+    },
+}
+
+impl CheckoutReport {
+    pub(super) const fn is_repository(&self) -> bool {
+        matches!(self, Self::Repository { .. })
+    }
+
+    pub(super) fn repository_requires_attention(&self) -> bool {
+        self.repository_revision_state() == RepositoryRevisionState::Unknown
+    }
+
+    pub(super) fn repository_revision_state(&self) -> RepositoryRevisionState {
+        match self {
+            Self::Repository {
+                dirty: Some(false),
+                head_changed: Some(false),
+                ..
+            } => RepositoryRevisionState::Unchanged,
+            Self::Repository {
+                dirty: Some(false),
+                head_changed: Some(true),
+                ..
+            } => RepositoryRevisionState::Changed,
+            Self::Repository { .. } => RepositoryRevisionState::Unknown,
+            Self::Worktree { .. } => RepositoryRevisionState::NotApplicable,
+        }
+    }
+
+    pub(super) fn retained_worktree(&self) -> Option<String> {
+        match self {
+            Self::Worktree {
+                path,
+                retained: true,
+                ..
+            } => Some(super::super::occurrence::encode_worktree_path(path)),
+            Self::Repository { .. } | Self::Worktree { .. } => None,
+        }
+    }
+
+    pub(super) fn value(&self) -> Value {
+        match self {
+            Self::Repository {
+                path,
+                dirty,
+                head_changed,
+                diagnostics,
+            } => json!({
+                "mode": "repo",
+                "path": super::super::occurrence::encode_worktree_path(path),
+                "retained": true,
+                "dirty": dirty,
+                "head_changed": head_changed,
+                "diagnostics": diagnostics,
+            }),
+            Self::Worktree {
+                path,
+                retained,
+                dirty,
+                head_changed,
+            } => json!({
+                "mode": "worktree",
+                "path": super::super::occurrence::encode_worktree_path(path),
+                "retained": retained,
+                "dirty": dirty,
+                "head_changed": head_changed,
+            }),
+        }
+    }
+}
+
+impl PreparedCheckout {
+    pub(super) fn path(&self) -> &Path {
+        match self {
+            Self::Repo { path, .. } | Self::Worktree { path, .. } => path,
+        }
+    }
+
+    pub(super) fn finish(self, outcome: TaskOutcome, ctx: &RepoContext) -> CheckoutCompletion {
+        let mut cleanup_observer = NoopExecutionObserver;
+        match self {
+            Self::Repo { path, initial_head } => {
+                let dirty = git_is_dirty(ctx, &path, &mut cleanup_observer);
+                let final_head =
+                    git_stdout(ctx, &path, ["rev-parse", "HEAD"], &mut cleanup_observer);
+                let diagnostics = CheckoutDiagnostics::inspect(ctx, &path, &dirty, &final_head);
+                let mut errors = Vec::new();
+                if let Err(error) = &dirty {
+                    errors.push(format!(
+                        "Failed to inspect retained task checkout: {error:#}"
+                    ));
+                }
+                if let Err(error) = &final_head {
+                    errors.push(format!(
+                        "Failed to inspect retained task checkout HEAD: {error:#}"
+                    ));
+                }
+                CheckoutCompletion {
+                    report: CheckoutReport::Repository {
+                        path,
+                        dirty: dirty.ok(),
+                        head_changed: final_head.ok().map(|head| head != initial_head),
+                        diagnostics,
+                    },
+                    error: (!errors.is_empty()).then(|| errors.join("; ")),
+                }
+            }
+            Self::Worktree {
+                repo_root,
+                path,
+                initial_head,
+            } => {
+                let dirty = git_is_dirty(ctx, &path, &mut cleanup_observer);
+                let final_head =
+                    git_stdout(ctx, &path, ["rev-parse", "HEAD"], &mut cleanup_observer);
+                let mut errors = Vec::new();
+                if let Err(error) = &dirty {
+                    errors.push(format!("Failed to inspect task worktree status: {error:#}"));
+                }
+                if let Err(error) = &final_head {
+                    errors.push(format!("Failed to inspect task worktree HEAD: {error:#}"));
+                }
+                let dirty = dirty.ok();
+                let head_changed = final_head.ok().map(|head| head != initial_head);
+                let mut retained = outcome == TaskOutcome::Failed
+                    || dirty.unwrap_or(true)
+                    || head_changed.unwrap_or(true);
+                if !retained
+                    && let Err(error) =
+                        remove_worktree(ctx, &repo_root, &path, false, &mut cleanup_observer)
+                {
+                    retained = true;
+                    errors.push(format!("Failed to remove clean task worktree: {error:#}"));
+                }
+                CheckoutCompletion {
+                    report: CheckoutReport::Worktree {
+                        path,
+                        retained,
+                        dirty,
+                        head_changed,
+                    },
+                    error: (!errors.is_empty()).then(|| errors.join("; ")),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+include!("checkout_tests.rs");

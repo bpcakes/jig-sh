@@ -5,7 +5,7 @@ use std::sync::mpsc;
 
 use jig_state::ResourceLease;
 
-use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
+use jig_execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
 
 use super::*;
 

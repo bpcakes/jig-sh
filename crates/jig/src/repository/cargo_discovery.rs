@@ -21,9 +21,7 @@ use jig_rust::{
     CargoMetadataErrorV1, CargoMetadataGraphV1, CargoMetadataLimitsV1, normalize_cargo_metadata_v1,
 };
 
-use crate::execution::{
-    ExecutionControl, SupervisedExecutionError, run_supervised_execution_command,
-};
+use jig_execution::{ExecutionControl, SupervisedExecutionError, run_supervised_execution_command};
 
 const CARGO_METADATA_PROGRAM: &str = "cargo";
 const CARGO_METADATA_LABEL: &str = "cargo metadata";

@@ -7,15 +7,15 @@ use jig_contract::{
     ManifestTool, NativeActionResult, NativeToolKind, PolicyPreparationV1, PreparedNativeInputV1,
     RunConclusion, TargetId,
 };
-use serde::Serialize;
-use serde_json::{Value, json};
-
 #[cfg(test)]
-use crate::execution::NoopExecutionObserver;
-use crate::execution::{
+use jig_execution::NoopExecutionObserver;
+use jig_execution::{
     ExecutionCommandError, ExecutionControl, ExecutionPhase, PhasePosition,
     SupervisedExecutionError, run_supervised_execution_command,
 };
+use serde::Serialize;
+use serde_json::{Value, json};
+
 use crate::policy::NativeToolOutput;
 
 pub(super) struct NativeActionContext<'a> {

@@ -16,7 +16,7 @@ use jig_contract::{ActionRunner, CargoImpactContextV1, ExecutionResourceV1, Plan
 use jig_state::{ResourceClaim, ResourceClaimMode};
 use sha2::{Digest, Sha256};
 
-use crate::execution::{
+use jig_execution::{
     ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
     run_supervised_execution_command,
 };

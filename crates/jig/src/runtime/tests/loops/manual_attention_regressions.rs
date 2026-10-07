@@ -82,7 +82,7 @@ printf 'task complete\n' > "$out"
         .is_some_and(|error| error.contains("Retained worktree")));
 
     let scheduled =
-        crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+        jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
     assert_eq!(scheduled["executed_count"], 0, "{scheduled:#}");
     assert_eq!(
         scheduled["actions"][0]["reason"],
@@ -97,7 +97,7 @@ fn manual_tick_evidence_failure_preserves_attention_and_blocks_reentry() {
     write_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     // A file where the evidence directory belongs makes the write fail.
-    let evidence_path = crate::runtime::loops::evidence_directory_for_test(&ctx);
+    let evidence_path = jig_loops::evidence_directory_for_test(&ctx);
     fs::create_dir_all(evidence_path.parent().unwrap()).unwrap();
     fs::write(&evidence_path, "not a directory").unwrap();
 
@@ -163,7 +163,7 @@ printf 'task complete\n' > "$out"
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _run_log = EnvVarGuard::set("JIG_TEST_RUN_LOG", run_log.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let evidence_path = crate::runtime::loops::evidence_directory_for_test(&ctx);
+    let evidence_path = jig_loops::evidence_directory_for_test(&ctx);
     fs::create_dir_all(evidence_path.parent().unwrap()).unwrap();
     fs::write(&evidence_path, "not a directory").unwrap();
 
@@ -220,7 +220,7 @@ printf 'task complete\n' > "$out"
         .as_str()
         .unwrap()
         .contains("requires acknowledgement"));
-    let scheduled = crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+    let scheduled = jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
     assert_eq!(scheduled["executed_count"], 0, "{scheduled:#}");
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
 }
@@ -269,7 +269,7 @@ printf 'task complete\n' > "$out"
     let _run_log = EnvVarGuard::set("JIG_TEST_RUN_LOG", run_log.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch =
-        crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+        jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
     assert_eq!(dispatch["needs_attention_count"], 1, "{dispatch:#}");
 
     let blocked = crate::runtime::dispatch(

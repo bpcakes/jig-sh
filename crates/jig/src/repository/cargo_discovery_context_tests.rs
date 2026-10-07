@@ -1,5 +1,6 @@
+use jig_execution::{ExecutionCancellation, ExecutionObserver, NoopExecutionObserver};
+
 use super::{tests::*, *};
-use crate::execution::{ExecutionCancellation, ExecutionObserver, NoopExecutionObserver};
 
 #[test]
 fn requested_metadata_context_is_preserved_except_for_readonly_lock_authority() {

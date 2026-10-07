@@ -172,7 +172,7 @@ For runtime changes, read `crates/jig/AGENTS.md` and use its entrypoint map:
 - CLI shape: `crates/jig/src/cli.rs`
 - command and legacy make dispatch: `crates/jig/src/runtime.rs`
 - run history and state maintenance: `crates/jig-state/`
-- loop occurrence evidence and `loop show`: `crates/jig/src/runtime/loops/evidence.rs` and `crates/jig/src/runtime/loops/show.rs`
+- loops, occurrence evidence, and `loop show`: `crates/jig-loops/`
 - bootstrap and template rendering: `crates/jig/src/bootstrap.rs` and `crates/jig/src/bootstrap/`
 - generated outputs: `templates/project/`
 

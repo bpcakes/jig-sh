@@ -622,9 +622,9 @@ fn schema_check_supervises_timeout_and_descendant_cleanup() {
 fn schema_check_preserves_pre_start_cancellation() {
     struct Cancelled;
 
-    impl crate::execution::ExecutionObserver for Cancelled {}
+    impl jig_execution::ExecutionObserver for Cancelled {}
 
-    impl crate::execution::ExecutionCancellation for Cancelled {
+    impl jig_execution::ExecutionCancellation for Cancelled {
         fn cancelled(&self) -> bool {
             true
         }

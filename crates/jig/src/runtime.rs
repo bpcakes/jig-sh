@@ -4,9 +4,9 @@ use std::ffi::OsStr;
 use std::time::Duration;
 
 use jig_context::RepoContext;
+use jig_execution::{ExecutionControl, NoopExecutionObserver};
 
 use crate::command::{AgentMapCommand, CheckCommand, NamedCheck, RuntimeCommand, StateCommand};
-use crate::execution::{ExecutionControl, NoopExecutionObserver};
 use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     SqlxTodoInput,
@@ -15,7 +15,6 @@ use crate::tool_defs::tool;
 
 mod agent;
 mod file_budget;
-mod loops;
 mod migration;
 mod repository_run;
 mod run_cancellation;
@@ -34,7 +33,6 @@ pub(crate) use vault_withholding::{
     vault_passphrase_operator_guidance, withhold_vault_passphrase,
     withhold_vault_passphrase_environment,
 };
-mod worker_runner;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum VaultRawOutcome {
@@ -106,7 +104,7 @@ pub(crate) fn dispatch_with_observer(
         RuntimeCommand::Dev(opts) => crate::dev_proxy::commands::dev(ctx, opts),
         RuntimeCommand::Proxy(command) => crate::dev_proxy::commands::proxy(ctx, command),
         RuntimeCommand::Agent(command) => agent::dispatch_with_observer(ctx, command, observer),
-        RuntimeCommand::Loop(command) => loops::dispatch_with_observer(ctx, command, observer),
+        RuntimeCommand::Loop(command) => jig_loops::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::State(command) => dispatch_state(ctx, command, observer),
     }
 }
@@ -149,7 +147,7 @@ pub(crate) fn loop_status_snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
-    loops::status_with_cancellation(
+    jig_loops::status_with_cancellation(
         ctx,
         crate::command::LoopStatusRequest { workflow: None },
         cancelled,
@@ -160,7 +158,7 @@ pub(crate) fn typed_loop_status_snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<jig_ui::dashboard::StatusLoopObservation> {
-    loops::typed_status_with_cancellation(
+    jig_loops::typed_status_with_cancellation(
         ctx,
         crate::command::LoopStatusRequest { workflow: None },
         cancelled,

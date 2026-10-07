@@ -120,12 +120,12 @@ struct CancelOnOutput {
     durable_ready: Option<std::sync::mpsc::Sender<()>>,
     output: Vec<u8>,
 }
-impl crate::execution::ExecutionObserver for CancelOnOutput {
-    fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+impl jig_execution::ExecutionObserver for CancelOnOutput {
+    fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
         if self.cancelled {
             return;
         }
-        let crate::execution::ExecutionEvent::Output { bytes, .. } = event else {
+        let jig_execution::ExecutionEvent::Output { bytes, .. } = event else {
             return;
         };
         self.output.extend_from_slice(bytes);
@@ -138,7 +138,7 @@ impl crate::execution::ExecutionObserver for CancelOnOutput {
         self.cancelled = true;
     }
 }
-impl crate::execution::ExecutionCancellation for CancelOnOutput {
+impl jig_execution::ExecutionCancellation for CancelOnOutput {
     fn cancelled(&self) -> bool {
         self.cancelled && self.durable_ready.is_none()
     }
@@ -273,8 +273,8 @@ fn foreground_run_rejects_comparison_authority_on_v6_before_state_changes() {
 }
 
 struct AlreadyCancelled;
-impl crate::execution::ExecutionObserver for AlreadyCancelled {}
-impl crate::execution::ExecutionCancellation for AlreadyCancelled {
+impl jig_execution::ExecutionObserver for AlreadyCancelled {}
+impl jig_execution::ExecutionCancellation for AlreadyCancelled {
     fn cancelled(&self) -> bool {
         true
     }
