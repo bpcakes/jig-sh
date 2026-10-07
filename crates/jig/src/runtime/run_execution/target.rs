@@ -252,7 +252,7 @@ pub(super) fn run_process_target(
     if matches!(
         planned.runner,
         ActionRunner::Argv { .. } | ActionRunner::RustNextestV1 { .. }
-    ) && let Err(error) = crate::repository::runners::prepare_literal_exec(&mut command)
+    ) && let Err(error) = jig_repository::runners::prepare_literal_exec(&mut command)
     {
         return TargetCapture::blocked(format!(
             "target '{}' literal process could not be prepared: {error}",

@@ -138,7 +138,7 @@ printf '%s\n' "$BIN_PATH"
     let fix = output.fix.as_deref().unwrap();
     let full_update = format!(
         "update {} --force",
-        crate::shell::quote(&temp.path().to_string_lossy())
+        jig_repository::shell::quote(&temp.path().to_string_lossy())
     );
     assert!(fix.contains(&full_update), "{fix}");
     assert!(fix.contains("--launcher-only --force"), "{fix}");

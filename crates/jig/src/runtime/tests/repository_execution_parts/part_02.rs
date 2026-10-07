@@ -16,9 +16,9 @@ fn parallel_read_only_layer_fails_closed_and_reports_failure_on_a_source_mutatio
     fs::write(config_path, config).unwrap();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+        jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
             .unwrap();
     let mut observer = PhaseRecordingObserver::default();
 
@@ -82,9 +82,9 @@ fn cancelled_parallel_target_keeps_not_started_evidence_after_a_sibling_mutation
     write_wide_v6_evidence_fixture_repo(temp.path(), &commands);
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+        jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
             .unwrap();
     let ninth_planned_digest = plan.targets[8].input_digest.clone();
     let mut observer = MarkerCancellationObserver {
@@ -130,9 +130,9 @@ fn parallel_target_that_fails_authority_before_start_keeps_specific_evidence() {
     write_wide_v6_evidence_fixture_repo(temp.path(), &commands);
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+        jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
             .unwrap();
     let mut observer = PhaseRecordingObserver::default();
 
@@ -222,11 +222,11 @@ depends_on = [{ component = "api", action = "generate" }]
     .unwrap();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan = crate::repository::plan_action_run(
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_action_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: vec!["api:verify-generated".into(), "web:verify-generated".into()],
             profile: None,
             affected_base: None,
@@ -300,9 +300,9 @@ checks = ["jig.first", "jig.second"]
         .write();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+        jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
             .unwrap();
 
     let execution = super::run_execution::execute_check_run(

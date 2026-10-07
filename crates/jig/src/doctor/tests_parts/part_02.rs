@@ -196,9 +196,9 @@ fn command_programs_follow_generated_optional_cargo_branch() {
     let temp = tempdir().unwrap();
     let command = format!(
         "{}cargo fetch{}printf '%s\\n' skipped{}",
-        crate::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
-        crate::shell::OPTIONAL_CARGO_COMMAND_ELSE,
-        crate::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
+        jig_repository::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
+        jig_repository::shell::OPTIONAL_CARGO_COMMAND_ELSE,
+        jig_repository::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
     );
 
     assert!(command_programs(temp.path(), &command).is_empty());

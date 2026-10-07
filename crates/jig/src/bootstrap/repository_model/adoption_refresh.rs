@@ -154,11 +154,11 @@ fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> boo
     // A policy assertion belongs to this implementation and its input set.
     // Retain the whole action, including its runner, when refreshing capabilities.
     // Transplanting the assertion onto a replacement runner would be unsound.
-    if crate::repository::freshness::adoption::is_authored(
+    if jig_repository::freshness::adoption::is_authored(
         action,
         "source_state",
         action.source_state.is_some(),
-    ) || crate::repository::freshness::adoption::is_authored(
+    ) || jig_repository::freshness::adoption::is_authored(
         action,
         "inputs_policy",
         action.inputs_policy.is_some(),

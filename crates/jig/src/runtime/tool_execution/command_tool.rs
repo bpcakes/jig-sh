@@ -194,7 +194,7 @@ fn run_configured_command(
         validate_runner_environment(environment)?;
     }
     let mut command = if let Some((program, positions)) = invocation.argv {
-        crate::repository::runners::argv_command(
+        jig_repository::runners::argv_command(
             program,
             positions,
             &serde_json::from_value(args.clone())?,
@@ -225,7 +225,7 @@ fn run_configured_command(
     }
 
     if invocation.argv.is_some() {
-        crate::repository::runners::prepare_literal_exec(&mut command)?;
+        jig_repository::runners::prepare_literal_exec(&mut command)?;
     }
     let phase = ExecutionPhase::start(observer, invocation.tool_name, position);
     let label = format!("Configured command for {}", invocation.tool_name);

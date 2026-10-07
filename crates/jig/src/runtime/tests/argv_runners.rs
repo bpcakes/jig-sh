@@ -75,7 +75,7 @@ fn request(values: Value) -> RepositoryRunRequest {
         .map(|(key, value)| format!("api:generate:{key}={}", value.as_str().unwrap()))
         .collect();
     RepositoryRunRequest {
-        arguments: crate::repository::arguments::parse_cli(arguments).unwrap(),
+        arguments: jig_repository::arguments::parse_cli(arguments).unwrap(),
         selectors: vec!["api:generate".into()],
         profile: None,
         affected_base: None,

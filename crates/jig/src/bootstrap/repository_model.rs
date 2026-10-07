@@ -498,7 +498,7 @@ impl<'a> ModelBuilder<'a> {
             let command_key = CommandScope::Component.command_key(REPO_COMPONENT, action_id)?;
             let command = format!(
                 "scripts/check-webapps.sh {mode} {}",
-                crate::shell::quote(&dependency_anchor.dir)
+                jig_repository::shell::quote(&dependency_anchor.dir)
             );
             self.insert_command(&command_key, &command)?;
             let mut action = ActionSpec::new(
@@ -623,9 +623,9 @@ impl<'a> ModelBuilder<'a> {
             let command_key = CommandScope::Component.command_key(component, descriptor.id)?;
             let command = format!(
                 "scripts/check-webapps.sh check-one {} {} {}",
-                crate::shell::quote(&app.dir),
+                jig_repository::shell::quote(&app.dir),
                 app.coverage_threshold,
-                crate::shell::quote(script)
+                jig_repository::shell::quote(script)
             );
             self.insert_command(&command_key, &command)?;
             let target = target_id(component, descriptor.id)?;

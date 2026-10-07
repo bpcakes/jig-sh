@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use jig_context::{DevAppConfig, RepoContext};
+use jig_repository::shell::quote as shell_quote;
 use serde_json::Value;
 
 use crate::command::{
@@ -18,7 +19,6 @@ use crate::command::{
     ProxyServiceInstallRequest, ProxyServiceRuntimeRequest, ProxyStopRequest,
 };
 use crate::progress::CliProgress;
-use crate::shell::quote as shell_quote;
 
 mod settings;
 use settings::*;

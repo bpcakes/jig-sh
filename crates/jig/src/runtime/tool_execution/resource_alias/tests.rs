@@ -295,7 +295,7 @@ impl Fixture {
             .iter()
             .find(|planned| planned.target == target)
             .unwrap();
-        let resolved = crate::repository::cargo_resources::resolve(
+        let resolved = jig_repository::cargo_resources::resolve(
             ctx,
             planned,
             Duration::from_secs(10),

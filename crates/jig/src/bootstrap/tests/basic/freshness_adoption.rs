@@ -274,7 +274,7 @@ fn footprint_and_capability_refresh_preserve_cargo_resource_owner_and_command() 
 
 #[test]
 fn generated_cargo_formatter_stays_git_with_aliases_added_before_or_after_adoption() {
-    use crate::repository::freshness::adoption::{Request, preview};
+    use jig_repository::freshness::adoption::{Request, preview};
 
     let _guard = lock_env();
     let template = materialize_template_worktree();

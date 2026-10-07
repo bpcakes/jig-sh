@@ -49,18 +49,13 @@ mod dev_proxy {
 mod info;
 mod policy;
 mod progress;
-mod repository;
 mod root_commands;
 mod runtime;
 mod runtime_artifacts;
 mod runtime_cache_lock;
 mod rust_syntax;
-mod shell;
 mod signal_supervision;
-mod source_identity;
-mod source_projection;
 mod status;
-mod surface;
 #[cfg(test)]
 use jig_context::test_support as test_env;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
@@ -72,7 +67,6 @@ mod ui;
 // `work check`: keep this prefix stable unless both sides change.
 // User commands that intentionally print this prefix are treated as those
 // generated harness skips in summary output.
-pub(crate) const CARGO_SKIP_OUTPUT_PREFIX: &str = "No Cargo.toml found; skipping cargo ";
 
 /// Runs the Jig command-line interface.
 ///

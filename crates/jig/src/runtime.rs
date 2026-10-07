@@ -288,7 +288,7 @@ fn dispatch_named_check(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     if ctx.contract_version() >= 6 {
-        let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
+        let catalog = jig_repository::RepositoryCatalog::from_context(ctx)?;
         dispatch_repository_check_with_catalog(
             ctx,
             &catalog,
@@ -317,28 +317,28 @@ fn dispatch_repository_check(
     request: crate::command::RepositoryCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
+    let catalog = jig_repository::RepositoryCatalog::from_context(ctx)?;
     dispatch_repository_check_with_catalog(ctx, &catalog, request, observer)
 }
 
 fn dispatch_repository_check_with_catalog(
     ctx: &RepoContext,
-    catalog: &crate::repository::RepositoryCatalog,
+    catalog: &jig_repository::RepositoryCatalog,
     request: crate::command::RepositoryCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     preserve_named_check_availability_diagnostic(ctx, catalog, &request.selectors)?;
     if request.comparison.is_some()
-        && catalog.contract_version() < crate::repository::FILE_BUDGET_CONTRACT_VERSION
+        && catalog.contract_version() < jig_repository::FILE_BUDGET_CONTRACT_VERSION
     {
         anyhow::bail!(
             "explicit check comparison authority requires repository contract version 7 or later"
         );
     }
-    let plan = crate::repository::plan_run_with_cancellation(
+    let plan = jig_repository::plan_run_with_cancellation(
         ctx,
         catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: request.selectors,
             profile: request.profile,
             affected_base: request.affected_base,
@@ -360,7 +360,7 @@ fn dispatch_repository_check_with_catalog(
 
 fn preserve_named_check_availability_diagnostic(
     ctx: &RepoContext,
-    catalog: &crate::repository::RepositoryCatalog,
+    catalog: &jig_repository::RepositoryCatalog,
     selectors: &[String],
 ) -> Result<()> {
     let [selector] = selectors else {
@@ -383,7 +383,7 @@ fn preserve_named_check_availability_diagnostic(
 
 fn execute_repository_check_plan(
     ctx: &RepoContext,
-    catalog: &crate::repository::RepositoryCatalog,
+    catalog: &jig_repository::RepositoryCatalog,
     plan: jig_contract::RunPlan,
     fail_fast: bool,
     observer: &mut dyn ExecutionControl,

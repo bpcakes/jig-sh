@@ -16,6 +16,7 @@ use jig_context::{
     validate_gate_path_pattern, validate_schema_docs_dir, validate_web_package_manager,
 };
 use jig_contract::{TargetId, tool};
+use jig_repository::shell::{optional_cargo_command, quote as shell_quote};
 use serde::{Deserialize, Serialize};
 
 use super::repository_model::{
@@ -25,7 +26,6 @@ use super::{
     AnswerOpts, DevApp, DevSettingsAnswers, FrontendApp, GENERATED_NODE_VERSION, ScaffoldOpts,
     ScaffoldPreset, generated_package_manager_spec, generated_package_manager_version,
 };
-use crate::shell::{optional_cargo_command, quote as shell_quote};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -392,7 +392,7 @@ impl RenderAnswers {
                 return None;
             }
 
-            if crate::repository::validate_read_only_check_closure(
+            if jig_repository::validate_read_only_check_closure(
                 &repository.actions,
                 std::iter::once(&action.target),
             )

@@ -91,13 +91,13 @@ fn empty_freshly_planned_check_rejects_source_drift_before_creating_a_run() {
     init_git_repo(temp.path());
     fs::write(temp.path().join("README.md"), "documentation only\n").unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan = crate::repository::plan_run(
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             affected_base: Some("HEAD".into()),
-            ..crate::repository::PlanRunRequest::default()
+            ..jig_repository::PlanRunRequest::default()
         },
     )
     .unwrap();
@@ -127,19 +127,19 @@ fn freshly_planned_check_rejects_authority_that_changed_before_planning() {
     write_v6_evidence_fixture_repo(temp.path(), "");
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
     let config_path = temp.path().join(".jig.toml");
     let changed = fs::read_to_string(&config_path).unwrap().replace(
         "api_test_command = \"printf 'api tests passed\\n'\"",
         "api_test_command = \"printf 'changed command\\n'\"",
     );
     fs::write(&config_path, changed).unwrap();
-    let plan = crate::repository::plan_run(
+    let plan = jig_repository::plan_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: vec!["api:test".into()],
-            ..crate::repository::PlanRunRequest::default()
+            ..jig_repository::PlanRunRequest::default()
         },
     )
     .unwrap();
@@ -167,13 +167,13 @@ fn freshly_planned_check_reports_repository_lease_waiting() {
     write_v6_evidence_fixture_repo(temp.path(), "");
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan = crate::repository::plan_run(
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: vec!["api:test".into()],
-            ..crate::repository::PlanRunRequest::default()
+            ..jig_repository::PlanRunRequest::default()
         },
     )
     .unwrap();
@@ -227,13 +227,13 @@ fn freshly_planned_check_can_cancel_while_waiting_for_repository_lease() {
     write_v6_evidence_fixture_repo(temp.path(), "");
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan = crate::repository::plan_run(
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: vec!["api:test".into()],
-            ..crate::repository::PlanRunRequest::default()
+            ..jig_repository::PlanRunRequest::default()
         },
     )
     .unwrap();
@@ -290,13 +290,13 @@ fn accepted_empty_check_cannot_complete_under_changed_manifest_authority() {
     init_git_repo(temp.path());
     fs::write(temp.path().join("README.md"), "documentation only\n").unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan = crate::repository::plan_run(
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             affected_base: Some("HEAD".into()),
-            ..crate::repository::PlanRunRequest::default()
+            ..jig_repository::PlanRunRequest::default()
         },
     )
     .unwrap();
@@ -345,13 +345,13 @@ fn target_that_changes_manifest_authority_cannot_report_success() {
     fs::write(&config_path, changed).unwrap();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan = crate::repository::plan_run(
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: vec!["api:test".into()],
-            ..crate::repository::PlanRunRequest::default()
+            ..jig_repository::PlanRunRequest::default()
         },
     )
     .unwrap();
@@ -396,13 +396,13 @@ fn repository_command_target_fails_on_the_configured_output_limit() {
     fs::write(config_path, config).unwrap();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan = crate::repository::plan_run(
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: vec!["api:test".into()],
-            ..crate::repository::PlanRunRequest::default()
+            ..jig_repository::PlanRunRequest::default()
         },
     )
     .unwrap();
@@ -451,13 +451,13 @@ fn repository_command_target_uses_the_configured_default_timeout() {
     fs::write(config_path, config).unwrap();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan = crate::repository::plan_run(
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(
         &ctx,
         &catalog,
-        crate::repository::PlanRunRequest {
+        jig_repository::PlanRunRequest {
             selectors: vec!["api:test".into()],
-            ..crate::repository::PlanRunRequest::default()
+            ..jig_repository::PlanRunRequest::default()
         },
     )
     .unwrap();
@@ -527,10 +527,9 @@ fn independent_read_only_layer_targets_execute_concurrently() {
     fs::write(config_path, config).unwrap();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
-            .unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
+        .unwrap();
     assert_eq!(plan.execution_layers.len(), 1);
     assert_eq!(plan.execution_layers[0].len(), 2);
     let mut observer = PhaseRecordingObserver::default();
@@ -618,10 +617,9 @@ fn queued_parallel_target_revalidates_source_before_starting() {
     write_wide_v6_evidence_fixture_repo(temp.path(), &commands);
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
-            .unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
+        .unwrap();
     let mut observer = PhaseRecordingObserver::default();
 
     let execution = super::run_execution::execute_freshly_planned_check_run(

@@ -105,7 +105,7 @@ pub(super) fn init_git_repo_with_validation(
             destination.display()
         )
     })?;
-    let staged_destination = crate::shell::git_env_path(staged.path())?;
+    let staged_destination = jig_repository::shell::git_env_path(staged.path())?;
     let staged_git = staged_destination.join(".git");
 
     let git_program = git_program();
@@ -216,7 +216,7 @@ pub(super) fn init_git_repo_with_validation(
                 return close_staging_directory(staged, &staged_destination, Err(error));
             }
         };
-    let metadata_stage_path = crate::shell::git_env_path(metadata_stage.path())?;
+    let metadata_stage_path = jig_repository::shell::git_env_path(metadata_stage.path())?;
 
     let transfer = (|| {
         staged.require_identity("before transferring initialized Git metadata")?;
@@ -895,7 +895,7 @@ fn prepare_private_git_template(
         require_absent_git_template_redirect(&private.join(relative))?;
     }
     require_empty_or_absent_alternates(&private.join("objects/info/alternates"))?;
-    Ok(Some(crate::shell::git_env_path(&private)?))
+    Ok(Some(jig_repository::shell::git_env_path(&private)?))
 }
 
 fn inherited_git_template_dir() -> Option<std::ffi::OsString> {

@@ -10,7 +10,7 @@ fn initial_next_steps(
         .unwrap_or_else(|_| destination.to_path_buf());
     let mut steps = vec![format!(
         "cd {}",
-        crate::shell::quote(&destination_for_cd.display().to_string())
+        jig_repository::shell::quote(&destination_for_cd.display().to_string())
     )];
     if command == InitialCommand::Adopt && result.apply_report.dry_run {
         steps.push("Review the adoption preview and managed-file diff.".into());

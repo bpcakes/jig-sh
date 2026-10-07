@@ -24,6 +24,7 @@ use jig_owned_process::{
     OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output,
     run_owned_process_tree_with_output_limits,
 };
+use jig_repository::shell;
 use serde::Serialize;
 use serde_json::{Value, json};
 

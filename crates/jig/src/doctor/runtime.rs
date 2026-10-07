@@ -173,9 +173,9 @@ pub(super) fn runtime_check(
     let fix = if !ok {
         let executable = runtime_executable
             .as_deref()
-            .map(crate::shell::quote)
+            .map(jig_repository::shell::quote)
             .unwrap_or_else(|| "jig".into());
-        let repository = crate::shell::quote(&root.to_string_lossy());
+        let repository = jig_repository::shell::quote(&root.to_string_lossy());
         let managed_manifest_exists = root
             .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH)
             .is_file();
@@ -281,9 +281,9 @@ pub(super) fn launcher_repair_cache_check(root: &Path, contract_version: u32) ->
     let executable = std::env::current_exe()
         .ok()
         .as_deref()
-        .map(|path| crate::shell::quote(&path.to_string_lossy()))
+        .map(|path| jig_repository::shell::quote(&path.to_string_lossy()))
         .unwrap_or_else(|| "jig".into());
-    let repository = crate::shell::quote(&root.to_string_lossy());
+    let repository = jig_repository::shell::quote(&root.to_string_lossy());
     let managed_manifest_exists = root
         .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH)
         .is_file();
@@ -495,9 +495,9 @@ pub(super) fn contract_migration_check(root: &Path, contract_version: u32) -> Do
     let executable = std::env::current_exe()
         .ok()
         .as_deref()
-        .map(|path| crate::shell::quote(&path.to_string_lossy()))
+        .map(|path| jig_repository::shell::quote(&path.to_string_lossy()))
         .unwrap_or_else(|| "jig".into());
-    let repository = crate::shell::quote(&root.to_string_lossy());
+    let repository = jig_repository::shell::quote(&root.to_string_lossy());
     let managed_manifest_exists = root
         .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH)
         .is_file();

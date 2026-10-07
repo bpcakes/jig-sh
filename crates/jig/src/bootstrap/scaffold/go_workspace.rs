@@ -129,7 +129,7 @@ impl InitScaffoldPlan {
             } else {
                 format!(
                     "(cd {} && {command})",
-                    crate::shell::quote(&backend.component_root)
+                    jig_repository::shell::quote(&backend.component_root)
                 )
             }
         };

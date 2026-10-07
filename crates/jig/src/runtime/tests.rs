@@ -594,10 +594,9 @@ checks = ["jig.test"]
         .write();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
-            .unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
+        .unwrap();
     fs::write(temp.path().join("changed-after-plan.txt"), "changed\n").unwrap();
 
     let error = super::run_execution::execute_check_run(

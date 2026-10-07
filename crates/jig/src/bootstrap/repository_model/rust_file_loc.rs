@@ -92,7 +92,7 @@ fn canonical_shell_literal(argument: &str) -> Option<String> {
     } else {
         argument.to_owned()
     };
-    (crate::shell::quote(&value) == argument).then_some(value)
+    (jig_repository::shell::quote(&value) == argument).then_some(value)
 }
 
 pub(super) fn refresh_managed_rust_file_loc_command(
@@ -116,6 +116,6 @@ pub(super) fn refresh_managed_rust_file_loc_command(
 fn rust_file_loc_command(default_branch: &str) -> String {
     format!(
         "{RUST_FILE_LOC_SCRIPT} {}",
-        crate::shell::quote(default_branch)
+        jig_repository::shell::quote(default_branch)
     )
 }
