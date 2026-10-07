@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 use crate::acl;
 use crate::error::{classified, classify_source};
 use crate::store::VaultStore;
+use crate::store::witness::WitnessStore;
 use crate::{VaultError, VaultErrorKind};
 
 use super::payload::DecodedBackupArchive;
@@ -272,6 +273,7 @@ fn restore_legacy(
     passphrase: &SecretString,
     decoded: DecodedBackupArchive,
     target: RestoreTarget,
+    witness: &WitnessStore,
 ) -> AnyResult<BackupRestoreResult> {
     revalidate_target(&target)?;
     let staging = FreshStaging::create(&target)?;
@@ -296,6 +298,28 @@ fn restore_legacy(
     if let Err(error) = prepared {
         return Err(staging.abandon(error.context("restore failed")));
     }
+    #[cfg(test)]
+    legacy_tests::before_install_lock();
+    // Finalization released the staging's home and ID locks. Recheck under
+    // the shared ID lock and retain it through installation, without taking
+    // another target/home lock: a same-ID migration must not slip between
+    // this eligibility decision and publication of the legacy home.
+    let install_lock = (|| {
+        let id = witness.lock_id(&decoded.source_vault_id)?;
+        if witness.read_record(&decoded.source_vault_id)?.is_some() {
+            return Err(classified(
+                VaultErrorKind::AlreadyExists,
+                "vault became witnessed during legacy restore; target was not installed; retry the restore to use witnessed recovery",
+            ));
+        }
+        Ok(id)
+    })();
+    let _id = match install_lock {
+        Ok(id) => id,
+        Err(error) => return Err(staging.abandon(error)),
+    };
+    #[cfg(test)]
+    legacy_tests::before_install();
     staging.install(&target)?;
     Ok(BackupRestoreResult {
         root: target.home,
@@ -521,5 +545,7 @@ fn vault_error_as_classified(error: VaultError) -> anyhow::Error {
     classified(error.kind(), error.to_string())
 }
 
+#[cfg(test)]
+mod legacy_tests;
 #[cfg(test)]
 mod tests;

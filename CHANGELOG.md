@@ -83,6 +83,9 @@
   rule in existing repositories.
 
 ### Fixed
+- Serialize legacy vault restore installation with same-ID migration. If
+  migration wins after restore finalization, leave the target absent and
+  request a retry through witnessed recovery.
 - Report uncertain pending-marker publication with recovery guidance, including
   retaining both passphrases after an interrupted credential change.
 - Retry complete output alias scans after transient witness entry disappearance,

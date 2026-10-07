@@ -65,10 +65,11 @@ pub(in crate::backup) fn restore(
         return Ok(result);
     }
     revalidate_target(&target)?;
-    // The authoritative check repeats under the ID lock while preparing.
+    // Each path repeats this check under the ID lock; legacy restore also
+    // rechecks after finalization and retains that lock through installation.
     let witnessed = witness.read_record(&decoded.source_vault_id)?.is_some();
     if decoded.source_format_version == V2_FORMAT_VERSION && !witnessed {
-        return restore_legacy(passphrase, decoded, target);
+        return restore_legacy(passphrase, decoded, target, &witness);
     }
     restore_transactional(passphrase, &decoded, &target, &witness, &target_key)
 }
