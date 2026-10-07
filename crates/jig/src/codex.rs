@@ -17,7 +17,7 @@ use self::home::{
     user_home,
 };
 use self::inspection::{inspect_home, inspection_failure};
-pub(crate) use self::resume::{normalize_session_id, resolve_resume_home_with_progress};
+pub(crate) use self::resume::{normalize_session_id, resolve_resume_home_with_cancellation};
 
 mod app_server;
 mod home;

@@ -28,7 +28,9 @@ fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
     let session_id = crate::codex::normalize_session_id(&opts.session_id)?;
     let home = match opts.home {
         Some(home) => Codex.resolve(&home)?,
-        None if json_output => Codex.resolve_session(&session_id, &mut |_, _| {})?,
+        None if json_output => {
+            resolve_session_with_signal_supervision(&session_id, &mut |_, _| {})?
+        }
         None => resolve_resume_home_with_cli_progress(&session_id)?,
     };
     let codex_args = resume_codex_args(session_id, opts.codex_args);
@@ -46,12 +48,23 @@ fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
 fn resolve_resume_home_with_cli_progress(session_id: &str) -> Result<PathBuf> {
     let progress = CliProgress::new("codex resume");
     progress.header("find the Codex home containing the session");
-    let result = Codex.resolve_session(session_id, &mut |completed, total| {
+    let result = resolve_session_with_signal_supervision(session_id, &mut |completed, total| {
         progress.step("inspect homes", format!("{completed}/{total}"))
     });
     let home = progress.log_blocked_on_err(result)?;
     progress.done("found the session's Codex home");
     Ok(home)
+}
+
+fn resolve_session_with_signal_supervision(
+    session_id: &str,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<PathBuf> {
+    crate::signal_supervision::supervise(
+        "Codex session lookup was not started because the process-wide signal session is unavailable",
+        "Codex session lookup signal supervision could not retire safely",
+        |cancelled| Codex.resolve_session(session_id, &cancelled, progress),
+    )
 }
 
 fn resume_codex_args(

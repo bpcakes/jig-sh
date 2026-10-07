@@ -26,18 +26,7 @@ pub(crate) fn normalize_session_id(input: &str) -> Result<String> {
     Ok(input.to_ascii_lowercase())
 }
 
-pub(crate) fn resolve_resume_home_with_progress<F>(thread_id: &str, progress: F) -> Result<PathBuf>
-where
-    F: FnMut(usize, usize),
-{
-    crate::signal_supervision::supervise(
-        "Codex session lookup was not started because the process-wide signal session is unavailable",
-        "Codex session lookup signal supervision could not retire safely",
-        |cancelled| resolve_resume_home_with_cancellation(thread_id, &cancelled, progress),
-    )
-}
-
-pub(super) fn resolve_resume_home_with_cancellation<F>(
+pub(crate) fn resolve_resume_home_with_cancellation<F>(
     thread_id: &str,
     cancelled: &(dyn Fn() -> bool + Sync),
     progress: F,

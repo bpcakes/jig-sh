@@ -79,9 +79,11 @@ pub(crate) trait AgentProvider {
 
 /// Optional capability: resolving sessions is not required of every agent provider.
 pub(crate) trait SessionProvider: AgentProvider {
+    /// Implementations must observe cancellation and retire their children before returning.
     fn resolve_session(
         &self,
         session: &str,
+        cancelled: &(dyn Fn() -> bool + Sync),
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Self::Home>;
 }
