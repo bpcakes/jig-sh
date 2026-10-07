@@ -413,6 +413,7 @@ fn status_propagates_damaged_witness_discovery_without_writing() {
     unrelated.init(&passphrase()).unwrap();
     let damaged = record_path(&temp, &unrelated);
     std::fs::write(&damaged, b"invalid witness record").unwrap();
+    let reported_path = format!("{:?}", std::fs::canonicalize(&damaged).unwrap());
     let journal = witness(&pending)
         .read_journal(&pending.target_key())
         .unwrap()
@@ -423,18 +424,12 @@ fn status_propagates_damaged_witness_discovery_without_writing() {
     });
     let error = status.unwrap_err();
     assert!(error.to_string().contains("pending vault transactions"));
-    assert!(
-        error.to_string().contains(&format!("{damaged:?}")),
-        "{error}"
-    );
+    assert!(error.to_string().contains(&reported_path), "{error}");
     assert!(error.to_string().contains("Operator step:"), "{error}");
     assert!(!error.to_string().contains("invalid witness record"));
     let error = unrelated.list_fields(&passphrase()).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::AuditTampered);
-    assert!(
-        error.to_string().contains(&format!("{damaged:?}")),
-        "{error}"
-    );
+    assert!(error.to_string().contains(&reported_path), "{error}");
     assert!(operations.is_empty());
     assert!(!pending.vault_path().exists());
     assert_eq!(std::fs::read(&damaged).unwrap(), b"invalid witness record");
