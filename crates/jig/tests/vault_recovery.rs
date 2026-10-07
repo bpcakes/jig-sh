@@ -18,6 +18,9 @@ const PASSPHRASE: &str = "test-only-recovery-passphrase";
 #[path = "vault_recovery_parts/rekey_policy.rs"]
 mod rekey_policy;
 
+#[path = "vault_recovery_parts/collisions.rs"]
+mod collisions;
+
 fn passphrase() -> SecretString {
     SecretString::from(PASSPHRASE.to_owned())
 }

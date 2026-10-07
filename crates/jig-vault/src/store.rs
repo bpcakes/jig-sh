@@ -431,12 +431,16 @@ impl VaultStore {
 fn inspect_home_state(root: &Path) -> AnyResult<VaultHomeState> {
     match fs::symlink_metadata(root) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
+            pending::reject_recorded_target_collision(root)?;
             bail!(
                 "Vault home {} must not be a symlink. Use a dedicated real directory.",
                 root.display()
             )
         }
-        Ok(_) => {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                pending::reject_recorded_target_collision(root)?;
+            }
             if text_file_exists_no_follow(&root.join(VAULT_FILE))? {
                 Ok(VaultHomeState::Initialized)
             } else {

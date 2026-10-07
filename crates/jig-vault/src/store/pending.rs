@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result as AnyResult};
 
 use crate::crypto::KdfParams;
+use crate::error::classified_recovery;
+use crate::{VaultErrorKind, VaultRecovery};
 
 use super::VaultStore;
 use super::witness::{self, WitnessLocation};
@@ -32,6 +34,10 @@ pub(super) fn pending_absent_target(
 ) -> AnyResult<Option<VaultStore>> {
     match fs::symlink_metadata(root) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(metadata) if !metadata.is_dir() => {
+            reject_recorded_target_collision(root)?;
+            return Ok(None);
+        }
         _ => return Ok(None),
     }
     let Some(target) = final_target(root) else {
@@ -47,6 +53,24 @@ pub(super) fn pending_absent_target(
         initialization_kdf.clone(),
         witness,
     )))
+}
+
+/// Annotate an already-refused non-directory leaf without following it or
+/// mutating the target, journal, or witness. Ordinary invalid homes retain
+/// their usual diagnostics; only a recorded target needs recovery routing.
+pub(super) fn reject_recorded_target_collision(root: &Path) -> AnyResult<()> {
+    let Some(target) = final_target(root) else {
+        return Ok(());
+    };
+    let witness = WitnessLocation::for_home(&target)?;
+    if transaction_recorded(&witness, &target)? {
+        return Err(classified_recovery(
+            VaultErrorKind::Io,
+            VaultRecovery::StorageConflict,
+            "Pending vault target is occupied by a non-directory entry; refusing to replace or follow it.",
+        ));
+    }
+    Ok(())
 }
 
 fn transaction_recorded(witness: &WitnessLocation, target: &Path) -> AnyResult<bool> {

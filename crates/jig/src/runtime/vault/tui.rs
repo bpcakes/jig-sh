@@ -109,7 +109,8 @@ impl VaultTuiBackend {
         let resolved = resolve_vault_runtime(&request.vault)?;
         // `Vault::status` is deliberately non-creating, so an absent target
         // remains truly absent for the future restore flow.
-        let status = Vault::status(resolved.home.clone())?;
+        let status = Vault::status(resolved.home.clone())
+            .map_err(super::recovery::vault_operator_guidance)?;
         let descriptor = VaultDescriptor {
             scope: resolved.scope.to_owned(),
             scope_id: resolved.scope_id.clone(),

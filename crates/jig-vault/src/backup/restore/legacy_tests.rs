@@ -15,8 +15,16 @@ use crate::test_fixtures::{
 
 type Hook = Option<Box<dyn FnOnce()>>;
 thread_local! {
+    static BEFORE_FINALIZE: RefCell<Hook> = const { RefCell::new(None) };
     static BEFORE_LOCK: RefCell<Hook> = const { RefCell::new(None) };
     static BEFORE_INSTALL: RefCell<Hook> = const { RefCell::new(None) };
+}
+
+pub(super) fn before_finalize() {
+    let hook = BEFORE_FINALIZE.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
 }
 
 pub(super) fn before_install_lock() {
@@ -37,6 +45,7 @@ struct ClearHooks;
 
 impl Drop for ClearHooks {
     fn drop(&mut self) {
+        BEFORE_FINALIZE.with(|slot| slot.borrow_mut().take());
         BEFORE_LOCK.with(|slot| slot.borrow_mut().take());
         BEFORE_INSTALL.with(|slot| slot.borrow_mut().take());
     }
@@ -49,6 +58,67 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     fs::write(&archive, GENERATED_V2_BACKUP).unwrap();
     let target = temp.path().join("restored");
     (temp, archive, target)
+}
+
+#[test]
+fn pending_migration_before_legacy_finalization_preserves_recovery_metadata() {
+    let (temp, archive, target) = fixture();
+    let source_home = temp.path().join("source");
+    let store = VaultStore::resolve_for_test(Some(source_home.clone())).unwrap();
+    install_generated_v2_fixture(&store);
+    let source = Vault::resolve_for_test(Some(source_home.clone())).unwrap();
+    let original = fs::read(source_home.join(VAULT_FILE)).unwrap();
+    let request = Vault::preflight_backup_restore(&archive, target.clone()).unwrap();
+    let _clear = ClearHooks;
+    BEFORE_FINALIZE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            // Restore selected the unwitnessed legacy path and created its
+            // staging. Publish a same-ID migration before staging opens for
+            // authenticated finalization, then leave that migration pending.
+            std::thread::spawn(move || {
+                store.arm_fault_for_test(crate::store::FaultPoint::AfterPending);
+                let error = source
+                    .migrate(&generated_v2_passphrase(), V3_FORMAT_VERSION)
+                    .unwrap_err();
+                assert_eq!(error.kind(), VaultErrorKind::Io);
+            })
+            .join()
+            .unwrap();
+        }));
+    });
+
+    let error = Vault::restore_backup(&generated_v2_passphrase(), request).unwrap_err();
+    assert!(BEFORE_FINALIZE.with(|slot| slot.borrow().is_none()));
+    assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
+    assert_eq!(error.recovery(), Some(VaultRecovery::StorageConflict));
+    assert!(!target.exists());
+    assert_eq!(fs::read(source_home.join(VAULT_FILE)).unwrap(), original);
+    assert!(
+        Vault::status(Some(source_home.clone()))
+            .unwrap()
+            .pending_transaction
+    );
+    assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("jig-vault-restore")
+    }));
+
+    // The conflicting restore must retain the source's recovery journal:
+    // an authenticated source open can still complete its recorded migration.
+    let source = Vault::resolve_for_test(Some(source_home.clone())).unwrap();
+    assert_eq!(
+        source
+            .list_fields(&generated_v2_passphrase())
+            .unwrap()
+            .len(),
+        2
+    );
+    let status = Vault::status(Some(source_home)).unwrap();
+    assert!(!status.pending_transaction);
+    assert_eq!(status.format_version, Some(V3_FORMAT_VERSION));
 }
 
 #[test]

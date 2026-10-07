@@ -284,6 +284,8 @@ fn restore_legacy(
 
         let staged_store = VaultStore::open_existing(staging.path().to_path_buf())
             .map_err(vault_error_as_classified)?;
+        #[cfg(test)]
+        legacy_tests::before_finalize();
         staged_store
             .finalize_backup_restore(
                 passphrase,
@@ -544,7 +546,7 @@ fn sync_directory(path: &Path) -> AnyResult<()> {
 }
 
 fn vault_error_as_classified(error: VaultError) -> anyhow::Error {
-    classified(error.kind(), error.to_string())
+    error.into_classified_anyhow()
 }
 
 #[cfg(test)]

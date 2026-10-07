@@ -36,6 +36,10 @@ static CAPTURED_PASSPHRASES: Mutex<CapturedPassphrases> = Mutex::new(CapturedPas
 });
 
 pub(crate) fn preflight_scoped_command(command: &mut VaultCommand) -> Result<()> {
+    preflight_scoped_command_inner(command).map_err(super::recovery::operator_guidance)
+}
+
+fn preflight_scoped_command_inner(command: &mut VaultCommand) -> Result<()> {
     match command {
         VaultCommand::Backup(VaultBackupCommand::Create(request)) => {
             if request.output == Path::new("-") {
