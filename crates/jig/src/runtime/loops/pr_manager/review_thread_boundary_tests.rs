@@ -10,9 +10,9 @@ mod review_thread_boundary_tests {
 
     struct CancelledControl;
 
-    impl crate::execution::ExecutionObserver for CancelledControl {}
+    impl jig_execution::ExecutionObserver for CancelledControl {}
 
-    impl crate::execution::ExecutionCancellation for CancelledControl {
+    impl jig_execution::ExecutionCancellation for CancelledControl {
         fn cancelled(&self) -> bool {
             true
         }

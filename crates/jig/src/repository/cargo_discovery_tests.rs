@@ -1,10 +1,10 @@
 use std::fs;
 
+use jig_execution::NoopExecutionObserver;
 use serde_json::json;
 use tempfile::tempdir;
 
 use super::*;
-use crate::execution::NoopExecutionObserver;
 
 pub(super) fn fixture_metadata(root: &Path) -> Vec<u8> {
     let package_id = "path+file:///workspace#ExampleWorkspace@0.1.0";

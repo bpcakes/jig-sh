@@ -12,6 +12,11 @@ use cap_std::{
     fs::{Dir, OpenOptions as CapabilityOpenOptions},
 };
 use jig_context::RepoContext;
+use jig_execution::{
+    ExecutionCommandOutput, ExecutionControl, NoopExecutionObserver, SupervisedExecutionError,
+    execution_command_error, internal_execution_output_limit, run_authoritative_execution_command,
+    run_supervised_execution_command,
+};
 use jig_owned_process::{OwnedProcessOutputStream, ProcessOutputOverflowPolicy};
 use serde_json::{Value, json};
 
@@ -19,11 +24,6 @@ use super::occurrence::OccurrenceWorktreeReservation;
 use super::workflow::{
     CodexTaskCheckout, CodexTaskSettings, RepositoryRevisionState, ResolvedWorkflow,
     UnexecutedReason, WorkflowCompletion, WorkflowExecution, WorkflowOutcome, WorkflowTick,
-};
-use crate::execution::{
-    ExecutionCommandOutput, ExecutionControl, NoopExecutionObserver, SupervisedExecutionError,
-    execution_command_error, internal_execution_output_limit, run_authoritative_execution_command,
-    run_supervised_execution_command,
 };
 use crate::runtime::worker_runner::{
     CodexExecOutcome, CodexExecRequest, WorkerRunLabel, run_codex_exec,

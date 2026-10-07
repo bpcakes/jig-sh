@@ -7,13 +7,11 @@ use std::{
 
 use jig_context::CommandOutputLimit;
 use jig_contract::RustTargetV1;
+use jig_execution::{NoopExecutionObserver, run_supervised_execution_command};
 use tempfile::{TempDir, tempdir};
 
 use super::*;
-use crate::{
-    execution::{NoopExecutionObserver, run_supervised_execution_command},
-    test_env::TestRepoBuilder,
-};
+use crate::test_env::TestRepoBuilder;
 
 pub(super) fn owned_command(root: &Path, command: &mut Command) -> Output {
     command

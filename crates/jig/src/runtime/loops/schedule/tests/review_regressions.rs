@@ -20,9 +20,9 @@ use crate::test_env::{EnvVarGuard, lock_env};
 
 struct CancelAfterScheduleClaim(PathBuf);
 
-impl crate::execution::ExecutionObserver for CancelAfterScheduleClaim {}
+impl jig_execution::ExecutionObserver for CancelAfterScheduleClaim {}
 
-impl crate::execution::ExecutionCancellation for CancelAfterScheduleClaim {
+impl jig_execution::ExecutionCancellation for CancelAfterScheduleClaim {
     fn cancelled(&self) -> bool {
         fs::read_to_string(&self.0).is_ok_and(|state| state.contains("\"status\": \"running\""))
     }
@@ -32,10 +32,10 @@ impl crate::execution::ExecutionCancellation for CancelAfterScheduleClaim {
 struct CancelAfterWorkflowLease(PathBuf);
 
 #[cfg(unix)]
-impl crate::execution::ExecutionObserver for CancelAfterWorkflowLease {}
+impl jig_execution::ExecutionObserver for CancelAfterWorkflowLease {}
 
 #[cfg(unix)]
-impl crate::execution::ExecutionCancellation for CancelAfterWorkflowLease {
+impl jig_execution::ExecutionCancellation for CancelAfterWorkflowLease {
     fn cancelled(&self) -> bool {
         fs::read_to_string(&self.0).is_ok_and(|state| state.contains("checkout:repo"))
     }

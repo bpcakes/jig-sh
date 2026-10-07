@@ -1,8 +1,8 @@
 use anyhow::Result;
 use jig_context::RepoContext;
+use jig_execution::ExecutionControl;
 use serde_json::{Value, json};
 
-use crate::execution::ExecutionControl;
 use crate::tool_defs::{args, tool};
 
 use super::tool_execution;

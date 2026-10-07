@@ -95,7 +95,7 @@ fn execute_alias(ctx: &RepoContext, values: Value) -> anyhow::Result<Value> {
         ctx,
         ALIAS,
         values,
-        &mut crate::execution::NoopExecutionObserver,
+        &mut jig_execution::NoopExecutionObserver,
     )
 }
 
@@ -246,12 +246,12 @@ fn argv_running_cancellation_stops_the_owned_process_and_descendant() {
         output: Vec<u8>,
         descendant: Option<crate::test_process::TestProcessIdentity>,
     }
-    impl crate::execution::ExecutionObserver for CancelOnDescendant {
-        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+    impl jig_execution::ExecutionObserver for CancelOnDescendant {
+        fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
             if self.descendant.is_some() {
                 return;
             }
-            let crate::execution::ExecutionEvent::Output { bytes, .. } = event else {
+            let jig_execution::ExecutionEvent::Output { bytes, .. } = event else {
                 return;
             };
             self.output.extend_from_slice(bytes);
@@ -267,7 +267,7 @@ fn argv_running_cancellation_stops_the_owned_process_and_descendant() {
             }
         }
     }
-    impl crate::execution::ExecutionCancellation for CancelOnDescendant {
+    impl jig_execution::ExecutionCancellation for CancelOnDescendant {
         fn cancelled(&self) -> bool {
             self.descendant.is_some()
         }

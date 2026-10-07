@@ -419,7 +419,7 @@ mod tests {
                 "review_threads": {"page_info": {"truncated": true}},
             }],
         });
-        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut observer = jig_execution::NoopExecutionObserver;
 
         let tick = pr_manager_tick_from_snapshot(
             &ctx,
@@ -501,7 +501,7 @@ mod tests {
                 }
             ],
         });
-        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut observer = jig_execution::NoopExecutionObserver;
 
         let tick = pr_manager_tick_from_snapshot(
             &ctx,
@@ -601,7 +601,7 @@ mod tests {
             &workflow,
             &item,
             None,
-            &mut crate::execution::NoopExecutionObserver,
+            &mut jig_execution::NoopExecutionObserver,
         )
         .unwrap_err();
         let PrRepairStepError::Failed(advanced) = advanced.source else {
@@ -625,7 +625,7 @@ mod tests {
             &workflow,
             &item,
             None,
-            &mut crate::execution::NoopExecutionObserver,
+            &mut jig_execution::NoopExecutionObserver,
         )
         .unwrap_err();
         let PrRepairStepError::Failed(rewound) = rewound.source else {

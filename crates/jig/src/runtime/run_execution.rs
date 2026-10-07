@@ -12,6 +12,11 @@ use jig_contract::{
     ActionEffect, ActionRunner, Finding, FindingSeverity, PlannedTarget, ResultParser,
     RunConclusion, RunPlan, RunStatus, TargetId, TargetRunResult,
 };
+use jig_execution::{
+    CompletedExecutionPhase, ExecutionCancellation, ExecutionControl, ExecutionEvent,
+    ExecutionObserver, ExecutionPhase, ExecutionStream, PhasePosition, SupervisedExecutionError,
+    run_supervised_execution_command,
+};
 use jig_owned_process::OwnedProcessTreeError;
 #[cfg(test)]
 use jig_state::start_run;
@@ -21,11 +26,6 @@ use jig_state::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::execution::{
-    CompletedExecutionPhase, ExecutionCancellation, ExecutionControl, ExecutionEvent,
-    ExecutionObserver, ExecutionPhase, ExecutionStream, PhasePosition, SupervisedExecutionError,
-    run_supervised_execution_command,
-};
 use crate::repository::{RepositoryCatalog, target_input_digest};
 
 use super::tool_execution::run_native_tool_with_control;

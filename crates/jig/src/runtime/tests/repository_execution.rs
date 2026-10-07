@@ -9,9 +9,9 @@ struct LeaseWaitObserver {
     wait_notice: Option<std::sync::mpsc::SyncSender<()>>,
 }
 
-impl crate::execution::ExecutionObserver for LeaseWaitObserver {
-    fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
-        if let crate::execution::ExecutionEvent::Output { bytes, .. } = event {
+impl jig_execution::ExecutionObserver for LeaseWaitObserver {
+    fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
+        if let jig_execution::ExecutionEvent::Output { bytes, .. } = event {
             self.output.extend_from_slice(bytes);
             if self.cancel_on_wait {
                 self.cancelled = true;
@@ -28,7 +28,7 @@ impl crate::execution::ExecutionObserver for LeaseWaitObserver {
     }
 }
 
-impl crate::execution::ExecutionCancellation for LeaseWaitObserver {
+impl jig_execution::ExecutionCancellation for LeaseWaitObserver {
     fn cancelled(&self) -> bool {
         self.cancelled
     }
@@ -40,30 +40,30 @@ struct PhaseRecordingObserver {
     finished: Vec<(String, bool)>,
 }
 
-impl crate::execution::ExecutionObserver for PhaseRecordingObserver {
-    fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+impl jig_execution::ExecutionObserver for PhaseRecordingObserver {
+    fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
         match event {
-            crate::execution::ExecutionEvent::PhaseStarted { label, .. } => {
+            jig_execution::ExecutionEvent::PhaseStarted { label, .. } => {
                 self.started.push(label.to_owned());
             }
-            crate::execution::ExecutionEvent::PhaseFinished { label, success, .. } => {
+            jig_execution::ExecutionEvent::PhaseFinished { label, success, .. } => {
                 self.finished.push((label.to_owned(), success));
             }
-            crate::execution::ExecutionEvent::Output { .. }
-            | crate::execution::ExecutionEvent::Heartbeat { .. } => {}
+            jig_execution::ExecutionEvent::Output { .. }
+            | jig_execution::ExecutionEvent::Heartbeat { .. } => {}
         }
     }
 }
 
-impl crate::execution::ExecutionCancellation for PhaseRecordingObserver {}
+impl jig_execution::ExecutionCancellation for PhaseRecordingObserver {}
 
 struct MarkerCancellationObserver {
     marker: std::path::PathBuf,
 }
 
-impl crate::execution::ExecutionObserver for MarkerCancellationObserver {}
+impl jig_execution::ExecutionObserver for MarkerCancellationObserver {}
 
-impl crate::execution::ExecutionCancellation for MarkerCancellationObserver {
+impl jig_execution::ExecutionCancellation for MarkerCancellationObserver {
     fn cancelled(&self) -> bool {
         self.marker.exists()
     }
@@ -104,7 +104,7 @@ fn empty_freshly_planned_check_rejects_source_drift_before_creating_a_run() {
     assert!(plan.targets.is_empty());
     fs::write(temp.path().join("api/example.go"), "package changed\n").unwrap();
 
-    let mut observer = crate::execution::NoopExecutionObserver;
+    let mut observer = jig_execution::NoopExecutionObserver;
     let error = super::run_execution::execute_freshly_planned_check_run(
         &ctx,
         &catalog,
@@ -144,7 +144,7 @@ fn freshly_planned_check_rejects_authority_that_changed_before_planning() {
     )
     .unwrap();
 
-    let mut observer = crate::execution::NoopExecutionObserver;
+    let mut observer = jig_execution::NoopExecutionObserver;
     let error = super::run_execution::execute_freshly_planned_check_run(
         &ctx,
         &catalog,

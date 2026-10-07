@@ -4,7 +4,7 @@ use anyhow::Result;
 use jig_context::RepoContext;
 use serde::Serialize;
 
-use crate::execution::NoopExecutionObserver;
+use jig_execution::NoopExecutionObserver;
 
 use super::super::git_output;
 

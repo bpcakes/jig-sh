@@ -1,10 +1,10 @@
 use anyhow::{Result, bail};
 use jig_context::RepoContext;
+use jig_execution::{AdditionalCancellationControl, ExecutionControl};
 use jig_state::now_ms;
 use serde_json::{Value, json};
 
 use crate::command::LoopTickRequest;
-use crate::execution::{AdditionalCancellationControl, ExecutionControl};
 
 use super::evidence::{self, OccurrenceEvidence};
 use super::occurrence::OccurrenceWorktreeReservation;

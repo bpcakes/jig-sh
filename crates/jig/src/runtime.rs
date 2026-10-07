@@ -4,9 +4,9 @@ use std::ffi::OsStr;
 use std::time::Duration;
 
 use jig_context::RepoContext;
+use jig_execution::{ExecutionControl, NoopExecutionObserver};
 
 use crate::command::{AgentMapCommand, CheckCommand, NamedCheck, RuntimeCommand, StateCommand};
-use crate::execution::{ExecutionControl, NoopExecutionObserver};
 use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     SqlxTodoInput,

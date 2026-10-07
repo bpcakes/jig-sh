@@ -103,7 +103,7 @@ printf '%s\n' '{}'
             &ctx,
             Vec::new(),
             gh.as_os_str(),
-            &mut crate::execution::NoopExecutionObserver,
+            &mut jig_execution::NoopExecutionObserver,
         )
         .unwrap();
 
@@ -177,7 +177,7 @@ esac
             default_branch: "main".into(),
             value: json!({}),
         };
-        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut observer = jig_execution::NoopExecutionObserver;
         let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
 
         let snapshot = review_threads_snapshot(
@@ -236,7 +236,7 @@ esac
             default_branch: "main".into(),
             value: json!({}),
         };
-        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut observer = jig_execution::NoopExecutionObserver;
         let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
 
         let snapshot = review_threads_snapshot(
@@ -371,7 +371,7 @@ esac
         let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
         let _log = EnvVarGuard::set("JIG_TEST_GH_LOG", log.as_os_str());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut observer = jig_execution::NoopExecutionObserver;
 
         let snapshot = github_pr_status_snapshot(&ctx, &mut observer).unwrap();
 
@@ -437,7 +437,7 @@ esac
         let _pr_list = EnvVarGuard::set("JIG_TEST_PR_LIST", OsStr::new(&pull_requests));
         let _log = EnvVarGuard::set("JIG_TEST_GH_LOG", log.as_os_str());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut observer = jig_execution::NoopExecutionObserver;
 
         let snapshot = github_pr_status_snapshot(&ctx, &mut observer).unwrap();
 
@@ -485,7 +485,7 @@ printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCoun
             default_branch: "main".into(),
             value: json!({}),
         };
-        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut observer = jig_execution::NoopExecutionObserver;
         let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
 
         let snapshot = review_threads_snapshot(
@@ -542,7 +542,7 @@ esac
             default_branch: "main".into(),
             value: json!({}),
         };
-        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut observer = jig_execution::NoopExecutionObserver;
         let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
 
         let snapshot = review_threads_snapshot(
@@ -596,7 +596,7 @@ esac
             value: json!({}),
         };
         let mut cache = RepositoryPermissionCache::default();
-        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut observer = jig_execution::NoopExecutionObserver;
         let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
 
         let maintainer = cache
@@ -620,9 +620,9 @@ esac
     fn gh_execution_honors_in_flight_cancellation() {
         struct CancelAfterStart(PathBuf);
 
-        impl crate::execution::ExecutionObserver for CancelAfterStart {}
+        impl jig_execution::ExecutionObserver for CancelAfterStart {}
 
-        impl crate::execution::ExecutionCancellation for CancelAfterStart {
+        impl jig_execution::ExecutionCancellation for CancelAfterStart {
             fn cancelled(&self) -> bool {
                 self.0.exists()
             }

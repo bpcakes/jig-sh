@@ -59,6 +59,7 @@ jig-contract.workspace = true
 jig-codex-tui.workspace = true
 jig-core.workspace = true
 jig-dev-proxy = { workspace = true, optional = true }
+jig-execution.workspace = true
 jig-features.workspace = true
 jig-file-budget.workspace = true
 jig-git.workspace = true

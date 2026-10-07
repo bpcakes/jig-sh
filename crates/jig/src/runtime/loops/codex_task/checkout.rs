@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::execution::NoopExecutionObserver;
+use jig_execution::NoopExecutionObserver;
 
 use super::{RepositoryRevisionState, git_is_dirty, git_stdout, remove_worktree};
 

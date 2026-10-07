@@ -21,9 +21,9 @@ mod preparation_tests {
 
     struct CancelWhenPresent(PathBuf);
 
-    impl crate::execution::ExecutionObserver for CancelWhenPresent {}
+    impl jig_execution::ExecutionObserver for CancelWhenPresent {}
 
-    impl crate::execution::ExecutionCancellation for CancelWhenPresent {
+    impl jig_execution::ExecutionCancellation for CancelWhenPresent {
         fn cancelled(&self) -> bool {
             self.0.exists()
         }

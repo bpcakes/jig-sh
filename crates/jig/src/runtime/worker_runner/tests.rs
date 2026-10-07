@@ -21,21 +21,21 @@ mod tests {
         output: Vec<u8>,
     }
 
-    impl crate::execution::ExecutionObserver for RecordingControl {
-        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
-            if let crate::execution::ExecutionEvent::Output { bytes, .. } = event {
+    impl jig_execution::ExecutionObserver for RecordingControl {
+        fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
+            if let jig_execution::ExecutionEvent::Output { bytes, .. } = event {
                 self.output.extend_from_slice(bytes);
             }
         }
     }
 
-    impl crate::execution::ExecutionCancellation for RecordingControl {}
+    impl jig_execution::ExecutionCancellation for RecordingControl {}
 
     struct CancelledControl;
 
-    impl crate::execution::ExecutionObserver for CancelledControl {}
+    impl jig_execution::ExecutionObserver for CancelledControl {}
 
-    impl crate::execution::ExecutionCancellation for CancelledControl {
+    impl jig_execution::ExecutionCancellation for CancelledControl {
         fn cancelled(&self) -> bool {
             true
         }
@@ -193,7 +193,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let output_path = temp.path().join("authoritative-output");
         fs::write(&output_path, b"result").unwrap();
-        let mut control = crate::execution::NoopExecutionObserver;
+        let mut control = jig_execution::NoopExecutionObserver;
         let mut observer = WorkerProcessObserver::new(
             ProcessExecutionObserver::new(&mut control, "test worker"),
             Some(&output_path),
@@ -235,7 +235,7 @@ mod tests {
             "test worker",
             ProcessOutputOverflowPolicy::Error,
             None,
-            &mut crate::execution::NoopExecutionObserver,
+            &mut jig_execution::NoopExecutionObserver,
         )
         .unwrap_err()
         .to_string();
@@ -264,7 +264,7 @@ mod tests {
             "test worker",
             ProcessOutputOverflowPolicy::Truncate,
             None,
-            &mut crate::execution::NoopExecutionObserver,
+            &mut jig_execution::NoopExecutionObserver,
         )
         .unwrap();
 
@@ -300,7 +300,7 @@ mod tests {
             "test worker",
             ProcessOutputOverflowPolicy::Truncate,
             Some(output_file.path()),
-            &mut crate::execution::NoopExecutionObserver,
+            &mut jig_execution::NoopExecutionObserver,
         )
         .unwrap_err()
         .to_string();
@@ -378,7 +378,7 @@ printf 'authoritative result\n' > "$out"
                 },
                 phase: None,
             },
-            &mut crate::execution::NoopExecutionObserver,
+            &mut jig_execution::NoopExecutionObserver,
         )
         .unwrap();
         let CodexExecOutcome::Completed(output) = outcome else {
@@ -427,7 +427,7 @@ wait
             "test worker",
             ProcessOutputOverflowPolicy::Error,
             None,
-            &mut crate::execution::NoopExecutionObserver,
+            &mut jig_execution::NoopExecutionObserver,
         )
         .unwrap_err()
         .to_string();

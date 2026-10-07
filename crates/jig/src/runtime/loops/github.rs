@@ -8,7 +8,7 @@ use jig_context::{CommandTimeout, RepoContext};
 use jig_state::now_ms;
 use serde_json::{Value, json};
 
-use crate::execution::{
+use jig_execution::{
     ExecutionCommandError, ExecutionControl, run_authoritative_execution_command_for_duration,
 };
 use jig_git::scrub_known_repository_git_environment;
@@ -620,7 +620,7 @@ fn run_gh_with_program_duration(
     let output = run_authoritative_execution_command_for_duration(
         &mut command,
         timeout,
-        crate::execution::internal_execution_output_limit(),
+        jig_execution::internal_execution_output_limit(),
         &execution_label,
         observer,
     )?;

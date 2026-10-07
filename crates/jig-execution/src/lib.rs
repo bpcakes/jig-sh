@@ -1,3 +1,6 @@
+//! Supervised execution of Jig-owned commands: bounded output capture,
+//! timeouts, cancellation, heartbeats, and phase observers.
+
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::process::{Command, ExitStatus, Stdio};
@@ -12,24 +15,24 @@ use jig_owned_process::{
 
 use jig_context::{CommandOutputLimit, CommandTimeout};
 
-pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
-pub(crate) const EXECUTION_OUTPUT_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
+pub const EXECUTION_OUTPUT_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
 const MAX_OVERFLOW_DIAGNOSTIC_BYTES: usize = 64 * 1024;
 
-pub(crate) fn internal_execution_output_limit() -> CommandOutputLimit {
+pub fn internal_execution_output_limit() -> CommandOutputLimit {
     CommandOutputLimit::from_bytes(EXECUTION_OUTPUT_CAPTURE_LIMIT as u64)
         .expect("internal execution output limit is valid")
 }
 
 #[derive(Debug)]
-pub(crate) struct ExecutionCommandOutput {
-    pub(crate) status: ExitStatus,
-    pub(crate) stdout: Vec<u8>,
-    pub(crate) stderr: Vec<u8>,
+pub struct ExecutionCommandOutput {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
 #[derive(Debug)]
-pub(crate) enum SupervisedExecutionError {
+pub enum SupervisedExecutionError {
     CancelledBeforeStart,
     Cancelled,
     TimedOut,
@@ -45,7 +48,7 @@ pub(crate) enum SupervisedExecutionError {
 }
 
 #[derive(Debug)]
-pub(crate) enum ExecutionCommandError {
+pub enum ExecutionCommandError {
     CancelledBeforeStart,
     Cancelled,
     Failed {
@@ -55,21 +58,21 @@ pub(crate) enum ExecutionCommandError {
 }
 
 impl ExecutionCommandError {
-    pub(crate) fn failed(error: impl Into<anyhow::Error>) -> Self {
+    pub fn failed(error: impl Into<anyhow::Error>) -> Self {
         Self::Failed {
             error: error.into(),
             process_started: false,
         }
     }
 
-    pub(crate) fn failed_after_start(error: impl Into<anyhow::Error>) -> Self {
+    pub fn failed_after_start(error: impl Into<anyhow::Error>) -> Self {
         Self::Failed {
             error: error.into(),
             process_started: true,
         }
     }
 
-    pub(crate) fn into_anyhow(self) -> anyhow::Error {
+    pub fn into_anyhow(self) -> anyhow::Error {
         match self {
             Self::CancelledBeforeStart => anyhow!("Execution was cancelled before it started"),
             Self::Cancelled => anyhow!("Execution was cancelled"),
@@ -105,7 +108,7 @@ impl From<anyhow::Error> for ExecutionCommandError {
     }
 }
 
-pub(crate) fn run_authoritative_execution_command(
+pub fn run_authoritative_execution_command(
     command: &mut Command,
     timeout: CommandTimeout,
     output_limit: CommandOutputLimit,
@@ -121,7 +124,7 @@ pub(crate) fn run_authoritative_execution_command(
     )
 }
 
-pub(crate) fn run_authoritative_execution_command_for_duration(
+pub fn run_authoritative_execution_command_for_duration(
     command: &mut Command,
     timeout: Duration,
     output_limit: CommandOutputLimit,
@@ -135,7 +138,7 @@ pub(crate) fn run_authoritative_execution_command_for_duration(
 /// Runs a repository-owned command under the complete non-interactive process
 /// policy. Callers cannot accidentally inherit stdin, skip capture, or choose a
 /// truncating overflow policy by partially configuring `command` themselves.
-pub(crate) fn run_supervised_execution_command(
+pub fn run_supervised_execution_command(
     command: &mut Command,
     timeout: Duration,
     output_limit: CommandOutputLimit,
@@ -172,7 +175,7 @@ pub(crate) fn run_supervised_execution_command(
     })
 }
 
-pub(crate) fn execution_command_error(
+pub fn execution_command_error(
     error: SupervisedExecutionError,
     timeout: CommandTimeout,
     output_limit: CommandOutputLimit,
@@ -352,42 +355,42 @@ mod capture_tests {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PhasePosition {
+pub struct PhasePosition {
     current: NonZeroUsize,
     total: NonZeroUsize,
 }
 
 impl PhasePosition {
-    pub(crate) const fn single() -> Self {
+    pub const fn single() -> Self {
         Self {
             current: NonZeroUsize::MIN,
             total: NonZeroUsize::MIN,
         }
     }
 
-    pub(crate) fn new(current: usize, total: usize) -> Option<Self> {
+    pub fn new(current: usize, total: usize) -> Option<Self> {
         let current = NonZeroUsize::new(current)?;
         let total = NonZeroUsize::new(total)?;
         (current <= total).then_some(Self { current, total })
     }
 
-    pub(crate) const fn current(self) -> usize {
+    pub const fn current(self) -> usize {
         self.current.get()
     }
 
-    pub(crate) const fn total(self) -> usize {
+    pub const fn total(self) -> usize {
         self.total.get()
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ExecutionStream {
+pub enum ExecutionStream {
     Stdout,
     Stderr,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum ExecutionEvent<'a> {
+pub enum ExecutionEvent<'a> {
     PhaseStarted {
         label: &'a str,
         position: PhasePosition,
@@ -407,7 +410,7 @@ pub(crate) enum ExecutionEvent<'a> {
     },
 }
 
-pub(crate) trait ExecutionObserver {
+pub trait ExecutionObserver {
     fn event(&mut self, _event: ExecutionEvent<'_>) {}
 
     /// Delivers events buffered since the previous successful flush.
@@ -418,23 +421,23 @@ pub(crate) trait ExecutionObserver {
     }
 }
 
-pub(crate) trait ExecutionCancellation {
+pub trait ExecutionCancellation {
     fn cancelled(&self) -> bool {
         false
     }
 }
 
-pub(crate) trait ExecutionControl: ExecutionObserver + ExecutionCancellation {}
+pub trait ExecutionControl: ExecutionObserver + ExecutionCancellation {}
 
 impl<T> ExecutionControl for T where T: ExecutionObserver + ExecutionCancellation + ?Sized {}
 
-pub(crate) struct AdditionalCancellationControl<'a> {
+pub struct AdditionalCancellationControl<'a> {
     control: &'a mut dyn ExecutionControl,
     additional_cancelled: &'a dyn Fn() -> bool,
 }
 
 impl<'a> AdditionalCancellationControl<'a> {
-    pub(crate) fn new(
+    pub fn new(
         control: &'a mut dyn ExecutionControl,
         additional_cancelled: &'a dyn Fn() -> bool,
     ) -> Self {
@@ -461,23 +464,23 @@ impl ExecutionCancellation for AdditionalCancellationControl<'_> {
     }
 }
 
-pub(crate) struct NoopExecutionObserver;
+pub struct NoopExecutionObserver;
 
 impl ExecutionObserver for NoopExecutionObserver {}
 impl ExecutionCancellation for NoopExecutionObserver {}
 
-pub(crate) struct ExecutionPhase<'a> {
+pub struct ExecutionPhase<'a> {
     label: &'a str,
     started: Instant,
 }
 
-pub(crate) struct CompletedExecutionPhase {
+pub struct CompletedExecutionPhase {
     label: String,
     elapsed: Duration,
 }
 
 impl<'a> ExecutionPhase<'a> {
-    pub(crate) fn start<O: ExecutionObserver + ?Sized>(
+    pub fn start<O: ExecutionObserver + ?Sized>(
         observer: &mut O,
         label: &'a str,
         position: PhasePosition,
@@ -487,7 +490,7 @@ impl<'a> ExecutionPhase<'a> {
         Self { label, started }
     }
 
-    pub(crate) fn finish<O: ExecutionObserver + ?Sized>(self, observer: &mut O, success: bool) {
+    pub fn finish<O: ExecutionObserver + ?Sized>(self, observer: &mut O, success: bool) {
         observer.event(ExecutionEvent::PhaseFinished {
             label: self.label,
             success,
@@ -495,7 +498,7 @@ impl<'a> ExecutionPhase<'a> {
         });
     }
 
-    pub(crate) fn complete_owned(self) -> CompletedExecutionPhase {
+    pub fn complete_owned(self) -> CompletedExecutionPhase {
         CompletedExecutionPhase {
             label: self.label.to_owned(),
             elapsed: self.started.elapsed(),
@@ -504,7 +507,7 @@ impl<'a> ExecutionPhase<'a> {
 }
 
 impl CompletedExecutionPhase {
-    pub(crate) fn finish<O: ExecutionObserver + ?Sized>(self, observer: &mut O, success: bool) {
+    pub fn finish<O: ExecutionObserver + ?Sized>(self, observer: &mut O, success: bool) {
         observer.event(ExecutionEvent::PhaseFinished {
             label: &self.label,
             success,
@@ -514,18 +517,24 @@ impl CompletedExecutionPhase {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct HeartbeatSchedule {
+pub struct HeartbeatSchedule {
     next: Option<Duration>,
 }
 
+impl Default for HeartbeatSchedule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HeartbeatSchedule {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             next: Some(HEARTBEAT_INTERVAL),
         }
     }
 
-    pub(crate) fn due(&mut self, elapsed: Duration) -> bool {
+    pub fn due(&mut self, elapsed: Duration) -> bool {
         let Some(next) = self.next else {
             return false;
         };
@@ -543,7 +552,7 @@ impl HeartbeatSchedule {
     }
 }
 
-pub(crate) struct ProcessExecutionObserver<'a> {
+pub struct ProcessExecutionObserver<'a> {
     control: &'a mut dyn ExecutionControl,
     label: &'a str,
     heartbeat: HeartbeatSchedule,
@@ -603,7 +612,7 @@ impl OwnedProcessObserver for CapturingProcessExecutionObserver<'_> {
 }
 
 impl<'a> ProcessExecutionObserver<'a> {
-    pub(crate) fn new(control: &'a mut dyn ExecutionControl, label: &'a str) -> Self {
+    pub fn new(control: &'a mut dyn ExecutionControl, label: &'a str) -> Self {
         Self {
             control,
             label,

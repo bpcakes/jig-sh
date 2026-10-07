@@ -108,7 +108,7 @@ printf 'ExampleProject worker completed\n' > "$out"
 
 fn dispatch(
     ctx: &RepoContext,
-    observer: &mut dyn crate::execution::ExecutionControl,
+    observer: &mut dyn jig_execution::ExecutionControl,
 ) -> (Value, OccurrenceStore) {
     let workflow = list_workflows(ctx)
         .unwrap()
@@ -327,9 +327,9 @@ fn unsupported_codex_sandbox_retains_worktree_without_starting_worker() {
 
 struct CancelAfterPreparation(PathBuf);
 
-impl crate::execution::ExecutionObserver for CancelAfterPreparation {}
+impl jig_execution::ExecutionObserver for CancelAfterPreparation {}
 
-impl crate::execution::ExecutionCancellation for CancelAfterPreparation {
+impl jig_execution::ExecutionCancellation for CancelAfterPreparation {
     fn cancelled(&self) -> bool {
         self.0.exists()
     }

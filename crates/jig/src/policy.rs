@@ -10,14 +10,14 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use jig_context::repository_path::validate_repository_directory_path;
 use jig_context::{RepoContext, WorkGate};
+#[cfg(test)]
+use jig_execution::NoopExecutionObserver;
+use jig_execution::{ExecutionCommandError, ExecutionControl};
 use jig_owned_process::{
     BoundedProcessOutput, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
 };
 use serde_json::{Value, json};
 
-#[cfg(test)]
-use crate::execution::NoopExecutionObserver;
-use crate::execution::{ExecutionCommandError, ExecutionControl};
 use crate::tool_defs::{self, kind};
 use git::{
     controlled_git_bytes, controlled_git_output, controlled_git_text, git_list_files, git_output,

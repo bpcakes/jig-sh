@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
+use jig_execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
 
 const CLI_PROGRESS_OUTPUT_LIMIT: usize = 64 * 1024;
 const CLI_PROGRESS_STRUCTURE_LIMIT: usize = 16 * 1024;
@@ -500,7 +500,7 @@ mod tests {
     use std::io::{self, Write};
     use std::time::Duration;
 
-    use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
+    use jig_execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
 
     use super::{
         CLI_PROGRESS_OUTPUT_LIMIT, CLI_PROGRESS_STRUCTURE_LIMIT, CliExecutionObserver, CliProgress,

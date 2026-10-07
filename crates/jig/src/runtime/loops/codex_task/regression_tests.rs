@@ -14,9 +14,9 @@ use jig_git::GIT_BIN_ENV;
 
 struct CancelAfterStart(AtomicUsize);
 
-impl crate::execution::ExecutionObserver for CancelAfterStart {}
+impl jig_execution::ExecutionObserver for CancelAfterStart {}
 
-impl crate::execution::ExecutionCancellation for CancelAfterStart {
+impl jig_execution::ExecutionCancellation for CancelAfterStart {
     fn cancelled(&self) -> bool {
         self.0.fetch_add(1, Ordering::SeqCst) > 0
     }
@@ -24,9 +24,9 @@ impl crate::execution::ExecutionCancellation for CancelAfterStart {
 
 struct CancelWhenPresent(PathBuf);
 
-impl crate::execution::ExecutionObserver for CancelWhenPresent {}
+impl jig_execution::ExecutionObserver for CancelWhenPresent {}
 
-impl crate::execution::ExecutionCancellation for CancelWhenPresent {
+impl jig_execution::ExecutionCancellation for CancelWhenPresent {
     fn cancelled(&self) -> bool {
         self.0.exists()
     }
@@ -34,9 +34,9 @@ impl crate::execution::ExecutionCancellation for CancelWhenPresent {
 
 struct AlwaysCancelled;
 
-impl crate::execution::ExecutionObserver for AlwaysCancelled {}
+impl jig_execution::ExecutionObserver for AlwaysCancelled {}
 
-impl crate::execution::ExecutionCancellation for AlwaysCancelled {
+impl jig_execution::ExecutionCancellation for AlwaysCancelled {
     fn cancelled(&self) -> bool {
         true
     }

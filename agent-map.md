@@ -15,6 +15,7 @@ If the owning area is already clear, read its nearest guide directly.
 - [crates/jig-contract](./crates/jig-contract/AGENTS.md)
 - [crates/jig-core](./crates/jig-core/AGENTS.md)
 - [crates/jig-dev-proxy](./crates/jig-dev-proxy/AGENTS.md)
+- [crates/jig-execution](./crates/jig-execution/AGENTS.md)
 - [crates/jig-features](./crates/jig-features/AGENTS.md)
 - [crates/jig-file-budget](./crates/jig-file-budget/AGENTS.md)
 - [crates/jig-git](./crates/jig-git/AGENTS.md)

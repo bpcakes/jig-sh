@@ -7,12 +7,12 @@ use anyhow::{Context, Result, bail};
 use jig_context::repository_path::normalize_repo_relative_path;
 use jig_context::{CommandOutputLimit, RepoContext};
 use jig_contract::TargetId;
-use tempfile::TempDir;
-
-use crate::execution::{
+use jig_execution::{
     ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
     run_supervised_execution_command,
 };
+use tempfile::TempDir;
+
 use crate::source_projection::{
     IGNORED_DOTENV_PATHSPECS, MAX_SUBMODULE_DEPTH, initialized_submodule_paths,
 };

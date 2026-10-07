@@ -409,20 +409,20 @@ fn command_tool_streams_both_outputs_through_execution_observer() {
         finished: bool,
     }
 
-    impl crate::execution::ExecutionObserver for RecordingObserver {
-        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+    impl jig_execution::ExecutionObserver for RecordingObserver {
+        fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
             match event {
-                crate::execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
-                crate::execution::ExecutionEvent::Output { bytes, .. } => {
+                jig_execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
+                jig_execution::ExecutionEvent::Output { bytes, .. } => {
                     self.output.extend_from_slice(bytes)
                 }
-                crate::execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
-                crate::execution::ExecutionEvent::Heartbeat { .. } => {}
+                jig_execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
+                jig_execution::ExecutionEvent::Heartbeat { .. } => {}
             }
         }
     }
 
-    impl crate::execution::ExecutionCancellation for RecordingObserver {}
+    impl jig_execution::ExecutionCancellation for RecordingObserver {}
 
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
@@ -468,20 +468,20 @@ fn plain_v6_named_test_routes_through_repository_planning_for_every_component() 
         finished: bool,
     }
 
-    impl crate::execution::ExecutionObserver for RecordingObserver {
-        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+    impl jig_execution::ExecutionObserver for RecordingObserver {
+        fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
             match event {
-                crate::execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
-                crate::execution::ExecutionEvent::Output { bytes, .. } => {
+                jig_execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
+                jig_execution::ExecutionEvent::Output { bytes, .. } => {
                     self.output.extend_from_slice(bytes);
                 }
-                crate::execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
-                crate::execution::ExecutionEvent::Heartbeat { .. } => {}
+                jig_execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
+                jig_execution::ExecutionEvent::Heartbeat { .. } => {}
             }
         }
     }
 
-    impl crate::execution::ExecutionCancellation for RecordingObserver {}
+    impl jig_execution::ExecutionCancellation for RecordingObserver {}
 
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
@@ -728,7 +728,7 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
         &ctx,
         crate::tool_defs::tool::TEST,
         json!({}),
-        &mut crate::execution::NoopExecutionObserver,
+        &mut jig_execution::NoopExecutionObserver,
     )
     .unwrap_err()
     .to_string();

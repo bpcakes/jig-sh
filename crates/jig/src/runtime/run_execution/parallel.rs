@@ -2,8 +2,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
+use jig_execution::ExecutionStream;
+
 use super::*;
-use crate::execution::ExecutionStream;
 
 const MAX_PARALLEL_LAYER_TARGETS: usize = 8;
 const PARALLEL_EVENT_QUEUE_CAPACITY: usize = 64;

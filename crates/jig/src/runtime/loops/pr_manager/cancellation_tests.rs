@@ -9,9 +9,9 @@ mod cancellation_tests {
 
     struct CancelledControl;
 
-    impl crate::execution::ExecutionObserver for CancelledControl {}
+    impl jig_execution::ExecutionObserver for CancelledControl {}
 
-    impl crate::execution::ExecutionCancellation for CancelledControl {
+    impl jig_execution::ExecutionCancellation for CancelledControl {
         fn cancelled(&self) -> bool {
             true
         }
@@ -19,9 +19,9 @@ mod cancellation_tests {
 
     struct CancelAfterStart(AtomicUsize);
 
-    impl crate::execution::ExecutionObserver for CancelAfterStart {}
+    impl jig_execution::ExecutionObserver for CancelAfterStart {}
 
-    impl crate::execution::ExecutionCancellation for CancelAfterStart {
+    impl jig_execution::ExecutionCancellation for CancelAfterStart {
         fn cancelled(&self) -> bool {
             self.0.fetch_add(1, Ordering::SeqCst) > 0
         }
@@ -29,9 +29,9 @@ mod cancellation_tests {
 
     struct CancelWhenPresent(PathBuf);
 
-    impl crate::execution::ExecutionObserver for CancelWhenPresent {}
+    impl jig_execution::ExecutionObserver for CancelWhenPresent {}
 
-    impl crate::execution::ExecutionCancellation for CancelWhenPresent {
+    impl jig_execution::ExecutionCancellation for CancelWhenPresent {
         fn cancelled(&self) -> bool {
             self.0.exists()
         }
@@ -690,9 +690,9 @@ esac
 
         struct MarkerCancellation(PathBuf);
 
-        impl crate::execution::ExecutionObserver for MarkerCancellation {}
+        impl jig_execution::ExecutionObserver for MarkerCancellation {}
 
-        impl crate::execution::ExecutionCancellation for MarkerCancellation {
+        impl jig_execution::ExecutionCancellation for MarkerCancellation {
             fn cancelled(&self) -> bool {
                 self.0.exists()
             }

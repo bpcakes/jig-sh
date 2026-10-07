@@ -1506,6 +1506,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-execution"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "jig-context",
+ "jig-owned-process",
+]
+
+[[package]]
 name = "jig-features"
 version = "0.7.3-dev"
 dependencies = [
@@ -1587,6 +1596,7 @@ dependencies = [
  "jig-contract",
  "jig-core",
  "jig-dev-proxy",
+ "jig-execution",
  "jig-features",
  "jig-file-budget",
  "jig-git",

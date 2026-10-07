@@ -595,15 +595,15 @@ fn loop_run_until_idle_stops_after_one_noop_tick() {
     #[derive(Default)]
     struct PhaseObserver(Vec<(String, usize, usize)>);
 
-    impl crate::execution::ExecutionObserver for PhaseObserver {
-        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+    impl jig_execution::ExecutionObserver for PhaseObserver {
+        fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
             match event {
-                crate::execution::ExecutionEvent::PhaseStarted { label, position } => self.0.push((
+                jig_execution::ExecutionEvent::PhaseStarted { label, position } => self.0.push((
                     format!("started:{label}"),
                     position.current(),
                     position.total(),
                 )),
-                crate::execution::ExecutionEvent::PhaseFinished { label, .. } => {
+                jig_execution::ExecutionEvent::PhaseFinished { label, .. } => {
                     self.0.push((format!("finished:{label}"), 0, 0));
                 }
                 _ => {}
@@ -611,7 +611,7 @@ fn loop_run_until_idle_stops_after_one_noop_tick() {
         }
     }
 
-    impl crate::execution::ExecutionCancellation for PhaseObserver {}
+    impl jig_execution::ExecutionCancellation for PhaseObserver {}
 
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

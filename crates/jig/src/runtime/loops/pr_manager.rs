@@ -8,15 +8,15 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use cap_std::{ambient_authority, fs::Dir};
 use jig_context::{CommandTimeout, RepoContext};
+use jig_execution::{
+    AdditionalCancellationControl, ExecutionCommandError, ExecutionControl, NoopExecutionObserver,
+    run_authoritative_execution_command,
+};
 use jig_owned_process::ProcessOutputOverflowPolicy;
 use jig_state::now_ms;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::execution::{
-    AdditionalCancellationControl, ExecutionCommandError, ExecutionControl, NoopExecutionObserver,
-    run_authoritative_execution_command,
-};
 use crate::runtime::worker_runner::{
     CodexExecFailure, CodexExecOutcome, CodexExecRequest, WorkerRunLabel, run_codex_exec,
 };

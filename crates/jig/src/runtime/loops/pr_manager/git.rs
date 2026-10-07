@@ -234,7 +234,7 @@ where
     let output = run_authoritative_execution_command(
         &mut command,
         timeout,
-        crate::execution::internal_execution_output_limit(),
+        jig_execution::internal_execution_output_limit(),
         &label,
         observer,
     )?;

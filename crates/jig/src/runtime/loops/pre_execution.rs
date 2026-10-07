@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, anyhow, bail};
 use jig_context::RepoContext;
 
-use crate::execution::{ExecutionControl, run_authoritative_execution_command};
+use jig_execution::{ExecutionControl, run_authoritative_execution_command};
 use jig_git::{git_program, scrub_known_repository_git_environment};
 
 use super::state::LOOP_RUNTIME_DIR;
@@ -56,7 +56,7 @@ pub(super) fn require_ignored_runtime_path(
     let output = run_authoritative_execution_command(
         &mut command,
         ctx.command_timeout(),
-        crate::execution::internal_execution_output_limit(),
+        jig_execution::internal_execution_output_limit(),
         "loop git check-ignore",
         observer,
     )

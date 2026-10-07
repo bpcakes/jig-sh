@@ -1,12 +1,12 @@
 use std::fs;
 
 use jig_context::RepoContext;
+use jig_execution::NoopExecutionObserver;
 use serde_json::Value;
 use tempfile::tempdir;
 
 use super::super::dispatch_due_at;
 use crate::command::{LoopShowRequest, LoopTickRequest};
-use crate::execution::NoopExecutionObserver;
 use crate::runtime::loops::{engine, show};
 use crate::test_env::TestRepoBuilder;
 

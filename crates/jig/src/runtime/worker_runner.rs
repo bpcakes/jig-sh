@@ -17,7 +17,7 @@ use jig_state::now_ms;
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 
-use crate::execution::{
+use jig_execution::{
     EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionCommandError, ExecutionControl, ExecutionPhase,
     PhasePosition, ProcessExecutionObserver,
 };

@@ -7,14 +7,14 @@ use jig_context::repository_path::{
 };
 use jig_context::{CommandOutputLimit, RepoContext};
 use jig_contract::{ActionRunner, PlannedTarget};
+use jig_execution::{
+    ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
+    run_supervised_execution_command,
+};
 use jig_state::{ResourceClaim, ResourceClaimMode};
 use sha2::{Digest, Sha256};
 
 use super::{cargo_resources::CargoResourceStop, execution_resources::ResolvedResources};
-use crate::execution::{
-    ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
-    run_supervised_execution_command,
-};
 
 // Mirror the generated configuration's JS coercion exactly, including Unicode
 // trim and hexadecimal/exponent spellings. No application module is loaded.
