@@ -21,14 +21,18 @@ scripts/jig check repo:source-affected-test
 scripts/test-rust-affected.py --base HEAD --print
 ```
 
-It compares the working tree, including uncommitted and untracked files, with
-the merge base of `origin/master`. Each changed workspace package selects its
-own tests and those of every package that depends on it, through nextest's
-`rdeps()`. Notes that no test reads (`.beads/`, `.agent/plans/`,
-`.agent/notes/`, `docs/plans/`) are ignored. Any other change outside a crate,
-such as `Cargo.lock`, `templates/`, `scripts/`, or `.config/nextest.toml`, runs
-the whole suite. `jig-sh` depends on every crate, so its tests run for any Rust
-change.
+A file counts as changed when a commit since the merge base of `origin/master`
+touched it, even if the working tree has since restored its original contents,
+or when it is staged, unstaged, or untracked. Each changed workspace package
+selects its own tests and those of every package that depends on it, through
+nextest's `rdeps()`. Packages whose tests read another package's files without
+depending on it are listed in the script's `EXTRA_CONSUMERS` table; a guard test
+in `scripts/tests/test_jig_rust_affected.py` fails when a crate names another
+crate's directory without such an edge. Notes that no test reads (`.beads/`,
+`.agent/plans/`, `.agent/notes/`, `docs/plans/`) and Python `__pycache__`
+directories are ignored. Any other change outside a crate, such as `Cargo.lock`,
+`templates/`, `scripts/`, or `.config/nextest.toml`, runs the whole suite.
+`jig-sh` depends on every crate, so its tests run for any Rust change.
 
 ## Before handing off a broad change
 
