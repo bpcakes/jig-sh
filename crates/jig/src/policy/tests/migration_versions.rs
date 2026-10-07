@@ -48,12 +48,48 @@ fn migration_versions_skip_versioned_artifacts_and_goose_owned_sources() {
         fs::write(root.join(directory).join("1_first.sql"), "").unwrap();
         fs::write(root.join(directory).join("01_second.sql"), "").unwrap();
         let ctx = RepoContext::load_from(root).unwrap();
+        assert!(ctx.sqlx_enabled());
         assert!(
             crate::policy::migration_versions::violations(&ctx)
                 .unwrap()
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn migration_versions_detect_duplicates_for_the_sqlx_owner_in_a_mixed_repository() {
+    let temp = tempdir().unwrap();
+    write_v6_mixed_migration_policy_repo(temp.path(), "worker");
+    let directory = temp.path().join("database/migrations");
+    fs::create_dir_all(&directory).unwrap();
+    for name in ["1_first.sql", "01_second.sql"] {
+        fs::write(directory.join(name), "").unwrap();
+    }
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    assert!(ctx.sqlx_enabled());
+    assert_eq!(
+        ctx.migration_backend().unwrap(),
+        Some(jig_context::MigrationBackend::Sqlx)
+    );
+    assert!(ctx.sqlx_owns_migration_authoring());
+
+    let violations = crate::policy::migration_versions::violations(&ctx).unwrap();
+
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let message = &violations[0];
+    assert!(
+        message.contains("Duplicate SQLx migration version 1"),
+        "{message}"
+    );
+    assert!(
+        message.contains("database/migrations/1_first.sql"),
+        "{message}"
+    );
+    assert!(
+        message.contains("database/migrations/01_second.sql"),
+        "{message}"
+    );
 }
 
 #[test]
