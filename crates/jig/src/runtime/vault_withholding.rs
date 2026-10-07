@@ -2,7 +2,6 @@
 //! never capture them, and explains that boundary in nested vault diagnostics.
 
 use std::borrow::Cow;
-use std::process::Command;
 
 use jig_vault::{VAULT_NEW_PASSPHRASE_ENV, VAULT_PASSPHRASE_ENV};
 
@@ -46,14 +45,6 @@ pub(crate) fn vault_passphrase_operator_guidance() -> Cow<'static, str> {
     }
 }
 
-/// Keeps both reserved variables out of a Jig-owned helper process even when
-/// it runs before a vault command has captured and cleared them.
-pub(crate) fn withhold_vault_passphrase(command: &mut Command) -> &mut Command {
-    command
-        .env_remove(VAULT_PASSPHRASE_ENV)
-        .env_remove(VAULT_NEW_PASSPHRASE_ENV)
-}
-
 fn passphrase_withheld_by_outer_command() -> bool {
     !reserved_passphrase_present()
         && std::env::var_os(VAULT_PASSPHRASE_WITHHELD_ENV).is_some_and(|value| value == "1")
@@ -66,8 +57,6 @@ fn reserved_passphrase_present() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
-
     use super::*;
     use crate::test_env::{EnvVarGuard, lock_env};
 
@@ -146,21 +135,5 @@ mod tests {
             vault_passphrase_operator_guidance(),
             VAULT_PASSPHRASE_OPERATOR_GUIDANCE
         );
-    }
-
-    #[test]
-    fn jig_owned_helpers_never_forward_reserved_vault_passphrases() {
-        let mut command = Command::new("git");
-        command.env(VAULT_PASSPHRASE_ENV, "test-only-reserved-current");
-
-        withhold_vault_passphrase(&mut command);
-
-        let removed = command
-            .get_envs()
-            .filter(|(_, value)| value.is_none())
-            .map(|(name, _)| name)
-            .collect::<Vec<_>>();
-        assert!(removed.contains(&OsStr::new(VAULT_PASSPHRASE_ENV)));
-        assert!(removed.contains(&OsStr::new(VAULT_NEW_PASSPHRASE_ENV)));
     }
 }

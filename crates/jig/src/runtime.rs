@@ -30,8 +30,7 @@ pub(crate) use file_budget::{FileBudgetEvaluationMode, run_direct_file_budget};
 #[cfg(test)]
 pub(crate) use vault_withholding::VAULT_PASSPHRASE_WITHHELD_ENV;
 pub(crate) use vault_withholding::{
-    vault_passphrase_operator_guidance, withhold_vault_passphrase,
-    withhold_vault_passphrase_environment,
+    vault_passphrase_operator_guidance, withhold_vault_passphrase_environment,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

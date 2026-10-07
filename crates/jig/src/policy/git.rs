@@ -23,7 +23,7 @@ const CONTROLLED_GIT_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 fn git_command(root: &Path) -> Command {
     let mut command = Command::new("git");
     command.current_dir(root);
-    crate::runtime::withhold_vault_passphrase(&mut command);
+    jig_vault::withhold_vault_passphrase(&mut command);
     command
 }
 
