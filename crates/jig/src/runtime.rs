@@ -118,16 +118,16 @@ fn dispatch_state(
 ) -> Result<Value> {
     match command {
         StateCommand::Summary => {
-            crate::state::state_summary_with_cancellation(ctx, &|| observer.cancelled()).map(
+            jig_state::state_summary_with_cancellation(ctx, &|| observer.cancelled()).map(
                 |mut value| {
                     value["command"] = json!("state summary");
                     value
                 },
             )
         }
-        StateCommand::Diagnose => Ok(crate::state::state_diagnose(ctx)),
-        StateCommand::Restore(request) => crate::state::restore_backup(ctx, request),
-        StateCommand::Archive(request) => crate::state::state_archive(ctx, request),
+        StateCommand::Diagnose => Ok(jig_state::state_diagnose(ctx)),
+        StateCommand::Restore(request) => jig_state::restore_backup(ctx, request),
+        StateCommand::Archive(request) => jig_state::state_archive(ctx, request),
     }
 }
 

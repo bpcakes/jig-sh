@@ -1,5 +1,6 @@
+use jig_state::cancellation::ensure_status_collection_active;
+
 use super::*;
-use crate::cancellation::ensure_status_collection_active;
 use crate::command::LoopStatusRequest;
 use crate::runtime::loops::dashboard::{attempt_status, lease_status, workflow_status};
 use crate::runtime::loops::occurrence::{OccurrenceStore, ScheduleOccurrence};

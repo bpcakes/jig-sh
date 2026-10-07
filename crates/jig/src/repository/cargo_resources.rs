@@ -13,14 +13,12 @@ use jig_context::repository_path::{
 };
 use jig_context::{CommandOutputLimit, RepoContext};
 use jig_contract::{ActionRunner, CargoImpactContextV1, ExecutionResourceV1, PlannedTarget};
+use jig_state::{ResourceClaim, ResourceClaimMode};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    execution::{
-        ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
-        run_supervised_execution_command,
-    },
-    state::{ResourceClaim, ResourceClaimMode},
+use crate::execution::{
+    ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
+    run_supervised_execution_command,
 };
 
 use super::execution_resources::ResolvedResources as ResolvedCargoResources;

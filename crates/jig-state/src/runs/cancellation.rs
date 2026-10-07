@@ -1,15 +1,15 @@
 use anyhow::Result;
 use jig_context::RepoContext;
 
-use crate::state::jsonl::{append_jsonl_with_end_offset, try_scan_jsonl_raw_from};
-use crate::state::records::RunEventRecord;
+use crate::jsonl::{append_jsonl_with_end_offset, try_scan_jsonl_raw_from};
+use crate::records::RunEventRecord;
 
 use super::{EVENT_CANCEL_REQUESTED, RUNS_FILE, parse_run_event_identity};
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct RunEventCursor(u64);
+pub struct RunEventCursor(u64);
 
-pub(crate) fn run_cancel_requested_since(
+pub fn run_cancel_requested_since(
     ctx: &RepoContext,
     run_id: &str,
     cursor: &mut RunEventCursor,

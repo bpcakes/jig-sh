@@ -33,7 +33,7 @@ const OVERSIZED_RECORD_BYTES: u64 = 1024 * 1024;
 const RUN_RETENTION_RECOMMENDATION_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DIAGNOSTIC_SAMPLES: usize = 20;
 
-pub(crate) fn state_diagnose(ctx: &RepoContext) -> Value {
+pub fn state_diagnose(ctx: &RepoContext) -> Value {
     let mut streams = BTreeMap::new();
     for (stream_name, file_name) in STATE_STREAMS {
         let path = ctx.state_file(file_name);

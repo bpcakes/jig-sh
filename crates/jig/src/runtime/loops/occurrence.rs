@@ -7,7 +7,7 @@ use jig_context::RepoContext;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-use crate::state::now_ms;
+use jig_state::now_ms;
 
 use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, RenewalWorker, renewal_interval};
 #[cfg(test)]

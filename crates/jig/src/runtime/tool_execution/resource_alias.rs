@@ -16,7 +16,7 @@ pub(super) fn execute(
     action: ActionSpec,
     args: Value,
     observer: &mut dyn ExecutionControl,
-    repository_execution: crate::state::RepositoryExecutionLease,
+    repository_execution: jig_state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
     let catalog = RepositoryCatalog::from_context(ctx)?;
     let target = action.target;

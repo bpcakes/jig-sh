@@ -63,6 +63,7 @@ jig-file-budget.workspace = true
 jig-git.workspace = true
 jig-owned-process.workspace = true
 jig-rust.workspace = true
+jig-state.workspace = true
 jig-typescript.workspace = true
 jig-tui.workspace = true
 jig-ui.workspace = true
@@ -97,6 +98,7 @@ unicode-normalization.workspace = true
 
 [dev-dependencies]
 jig-context = { workspace = true, features = ["test-support"] }
+jig-state = { workspace = true, features = ["test-support"] }
 jig-vault = { workspace = true, features = ["test-utils"] }
 
 [build-dependencies]

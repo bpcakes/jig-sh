@@ -1,7 +1,7 @@
 use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::state::now_ms;
+use jig_state::now_ms;
 
 use super::super::occurrence::OccurrenceStore;
 use super::super::state::{AttemptSections, AttemptStore};

@@ -3,10 +3,10 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use jig_context::test_support::TestRepoBuilder;
 use tempfile::tempdir;
 
 use super::*;
-use crate::test_env::TestRepoBuilder;
 
 fn fixture_context(root: &Path) -> RepoContext {
     TestRepoBuilder::new(root).write();

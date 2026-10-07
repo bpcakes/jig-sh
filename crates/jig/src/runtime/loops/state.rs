@@ -11,8 +11,8 @@ use jig_context::RepoContext;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use ulid::Ulid;
 
-use crate::cancellation::ensure_status_collection_active;
-use crate::state::now_ms;
+use jig_state::cancellation::ensure_status_collection_active;
+use jig_state::now_ms;
 
 use super::renewal::{RenewalWorker, renewal_interval};
 use super::workflow::ResolvedWorkflow;

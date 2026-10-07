@@ -1,7 +1,7 @@
 use super::*;
 
 #[cfg(test)]
-pub(in crate::state) fn read_jsonl_with_data_lock<T: DeserializeOwned>(
+pub fn read_jsonl_with_data_lock<T: DeserializeOwned>(
     path: &Path,
     lock_data: impl FnMut(&File) -> io::Result<()>,
 ) -> Result<Vec<T>> {
@@ -12,7 +12,7 @@ pub(in crate::state) fn read_jsonl_with_data_lock<T: DeserializeOwned>(
 }
 
 #[cfg(test)]
-pub(in crate::state) fn read_jsonl_with_io<T: DeserializeOwned>(
+pub fn read_jsonl_with_io<T: DeserializeOwned>(
     path: &Path,
     mut lock_data: impl FnMut(&File) -> io::Result<()>,
     mut read_snapshot: impl FnMut(&Path) -> Result<Vec<u8>>,
@@ -228,7 +228,7 @@ pub(super) fn parse_jsonl_file_with_cancellation<T: DeserializeOwned>(
     Ok(items)
 }
 
-pub(in crate::state) fn scan_jsonl_file(
+pub fn scan_jsonl_file(
     file: &File,
     path: &Path,
     cancelled: &dyn Fn() -> bool,

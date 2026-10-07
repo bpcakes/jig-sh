@@ -108,7 +108,7 @@ The canonical `scripts/jig ui` entrypoint starts on Timeline, while `scripts/jig
 
 `crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract and check runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 
-`crates/jig/src/state/` stores append-only JSONL records:
+`crates/jig-state` stores append-only JSONL records:
 
 - `runs.jsonl`: accepted immutable plans and folded execution lifecycle events, including each target's conclusion and the output tail of a target that did not succeed
 Repositories from earlier runtimes may also keep `receipts.jsonl`,
@@ -171,7 +171,7 @@ For runtime changes, read `crates/jig/AGENTS.md` and use its entrypoint map:
 
 - CLI shape: `crates/jig/src/cli.rs`
 - command and legacy make dispatch: `crates/jig/src/runtime.rs`
-- run history and state maintenance: `crates/jig/src/state.rs` and `crates/jig/src/state/`
+- run history and state maintenance: `crates/jig-state/`
 - loop occurrence evidence and `loop show`: `crates/jig/src/runtime/loops/evidence.rs` and `crates/jig/src/runtime/loops/show.rs`
 - bootstrap and template rendering: `crates/jig/src/bootstrap.rs` and `crates/jig/src/bootstrap/`
 - generated outputs: `templates/project/`

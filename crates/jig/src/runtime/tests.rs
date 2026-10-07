@@ -548,7 +548,7 @@ checks = ["jig.fmt_check", "jig.test"]
     .unwrap();
     let run_id = output["run"]["run_id"].as_str().unwrap();
 
-    let durable = crate::state::run_by_id(&ctx, run_id).unwrap();
+    let durable = jig_state::run_by_id(&ctx, run_id).unwrap();
     assert_eq!(durable.result.status, jig_contract::RunStatus::Completed);
     assert_eq!(
         durable.result.conclusion,

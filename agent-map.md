@@ -21,6 +21,7 @@ If the owning area is already clear, read its nearest guide directly.
 - [crates/jig-owned-process](./crates/jig-owned-process/AGENTS.md)
 - [crates/jig-rust](./crates/jig-rust/AGENTS.md)
 - [crates/jig-sqlx](./crates/jig-sqlx/AGENTS.md)
+- [crates/jig-state](./crates/jig-state/AGENTS.md)
 - [crates/jig-tui](./crates/jig-tui/AGENTS.md)
 - [crates/jig-typescript](./crates/jig-typescript/AGENTS.md)
 - [crates/jig-ui](./crates/jig-ui/AGENTS.md)

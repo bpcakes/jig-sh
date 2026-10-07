@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use cap_std::{ambient_authority, fs::Dir};
 use jig_context::{CommandTimeout, RepoContext};
 use jig_owned_process::ProcessOutputOverflowPolicy;
+use jig_state::now_ms;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -19,7 +20,6 @@ use crate::execution::{
 use crate::runtime::worker_runner::{
     CodexExecFailure, CodexExecOutcome, CodexExecRequest, WorkerRunLabel, run_codex_exec,
 };
-use crate::state::now_ms;
 use jig_git::metadata::{
     MAX_GIT_POINTER_BYTES, parse_gitdir_pointer, path_from_git_bytes, read_nofollow_regular_file,
     trim_ascii_line,

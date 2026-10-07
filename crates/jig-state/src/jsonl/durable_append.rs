@@ -1,6 +1,6 @@
 use super::*;
 
-pub(in crate::state) fn append_jsonl_locked<T: Serialize>(
+pub fn append_jsonl_locked<T: Serialize>(
     _guard: &JsonlWriteGuard,
     path: &Path,
     value: &T,

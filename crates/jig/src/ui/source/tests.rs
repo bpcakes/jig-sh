@@ -215,14 +215,14 @@ fn recorder_refresh_pairs_one_epoch_and_reuse_performs_no_refresh() {
     let _: jig_ui::dashboard::RecorderSnapshot = serde_json::from_value(encoded).unwrap();
     assert_eq!(first.recorder.timeline.len(), 1);
 
-    crate::state::reset_dashboard_scan_counts();
+    jig_state::reset_dashboard_scan_counts();
     let reused = source
         .recorder(recorder_request(RecorderMode::ReuseCurrent), &|| false)
         .unwrap();
     assert_eq!(reused.recorder.epoch_id, first.recorder.epoch_id);
     assert_eq!(reused.status_local.epoch_id, first.status_local.epoch_id);
     assert_eq!(
-        crate::state::dashboard_scan_count(&source.context.state_file("runs.jsonl")),
+        jig_state::dashboard_scan_count(&source.context.state_file("runs.jsonl")),
         0,
         "ReuseCurrent must not traverse run history"
     );
@@ -322,7 +322,7 @@ fn recorder_status_projection_matches_local_status_command_data() {
         }),
     );
     let source = RepoDashboardSource::new(RepoContext::load_from(root.path()).unwrap());
-    let _clock = crate::state::set_test_now_ms(1_900_000_000_000);
+    let _clock = jig_state::set_test_now_ms(1_900_000_000_000);
     let legacy = crate::status::snapshot_with_cancellation(&source.context, &|| false).unwrap();
     let typed = source
         .recorder(
@@ -348,7 +348,7 @@ fn recorder_status_projection_matches_status_errors() {
     let loop_cache = root.path().join(".agent/.cache/loop");
     fs::create_dir_all(&loop_cache).unwrap();
     fs::write(loop_cache.join("attempts.json"), "not-json").unwrap();
-    let _clock = crate::state::set_test_now_ms(1_900_000_000_000);
+    let _clock = jig_state::set_test_now_ms(1_900_000_000_000);
 
     let legacy = crate::status::snapshot_with_cancellation(&source.context, &|| false).unwrap();
     let typed = source
@@ -385,13 +385,13 @@ fn local_epoch_traverses_run_history_once_and_ignores_retired_streams() {
     ] {
         fs::write(context.state_file(stream), "{}\n").unwrap();
     }
-    crate::state::reset_dashboard_scan_counts();
+    jig_state::reset_dashboard_scan_counts();
     let refresh = source
         .recorder(recorder_request(RecorderMode::Refresh), &|| false)
         .unwrap();
 
     assert_eq!(
-        crate::state::dashboard_scan_count(&context.state_file("runs.jsonl")),
+        jig_state::dashboard_scan_count(&context.state_file("runs.jsonl")),
         1,
         "run history should be traversed exactly once"
     );
@@ -402,7 +402,7 @@ fn local_epoch_traverses_run_history_once_and_ignores_retired_streams() {
         "decisions.jsonl",
     ] {
         assert_eq!(
-            crate::state::dashboard_scan_count(&context.state_file(stream)),
+            jig_state::dashboard_scan_count(&context.state_file(stream)),
             0,
             "{stream} is no longer read"
         );

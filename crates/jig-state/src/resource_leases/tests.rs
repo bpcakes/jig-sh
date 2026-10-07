@@ -217,7 +217,7 @@ fn unrelated_exec_does_not_inherit_parent_claim() {
             child: Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "state::resource_leases::tests::unrelated_exec_does_not_inherit_parent_claim",
+                    "resource_leases::tests::unrelated_exec_does_not_inherit_parent_claim",
                     "--nocapture",
                 ])
                 .env(ISOLATED, "1")
@@ -364,7 +364,7 @@ fn helper_command(
     command
         .args([
             "--exact",
-            "state::resource_leases::tests::lease_process_helper",
+            "resource_leases::tests::lease_process_helper",
             "--nocapture",
         ])
         .env(FIXTURE, root)
