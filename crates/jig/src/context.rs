@@ -38,8 +38,10 @@ pub(crate) use runtime::{
 };
 
 pub(crate) use execution_config::ExecutionConfig;
+pub(crate) use inputs_policy::validate_inputs_policy;
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig, parse_five_field_cron};
 pub(crate) use migration::{MigrationBackend, RustMigrationLayout, native_migration_backend};
+pub(crate) use vault_config::is_valid_vault_scope_id;
 use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
     WorkConfig, WorkEvidenceSelector, WorkGate, validate_gate_path_pattern,
@@ -725,6 +727,7 @@ mod contract_tests;
 use config_snapshot::{load_config, load_config_snapshot};
 mod defaults;
 mod execution_config;
+mod inputs_policy;
 mod loop_config;
 mod migration;
 mod optional;

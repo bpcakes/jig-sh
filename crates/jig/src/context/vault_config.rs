@@ -32,3 +32,25 @@ impl VaultConfig {
         self.allow_global
     }
 }
+
+pub(crate) fn is_valid_vault_scope_id(scope_id: &str) -> bool {
+    !scope_id.is_empty()
+        && scope_id.len() <= 128
+        && scope_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_vault_scope_id;
+
+    #[test]
+    fn vault_scope_id_validator_rejects_path_and_length_boundaries() {
+        assert!(is_valid_vault_scope_id("abc_123-XYZ"));
+        assert!(!is_valid_vault_scope_id(""));
+        assert!(!is_valid_vault_scope_id("../shared"));
+        assert!(!is_valid_vault_scope_id("scope/child"));
+        assert!(!is_valid_vault_scope_id(&"a".repeat(129)));
+    }
+}

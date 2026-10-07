@@ -33,7 +33,7 @@ pub(super) struct ScopedVaultHome {
 }
 
 pub(super) fn scoped_vault_home(scope: &VaultRepoScope) -> Result<ScopedVaultHome> {
-    if !crate::command::is_valid_vault_scope_id(&scope.scope_id) {
+    if !crate::context::is_valid_vault_scope_id(&scope.scope_id) {
         bail!("invalid repo vault scope id '{}'", scope.scope_id);
     }
     let scopes_home = vault_base_home()?.join("scopes");

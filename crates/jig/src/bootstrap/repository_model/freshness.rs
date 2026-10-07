@@ -99,5 +99,5 @@ pub(in crate::bootstrap) fn prepare_action_inputs_policy(
             .entry("source_state".into())
             .or_insert(provenance);
     }
-    crate::repository::freshness::validate_inputs_policy(epoch, action)
+    crate::context::validate_inputs_policy(epoch, action)
 }

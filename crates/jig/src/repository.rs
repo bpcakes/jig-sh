@@ -255,7 +255,7 @@ impl RepositoryCatalog {
             let mut action = action.clone();
             normalize_native_configuration(contract_version, &mut action)?;
             arguments::normalize_declarations(contract_version, &mut action)?;
-            freshness::validate_inputs_policy(contract_version, &action)?;
+            crate::context::validate_inputs_policy(contract_version, &action)?;
             runners::validate(contract_version, &action)?;
             planner::resources::validate_declarations(&action)?;
             if !components.contains_key(&action.target.component) {

@@ -18,7 +18,7 @@ pub(super) fn validate_repository_source(
         .flat_map(|source| &source.actions)
         .chain(&manifest.actions)
     {
-        crate::repository::freshness::validate_inputs_policy(manifest.contract_version, action)?;
+        validate_inputs_policy(manifest.contract_version, action)?;
     }
     if manifest.contract_version < 6 {
         if config.repository.is_some() {
@@ -449,7 +449,7 @@ pub(super) fn validate_vault_config(config: &RepoConfig) -> Result<()> {
 }
 
 pub(super) fn validate_vault_scope_id(scope_id: &str) -> Result<()> {
-    if !crate::command::is_valid_vault_scope_id(scope_id) {
+    if !is_valid_vault_scope_id(scope_id) {
         bail!(
             "[vault].scope_id must be 1 to 128 bytes and may only contain letters, digits, '_', or '-'"
         );
