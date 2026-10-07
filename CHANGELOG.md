@@ -83,6 +83,10 @@
   rule in existing repositories.
 
 ### Fixed
+- Remove the lifetime witness entry-count cliff from authenticated vault
+  access and existing-file output checks. Scans still validate complete
+  authority, retain bounded state, and preserve witness history; their
+  filesystem work remains proportional to retained entries.
 
 - Reject an audit append that would exceed the log's read limit before any
   audit write or pending transaction, keeping the existing vault usable.

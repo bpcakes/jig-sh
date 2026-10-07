@@ -227,7 +227,7 @@ fn an_orphan_proof_unlinks_only_its_targets_journal_under_its_own_lock() {
 }
 
 #[test]
-fn records_that_cannot_be_trusted_or_the_scan_bound_never_authorize_deletion() {
+fn records_that_cannot_be_trusted_never_authorize_deletion() {
     let key = target_key(Path::new("/example/home"));
     let check = |prepare: &dyn Fn(&WitnessStore)| {
         let (_temp, store) = witness();
@@ -247,16 +247,6 @@ fn records_that_cannot_be_trusted_or_the_scan_bound_never_authorize_deletion() {
             store.record_path(OTHER_VAULT_ID),
         )
         .unwrap();
-    });
-    // Too many entries to scan.
-    check(&|store| {
-        for index in 0..=target::MAX_RECORD_SCAN_ENTRIES {
-            fs::write(
-                store.root().join(IDS_DIR).join(format!(".{index}.tmp")),
-                b"",
-            )
-            .unwrap();
-        }
     });
     // Several markers naming the target.
     check(&|store| {

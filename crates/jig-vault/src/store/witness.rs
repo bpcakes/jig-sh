@@ -5,7 +5,8 @@
 //! marker. Target-keyed journals hold the exact candidate of a pending
 //! transaction, and lock files serialize absent targets and same-ID copies.
 //! The tree is protected internal storage: it is never a private-output
-//! destination, and nothing in it is read through symlinks or unbounded.
+//! destination. Files are never read through symlinks and have byte limits;
+//! directory scans stream retained history without a lifetime entry quota.
 //!
 //! The witness protects previously witnessed history only while it
 //! survives. Whole-profile rollback, deleting or replacing it, same-user or
@@ -49,8 +50,6 @@ const IDS_DIR: &str = "ids";
 const JOURNALS_DIR: &str = "journals";
 const LOCKS_DIR: &str = "locks";
 const RECORD_READ_LIMIT: u64 = 64 * 1024;
-#[cfg(unix)]
-const MAX_ALIAS_SCAN_ENTRIES: usize = 100_000;
 /// Bounds an in-place journal: one envelope up to the persistent vault
 /// limit, escaped as JSON, plus a single audit line.
 pub(crate) const JOURNAL_READ_LIMIT: u64 = 48 * 1024 * 1024;
@@ -180,10 +179,7 @@ impl WitnessLocation {
                     });
                 }
             };
-            for (index, entry) in entries.enumerate() {
-                if index >= MAX_ALIAS_SCAN_ENTRIES {
-                    bail!("vault witness has too many entries to check output aliases safely");
-                }
+            for entry in entries {
                 let metadata = fs::symlink_metadata(entry?.path())?;
                 if metadata.dev() == output.dev() && metadata.ino() == output.ino() {
                     return Ok(true);

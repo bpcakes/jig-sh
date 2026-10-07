@@ -28,13 +28,6 @@ use crate::error::classified;
 
 use super::{HeldLock, IDS_DIR, Journal, WitnessRecord, WitnessStore, id_key, record};
 
-/// Records are scanned up to this many directory entries. Reaching the
-/// bound never authorizes a deletion.
-#[cfg(not(test))]
-const MAX_RECORD_SCAN_ENTRIES: usize = 100_000;
-#[cfg(test)]
-pub(super) const MAX_RECORD_SCAN_ENTRIES: usize = 64;
-
 /// One acquisition of a final target's lock, held while this value lives.
 pub(crate) struct TargetLock {
     root: PathBuf,
@@ -77,9 +70,9 @@ pub(crate) struct OrphanJournal<'lock> {
 impl WitnessStore {
     /// Classifies the journal of the target `lock` holds against every
     /// authoritative marker, whether or not the journal still exists. Fails
-    /// closed when any record cannot be read and validated, when the scan
-    /// reaches its bound, when a marker names the target but its journal is
-    /// missing or does not match it, or when several markers name it.
+    /// closed when enumeration or record validation fails, when a marker
+    /// names the target but its journal is missing or does not match it, or
+    /// when several markers name it.
     pub(crate) fn classify_target_journal<'lock>(
         &self,
         lock: &'lock TargetLock,
@@ -164,8 +157,8 @@ impl WitnessStore {
             .is_some_and(|naming| !naming.is_empty()))
     }
 
-    /// Every record whose pending marker names `target_key`, made durable
-    /// before returning.
+    /// Up to two records whose pending marker names `target_key`, made
+    /// durable before returning. Two are enough to establish ambiguity.
     fn records_with_pending_for(&self, target_key: &str) -> AnyResult<Vec<WitnessRecord>> {
         let Some(naming) = self.scan_pending_for(target_key)? else {
             return Ok(Vec::new());
@@ -176,12 +169,15 @@ impl WitnessStore {
         Ok(naming)
     }
 
-    /// Records whose pending marker names `target_key`, or `None` when the
-    /// records directory does not exist yet: an interrupted first creation
+    /// Up to two records whose pending marker names `target_key`, or `None`
+    /// when the records directory does not exist yet: an interrupted first creation
     /// can leave the witness root without it, and with no records no marker
     /// names anything; the next witness open finishes the tree. Only
     /// `<id key>.json` entries are records; interrupted atomic writes leave
-    /// temporary names that were never published and are not read.
+    /// temporary names that were never published and are not read. Stream
+    /// the complete directory: retained history must not exhaust a lifetime
+    /// entry quota. Individual reads remain size-bounded, and retaining at
+    /// most two matching records bounds memory independently of history.
     fn scan_pending_for(&self, target_key: &str) -> AnyResult<Option<Vec<WitnessRecord>>> {
         let entries = match fs::read_dir(self.root.join(IDS_DIR)) {
             Ok(entries) => entries,
@@ -189,12 +185,7 @@ impl WitnessStore {
             Err(error) => return Err(error.into()),
         };
         let mut naming = Vec::new();
-        for (index, entry) in entries.enumerate() {
-            if index >= MAX_RECORD_SCAN_ENTRIES {
-                bail!(
-                    "the vault witness has too many records to establish that no pending transaction needs this journal"
-                );
-            }
+        for entry in entries {
             let entry = entry?;
             let Some(key) = record_key(&entry.file_name()) else {
                 continue;
@@ -210,6 +201,7 @@ impl WitnessStore {
                 .pending
                 .as_ref()
                 .is_some_and(|pending| pending.target_key == target_key)
+                && naming.len() < 2
             {
                 naming.push(record);
             }

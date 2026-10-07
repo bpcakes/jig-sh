@@ -286,4 +286,5 @@ fn special_files_at_witness_paths_fail_closed_without_blocking() {
     assert!(store.lock_id(VAULT_ID).is_err());
 }
 
+mod capacity;
 mod durability;
