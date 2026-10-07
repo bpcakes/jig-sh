@@ -152,7 +152,7 @@ fn cache_has_launcher_repair_seed(cache: &Path) -> Result<bool> {
 pub(in crate::bootstrap) fn finish_full_refresh(
     destination: &Path,
     runtime_policy: FullRefreshRuntimePolicy,
-    progress: crate::progress::CliProgress,
+    progress: jig_execution::progress::CliProgress,
     completion_message: &str,
 ) -> Vec<String> {
     let mut warnings = Vec::new();

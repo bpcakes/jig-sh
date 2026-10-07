@@ -11,7 +11,7 @@ use crate::{doctor, runtime};
 
 pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     let ctx = RepoContext::load()?;
-    let progress = crate::progress::CliProgress::for_human_output("setup", json_output);
+    let progress = jig_execution::progress::CliProgress::for_human_output("setup", json_output);
     progress.header("prepare repository and agent tooling");
     #[cfg(all(unix, not(test)))]
     let signal_session = crate::signal_supervision::SignalSession::start().map_err(|_| {
@@ -21,11 +21,11 @@ pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     let cancellation = signal_session.cancellation();
     #[cfg(all(unix, not(test)))]
     let mut observer =
-        crate::progress::CliExecutionObserver::with_cancellation(json_output, move || {
+        jig_execution::progress::CliExecutionObserver::with_cancellation(json_output, move || {
             cancellation.cancelled()
         });
     #[cfg(any(not(unix), test))]
-    let mut observer = crate::progress::CliExecutionObserver::for_human_output(json_output);
+    let mut observer = jig_execution::progress::CliExecutionObserver::for_human_output(json_output);
     let outcome = run_setup_with_progress(
         || {
             #[cfg(all(unix, not(test)))]

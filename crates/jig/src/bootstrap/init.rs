@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use jig_execution::progress::CliProgress;
+use jig_repository::path::bootstrap_invocation_cwd;
 
 use super::answers::{AnswerInput, AnswerResolution, PreparedInitAnswers};
 use super::git::init_git_repo_with_validation;
@@ -14,8 +16,6 @@ use super::{
     initial_render_report, managed_paths, path, scaffold, template_progress_label,
     validate_init_destination,
 };
-use crate::progress::CliProgress;
-use jig_repository::path::bootstrap_invocation_cwd;
 
 struct PreparedInit {
     destination: PathBuf,

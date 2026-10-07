@@ -17,5 +17,8 @@ anyhow.workspace = true
 jig-context.workspace = true
 jig-owned-process.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [lints]
 workspace = true

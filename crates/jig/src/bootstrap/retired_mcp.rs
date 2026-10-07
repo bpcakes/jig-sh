@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use crate::progress::CliProgress;
+use jig_execution::progress::CliProgress;
 
 pub(super) fn stage_retirement(
     seed: Option<&Path>,

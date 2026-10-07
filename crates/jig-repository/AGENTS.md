@@ -13,6 +13,7 @@
 - `src/cargo_discovery.rs`, `src/cargo_impact.rs`, `src/cargo_resources.rs`, `src/rust_focus.rs`, `src/playwright_resources.rs`: resource discovery.
 - `src/inspect.rs`: `jig repository inspect` data for each `ResponseSurface`.
 - `src/source_identity.rs` and `src/source_identity/`: Git-backed source snapshots, worktree fingerprints, and comparison scopes.
+- `src/file_budget.rs` and `src/file_budget/`: the native `repo:file-budget` runner, shared by `jig check` and bootstrap's file-budget lifecycle.
 - `src/shell.rs`: shell quoting and the optional-Cargo command wrapper shared with bootstrap.
 
 ## Edit here for X

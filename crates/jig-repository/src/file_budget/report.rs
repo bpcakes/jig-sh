@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn engine_error_result(
+pub fn engine_error_result(
     context: &FileBudgetEngineContext<'_>,
     error: anyhow::Error,
 ) -> NativeActionResult {
@@ -67,7 +67,7 @@ pub(super) fn engine_error_result(
     )
 }
 
-pub(super) fn measurement_error_result(
+pub fn measurement_error_result(
     context: &FileBudgetEngineContext<'_>,
     prepared: &PreparedNativeInputV1,
     comparison: &ResolvedComparisonV1,
@@ -129,7 +129,7 @@ pub(super) fn measurement_error_result(
     )
 }
 
-pub(super) fn scope_incomplete_result(
+pub fn scope_incomplete_result(
     prepared: &PreparedNativeInputV1,
     comparison: &ResolvedComparisonV1,
     evaluated_at_ms: u64,
@@ -178,7 +178,7 @@ pub(super) fn scope_incomplete_result(
     )
 }
 
-pub(super) fn resource_limit_result(
+pub fn resource_limit_result(
     prepared: &PreparedNativeInputV1,
     comparison: &ResolvedComparisonV1,
     evaluated_at_ms: u64,
@@ -215,7 +215,7 @@ pub(super) fn resource_limit_result(
     )
 }
 
-pub(super) fn result_with_findings(
+pub fn result_with_findings(
     conclusion: RunConclusion,
     findings: Vec<Finding>,
     evaluated_at_ms: u64,
@@ -254,7 +254,7 @@ pub(super) fn result_with_findings(
     }
 }
 
-pub(super) fn terminal_result(
+pub fn terminal_result(
     conclusion: RunConclusion,
     code: &str,
     message: &str,
@@ -275,7 +275,7 @@ pub(super) fn terminal_result(
     )
 }
 
-pub(super) fn normalize_diagnostic(diagnostic: &BudgetDiagnosticV1) -> Finding {
+pub fn normalize_diagnostic(diagnostic: &BudgetDiagnosticV1) -> Finding {
     file_budget_finding(
         match diagnostic.severity {
             BudgetSeverityV1::Error => FindingSeverity::Error,
@@ -288,7 +288,7 @@ pub(super) fn normalize_diagnostic(diagnostic: &BudgetDiagnosticV1) -> Finding {
     )
 }
 
-pub(super) fn file_budget_finding(
+pub fn file_budget_finding(
     severity: FindingSeverity,
     code: &str,
     message: &str,
@@ -307,7 +307,7 @@ pub(super) fn file_budget_finding(
     }
 }
 
-pub(super) fn sort_findings(findings: &mut [Finding]) {
+pub fn sort_findings(findings: &mut [Finding]) {
     findings.sort_by(|left, right| {
         severity_rank(left.severity)
             .cmp(&severity_rank(right.severity))
@@ -327,7 +327,7 @@ pub(super) fn sort_findings(findings: &mut [Finding]) {
     });
 }
 
-pub(super) const fn severity_rank(severity: FindingSeverity) -> u8 {
+pub const fn severity_rank(severity: FindingSeverity) -> u8 {
     match severity {
         FindingSeverity::Error => 0,
         FindingSeverity::Warning => 1,
@@ -335,7 +335,7 @@ pub(super) const fn severity_rank(severity: FindingSeverity) -> u8 {
     }
 }
 
-pub(super) fn finding_severity_counts(findings: &[Finding]) -> (u64, u64, u64) {
+pub fn finding_severity_counts(findings: &[Finding]) -> (u64, u64, u64) {
     findings.iter().fold((0, 0, 0), |mut counts, finding| {
         match finding.severity {
             FindingSeverity::Notice => counts.0 += 1,
@@ -347,7 +347,7 @@ pub(super) fn finding_severity_counts(findings: &[Finding]) -> (u64, u64, u64) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn human_report(
+pub fn human_report(
     prepared: &PreparedNativeInputV1,
     comparison: &ResolvedComparisonV1,
     policy_raw_digest: &str,
@@ -415,7 +415,7 @@ pub(super) fn human_report(
     bound_utf8(&output, HUMAN_OUTPUT_BYTES_V1)
 }
 
-pub(super) fn earliest_valid_until_ms(policy: &PolicyV1) -> Result<Option<u64>> {
+pub fn earliest_valid_until_ms(policy: &PolicyV1) -> Result<Option<u64>> {
     policy
         .waivers()
         .iter()
@@ -442,7 +442,7 @@ pub(super) fn earliest_valid_until_ms(policy: &PolicyV1) -> Result<Option<u64>> 
         .map(|boundaries| boundaries.into_iter().min())
 }
 
-pub(super) fn policy_date_at_ms(timestamp_ms: u64) -> Result<PolicyDateV1> {
+pub fn policy_date_at_ms(timestamp_ms: u64) -> Result<PolicyDateV1> {
     let seconds = i64::try_from(timestamp_ms / 1_000)
         .context("evaluation timestamp exceeds supported UTC range")?;
     let date = OffsetDateTime::from_unix_timestamp(seconds)
@@ -452,7 +452,7 @@ pub(super) fn policy_date_at_ms(timestamp_ms: u64) -> Result<PolicyDateV1> {
         .map_err(anyhow::Error::msg)
 }
 
-pub(super) fn ensure_active(context: &FileBudgetEngineContext<'_>) -> Result<()> {
+pub fn ensure_active(context: &FileBudgetEngineContext<'_>) -> Result<()> {
     if (context.cancelled)() {
         return Err(EngineStopV1::Cancelled.into());
     }
@@ -462,11 +462,11 @@ pub(super) fn ensure_active(context: &FileBudgetEngineContext<'_>) -> Result<()>
     Ok(())
 }
 
-pub(super) fn combined_cancelled(context: &FileBudgetEngineContext<'_>) -> bool {
+pub fn combined_cancelled(context: &FileBudgetEngineContext<'_>) -> bool {
     (context.cancelled)() || Instant::now() >= context.deadline
 }
 
-pub(super) fn classify_stop(
+pub fn classify_stop(
     context: &FileBudgetEngineContext<'_>,
     error: &anyhow::Error,
 ) -> Option<EngineStopV1> {
@@ -498,13 +498,13 @@ impl std::fmt::Display for EngineStopV1 {
 
 impl std::error::Error for EngineStopV1 {}
 
-pub(super) fn bounded_error_message(repository: &RepoContext, error: &anyhow::Error) -> String {
+pub fn bounded_error_message(repository: &RepoContext, error: &anyhow::Error) -> String {
     let message =
         format!("{error:#}").replace(&repository.root().display().to_string(), "<repository>");
     bound_utf8(&message, 4 * 1024)
 }
 
-pub(super) fn unsupported_file_kind(kind: ScopeIssueKindV1) -> UnsupportedFileKindV1 {
+pub fn unsupported_file_kind(kind: ScopeIssueKindV1) -> UnsupportedFileKindV1 {
     match kind {
         ScopeIssueKindV1::Symlink => UnsupportedFileKindV1::Symlink,
         ScopeIssueKindV1::Gitlink | ScopeIssueKindV1::EmbeddedRepository => {
@@ -514,7 +514,7 @@ pub(super) fn unsupported_file_kind(kind: ScopeIssueKindV1) -> UnsupportedFileKi
     }
 }
 
-pub(super) const fn change_kind(kind: FileChangeKindV1) -> &'static str {
+pub const fn change_kind(kind: FileChangeKindV1) -> &'static str {
     match kind {
         FileChangeKindV1::Added => "added",
         FileChangeKindV1::Modified => "modified",
@@ -525,7 +525,7 @@ pub(super) const fn change_kind(kind: FileChangeKindV1) -> &'static str {
     }
 }
 
-pub(super) const fn comparison_kind(comparison: &ResolvedComparisonV1) -> &'static str {
+pub const fn comparison_kind(comparison: &ResolvedComparisonV1) -> &'static str {
     match comparison {
         ResolvedComparisonV1::MergeBase { .. } => "merge_base",
         ResolvedComparisonV1::ExactTree { .. } => "exact_tree",
@@ -534,7 +534,7 @@ pub(super) const fn comparison_kind(comparison: &ResolvedComparisonV1) -> &'stat
     }
 }
 
-pub(super) fn scope_issue_json(issue: &jig_repository::source_identity::ScopeIssueV1) -> Value {
+pub fn scope_issue_json(issue: &crate::source_identity::ScopeIssueV1) -> Value {
     json!({
         "kind": format!("{:?}", issue.kind).to_ascii_lowercase(),
         "path": issue.path,
@@ -542,11 +542,11 @@ pub(super) fn scope_issue_json(issue: &jig_repository::source_identity::ScopeIss
     })
 }
 
-pub(super) fn digest_bytes(bytes: &[u8]) -> String {
+pub fn digest_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-pub(super) fn digest_json(domain: &[u8], value: &impl Serialize) -> String {
+pub fn digest_json(domain: &[u8], value: &impl Serialize) -> String {
     let encoded = serde_json::to_vec(value).expect("file-budget digest facts are serializable");
     let mut hasher = Sha256::new();
     hasher.update(domain);
@@ -555,7 +555,7 @@ pub(super) fn digest_json(domain: &[u8], value: &impl Serialize) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
-pub(super) fn bound_utf8(value: &str, max_bytes: usize) -> String {
+pub fn bound_utf8(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_owned();
     }

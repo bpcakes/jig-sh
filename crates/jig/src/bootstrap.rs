@@ -12,6 +12,10 @@ use jig_context::RepoContext;
 use jig_context::frontend_metadata::resolve_frontend_metadata;
 #[cfg(test)]
 use jig_context::{RuntimeCacheProfile, runtime_cache_base, runtime_profile_cache_name};
+use jig_execution::progress::CliProgress;
+use jig_repository::path::{
+    self, absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::{Builder as TempFileBuilder, TempDir};
@@ -21,7 +25,6 @@ use toml::Table;
 use toml::Value as TomlValue;
 use ulid::Ulid;
 
-use crate::progress::CliProgress;
 #[cfg(test)]
 use crate::runtime_cache_lock::{RuntimeCacheLockPolicy, RuntimeCacheLocks};
 use answers::{AnswerInput, RenderAnswers};
@@ -48,9 +51,6 @@ use initial_template::{
     official_template_ref_for_version, resolve_initial_template_request_with_policy,
 };
 use initial_template::{prepare_initial_template_source, resolve_initial_template_request};
-use jig_repository::path::{
-    self, absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors,
-};
 #[cfg(test)]
 use preview_seed::seed_preview_workspace;
 use renderer::{RenderStageRequest, stage_render, stage_selected_render};

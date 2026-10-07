@@ -1520,6 +1520,7 @@ dependencies = [
  "anyhow",
  "jig-context",
  "jig-owned-process",
+ "libc",
 ]
 
 [[package]]
