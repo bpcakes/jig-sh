@@ -188,6 +188,9 @@ fn run_configured_command(
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ConfiguredCommandOutcome> {
+    if invocation.tool_name == tool::SQLX_CHECK {
+        crate::policy::migration_versions::check(ctx)?;
+    }
     let working_directory =
         resolve_repository_working_directory(ctx.root(), invocation.working_directory)?;
     if let Some(environment) = invocation.environment {

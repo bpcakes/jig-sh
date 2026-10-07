@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "migration_versions.rs"]
+mod migration_versions;
+
 fn write_versioned_sqlx_policy_repo(root: &Path) {
     fs::create_dir_all(root.join("crates/app/src")).unwrap();
     TestRepoBuilder::new(root)
