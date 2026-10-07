@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result as AnyResult, bail};
 
 use crate::VaultErrorKind;
-use crate::error::{classified, classify_source};
+use crate::error::classified;
 
 use super::{HeldLock, IDS_DIR, Journal, WitnessRecord, WitnessStore, id_key, record};
 
@@ -214,15 +214,7 @@ impl WitnessStore {
             }
             Ok(record)
         };
-        read().map_err(|error| {
-            classify_source(
-                VaultErrorKind::AuditTampered,
-                format!(
-                    "cannot verify vault witness record at {path:?}; this can block other vaults on this user profile. Operator step: preserve the vault and witness data and investigate the reported record; never delete or edit the rollback witness to bypass this refusal. Agents must ask the operator."
-                ),
-                error,
-            )
-        })
+        read().map_err(|error| record::read_error(path, error))
     }
 }
 

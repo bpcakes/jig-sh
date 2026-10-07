@@ -203,13 +203,17 @@ fn scanned_record_failures_identify_the_record_without_echoing_its_contents() {
     let key = target_key(Path::new("/example/home"));
     for contents in cases {
         fs::write(&path, &contents).unwrap();
-        let error = store.target_has_pending_marker(&key).unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains(&format!("{path:?}")), "{message}");
-        assert!(message.contains("Operator step:"), "{message}");
-        assert!(message.contains("never delete or edit"), "{message}");
-        assert!(!message.contains("ExamplePrivateMalformedContents"));
-        assert!(!message.contains("ExampleOtherVault"));
+        for error in [
+            store.target_has_pending_marker(&key).unwrap_err(),
+            store.read_record(VAULT_ID).unwrap_err(),
+        ] {
+            let message = error.to_string();
+            assert!(message.contains(&format!("{path:?}")), "{message}");
+            assert!(message.contains("Operator step:"), "{message}");
+            assert!(message.contains("never delete or edit"), "{message}");
+            assert!(!message.contains("ExamplePrivateMalformedContents"));
+            assert!(!message.contains("ExampleOtherVault"));
+        }
         assert_eq!(fs::read(&path).unwrap(), contents);
     }
 }

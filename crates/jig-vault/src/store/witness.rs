@@ -287,10 +287,16 @@ impl WitnessStore {
     /// visible but unsynced, and every caller relies on what it says.
     pub(crate) fn read_record(&self, vault_id: &str) -> AnyResult<Option<WitnessRecord>> {
         record::validate_vault_id(vault_id)?;
-        let Some(record) = self.read_record_file(&self.record_path(vault_id))? else {
+        let path = self.record_path(vault_id);
+        let Some(record) = self
+            .read_record_file(&path)
+            .map_err(|error| record::read_error(&path, error))?
+        else {
             return Ok(None);
         };
-        record.validate(vault_id)?;
+        record
+            .validate(vault_id)
+            .map_err(|error| record::read_error(&path, error))?;
         self.sync_records()?;
         Ok(Some(record))
     }

@@ -4,6 +4,16 @@
 use anyhow::{Result as AnyResult, bail};
 use serde::{Deserialize, Serialize};
 
+pub(super) fn read_error(path: &std::path::Path, error: anyhow::Error) -> anyhow::Error {
+    crate::error::classify_source(
+        crate::VaultErrorKind::AuditTampered,
+        format!(
+            "cannot verify vault witness record at {path:?}; this can block other vaults on this user profile. Operator step: preserve the vault and witness data and investigate the reported record; never delete or edit the rollback witness to bypass this refusal. Agents must ask the operator."
+        ),
+        error,
+    )
+}
+
 pub(crate) const RECORD_SCHEMA: u32 = 1;
 /// Records exist only for vault IDs that have been witnessed as format 3.
 pub(crate) const WITNESSED_MIN_FORMAT: u32 = 3;
