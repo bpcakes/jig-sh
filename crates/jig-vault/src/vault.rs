@@ -161,14 +161,15 @@ impl Vault {
     /// # Errors
     ///
     /// Returns an error when the vault home or state path is invalid, unsafe,
-    /// or cannot be inspected.
+    /// or cannot be inspected, or pending witness discovery fails.
     pub fn status(explicit_home: Option<PathBuf>) -> Result<VaultStatus> {
         let (root, home_state) = VaultStore::inspect(explicit_home)?;
         let format_version = home_state
             .is_initialized()
             .then(|| VaultStore::public_format_version(&root))
             .flatten();
-        let pending_transaction = crate::store::pending_transaction_marked(&root);
+        let pending_transaction = crate::store::pending_transaction_marked(&root)
+            .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Io, error))?;
         Ok(VaultStatus {
             root,
             home_state,

@@ -401,6 +401,39 @@ fn status_reports_a_pending_transaction_without_side_effects() {
 }
 
 #[test]
+fn status_propagates_damaged_witness_discovery_without_writing() {
+    let temp = tempfile::tempdir().unwrap();
+    let pending = store_at(&temp, "pending");
+    pending.arm_fault_for_test(FaultPoint::AfterPending);
+    pending.init(&passphrase()).unwrap_err();
+    let unrelated = store_at(&temp, "unrelated");
+    unrelated.init(&passphrase()).unwrap();
+    let damaged = record_path(&temp, &unrelated);
+    std::fs::write(&damaged, b"invalid witness record").unwrap();
+    let journal = witness(&pending)
+        .read_journal(&pending.target_key())
+        .unwrap()
+        .unwrap()
+        .1;
+    let (status, operations) = crate::store::durable::recording::record(|| {
+        Vault::status(Some(pending.root().to_path_buf()))
+    });
+    let error = status.unwrap_err();
+    assert!(error.to_string().contains("pending vault transactions"));
+    assert!(operations.is_empty());
+    assert!(!pending.vault_path().exists());
+    assert_eq!(std::fs::read(&damaged).unwrap(), b"invalid witness record");
+    assert_eq!(
+        witness(&pending)
+            .read_journal(&pending.target_key())
+            .unwrap()
+            .unwrap()
+            .1,
+        journal
+    );
+}
+
+#[test]
 fn status_distinguishes_orphan_init_journals_from_missing_pending_journals() {
     for point in [FaultPoint::AfterJournal, FaultPoint::AfterPending] {
         let temp = tempfile::tempdir().unwrap();

@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result as AnyResult;
+use anyhow::{Context, Result as AnyResult};
 
 use crate::crypto::KdfParams;
 
@@ -69,19 +69,27 @@ pub(crate) fn pending_transaction_recorded(home: &Path) -> bool {
 
 /// Read-only status presentation: only a marker commits to finishing a
 /// transaction. A journal left before that point is discarded on retry.
-pub(crate) fn pending_transaction_marked(home: &Path) -> bool {
-    let Some(target) = final_target(home) else {
-        return false;
+pub(crate) fn pending_transaction_marked(home: &Path) -> AnyResult<bool> {
+    let parent = home
+        .parent()
+        .context("vault home has no parent directory")?;
+    let parent = match fs::canonicalize(parent) {
+        Ok(parent) => parent,
+        // A restore creates its parents before recording a transaction.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("failed to inspect pending vault target"),
     };
-    WitnessLocation::for_home(&target)
-        .ok()
-        .and_then(|witness| witness.open_existing().ok().flatten())
-        .and_then(|store| {
-            store
-                .target_has_pending_marker(&witness::target_key(&target))
-                .ok()
-        })
-        .unwrap_or(false)
+    let target = parent.join(
+        home.file_name()
+            .context("vault home has no directory name")?,
+    );
+    let witness = WitnessLocation::for_home(&target)?;
+    let Some(store) = witness.open_existing()? else {
+        return Ok(false);
+    };
+    store
+        .target_has_pending_marker(&witness::target_key(&target))
+        .context("failed to inspect pending vault transactions")
 }
 
 impl VaultStore {

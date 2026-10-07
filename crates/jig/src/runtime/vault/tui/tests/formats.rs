@@ -121,6 +121,17 @@ fn a_pending_absent_restore_target_is_presented_for_unlock_and_finished() {
     let backend = VaultTuiBackend::new(request(target.clone())).unwrap();
     assert_eq!(backend.descriptor().home_state, VaultHomeState::Initialized);
     assert!(!target.exists());
+    // Failure to read an unrelated witness record must not reroute this
+    // absent pending target to initialization or restore.
+    let damaged = temp
+        .path()
+        .join(".jig-vault-witness/ids")
+        .join(format!("{}.json", "f".repeat(64)));
+    std::fs::write(&damaged, b"invalid witness record").unwrap();
+    assert!(VaultTuiBackend::new(request(target.clone())).is_err());
+    assert!(backend.home_state().is_err());
+    assert!(!target.exists());
+    std::fs::remove_file(damaged).unwrap();
     let snapshot = backend
         .unlock(SecretBytes::new(PASSPHRASE.as_bytes().to_vec()))
         .unwrap();

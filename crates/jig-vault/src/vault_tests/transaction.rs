@@ -6,6 +6,8 @@ use crate::store::witness::{JournalPayload, TransactionKind, WitnessStore};
 
 #[path = "transaction/capacity.rs"]
 mod capacity;
+#[path = "transaction/locking.rs"]
+mod locking;
 #[path = "transaction/publication.rs"]
 mod publication;
 
