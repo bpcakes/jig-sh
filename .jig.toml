@@ -589,6 +589,43 @@ args = ["vault"]
 action = "source-vault-test"
 component = "repo"
 
+[[repository.actions]]
+description = "Run only the Rust tests that changes since the merge base with origin/master can affect."
+effects = ["read_only", "process"]
+inputs = [
+    "crates/**",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain*",
+    ".cargo/**",
+    "nextest.toml",
+    ".config/nextest.toml",
+    ".jig.toml",
+    "templates/**",
+    "scripts/**",
+    "examples/**",
+    "tests/**",
+]
+source_state = "worktree"
+intent = "check"
+
+[repository.actions.provenance]
+effects = "declared"
+inputs = "declared"
+source_state = "declared"
+intent = "declared"
+runner = "declared"
+target = "declared"
+
+[repository.actions.runner]
+kind = "argv"
+program = "scripts/test-rust-affected.py"
+args = []
+
+[repository.actions.target]
+action = "source-affected-test"
+component = "repo"
+
 [[repository.components]]
 adapters = ["rust"]
 description = "Primary application backend."
