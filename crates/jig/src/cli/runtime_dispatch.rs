@@ -75,11 +75,11 @@ pub(super) fn dispatch_runtime(dispatch: RuntimeDispatch, json_output: bool) -> 
     let cancellation = signal_session.cancellation();
     #[cfg(all(unix, not(test)))]
     let mut observer =
-        crate::progress::CliExecutionObserver::with_cancellation(json_output, move || {
+        jig_execution::progress::CliExecutionObserver::with_cancellation(json_output, move || {
             cancellation.cancelled()
         });
     #[cfg(any(not(unix), test))]
-    let mut observer = crate::progress::CliExecutionObserver::for_human_output(json_output);
+    let mut observer = jig_execution::progress::CliExecutionObserver::for_human_output(json_output);
     let outcome = runtime::dispatch_with_observer(&ctx, command, &mut observer);
     let outcome = observer.finish_with(outcome);
     #[cfg(all(unix, not(test)))]

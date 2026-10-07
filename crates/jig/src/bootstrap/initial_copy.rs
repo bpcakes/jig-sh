@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use jig_context::RepoContext;
+use jig_execution::progress::CliProgress;
+use jig_repository::path::validate_portable_planned_file_collisions;
 use serde_json::Value as JsonValue;
 #[cfg(test)]
 use toml::{Table, Value as TomlValue};
@@ -26,8 +28,6 @@ use super::template_source::PrivateAnswerOverrides;
 use super::update_transaction::{RepositoryUpdateLock, RepositoryUpdateTransaction};
 #[cfg(test)]
 use super::{TEMPLATE_LOCAL_PATH_KEY, TEMPLATE_MODE_KEY};
-use crate::progress::CliProgress;
-use jig_repository::path::validate_portable_planned_file_collisions;
 
 const ANSWERS_DETAIL: &str = ".jig.toml values and command defaults";
 const REQUIRED_FRONTEND_SCRIPTS: &[&str] = &["lint", "typecheck", "build:bundle", "test:coverage"];

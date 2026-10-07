@@ -20,9 +20,9 @@ pub(super) fn homes<P: AgentProvider>(
         );
     }
     let progress = if !json && (usage || P::METADATA.inspect_on_list) {
-        crate::progress::CliProgress::new(P::METADATA.homes_command)
+        jig_execution::progress::CliProgress::new(P::METADATA.homes_command)
     } else {
-        crate::progress::CliProgress::disabled(P::METADATA.homes_command)
+        jig_execution::progress::CliProgress::disabled(P::METADATA.homes_command)
     };
     progress.header(format!("inspect local {} homes", P::METADATA.name));
     let report = super::home_picker::supervise(|cancelled| {

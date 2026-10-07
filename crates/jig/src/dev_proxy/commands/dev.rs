@@ -1,9 +1,9 @@
 use anyhow::Result;
 use jig_context::RepoContext;
+use jig_execution::progress::CliProgress;
 use serde_json::Value;
 
 use crate::command::{DevCommand, DevRecoverRequest, DevRequest, DevStatusRequest, DevStopRequest};
-use crate::progress::CliProgress;
 
 use super::super::{
     FrontendDependencyPreflightCancelled, FrontendDependencyPreflightCleanupUnconfirmed,

@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use jig_agents::agent_provider::{AgentProvider, SessionProvider};
 use jig_agents::codex::provider::Codex;
+use jig_execution::progress::CliProgress;
 
 use super::{CodexCommand, CodexLaunchOpts, CodexResumeOpts, render};
 use crate::cli::agent_run;
-use crate::progress::CliProgress;
 
 pub(in crate::cli) fn run_codex_command(command: CodexCommand, json_output: bool) -> Result<()> {
     match command {

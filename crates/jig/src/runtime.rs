@@ -14,7 +14,6 @@ use jig_policy::{
 use crate::command::{AgentMapCommand, CheckCommand, NamedCheck, RuntimeCommand, StateCommand};
 
 mod agent;
-mod file_budget;
 mod migration;
 mod repository_run;
 mod run_cancellation;
@@ -26,7 +25,7 @@ mod vault_env;
 mod vault_import;
 mod vault_withholding;
 
-pub(crate) use file_budget::{FileBudgetEvaluationMode, run_direct_file_budget};
+pub(crate) use jig_repository::file_budget::{FileBudgetEvaluationMode, run_direct_file_budget};
 #[cfg(test)]
 pub(crate) use vault_withholding::VAULT_PASSPHRASE_WITHHELD_ENV;
 pub(crate) use vault_withholding::{
