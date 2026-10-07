@@ -12,6 +12,7 @@ mod preparation_tests {
 
     use tempfile::tempdir;
 
+    use jig_git::GIT_BIN_ENV;
     use super::*;
     use crate::runtime::loops::occurrence::{
         OccurrenceAttentionScope, OccurrenceClaim, OccurrenceGuard, OccurrenceStore,

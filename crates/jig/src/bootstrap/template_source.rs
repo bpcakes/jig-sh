@@ -4,18 +4,19 @@ use std::process::Command;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use jig_git::scrub_known_repository_git_environment;
 use jig_owned_process::{require_success, run_checked_output};
 use tempfile::TempDir;
 use toml::{Table, Value as TomlValue};
 
 use super::git::{
     disable_git_worktree_integrations, ensure_clean_git_work_tree, git_stdout, is_git_work_tree,
-    scrub_known_repository_git_environment, scrub_remote_template_git_environment,
+    scrub_remote_template_git_environment,
 };
 use super::path::absolute_path_from;
 use super::{
-    ANSWERS_FILE, GIT_BIN_ENV, REMOTE_TEMPLATE_MODE_ERROR, TEMPLATE_LOCAL_PATH_KEY,
-    TEMPLATE_MODE_KEY, TemplateMode, UpdateOpts, external_program, read_answers_toml,
+    ANSWERS_FILE, REMOTE_TEMPLATE_MODE_ERROR, TEMPLATE_LOCAL_PATH_KEY, TEMPLATE_MODE_KEY,
+    TemplateMode, UpdateOpts, read_answers_toml,
 };
 const COMMIT_KEY: &str = "_commit";
 const SRC_PATH_KEY: &str = "_src_path";
@@ -331,7 +332,7 @@ fn clone_template_source(template: &str) -> Result<TempDir> {
     let destination = checkout.path().join("template");
     let empty_git_template = checkout.path().join("empty-git-template");
     fs::create_dir(&empty_git_template).context("Failed to create private empty Git template")?;
-    let git_program = external_program(GIT_BIN_ENV, "git");
+    let git_program = jig_git::git_program();
     let mut command = Command::new(&git_program);
     scrub_remote_template_git_environment(&mut command);
     disable_git_worktree_integrations(&mut command);
@@ -359,7 +360,7 @@ fn clone_template_source(template: &str) -> Result<TempDir> {
 }
 
 fn git_checkout(repo: &Path, vcs_ref: &str) -> Result<()> {
-    let mut command = Command::new(external_program(GIT_BIN_ENV, "git"));
+    let mut command = Command::new(jig_git::git_program());
     scrub_known_repository_git_environment(&mut command);
     disable_git_worktree_integrations(&mut command);
     command

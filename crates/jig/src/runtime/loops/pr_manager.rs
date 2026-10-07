@@ -11,20 +11,20 @@ use jig_owned_process::ProcessOutputOverflowPolicy;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::{CommandTimeout, RepoContext};
 use crate::execution::{
     AdditionalCancellationControl, ExecutionCommandError, ExecutionControl, NoopExecutionObserver,
     run_authoritative_execution_command,
 };
-use crate::runtime::git_path::{
-    MAX_GIT_POINTER_BYTES, parse_gitdir_pointer, path_from_git_bytes, read_nofollow_regular_file,
-    trim_ascii_line,
-};
 use crate::runtime::worker_runner::{
     CodexExecFailure, CodexExecOutcome, CodexExecRequest, WorkerRunLabel, run_codex_exec,
 };
 use crate::state::now_ms;
+use jig_git::metadata::{
+    MAX_GIT_POINTER_BYTES, parse_gitdir_pointer, path_from_git_bytes, read_nofollow_regular_file,
+    trim_ascii_line,
+};
+use jig_git::{git_program, scrub_known_repository_git_environment};
 
 use super::github;
 use super::managed_path::{ensure_managed_directory, inspect_managed_directory};

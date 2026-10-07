@@ -330,7 +330,7 @@ fn run_init_falls_back_only_for_unsupported_git_branch_flag() {
         fs::set_permissions(&git_path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &git_path);
+    let _git_bin = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git_path);
 
     let template = materialize_template_worktree();
     let destination = temp.path().join("repo");
@@ -383,7 +383,7 @@ fn run_init_surfaces_git_branch_init_failures() {
         fs::set_permissions(&git_path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &git_path);
+    let _git_bin = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git_path);
 
     let template = materialize_template_worktree();
     let error = run_init(InitOpts {

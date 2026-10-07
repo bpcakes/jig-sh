@@ -1,0 +1,27 @@
+[package]
+name = "jig-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Git program selection, environment scrubbing, and on-disk metadata reads for Jig."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lib]
+name = "jig_git"
+
+[dependencies]
+anyhow.workspace = true
+cap-fs-ext.workspace = true
+cap-std.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true
+
+[lints]
+workspace = true

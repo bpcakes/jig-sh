@@ -57,6 +57,7 @@
 - Change bounded owned-process execution or process-tree cleanup: [jig-owned-process](../jig-owned-process/AGENTS.md).
 - Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`; the legacy file-budget checker retirement evaluates `repo:file-budget` inline in `src/bootstrap/file_budget_lifecycle.rs`.
 - Change repository source identity: `src/source_identity.rs`.
+- Change Git program selection (`JIG_GIT_BIN`), known-repository `GIT_*` scrubbing, or Git metadata-file reads: [jig-git](../jig-git/AGENTS.md).
 
 ## Invariants
 

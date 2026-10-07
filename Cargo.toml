@@ -7,6 +7,7 @@ members = [
     "crates/jig-dev-proxy",
     "crates/jig-features",
     "crates/jig-file-budget",
+    "crates/jig-git",
     "crates/jig-go",
     "crates/jig-owned-process",
     "crates/jig-rust",
@@ -70,6 +71,7 @@ jig-codex-tui = { path = "crates/jig-codex-tui", version = "=0.7.3-dev" }
 jig-core = { path = "crates/jig-core", version = "=0.7.3-dev" }
 jig-features = { path = "crates/jig-features", version = "=0.7.3-dev" }
 jig-file-budget = { path = "crates/jig-file-budget", version = "=0.7.3-dev" }
+jig-git = { path = "crates/jig-git", version = "=0.7.3-dev" }
 jig-go = { path = "crates/jig-go", version = "=0.7.3-dev" }
 jig-owned-process = { path = "crates/jig-owned-process", version = "=0.7.3-dev" }
 jig-rust = { path = "crates/jig-rust", version = "=0.7.3-dev" }

@@ -12,7 +12,7 @@ use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 #[test]
 fn non_codex_tick_refuses_to_create_an_unignored_loop_runtime() {
     let _env_lock = lock_env();
-    let _git = EnvVarGuard::set(crate::bootstrap::GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+    let _git = EnvVarGuard::set(jig_git::GIT_BIN_ENV, std::ffi::OsStr::new("git"));
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
     let init = std::process::Command::new("git")

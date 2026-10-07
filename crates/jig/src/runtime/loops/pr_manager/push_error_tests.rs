@@ -11,6 +11,7 @@ mod push_error_tests {
 
     use tempfile::tempdir;
 
+    use jig_git::GIT_BIN_ENV;
     use super::*;
     #[cfg(unix)]
     use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};

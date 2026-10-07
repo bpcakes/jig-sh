@@ -70,7 +70,7 @@ fn run_init_uses_native_renderer_and_git() {
         fs::set_permissions(&git_path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &git_path);
+    let _git_bin = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git_path);
 
     let template = materialize_template_worktree();
     let destination = temp.path().join("repo");

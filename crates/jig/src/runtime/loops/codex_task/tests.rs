@@ -2,6 +2,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
+use jig_git::GIT_BIN_ENV;
 
 #[test]
 fn prompt_reader_rejects_oversized_and_non_regular_files() {

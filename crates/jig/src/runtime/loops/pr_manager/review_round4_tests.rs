@@ -188,7 +188,7 @@ exec git "$@"
         let mut permissions = fs::metadata(&git).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&git, permissions).unwrap();
-        let _git = crate::test_env::EnvVarGuard::set(crate::bootstrap::GIT_BIN_ENV, git.as_os_str());
+        let _git = crate::test_env::EnvVarGuard::set(jig_git::GIT_BIN_ENV, git.as_os_str());
         let _lease_path = crate::test_env::EnvVarGuard::set("JIG_TEST_LEASE_PATH", lease_path.as_os_str());
         let _observed = crate::test_env::EnvVarGuard::set("JIG_TEST_LEASE_OBSERVED", observed.as_os_str());
         let workflow = workflow();
@@ -273,7 +273,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             "JIG_TEST_LEASE_REASSIGNED",
             reassigned.as_os_str(),
         );
-        let _git = crate::test_env::EnvVarGuard::set(crate::bootstrap::GIT_BIN_ENV, git.as_os_str());
+        let _git = crate::test_env::EnvVarGuard::set(jig_git::GIT_BIN_ENV, git.as_os_str());
 
         let workflow = workflow();
         let mut item = item();
@@ -333,7 +333,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
     fn pre_start_worker_cancellation_is_reported_as_unexecuted() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
-            crate::bootstrap::GIT_BIN_ENV,
+            jig_git::GIT_BIN_ENV,
             std::ffi::OsStr::new("git"),
         );
         let (_temp, ctx, worktree, head) = repair_worktree_fixture();
@@ -377,7 +377,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
     fn pre_start_cancellation_retains_worktree_without_cleanup_authority() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
-            crate::bootstrap::GIT_BIN_ENV,
+            jig_git::GIT_BIN_ENV,
             std::ffi::OsStr::new("git"),
         );
         let (_temp, ctx, worktree, head) = repair_worktree_fixture();
@@ -436,7 +436,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
     fn pre_execution_failure_cleans_the_worktree_without_consuming_an_attempt() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
-            crate::bootstrap::GIT_BIN_ENV,
+            jig_git::GIT_BIN_ENV,
             std::ffi::OsStr::new("git"),
         );
         let (_temp, ctx, worktree, head) = repair_worktree_fixture();
@@ -480,7 +480,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
     fn failed_worker_retains_dirty_worktree_and_receipt() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
-            crate::bootstrap::GIT_BIN_ENV,
+            jig_git::GIT_BIN_ENV,
             std::ffi::OsStr::new("git"),
         );
         let (_temp, ctx, worktree, head) = repair_worktree_fixture();
@@ -524,7 +524,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
     fn failed_worker_retains_a_clean_local_commit() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
-            crate::bootstrap::GIT_BIN_ENV,
+            jig_git::GIT_BIN_ENV,
             std::ffi::OsStr::new("git"),
         );
         let (_temp, ctx, worktree, head) = repair_worktree_fixture();
@@ -577,7 +577,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
     fn failed_worker_removes_a_clean_unchanged_worktree() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
-            crate::bootstrap::GIT_BIN_ENV,
+            jig_git::GIT_BIN_ENV,
             std::ffi::OsStr::new("git"),
         );
         let (_temp, ctx, worktree, head) = repair_worktree_fixture();
@@ -616,7 +616,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
     fn failed_worker_retains_unchanged_worktree_without_cleanup_authority() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
-            crate::bootstrap::GIT_BIN_ENV,
+            jig_git::GIT_BIN_ENV,
             std::ffi::OsStr::new("git"),
         );
         let (_temp, ctx, worktree, head) = repair_worktree_fixture();

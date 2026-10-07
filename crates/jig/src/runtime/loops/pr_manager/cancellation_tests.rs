@@ -4,6 +4,7 @@ mod cancellation_tests {
 
     use tempfile::tempdir;
 
+    use jig_git::GIT_BIN_ENV;
     use super::*;
 
     struct CancelledControl;

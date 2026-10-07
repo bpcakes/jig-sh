@@ -1485,6 +1485,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-git"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "cap-fs-ext",
+ "cap-std",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "jig-go"
 version = "0.7.3-dev"
 dependencies = [
@@ -1532,6 +1543,7 @@ dependencies = [
  "jig-dev-proxy",
  "jig-features",
  "jig-file-budget",
+ "jig-git",
  "jig-owned-process",
  "jig-rust",
  "jig-tui",

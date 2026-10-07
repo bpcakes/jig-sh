@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use cap_std::{ambient_authority, fs::Dir};
 
-use crate::runtime::git_path::{
+use jig_git::metadata::{
     MAX_GIT_POINTER_BYTES, parse_git_path_line, parse_gitdir_pointer, read_nofollow_regular_file,
 };
 

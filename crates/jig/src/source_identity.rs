@@ -18,7 +18,7 @@ use jig_contract::{
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
-use crate::bootstrap::scrub_known_repository_git_environment;
+use jig_git::scrub_known_repository_git_environment;
 
 #[cfg(unix)]
 use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
