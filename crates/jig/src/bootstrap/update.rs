@@ -234,7 +234,7 @@ fn run_launcher_only_update(prepared: PreparedUpdate) -> Result<Value> {
         vec![format!(
             "Because {} was missing, review the repository's current harness footprint and answer overrides, then run `cd {} && scripts/jig adopt . --write --force` to establish exact managed-path ownership before a full update.",
             managed_paths::MANIFEST_PATH,
-            crate::shell::quote(&destination.to_string_lossy()),
+            jig_repository::shell::quote(&destination.to_string_lossy()),
         )]
     } else {
         Vec::new()

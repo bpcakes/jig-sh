@@ -25,10 +25,10 @@ impl RepositoryRenderModel {
         contract_version: u32,
     ) -> Result<()> {
         for action in &mut self.actions {
-            if contract_version >= crate::repository::ACTION_EXECUTION_CONTRACT_VERSION {
+            if contract_version >= jig_repository::ACTION_EXECUTION_CONTRACT_VERSION {
                 make_shell_explicit(&mut action.runner);
             }
-            crate::repository::runners::validate(contract_version, action)?;
+            jig_repository::runners::validate(contract_version, action)?;
         }
         Ok(())
     }

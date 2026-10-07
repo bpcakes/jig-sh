@@ -398,7 +398,7 @@ fn go_runtime_check_uses_a_nested_v6_component_module() {
         "#!/bin/sh\nprintf 'go version go1.27.4 linux/amd64\\n'\n",
     );
     let ctx = RepoContext::load_from_root(root.clone()).unwrap();
-    crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
 
     let check = go_runtime_check(
         &ctx,
@@ -438,7 +438,7 @@ fn go_runtime_check_uses_the_nearest_parent_module_for_a_nested_component() {
         "#!/bin/sh\nprintf 'go version go1.27.4 linux/amd64\\n'\n",
     );
     let ctx = RepoContext::load_from_root(root.clone()).unwrap();
-    crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
 
     let check = go_runtime_check(
         &ctx,
@@ -488,7 +488,7 @@ fn go_runtime_check_reports_a_missing_module_at_the_nested_component_root() {
     write_doctor_fixture(&root);
     configure_doctor_fixture_go_adapter_at(&root, "services/api");
     let ctx = RepoContext::load_from_root(root.clone()).unwrap();
-    crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
 
     let check = go_runtime_check(
         &ctx,

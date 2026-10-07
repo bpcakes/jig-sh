@@ -30,7 +30,7 @@ pub(super) fn prepare_wave(
             );
             let prepare = || -> std::result::Result<Prepared, TargetStop> {
                 target_control.remaining()?;
-                crate::repository::validate_current_repository_authority(
+                jig_repository::validate_current_repository_authority(
                     finisher.ctx,
                     &finisher.run.plan.config_digest,
                 )

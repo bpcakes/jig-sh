@@ -26,7 +26,7 @@ use jig_state::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::repository::{RepositoryCatalog, target_input_digest};
+use jig_repository::{RepositoryCatalog, target_input_digest};
 
 use super::tool_execution::run_native_tool_with_control;
 use super::tool_execution::{NativeActionContext, run_prepared_native_action};
@@ -129,13 +129,13 @@ pub(super) fn execute_freshly_planned_check_run_with_lease(
     repository_execution: jig_state::RepositoryExecutionLease,
     observe_durable_cancellation: bool,
 ) -> Result<CheckRunExecution> {
-    crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
+    jig_repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     // A nonempty run gets the same source check from its first target
     // precondition. An empty affected plan has no such target, so it must prove
     // freshness here before it can become a durable success.
     if plan.targets.is_empty() {
-        crate::repository::validate_run_plan_source(ctx, &plan)?;
-        crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
+        jig_repository::validate_run_plan_source(ctx, &plan)?;
+        jig_repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     }
     if observe_durable_cancellation && observer.cancelled() {
         bail!("Execution was cancelled before the run started");
@@ -202,7 +202,7 @@ pub(super) fn start_check_run(
     plan: RunPlan,
 ) -> Result<(jig_state::DurableRun, jig_state::RunLease)> {
     let repository_execution = jig_state::acquire_repository_execution_lease(ctx, &plan.effects)?;
-    let plan = crate::repository::validate_run_plan(ctx, catalog, &plan)?;
+    let plan = jig_repository::validate_run_plan(ctx, catalog, &plan)?;
     jig_state::start_run_with_execution_lease(ctx, plan, repository_execution)
 }
 
@@ -436,10 +436,9 @@ fn execute_started_check_run_inner(
                 )?;
                 resource_lease = outcome.lease;
                 (outcome.result, outcome.compatibility)
-            } else if let Err(error) = crate::repository::validate_current_repository_authority(
-                ctx,
-                &run.plan.config_digest,
-            ) {
+            } else if let Err(error) =
+                jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
+            {
                 source_epoch.discard_reusable_observation();
                 let message = format!(
                     "target '{}' could not start because repository execution authority could not be verified: {error:#}",
@@ -496,8 +495,8 @@ fn execute_started_check_run_inner(
     }
 
     if run.plan.targets.is_empty() {
-        crate::repository::validate_run_plan_source(ctx, &run.plan)?;
-        crate::repository::validate_current_repository_authority(ctx, &run.plan.config_digest)?;
+        jig_repository::validate_run_plan_source(ctx, &run.plan)?;
+        jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)?;
     }
     let conclusion = aggregate_conclusion(conclusions.values().copied());
     complete_run(ctx, &run_id, conclusion)?;
@@ -567,8 +566,7 @@ fn run_target_with_control(
             working_directory,
             environment,
         } => {
-            let command =
-                crate::repository::runners::argv_command(program, args, &planned.arguments);
+            let command = jig_repository::runners::argv_command(program, args, &planned.arguments);
             target::run_process_target(
                 ctx,
                 planned,

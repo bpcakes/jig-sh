@@ -56,7 +56,7 @@ pub(super) fn render_context(
             answers
                 .rust_crate_roots()
                 .iter()
-                .map(|root| JsonValue::String(crate::shell::quote(root)))
+                .map(|root| JsonValue::String(jig_repository::shell::quote(root)))
                 .collect(),
         ),
     );
@@ -171,7 +171,7 @@ pub(super) fn render_context(
     );
     if contract_version >= 6 {
         let mut repository = repository.expect("contract v6 always resolves a repository model");
-        if contract_version >= crate::repository::ACTION_EXECUTION_CONTRACT_VERSION {
+        if contract_version >= jig_repository::ACTION_EXECUTION_CONTRACT_VERSION {
             for action in &mut repository.actions {
                 if matches!(&action.runner, jig_contract::ActionRunner::Native { operation, .. } if operation == jig_contract::tool::MIGRATION_ADD)
                     && action.arguments.is_empty()
@@ -181,7 +181,7 @@ pub(super) fn render_context(
                         jig_contract::ActionArgumentSpec::migration_name(),
                     );
                 }
-                crate::repository::arguments::normalize_declarations(contract_version, action)?;
+                jig_repository::arguments::normalize_declarations(contract_version, action)?;
             }
         }
         repository.prepare_runner_epoch(contract_version)?;

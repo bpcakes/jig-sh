@@ -103,7 +103,7 @@ pub(super) fn execute_parallel_read_only_layer(
     source_epoch.begin_read_only_layer();
     if source_may_be_observed {
         if let Err(error) =
-            crate::repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
+            jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
         {
             let outcomes = targets
                 .iter()
@@ -291,10 +291,9 @@ fn execute_parallel_target(
             )),
         ),
         Ok(false) => {
-            if let Err(error) = crate::repository::validate_current_repository_authority(
-                ctx,
-                &run.plan.config_digest,
-            ) {
+            if let Err(error) =
+                jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
+            {
                 let message = format!(
                     "target '{}' could not start because repository execution authority could not be verified: {error:#}",
                     planned.target

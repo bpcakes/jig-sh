@@ -64,7 +64,7 @@ impl TryFrom<RepositoryRunOpts> for crate::command::RepositoryRunRequest {
     type Error = anyhow::Error;
     fn try_from(opts: RepositoryRunOpts) -> Result<Self, Self::Error> {
         Ok(Self {
-            arguments: crate::repository::arguments::parse_cli(opts.arguments)?,
+            arguments: jig_repository::arguments::parse_cli(opts.arguments)?,
             comparison: opts.comparison.request()?,
             selectors: opts.selectors,
             profile: opts.profile,

@@ -48,8 +48,8 @@ fn retract_formatter_inference(
     epoch: u32,
     commands: &BTreeMap<String, String>,
 ) {
-    use crate::repository::freshness::adoption::{cargo_formatter, is_read_only_check};
     use jig_contract::ActionSourceState;
+    use jig_repository::freshness::adoption::{cargo_formatter, is_read_only_check};
 
     if epoch < jig_contract::freshness::WORKTREE_FRESHNESS_CONTRACT_VERSION
         || action.source_state != Some(ActionSourceState::Worktree)

@@ -300,7 +300,7 @@ pub(super) fn collection_error_for(
 
 pub(super) fn shell_display(argv: &[String]) -> String {
     argv.iter()
-        .map(|part| crate::shell::quote(part))
+        .map(|part| jig_repository::shell::quote(part))
         .collect::<Vec<_>>()
         .join(" ")
 }

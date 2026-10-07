@@ -1592,6 +1592,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-repository"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "globset",
+ "jig-context",
+ "jig-contract",
+ "jig-execution",
+ "jig-file-budget",
+ "jig-git",
+ "jig-owned-process",
+ "jig-rust",
+ "jig-state",
+ "libc",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "toml",
+ "toml_edit",
+]
+
+[[package]]
 name = "jig-rust"
 version = "0.7.3-dev"
 dependencies = [
@@ -1628,6 +1654,7 @@ dependencies = [
  "jig-git",
  "jig-loops",
  "jig-owned-process",
+ "jig-repository",
  "jig-rust",
  "jig-state",
  "jig-tui",

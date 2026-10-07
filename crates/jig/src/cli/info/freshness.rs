@@ -2,10 +2,10 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 use jig_context::RepoContext;
+use jig_repository::freshness::adoption;
 
 use super::FreshnessOpts;
 use crate::cli::output::print_json;
-use crate::repository::freshness::adoption;
 
 pub(super) fn run(opts: &FreshnessOpts, json_output: bool) -> Result<()> {
     let output = adoption::preview(

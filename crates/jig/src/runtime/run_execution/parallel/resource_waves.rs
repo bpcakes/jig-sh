@@ -1,9 +1,9 @@
 //! Admit without hold-and-wait, then publish only after the cohort source check.
+use jig_repository::execution_resources::{self, ResolvedResources};
 use jig_state::ResourceLease;
 
 use super::slots::AdmissionSnapshot;
 use super::*;
-use crate::repository::execution_resources::{self, ResolvedResources};
 use crate::runtime::run_execution::resources;
 use crate::runtime::run_execution::target::TargetBudget;
 
@@ -320,12 +320,14 @@ fn wave_fingerprint(
                     .is_some_and(|budget| budget.remaining_time().is_zero())
             })
     };
-    crate::source_identity::repository_source_snapshot_with_cancellation(ctx.root(), &cancelled)
-        .map(|snapshot| snapshot.worktree_fingerprint)
-        .map_err(|_| {
-            "resource wave source authority could not be established within its remaining budget"
-                .into()
-        })
+    jig_repository::source_identity::repository_source_snapshot_with_cancellation(
+        ctx.root(),
+        &cancelled,
+    )
+    .map(|snapshot| snapshot.worktree_fingerprint)
+    .map_err(|_| {
+        "resource wave source authority could not be established within its remaining budget".into()
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

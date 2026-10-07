@@ -271,7 +271,7 @@ fn nested_manifest_command(manifest_paths: &[String], cargo_command: &str, label
     let mut command = "( found=0".to_string();
     command.push_str("; rc=0");
     for manifest_path in manifest_paths {
-        let manifest_path = crate::shell::quote(manifest_path);
+        let manifest_path = jig_repository::shell::quote(manifest_path);
         // Keep any cargo failure nonzero while still attempting later inferred manifests.
         let _ = write!(
             command,
@@ -281,7 +281,10 @@ fn nested_manifest_command(manifest_paths: &[String], cargo_command: &str, label
     let _ = write!(
         command,
         "; if [ \"$found\" -eq 0 ]; then printf '%s\\n' {}; fi",
-        crate::shell::quote(&format!("{}{label}.", crate::CARGO_SKIP_OUTPUT_PREFIX))
+        jig_repository::shell::quote(&format!(
+            "{}{label}.",
+            jig_repository::shell::CARGO_SKIP_OUTPUT_PREFIX
+        ))
     );
     command.push_str("; exit \"$rc\" )");
     command

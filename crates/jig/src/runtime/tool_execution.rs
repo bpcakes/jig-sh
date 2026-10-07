@@ -152,8 +152,8 @@ fn native_result(
         valid_until_ms: None,
     }
 }
-use crate::repository::RepositoryCatalog;
 use crate::tool_defs::{args, kind, tool};
+use jig_repository::RepositoryCatalog;
 
 mod failure;
 
@@ -371,7 +371,7 @@ fn bind_alias_arguments(
     {
         return Ok(args);
     }
-    Ok(json!(crate::repository::arguments::bind(
+    Ok(json!(jig_repository::arguments::bind(
         ctx.contract_version(),
         action,
         serde_json::from_value(args)?

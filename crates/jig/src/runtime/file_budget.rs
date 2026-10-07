@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
 
-use crate::source_identity::{
+use jig_repository::source_identity::{
     BaselineFileV1, CurrentSourceV1, ExactCurrentPathStateV1 as GitExactCurrentPathStateV1,
     FileChangeKindV1, ScopeEntryV1, ScopeIssueKindV1, ScopeSnapshotV1,
     capture_all_current_scope_v1_with_cancellation, capture_scope_v1_with_cancellation,
@@ -61,7 +61,7 @@ pub(crate) fn run_direct_file_budget(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeActionResult> {
     let prepared =
-        crate::repository::prepare_file_budget_input_v1(repository, request, configuration)?;
+        jig_repository::prepare_file_budget_input_v1(repository, request, configuration)?;
     if let PolicyPreparationV1::InvalidPolicy {
         diagnostics_count,
         diagnostics_digest,

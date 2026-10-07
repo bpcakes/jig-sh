@@ -110,14 +110,14 @@ fn format_codex_command_summary(value: &serde_json::Value, label: &str) -> Strin
     let mut display = CommandDisplay::default();
     let home = display.text(value_str(value, "home").unwrap_or("<unknown>"));
     let codex_bin = display.text(value_str(value, "codex_bin").unwrap_or("codex"));
-    let mut command = vec![crate::shell::quote(&codex_bin)];
+    let mut command = vec![jig_repository::shell::quote(&codex_bin)];
     command.extend(
         value["args"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(serde_json::Value::as_str)
-            .map(|argument| crate::shell::quote(&display.text(argument))),
+            .map(|argument| jig_repository::shell::quote(&display.text(argument))),
     );
     let lines = [
         format!("{label}: dry run"),

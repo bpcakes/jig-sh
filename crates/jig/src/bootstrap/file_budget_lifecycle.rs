@@ -9,6 +9,7 @@ use jig_context::RepoContext;
 use jig_contract::{
     ActionId, ActionRunner, ComponentId, NativeActionConfigurationV1, RunConclusion, TargetId, tool,
 };
+use jig_repository::{RepositoryCatalog, target_input_digest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -16,7 +17,6 @@ use sha2::{Digest, Sha256};
 use super::managed_paths;
 use super::repository_model::generated_file_budget_action;
 use super::staged_render::{FILE_BUDGET_POLICY_PATH, StagedRender};
-use crate::repository::{RepositoryCatalog, target_input_digest};
 
 pub(super) const LEGACY_CHECKER_PATH: &str = "scripts/check-rust-file-loc.sh";
 const LEGACY_REGISTRY_PATH: &str = ".agent/jig-legacy-assets.json";
@@ -326,7 +326,7 @@ fn native_proof_with_context(ctx: &RepoContext) -> Result<LifecycleProof> {
         .action(&target)
         .context("file-budget action disappeared")?;
     let configuration = action_file_budget_configuration(action)?;
-    let source = crate::source_identity::repository_source_snapshot(root)?;
+    let source = jig_repository::source_identity::repository_source_snapshot(root)?;
     let result = crate::runtime::run_direct_file_budget(
         ctx,
         None,
@@ -338,7 +338,7 @@ fn native_proof_with_context(ctx: &RepoContext) -> Result<LifecycleProof> {
     if result.conclusion != RunConclusion::Success {
         bail!("repo:file-budget does not pass on the current repository source");
     }
-    if crate::source_identity::repository_source_snapshot(root)?.worktree_fingerprint
+    if jig_repository::source_identity::repository_source_snapshot(root)?.worktree_fingerprint
         != source.worktree_fingerprint
     {
         bail!("repository source changed while repo:file-budget was evaluated");

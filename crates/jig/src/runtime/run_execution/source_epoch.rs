@@ -309,7 +309,7 @@ impl ExecutionSourceEpoch {
 pub(super) fn collect_execution_fingerprint(
     ctx: &RepoContext,
 ) -> std::result::Result<String, String> {
-    crate::source_identity::repository_source_snapshot(ctx.root())
+    jig_repository::source_identity::repository_source_snapshot(ctx.root())
         .map(|snapshot| snapshot.worktree_fingerprint)
         .map_err(|error| format!("{error:#}"))
 }
@@ -397,7 +397,7 @@ pub(super) fn enforce_current_repository_authority(
     planned: &PlannedTarget,
     mut capture: TargetCapture,
 ) -> TargetCapture {
-    let Err(error) = crate::repository::validate_current_repository_authority(ctx, expected_digest)
+    let Err(error) = jig_repository::validate_current_repository_authority(ctx, expected_digest)
     else {
         return capture;
     };

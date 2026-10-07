@@ -103,7 +103,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                 slots.finish_resource_dispatch();
 
                 if !ordinary.is_empty() {
-                    let precondition = crate::repository::validate_current_repository_authority(
+                    let precondition = jig_repository::validate_current_repository_authority(
                         finisher.ctx,
                         &finisher.run.plan.config_digest,
                     )
@@ -261,7 +261,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                         cancellation.current().unwrap_or(true)
                     };
                     let observed = source_epoch.observe_ready_read_only_postcondition_with(|| {
-                        crate::source_identity::repository_source_snapshot_with_cancellation(
+                        jig_repository::source_identity::repository_source_snapshot_with_cancellation(
                             finisher.ctx.root(),
                             &cancelled,
                         )

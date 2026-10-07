@@ -13,8 +13,8 @@ mod commands;
 pub(crate) fn run(
     commands: bool,
     json_output: bool,
-    request: Option<crate::repository::InspectRequest>,
-    projection: crate::surface::ResponseSurface,
+    request: Option<jig_repository::InspectRequest>,
+    projection: jig_repository::surface::ResponseSurface,
 ) -> Result<Value> {
     if commands && request.is_some() {
         anyhow::bail!("--commands cannot be combined with an info subject");
@@ -72,7 +72,7 @@ pub(crate) fn run(
     }
     let ctx = RepoContext::load()?;
     match request {
-        Some(request) => crate::repository::inspect_repository(&ctx, request, projection),
+        Some(request) => jig_repository::inspect_repository(&ctx, request, projection),
         None => Ok(repo_info(&ctx)),
     }
 }

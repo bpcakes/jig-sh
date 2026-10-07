@@ -183,11 +183,11 @@ fn validate_required_commands(ctx: &RepoContext, errors: &mut Vec<String>) {
 fn validate_repository_model(
     ctx: &RepoContext,
     errors: &mut Vec<String>,
-) -> Option<crate::repository::RepositoryCatalog> {
+) -> Option<jig_repository::RepositoryCatalog> {
     if ctx.contract_version() < 6 {
         return None;
     }
-    let catalog = match crate::repository::RepositoryCatalog::from_context(ctx) {
+    let catalog = match jig_repository::RepositoryCatalog::from_context(ctx) {
         Ok(catalog) => catalog,
         Err(error) => {
             errors.push(format!("Invalid repository model: {error}."));
@@ -198,7 +198,7 @@ fn validate_repository_model(
         let WorkGate::Evidence(gate) = gate else {
             continue;
         };
-        if let Err(error) = crate::repository::resolve_evidence_targets(&catalog, &gate.selector) {
+        if let Err(error) = jig_repository::resolve_evidence_targets(&catalog, &gate.selector) {
             errors.push(format!("Work gate '{}': {error}.", gate.id));
         }
     }
@@ -258,7 +258,7 @@ fn validate_actions_and_evidence_gates(ctx: &RepoContext, errors: &mut Vec<Strin
 
 fn validate_tool_definitions(
     ctx: &RepoContext,
-    catalog: Option<&crate::repository::RepositoryCatalog>,
+    catalog: Option<&jig_repository::RepositoryCatalog>,
     errors: &mut Vec<String>,
 ) {
     let tool_names = ctx
@@ -278,7 +278,7 @@ fn validate_tool_definitions(
 
 fn validate_tool_definition(
     ctx: &RepoContext,
-    catalog: Option<&crate::repository::RepositoryCatalog>,
+    catalog: Option<&jig_repository::RepositoryCatalog>,
     tool: &jig_contract::ManifestTool,
     errors: &mut Vec<String>,
 ) {
@@ -410,7 +410,7 @@ fn validate_command_tool(
 
 fn validate_work_tools(
     ctx: &RepoContext,
-    catalog: Option<&crate::repository::RepositoryCatalog>,
+    catalog: Option<&jig_repository::RepositoryCatalog>,
     errors: &mut Vec<String>,
 ) {
     let mut work_tools = HashSet::new();

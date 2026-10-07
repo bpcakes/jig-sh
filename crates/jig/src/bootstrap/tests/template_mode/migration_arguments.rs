@@ -136,7 +136,7 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
         expected_runner["kind"] = serde_json::json!("shell");
 
         let updated = RepoContext::load_from(&repo).unwrap();
-        let catalog = crate::repository::RepositoryCatalog::from_context(&updated).unwrap();
+        let catalog = jig_repository::RepositoryCatalog::from_context(&updated).unwrap();
         let preserved = catalog.action_for_alias("jig.migration_add").unwrap();
         assert_eq!(
             serde_json::to_value(preserved).unwrap()["runner"],

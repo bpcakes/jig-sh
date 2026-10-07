@@ -287,11 +287,11 @@ fn foreground_prestart_cancellation_keeps_existing_check_run_evidence() {
         write_v6_evidence_fixture_repo(temp.path(), "");
         init_git_repo(temp.path());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-        let plan = crate::repository::plan_action_run(
+        let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+        let plan = jig_repository::plan_action_run(
             &ctx,
             &catalog,
-            crate::repository::PlanRunRequest {
+            jig_repository::PlanRunRequest {
                 selectors: vec!["api:test".into()],
                 ..Default::default()
             },
