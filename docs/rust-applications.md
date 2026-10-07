@@ -133,7 +133,7 @@ Upgrade the Batter Git revision and enabled facade features together in the
 generated `Cargo.toml`, regenerate and commit the lockfile, and validate startup,
 request admission, shutdown, and database setup for the project's enabled shape.
 For Jig maintainers, new scaffold pins live in
-`crates/jig/src/bootstrap/scaffold/rust_workspace.rs`.
+`crates/jig-bootstrap/src/scaffold/rust_workspace.rs`.
 
 Generated application source is project-owned. Neither `jig update` nor adoption
 automatically converts an existing non-Batter application. Generate a disposable

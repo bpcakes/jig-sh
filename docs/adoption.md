@@ -80,7 +80,7 @@ environment, registry/authentication, dependency layout, peer resolution, and
 install-script approval remain project-owned.
 
 Contributors changing dependency proof, locking, environment handling, or generated
-installers must follow the [bootstrap guide](../crates/jig/src/bootstrap/AGENTS.md).
+installers must follow the [bootstrap guide](../crates/jig-bootstrap/AGENTS.md).
 
 ### Review component ownership
 

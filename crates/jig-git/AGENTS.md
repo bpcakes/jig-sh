@@ -14,7 +14,7 @@
 - Change how Jig selects the Git program (`JIG_GIT_BIN`): `git_program` in `src/lib.rs`.
 - Change which `GIT_*` variables a command aimed at a known repository keeps: `scrub_known_repository_git_environment` in `src/lib.rs`.
 - Change reads of Git metadata files: `src/metadata.rs`.
-- Change the staged, ambient-config, or remote-template Git environments used by init/adopt/update: `crates/jig/src/bootstrap/git.rs`, which builds them on `scrub_git_repository_environment_except`.
+- Change the staged, ambient-config, or remote-template Git environments used by init/adopt/update: `crates/jig-bootstrap/src/git.rs`, which builds them on `scrub_git_repository_environment_except`.
 
 ## Invariants
 

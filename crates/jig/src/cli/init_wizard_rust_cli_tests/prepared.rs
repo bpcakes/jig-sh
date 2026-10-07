@@ -42,7 +42,7 @@ workspace_discovery = true
     ]);
     opts.template = Some(template.display().to_string());
     let reads = Cell::new(0);
-    let mut prepared = bootstrap::PreparedInitAnswers::from_opts_at_with_reader(
+    let mut prepared = jig_bootstrap::PreparedInitAnswers::from_opts_at_with_reader(
         &opts.answers,
         temp.path(),
         |path| {
@@ -69,7 +69,7 @@ workspace_discovery = true
     )
     .unwrap();
 
-    bootstrap::run_prepared_init(opts, prepared).unwrap();
+    jig_bootstrap::run_prepared_init(opts, prepared).unwrap();
 
     let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(rendered.contains("repo_name = \"frozencli\""));
@@ -106,7 +106,7 @@ fn bootstrap_guard_rejects_rust_cli_before_template_or_publication() {
     ]);
     opts.template = Some("/missing/ExampleProject-template".into());
 
-    let error = bootstrap::run_init(opts).unwrap_err().to_string();
+    let error = jig_bootstrap::run_init(opts).unwrap_err().to_string();
 
     assert!(error.contains("rust-cli"), "{error}");
     assert!(error.contains("unexpected_shape_authority"), "{error}");

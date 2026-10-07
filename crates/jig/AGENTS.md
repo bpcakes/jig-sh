@@ -21,8 +21,6 @@
 - `src/ui/source.rs`: typed recorder and status source with retained local epochs.
 - `src/status.rs`: read-only local repository and loop aggregate snapshots.
 - `src/runtime/vault/tui.rs`: fixed-scope, process-local credential adapter for the separately owned `jig-vault-tui` crate.
-- `src/bootstrap.rs`: init/adopt/update command surface.
-- `src/bootstrap/`: bootstrap support for native template rendering, git, staged renders, and template-source handling.
 
 ## Edit here for X
 
@@ -51,7 +49,7 @@
 - Change terminal status navigation, refresh runtime, or rendering: `crates/jig-ui/src/terminal/`.
 - Change Vault TUI navigation, forms, or rendering: `crates/jig-vault-tui/`; keep scope, environment capture, external tools, and core calls in `src/runtime/vault/tui.rs`.
 - Change bounded owned-process execution or process-tree cleanup: [jig-owned-process](../jig-owned-process/AGENTS.md).
-- Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`; the legacy file-budget checker retirement evaluates `repo:file-budget` inline in `src/bootstrap/file_budget_lifecycle.rs`.
+- Change init/adopt/update behavior, templates, or the embedded template snapshots: [jig-bootstrap](../jig-bootstrap/AGENTS.md); `src/cli/bootstrap_run.rs` and the init wizard in `src/cli/` are the CLI adapters.
 - Change policy checks (contract, agent guides, agent map, SQLx, schema): [jig-policy](../jig-policy/AGENTS.md).
 - Change the repository action catalog, run planning, affected selection, or repository source identity: [jig-repository](../jig-repository/AGENTS.md).
 - Change `.jig.toml` or manifest loading and validation, contract-version support, or the shared test fixtures in `crate::test_env`: [jig-context](../jig-context/AGENTS.md).
@@ -64,7 +62,7 @@
 - Treat `.agent/state/*.jsonl` as append-only unless a migration path is explicit.
 - Keep execution tools aligned with the generated contract manifest and template outputs.
 - Doctor checks whose remediation needs a human-chosen secret (`vault init`) are `operator_only`; never promote them into `next_step`, `next_issue`, `next_required_step`, or `optional_setup`. Report them through `operator_setup` instead.
-- Before changing bootstrap entrypoints, toolchain checks, or templates, read the [bootstrap guide](src/bootstrap/AGENTS.md).
+- Before changing bootstrap entrypoints, toolchain checks, or templates, read the [bootstrap guide](../jig-bootstrap/AGENTS.md).
 - Before changing vault entrypoints or dispatch, read the [vault runtime guide](src/runtime/vault/AGENTS.md).
 - New top-level commands must choose a branch in the exhaustive `CommandKind::may_capture_vault_passphrase` match; commands that never unlock the vault withhold the passphrase. Do not add per-spawn passphrase plumbing.
 - A top-level command's name and generated-launcher scope are declared only in `crates/jig-commands/src/root_commands.rs`. Never repeat a root command name as a string elsewhere, and regenerate rather than hand-edit the launcher's command-list markers and `case` arms.

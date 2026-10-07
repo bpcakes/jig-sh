@@ -32,7 +32,7 @@ fn runtime_check_rejects_launcher_without_contract_probe() {
     let fix = output.fix.as_deref().unwrap();
     assert!(!fix.contains("--launcher-only"));
     assert!(fix.contains("cargo install jig-sh"));
-    assert!(fix.contains(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH));
+    assert!(fix.contains(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH));
     assert!(fix.contains(" adopt "));
     assert_eq!(
         output.data["runtime_executable"],
@@ -52,8 +52,7 @@ fn runtime_check_rejects_comment_only_contract_probe() {
     fs::write(temp.path().join("scripts/install-jig.sh"), "").unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::write(
-        temp.path()
-            .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH),
+        temp.path().join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH),
         "{}",
     )
     .unwrap();
@@ -77,8 +76,7 @@ fn runtime_check_reports_legacy_launcher_migration() {
     fs::write(temp.path().join("scripts/install-jig.sh"), "").unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::write(
-        temp.path()
-            .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH),
+        temp.path().join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH),
         "{}",
     )
     .unwrap();
@@ -127,8 +125,7 @@ printf '%s\n' "$BIN_PATH"
     .unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::write(
-        temp.path()
-            .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH),
+        temp.path().join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH),
         "{}",
     )
     .unwrap();
@@ -156,8 +153,7 @@ fn runtime_check_reports_unreadable_launcher() {
     fs::write(temp.path().join("scripts/install-jig.sh"), "").unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::write(
-        temp.path()
-            .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH),
+        temp.path().join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH),
         "{}",
     )
     .unwrap();
@@ -309,9 +305,7 @@ fn repaired_current_runtime_exposes_a_structured_cache_rebuild_fix() {
         "jig-seeded-runtime-v1\nbinary:sha256:fixture\nsource:sha256:fixture\n",
     )
     .unwrap();
-    let managed_manifest = temp
-        .path()
-        .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH);
+    let managed_manifest = temp.path().join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH);
     fs::create_dir_all(managed_manifest.parent().unwrap()).unwrap();
     fs::write(&managed_manifest, "{}\n").unwrap();
 
@@ -479,8 +473,7 @@ fn runtime_check_rejects_unrecognizable_generated_installer() {
     .unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::write(
-        temp.path()
-            .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH),
+        temp.path().join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH),
         "{}",
     )
     .unwrap();
@@ -509,8 +502,7 @@ fn legacy_contract_migration_is_an_optional_actionable_doctor_issue() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::write(
-        temp.path()
-            .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH),
+        temp.path().join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH),
         "{}",
     )
     .unwrap();
@@ -597,8 +589,7 @@ fn damaged_contract_manifest_recommends_full_update_not_launcher_repair() {
     .unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::write(
-        temp.path()
-            .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH),
+        temp.path().join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH),
         "{}",
     )
     .unwrap();

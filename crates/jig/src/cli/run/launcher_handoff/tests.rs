@@ -11,7 +11,7 @@ use crate::cli::{LAUNCHER_CHECK_SUBCOMMANDS, LAUNCHER_GLOBAL_FLAGS};
 use crate::test_env::{CurrentDirGuard, TestRepoBuilder, lock_env};
 
 const CURRENT_GENERATED_LAUNCHER: &str =
-    include_str!("../../../bootstrap/embedded_template_snapshots/scripts/jig.jinja");
+    include_str!("../../../../../jig-bootstrap/src/embedded_template_snapshots/scripts/jig.jinja");
 
 fn generated_launcher_classifies_as_capability_only(args: &[&str]) -> bool {
     fn function_source(name: &str) -> String {

@@ -56,7 +56,7 @@ fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Resul
         Err(_) => (false, None, None),
     };
     let config_valid_for_launcher_repair =
-        config_ok && crate::bootstrap::launcher_only_repair_answers_are_valid(&root);
+        config_ok && jig_bootstrap::launcher_only_repair_answers_are_valid(&root);
     checks.push(config_check(&root, &config_probe));
     checks.push(runtime_check(
         &root,

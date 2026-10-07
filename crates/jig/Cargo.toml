@@ -38,7 +38,7 @@ required-features = ["dev-proxy"]
 # The default CLI build includes the local dev proxy. Library consumers that
 # only need the harness/runtime API can use `default-features = false`.
 default = ["dev-proxy"]
-dev-proxy = ["dep:jig-dev-proxy", "jig-context/dev-proxy"]
+dev-proxy = ["dep:jig-dev-proxy", "jig-bootstrap/dev-proxy", "jig-context/dev-proxy"]
 
 [dependencies]
 anyhow.workspace = true
@@ -53,6 +53,7 @@ fs4.workspace = true
 flate2.workspace = true
 globset.workspace = true
 jig-agents.workspace = true
+jig-bootstrap.workspace = true
 jig-commands.workspace = true
 jig-context.workspace = true
 jig-contract.workspace = true
@@ -98,6 +99,7 @@ security-framework.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
+jig-bootstrap = { workspace = true, features = ["test-support"] }
 jig-commands = { workspace = true, features = ["test-support"] }
 jig-context = { workspace = true, features = ["test-support"] }
 jig-loops = { workspace = true, features = ["test-support"] }

@@ -153,9 +153,9 @@ launcher_generated_marker="$(sed -n '/^# jig-generated-runtime-launcher:v[0-9][0
 installer_generated_marker="$(sed -n '/^# jig-generated-runtime-installer:v[0-9][0-9]*$/p' "$ROOT_DIR/scripts/install-jig.sh")"
 launcher_scope_marker="$(sed -n '/^# jig-runtime-repository-scope:v[0-9][0-9]*$/p' "$ROOT_DIR/scripts/jig")"
 installer_scope_marker="$(sed -n '/^# jig-runtime-repository-scope:v[0-9][0-9]*$/p' "$ROOT_DIR/scripts/install-jig.sh")"
-rust_launcher_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_artifacts.rs" GENERATED_RUNTIME_LAUNCHER_MARKER)"
-rust_installer_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_artifacts.rs" GENERATED_RUNTIME_INSTALLER_MARKER)"
-rust_scope_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_artifacts.rs" RUNTIME_REPOSITORY_SCOPE_MARKER)"
+rust_launcher_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig-bootstrap/src/runtime_artifacts.rs" GENERATED_RUNTIME_LAUNCHER_MARKER)"
+rust_installer_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig-bootstrap/src/runtime_artifacts.rs" GENERATED_RUNTIME_INSTALLER_MARKER)"
+rust_scope_marker="$(rust_string_const "$ROOT_DIR/crates/jig-bootstrap/src/runtime_artifacts.rs" RUNTIME_REPOSITORY_SCOPE_MARKER)"
 if [[ -z "$launcher_generated_marker" \
   || "$launcher_generated_marker" != "$rust_launcher_generated_marker" ]]; then
   echo "Launcher protocol marker '${launcher_generated_marker:-<unreadable>}' does not match Rust recognition marker '${rust_launcher_generated_marker:-<unreadable>}'." >&2
@@ -185,7 +185,7 @@ if [[ -z "$installer_cache_layout" \
   exit 1
 fi
 installer_cache_lock="$(sed -n 's/^# jig-runtime-cache-lock://p' "$ROOT_DIR/scripts/install-jig.sh")"
-rust_cache_lock="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_cache_lock.rs" INSTALLER_CACHE_LOCK_PROTOCOL_MARKER)"
+rust_cache_lock="$(rust_string_const "$ROOT_DIR/crates/jig-bootstrap/src/runtime_cache_lock.rs" INSTALLER_CACHE_LOCK_PROTOCOL_MARKER)"
 installer_lock_attempts="$(sed -n 's/^INSTALL_LOCK_ATTEMPTS=\([0-9][0-9]*\)$/\1/p' "$ROOT_DIR/scripts/install-jig.sh")"
 installer_lock_retry="$(sed -n 's/^INSTALL_LOCK_RETRY_SECONDS=\([0-9][0-9]*\)$/\1/p' "$ROOT_DIR/scripts/install-jig.sh")"
 installer_lock_from_values="directory-suffix=.lock;guard-suffix=.lock.guard;mechanism=os-exclusive+legacy-directory;record=owner-v1;attempts=$installer_lock_attempts;retry-seconds=$installer_lock_retry"
@@ -217,7 +217,7 @@ done
 for rust_lock_protocol_fragment in \
   'FileExt::try_lock_exclusive(&guard)' \
   'Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false)'; do
-  if ! grep -Fq "$rust_lock_protocol_fragment" "$ROOT_DIR/crates/jig/src/runtime_cache_lock.rs"; then
+  if ! grep -Fq "$rust_lock_protocol_fragment" "$ROOT_DIR/crates/jig-bootstrap/src/runtime_cache_lock.rs"; then
     echo "Rust cache-lock implementation is missing protocol fragment: $rust_lock_protocol_fragment" >&2
     exit 1
   fi
@@ -244,7 +244,7 @@ if [[ "$installer_source_checkout_cache_checks" != "2" ]]; then
 fi
 for contract_template in \
   "$ROOT_DIR/templates/project/.agent/jig-contract.json.jinja" \
-  "$ROOT_DIR/crates/jig/src/bootstrap/embedded_template_snapshots/.agent/jig-contract.json.jinja"
+  "$ROOT_DIR/crates/jig-bootstrap/src/embedded_template_snapshots/.agent/jig-contract.json.jinja"
 do
   if ! grep -Fxq '  "contract_version": <<[ _jig.contract_version ]>>,' "$contract_template"; then
     echo "$contract_template must render contract_version from _jig.contract_version." >&2
@@ -254,7 +254,7 @@ done
 
 if ! cmp -s \
   "$ROOT_DIR/templates/project/.agent/jig-contract.json.jinja" \
-  "$ROOT_DIR/crates/jig/src/bootstrap/embedded_template_snapshots/.agent/jig-contract.json.jinja"
+  "$ROOT_DIR/crates/jig-bootstrap/src/embedded_template_snapshots/.agent/jig-contract.json.jinja"
 then
   echo "Generated and embedded contract-manifest templates drifted." >&2
   exit 1
@@ -308,7 +308,7 @@ fi
 
 if ! cmp -s \
   "$ROOT_DIR/templates/project/scripts/jig.jinja" \
-  "$ROOT_DIR/crates/jig/src/bootstrap/embedded_template_snapshots/scripts/jig.jinja"
+  "$ROOT_DIR/crates/jig-bootstrap/src/embedded_template_snapshots/scripts/jig.jinja"
 then
   echo "Generated and embedded launcher templates drifted." >&2
   exit 1
@@ -324,7 +324,7 @@ fi
 
 if ! cmp -s \
   "$ROOT_DIR/templates/project/scripts/install-jig.sh.jinja" \
-  "$ROOT_DIR/crates/jig/src/bootstrap/embedded_template_snapshots/scripts/install-jig.sh.jinja"
+  "$ROOT_DIR/crates/jig-bootstrap/src/embedded_template_snapshots/scripts/install-jig.sh.jinja"
 then
   echo "Generated and embedded installer templates drifted." >&2
   exit 1

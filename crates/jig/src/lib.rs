@@ -1,5 +1,4 @@
 mod agent_launch;
-mod bootstrap;
 #[cfg(test)]
 #[path = "../build_identity.rs"]
 mod build_identity;
@@ -49,8 +48,6 @@ mod info;
 #[cfg(test)]
 mod launcher_command_lists;
 mod runtime;
-mod runtime_artifacts;
-mod runtime_cache_lock;
 mod signal_supervision;
 mod status;
 #[cfg(test)]
@@ -77,7 +74,7 @@ mod ui;
 /// Returns an error when command parsing, repository loading, command
 /// execution, structured output, or cleanup fails.
 pub fn run() -> anyhow::Result<()> {
-    bootstrap::record_build_template_pin_policy(option_env!("JIG_BUILD_OFFICIAL_TEMPLATE_PIN"));
+    jig_bootstrap::record_build_template_pin_policy(option_env!("JIG_BUILD_OFFICIAL_TEMPLATE_PIN"));
     cli::run()
 }
 
@@ -251,7 +248,7 @@ mod build_identity_tests {
         std::fs::write(package.join("src/lib.rs"), "pub fn packaged() {}\n").unwrap();
 
         let layout = crate::build_identity::resolve_source_layout(&package).unwrap();
-        assert!(layout.live_template_root("project").is_none());
+        assert!(!layout.is_checkout());
         let first = crate::build_identity::compute(&package, &build_configuration()).unwrap();
         std::fs::write(
             workspace.path().join("templates/project/ambient.jinja"),
