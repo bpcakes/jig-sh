@@ -621,7 +621,7 @@ fn codex_supports_plugin_marketplaces_with_environment_and_cancellation(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .envs(environment.iter().map(|(key, value)| (key, value)));
-    crate::shell::sanitize_bash_environment(&mut command);
+    jig_owned_process::sanitize_bash_environment(&mut command);
     let output = match run_owned_process_tree_with_output(&mut command, timeout, cancelled) {
         Ok(output) => output,
         Err(OwnedProcessTreeError::Start(_)) => return Ok(false),

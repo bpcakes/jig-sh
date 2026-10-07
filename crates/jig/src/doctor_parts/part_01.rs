@@ -550,7 +550,7 @@ fn inherited_shell_environment_issue(
     }
     variables
         .into_iter()
-        .any(|(key, _)| crate::shell::is_exported_bash_function_environment_key(&key))
+        .any(|(key, _)| jig_owned_process::is_exported_bash_function_environment_key(&key))
         .then_some(ShellEnvironmentIssue::ImportedFunction)
 }
 
