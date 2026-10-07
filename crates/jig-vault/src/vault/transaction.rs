@@ -22,7 +22,7 @@ use crate::store::witness::{
     JournalTarget, PendingMarker, TargetJournal, TransactionKind, WitnessRecord, WitnessStore,
     directory_identity, sha256_hex,
 };
-use crate::store::{AUDIT_TEXT_READ_LIMIT, FaultPoint, VaultStore};
+use crate::store::{FaultPoint, VaultStore};
 
 use super::envelope::ParsedVaultEnvelope;
 
@@ -138,7 +138,7 @@ impl VaultStore {
         verify_with: Option<&[u8; KEY_LEN]>,
     ) -> AnyResult<()> {
         let current = self
-            .read_audit_bytes_bounded(AUDIT_TEXT_READ_LIMIT as usize)?
+            .read_audit_bytes_bounded(self.audit_text_read_limit() as usize)?
             .map(|bytes| bytes.to_vec())
             .unwrap_or_default();
         let prefix_len = usize::try_from(transition.prefix_len)?;

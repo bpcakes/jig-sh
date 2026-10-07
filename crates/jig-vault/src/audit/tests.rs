@@ -1,5 +1,7 @@
 use super::*;
 
+mod capacity;
+
 /// A raw test key bound to a fixture identity; these stores have no vault
 /// file or witness record, so only the audit chain itself is exercised.
 fn retained(key: [u8; 32]) -> RetainedAuditKey {

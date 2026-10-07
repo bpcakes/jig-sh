@@ -4,6 +4,9 @@ use super::*;
 use crate::store::FaultPoint;
 use crate::store::witness::{JournalPayload, TransactionKind, WitnessStore};
 
+#[path = "transaction/capacity.rs"]
+mod capacity;
+
 fn field(reference: &str) -> VaultReference {
     VaultReference::parse(reference).unwrap()
 }

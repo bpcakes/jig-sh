@@ -51,6 +51,12 @@
 
 ### Changed
 
+- **Breaking:** authenticated vault operations now require a writable per-user
+  `~/.jig/vault-witness`, including operations on format 1 and 2 vaults selected
+  with `--home` or `JIG_VAULT_HOME`. Shared witness locks serialize legacy
+  operations with migration of another copy of the same vault. A writable
+  vault home alone is no longer sufficient when the user profile is read-only;
+  `vault status` remains a read-only, non-creating probe.
 - **Breaking:** Jig 0.7.2 and earlier cannot read format 3 vaults or their
   backups. Before migrating a vault or creating a new one, make sure every Jig
   runtime that uses it, including one selected by a repository's runtime pin,
@@ -78,6 +84,10 @@
 
 ### Fixed
 
+- Reject an audit append that would exceed the log's read limit before any
+  audit write or pending transaction, keeping the existing vault usable.
+- Keep initialization available in the Vault TUI after an init interrupted
+  before its pending marker; an orphan journal no longer advertises recovery.
 - On macOS, the Claude home picker's usage check no longer prompts for
   Keychain access as `jig`. It reads with system dialogs disabled, then
   requests permission through Apple's `/usr/bin/security` tool, whose

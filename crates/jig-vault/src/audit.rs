@@ -250,6 +250,16 @@ impl AuditEvent {
             mac,
         };
         let line = serde_json::to_string(&event)?;
+        // Admission must precede both audit-only writes and the irrevocable
+        // Pending marker: recovery and authenticated opens read this same cap.
+        // A torn suffix is discarded, so only the verified prefix survives.
+        let successor_len = u64::try_from(verified.valid_len)?
+            .checked_add(u64::from(verified.prefix_needs_separator))
+            .and_then(|len| len.checked_add(line.len() as u64))
+            .and_then(|len| len.checked_add(1));
+        if successor_len.is_none_or(|len| len > store.audit_text_read_limit()) {
+            anyhow::bail!("vault audit append would exceed the audit read limit");
+        }
         Ok(PreparedAuditAppend {
             event,
             line,

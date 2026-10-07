@@ -56,8 +56,7 @@ fn transaction_recorded(witness: &WitnessLocation, target: &Path) -> AnyResult<b
     store.target_pending(&witness::target_key(target))
 }
 
-/// Best-effort, read-only probe for status reporting: whether a transaction
-/// is recorded for this home.
+/// Best-effort, conservative discovery for preflight, including orphan journals.
 pub(crate) fn pending_transaction_recorded(home: &Path) -> bool {
     let Some(target) = final_target(home) else {
         return false;
@@ -65,6 +64,23 @@ pub(crate) fn pending_transaction_recorded(home: &Path) -> bool {
     WitnessLocation::for_home(&target)
         .ok()
         .and_then(|witness| transaction_recorded(&witness, &target).ok())
+        .unwrap_or(false)
+}
+
+/// Read-only status presentation: only a marker commits to finishing a
+/// transaction. A journal left before that point is discarded on retry.
+pub(crate) fn pending_transaction_marked(home: &Path) -> bool {
+    let Some(target) = final_target(home) else {
+        return false;
+    };
+    WitnessLocation::for_home(&target)
+        .ok()
+        .and_then(|witness| witness.open_existing().ok().flatten())
+        .and_then(|store| {
+            store
+                .target_has_pending_marker(&witness::target_key(&target))
+                .ok()
+        })
         .unwrap_or(false)
 }
 

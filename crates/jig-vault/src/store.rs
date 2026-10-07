@@ -26,7 +26,7 @@ pub(crate) mod witness;
 
 pub(crate) use durable::ensure_entry_chain_durable;
 use durable::{create_dir_all_durable, sync_dir as sync_parent_dir, sync_file};
-pub(crate) use pending::pending_transaction_recorded;
+pub(crate) use pending::{pending_transaction_marked, pending_transaction_recorded};
 use witness::WitnessLocation;
 
 const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
@@ -45,6 +45,8 @@ pub(crate) struct VaultStore {
     witness: WitnessLocation,
     #[cfg(test)]
     fail_next_vault_write: Arc<AtomicBool>,
+    #[cfg(test)]
+    audit_text_read_limit: u64,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -135,11 +137,25 @@ impl VaultStore {
             witness,
             #[cfg(test)]
             fail_next_vault_write: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            audit_text_read_limit: AUDIT_TEXT_READ_LIMIT,
         }
     }
 
     pub(crate) fn witness(&self) -> &WitnessLocation {
         &self.witness
+    }
+
+    pub(crate) fn audit_text_read_limit(&self) -> u64 {
+        #[cfg(test)]
+        return self.audit_text_read_limit;
+        #[cfg(not(test))]
+        AUDIT_TEXT_READ_LIMIT
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_audit_text_read_limit_for_test(&mut self, limit: u64) {
+        self.audit_text_read_limit = limit;
     }
 
     /// Key of this home as a final target in the witness.
@@ -390,7 +406,7 @@ impl VaultStore {
     }
 
     pub(crate) fn read_audit_text(&self) -> AnyResult<Option<String>> {
-        read_text_no_follow(&self.audit_path(), AUDIT_TEXT_READ_LIMIT)
+        read_text_no_follow(&self.audit_path(), self.audit_text_read_limit())
     }
 
     pub(crate) fn read_audit_bytes_bounded(

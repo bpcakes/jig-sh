@@ -69,6 +69,35 @@ fn version_two_vaults_keep_field_management_without_migrating() {
     assert_eq!(snapshot.fields.len(), 1);
 }
 
+#[test]
+fn an_init_orphan_journal_offers_initialization_instead_of_unlock() {
+    use jig_vault::test_support::{TransactionFaultPoint, arm_transaction_fault};
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("ExampleVault");
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+    arm_transaction_fault(TransactionFaultPoint::AfterJournal);
+    vault
+        .init(&SecretString::from(PASSPHRASE.to_owned()))
+        .unwrap_err();
+
+    let backend = VaultTuiBackend::new(request(home.clone())).unwrap();
+    assert_eq!(
+        backend.descriptor().home_state,
+        VaultHomeState::Uninitialized
+    );
+    assert_eq!(backend.home_state().unwrap(), VaultHomeState::Uninitialized);
+    assert!(!Vault::status(Some(home)).unwrap().pending_transaction);
+    let snapshot = backend
+        .initialize(SecretBytes::new(PASSPHRASE.as_bytes().to_vec()))
+        .unwrap();
+    assert_eq!(
+        snapshot.format_version,
+        jig_vault::LATEST_VAULT_FORMAT_VERSION
+    );
+    assert_eq!(backend.home_state().unwrap(), VaultHomeState::Initialized);
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_pending_absent_restore_target_is_presented_for_unlock_and_finished() {

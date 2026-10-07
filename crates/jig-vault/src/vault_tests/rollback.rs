@@ -401,6 +401,69 @@ fn status_reports_a_pending_transaction_without_side_effects() {
 }
 
 #[test]
+fn status_distinguishes_orphan_init_journals_from_missing_pending_journals() {
+    for point in [FaultPoint::AfterJournal, FaultPoint::AfterPending] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store_at(&temp, "ExampleVault");
+        store.arm_fault_for_test(point);
+        store.init(&passphrase()).unwrap_err();
+        let witness = store.witness().open_existing().unwrap().unwrap();
+        let before = witness.read_journal(&store.target_key()).unwrap().unwrap();
+
+        let status = Vault::status(Some(store.root().to_path_buf())).unwrap();
+        assert_eq!(
+            status.pending_transaction,
+            point == FaultPoint::AfterPending
+        );
+        assert!(!status.exists);
+        assert!(store.has_pending_transaction().unwrap());
+        assert_eq!(
+            witness.read_journal(&store.target_key()).unwrap().unwrap(),
+            before
+        );
+
+        if point == FaultPoint::AfterPending {
+            // A missing journal must not disguise a committed recovery obligation.
+            std::fs::remove_file(
+                temp.path()
+                    .join(".jig-vault-witness/journals")
+                    .join(format!("{}.json", store.target_key())),
+            )
+            .unwrap();
+            assert!(
+                Vault::status(Some(store.root().to_path_buf()))
+                    .unwrap()
+                    .pending_transaction
+            );
+            assert!(store.init(&passphrase()).is_err());
+        } else {
+            store.init(&passphrase()).unwrap();
+            assert!(store.list_fields(&passphrase()).unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
+fn legacy_access_with_an_unavailable_witness_fails_without_changing_the_vault() {
+    for version in [V1_FORMAT_VERSION, V2_FORMAT_VERSION] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store_at(&temp, "ExampleVault");
+        init_with_format(&store, &passphrase(), version);
+        let before_vault = std::fs::read(store.vault_path()).unwrap();
+        let before_audit = std::fs::read(store.audit_path()).unwrap();
+        let blocked = temp.path().join("unavailable-witness");
+        std::fs::write(&blocked, b"not a witness directory").unwrap();
+        let _override = crate::store::witness::override_root_for_test(blocked.clone());
+        let reopened = VaultStore::resolve_for_test(Some(store.root().to_path_buf())).unwrap();
+
+        assert!(reopened.list(&passphrase()).is_err());
+        assert_eq!(std::fs::read(store.vault_path()).unwrap(), before_vault);
+        assert_eq!(std::fs::read(store.audit_path()).unwrap(), before_audit);
+        assert_eq!(std::fs::read(blocked).unwrap(), b"not a witness directory");
+    }
+}
+
+#[test]
 fn an_interrupted_enrollment_is_made_durable_before_a_retry_accepts_it() {
     use crate::store::durable::recording::{FsOp, fail_next_sync_of, record};
 

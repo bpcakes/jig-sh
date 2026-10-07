@@ -153,6 +153,12 @@ impl WitnessStore {
         if self.journal_exists(target_key) {
             return Ok(true);
         }
+        self.target_has_pending_marker(target_key)
+    }
+
+    /// Status presentation only: an orphan journal cannot finish a change.
+    /// Keep the journal-inclusive probe above for resolution and preflight.
+    pub(crate) fn target_has_pending_marker(&self, target_key: &str) -> AnyResult<bool> {
         Ok(self
             .scan_pending_for(target_key)?
             .is_some_and(|naming| !naming.is_empty()))
