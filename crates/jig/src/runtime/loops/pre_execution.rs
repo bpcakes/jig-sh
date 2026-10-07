@@ -4,9 +4,9 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
 use crate::execution::{ExecutionControl, run_authoritative_execution_command};
+use jig_git::{git_program, scrub_known_repository_git_environment};
 
 use super::state::LOOP_RUNTIME_DIR;
 
@@ -44,7 +44,7 @@ pub(super) fn require_ignored_runtime_path(
         OsString::from("--"),
         path.as_os_str().to_os_string(),
     ];
-    let mut command = Command::new(external_program(GIT_BIN_ENV, "git"));
+    let mut command = Command::new(git_program());
     command
         .current_dir(ctx.root())
         .arg("--no-replace-objects")

@@ -6,12 +6,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::bootstrap::scrub_known_repository_git_environment;
 use crate::context::{CommandTimeout, RepoContext};
 use crate::execution::{
     ExecutionCommandError, ExecutionControl, run_authoritative_execution_command_for_duration,
 };
 use crate::state::now_ms;
+use jig_git::scrub_known_repository_git_environment;
 
 use super::workflow::WorkflowTick;
 

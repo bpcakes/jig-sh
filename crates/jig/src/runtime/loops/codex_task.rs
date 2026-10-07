@@ -19,7 +19,6 @@ use super::workflow::{
     CodexTaskCheckout, CodexTaskSettings, RepositoryRevisionState, ResolvedWorkflow,
     UnexecutedReason, WorkflowCompletion, WorkflowExecution, WorkflowOutcome, WorkflowTick,
 };
-use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
 use crate::execution::{
     ExecutionCommandOutput, ExecutionControl, NoopExecutionObserver, SupervisedExecutionError,
@@ -29,6 +28,7 @@ use crate::execution::{
 use crate::runtime::worker_runner::{
     CodexExecOutcome, CodexExecRequest, WorkerRunLabel, run_codex_exec,
 };
+use jig_git::{git_program, scrub_known_repository_git_environment};
 
 mod checkout;
 mod pre_execution;
@@ -585,7 +585,7 @@ where
         .map(|arg| arg.to_string_lossy())
         .unwrap_or_else(|| "command".into());
     let label = format!("Codex task git {operation}");
-    let mut command = Command::new(external_program(GIT_BIN_ENV, "git"));
+    let mut command = Command::new(git_program());
     command
         .current_dir(cwd)
         .arg("--no-replace-objects")

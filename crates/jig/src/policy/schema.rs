@@ -205,7 +205,7 @@ fn clone_committed_snapshot(
     let mut clone = Command::new("git");
     clone.args(["clone", "--quiet", "--no-checkout", "--shared", "--"]);
     clone.arg(repository_root).arg(sandbox_root);
-    crate::bootstrap::scrub_known_repository_git_environment(&mut clone);
+    jig_git::scrub_known_repository_git_environment(&mut clone);
     let output = controlled_output(&mut clone, deadline, cancelled)
         .context("Failed to clone schema-check sandbox")?;
     if !output.status.success() {
@@ -221,7 +221,7 @@ fn clone_committed_snapshot(
     checkout
         .current_dir(sandbox_root)
         .args(["checkout", "--quiet", "--detach", snapshot]);
-    crate::bootstrap::scrub_known_repository_git_environment(&mut checkout);
+    jig_git::scrub_known_repository_git_environment(&mut checkout);
     let output = controlled_output(&mut checkout, deadline, cancelled)
         .context("Failed to check out schema-check snapshot")?;
     if !output.status.success() {

@@ -10,6 +10,7 @@ use crate::runtime::loops::occurrence::{
     OccurrenceAttentionScope, OccurrenceClaim, OccurrenceGuard, OccurrenceStore,
 };
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
+use jig_git::GIT_BIN_ENV;
 
 struct CancelAfterStart(AtomicUsize);
 

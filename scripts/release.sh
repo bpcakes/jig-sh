@@ -12,6 +12,7 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-contract"
   "jig-core"
   "jig-file-budget"
+  "jig-git"
   "jig-owned-process"
   "jig-rust"
   "jig-sqlx"
@@ -99,6 +100,7 @@ crate_dir_for_package() {
     jig-contract) printf '%s\n' "crates/jig-contract" ;;
     jig-core) printf '%s\n' "crates/jig-core" ;;
     jig-file-budget) printf '%s\n' "crates/jig-file-budget" ;;
+    jig-git) printf '%s\n' "crates/jig-git" ;;
     jig-owned-process) printf '%s\n' "crates/jig-owned-process" ;;
     jig-rust) printf '%s\n' "crates/jig-rust" ;;
     jig-sqlx) printf '%s\n' "crates/jig-sqlx" ;;

@@ -428,10 +428,7 @@ fn authority_resolution_does_not_execute_the_configured_git_binary() {
     let temp = tempfile::tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
     git(temp.path(), &["init"]);
-    let _git = EnvVarGuard::set(
-        crate::bootstrap::GIT_BIN_ENV,
-        "authority-probe-must-not-run",
-    );
+    let _git = EnvVarGuard::set(jig_git::GIT_BIN_ENV, "authority-probe-must-not-run");
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let persistence = SchedulePersistence::new(&ctx);

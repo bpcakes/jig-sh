@@ -226,7 +226,7 @@ fn seed_launcher_repair_profile(
         .env("PATH", tool_environment.helper_path)
         .current_dir(destination);
     crate::shell::sanitize_bash_environment(&mut command);
-    super::super::scrub_git_repository_environment_except(&mut command, &[]);
+    jig_git::scrub_git_repository_environment_except(&mut command, &[]);
     sanitize_launcher_repair_environment(&mut command);
     let output = command.output().with_context(|| {
         format!(

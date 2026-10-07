@@ -13,19 +13,19 @@ use cap_std::fs::{Dir, OpenOptions};
 
 /// Upper bound for single-line Git pointer files such as `.git`, `commondir`,
 /// and a linked worktree's `gitdir` back-link.
-pub(in crate::runtime) const MAX_GIT_POINTER_BYTES: u64 = 16 * 1024;
+pub const MAX_GIT_POINTER_BYTES: u64 = 16 * 1024;
 
 #[cfg(unix)]
-pub(in crate::runtime) fn path_from_git_bytes(bytes: &[u8]) -> PathBuf {
+pub fn path_from_git_bytes(bytes: &[u8]) -> PathBuf {
     PathBuf::from(OsString::from_vec(bytes.to_vec()))
 }
 
 #[cfg(not(unix))]
-pub(in crate::runtime) fn path_from_git_bytes(bytes: &[u8]) -> PathBuf {
+pub fn path_from_git_bytes(bytes: &[u8]) -> PathBuf {
     PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
-pub(in crate::runtime) fn trim_ascii_line(mut bytes: &[u8]) -> &[u8] {
+pub fn trim_ascii_line(mut bytes: &[u8]) -> &[u8] {
     while bytes
         .last()
         .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
@@ -42,7 +42,7 @@ pub(in crate::runtime) fn trim_ascii_line(mut bytes: &[u8]) -> &[u8] {
 /// exceeds the limit. The open is non-blocking so a FIFO swapped in after an
 /// earlier metadata check cannot hang the caller, and the read is capped
 /// independently of the opened file's reported length.
-pub(in crate::runtime) fn read_nofollow_regular_file(
+pub fn read_nofollow_regular_file(
     directory: &Dir,
     name: &str,
     max_bytes: u64,
@@ -73,7 +73,7 @@ pub(in crate::runtime) fn read_nofollow_regular_file(
 
 /// Parses a single-line Git path file such as `commondir` or a linked
 /// worktree's `gitdir` back-link, resolving a relative path against `base`.
-pub(in crate::runtime) fn parse_git_path_line(bytes: &[u8], base: &Path) -> Option<PathBuf> {
+pub fn parse_git_path_line(bytes: &[u8], base: &Path) -> Option<PathBuf> {
     let line = trim_ascii_line(bytes);
     if line.is_empty() || line.contains(&b'\n') || line.contains(&b'\r') {
         return None;
@@ -88,7 +88,7 @@ pub(in crate::runtime) fn parse_git_path_line(bytes: &[u8], base: &Path) -> Opti
 
 /// Parses a `.git` pointer file (`gitdir: PATH`), resolving a relative path
 /// against the worktree that contains it.
-pub(in crate::runtime) fn parse_gitdir_pointer(bytes: &[u8], worktree: &Path) -> Option<PathBuf> {
+pub fn parse_gitdir_pointer(bytes: &[u8], worktree: &Path) -> Option<PathBuf> {
     parse_git_path_line(trim_ascii_line(bytes).strip_prefix(b"gitdir: ")?, worktree)
 }
 

@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -30,9 +29,6 @@ use answers::{AnswerInput, RenderAnswers};
 use file_copy::create_symlink;
 #[cfg(test)]
 use git::{git, git_stdout};
-pub(crate) use git::{
-    scrub_git_repository_environment_except, scrub_known_repository_git_environment,
-};
 use init_transaction::InitMutationTransaction;
 #[cfg(test)]
 use init_transaction::{
@@ -143,7 +139,6 @@ const LAUNCHER_ONLY_MANAGED_PATHS: [&str; 2] = ["scripts/install-jig.sh", "scrip
 const ADOPT_RECEIPT_PATH: &str = ".agent/.cache/adopt/adopt-last.json";
 const LEGACY_ADOPT_RECEIPT_PATH: &str = ".agent/state/adopt-last.json";
 const ADOPT_RECEIPT_PATHS: [&str; 2] = [ADOPT_RECEIPT_PATH, LEGACY_ADOPT_RECEIPT_PATH];
-pub(crate) const GIT_BIN_ENV: &str = "JIG_GIT_BIN";
 const BUILD_TEMPLATE_PIN_RELEASED: &str = "released";
 const BUILD_TEMPLATE_PIN_UNRELEASED: &str = "unreleased";
 const OFFICIAL_TEMPLATE_SOURCE: &str = "https://github.com/bpcakes/jig-sh.git";
@@ -160,7 +155,6 @@ pub(crate) const RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME: &str = "admin-api";
 
 include!("bootstrap_parts/part_01.rs");
 include!("bootstrap_parts/part_02.rs");
-include!("bootstrap_parts/part_03.rs");
 
 #[cfg(test)]
 mod tests;

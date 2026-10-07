@@ -2,6 +2,7 @@ use tempfile::{TempDir, tempdir};
 
 use super::*;
 use crate::test_env::{EnvVarGuard, lock_env};
+use jig_git::GIT_BIN_ENV;
 
 mod adopt_fixture;
 use adopt_fixture::{run_adopt, write_test_crate_guide};

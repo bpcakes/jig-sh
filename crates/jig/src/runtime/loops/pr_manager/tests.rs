@@ -2,6 +2,7 @@
 mod tests {
     use tempfile::tempdir;
 
+    use jig_git::GIT_BIN_ENV;
     use super::*;
     use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
@@ -102,7 +103,7 @@ mod tests {
     #[test]
     fn failed_pr_worktree_cleanup_preserves_attention_evidence() {
         let _env_lock = lock_env();
-        let _git = EnvVarGuard::set(crate::bootstrap::GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+        let _git = EnvVarGuard::set(jig_git::GIT_BIN_ENV, std::ffi::OsStr::new("git"));
         let temp = tempdir().unwrap();
         TestRepoBuilder::new(temp.path())
             .required_commands(Vec::<String>::new())

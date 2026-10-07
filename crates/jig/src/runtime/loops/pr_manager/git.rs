@@ -279,7 +279,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut command = Command::new(external_program(GIT_BIN_ENV, "git"));
+    let mut command = Command::new(git_program());
     command
         .current_dir(cwd)
         .arg("--no-replace-objects")

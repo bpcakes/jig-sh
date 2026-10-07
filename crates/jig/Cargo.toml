@@ -59,6 +59,7 @@ jig-core.workspace = true
 jig-dev-proxy = { workspace = true, optional = true }
 jig-features.workspace = true
 jig-file-budget.workspace = true
+jig-git.workspace = true
 jig-owned-process.workspace = true
 jig-rust.workspace = true
 jig-typescript.workspace = true

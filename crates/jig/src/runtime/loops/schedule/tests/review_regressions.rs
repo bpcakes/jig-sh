@@ -749,7 +749,7 @@ esac
     .unwrap();
     fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
     let missing_codex = temp.path().join("missing-codex");
-    let _git = EnvVarGuard::set(crate::bootstrap::GIT_BIN_ENV, git.as_os_str());
+    let _git = EnvVarGuard::set(jig_git::GIT_BIN_ENV, git.as_os_str());
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", missing_codex.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let workflow = list_workflows(&ctx)

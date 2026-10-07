@@ -428,6 +428,7 @@ effects = [
 inputs = [
     "crates/jig/src/bootstrap.rs",
     "crates/jig/src/bootstrap/**",
+    "crates/jig-git/**",
     "Cargo.toml",
     "Cargo.lock",
     "rust-toolchain*",
@@ -556,7 +557,7 @@ inputs = [
     "crates/jig/src/doctor/**",
     "crates/jig/src/doctor_parts/**",
     "crates/jig/src/runtime.rs",
-    "crates/jig/src/runtime/git_path.rs",
+    "crates/jig-git/**",
     "crates/jig/src/signal_supervision.rs",
     "crates/jig/src/signal_supervision/**",
     "crates/jig/tests/vault_*.rs",

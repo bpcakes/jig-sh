@@ -72,7 +72,7 @@ pub(super) fn controlled_git_output(
 ) -> Result<ControlledBytesOutput> {
     let mut command = git_command(root);
     command.args(args);
-    crate::bootstrap::scrub_known_repository_git_environment(&mut command);
+    jig_git::scrub_known_repository_git_environment(&mut command);
     let output = controlled_output_bytes_with_limits(
         &mut command,
         deadline,

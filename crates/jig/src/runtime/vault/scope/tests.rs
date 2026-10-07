@@ -91,7 +91,7 @@ impl Fixture {
 /// redirection, so developer settings cannot change the metadata it writes.
 fn git(cwd: &Path, args: &[&str]) {
     let mut command = Command::new("git");
-    crate::bootstrap::scrub_known_repository_git_environment(&mut command);
+    jig_git::scrub_known_repository_git_environment(&mut command);
     let output = command
         .current_dir(cwd)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

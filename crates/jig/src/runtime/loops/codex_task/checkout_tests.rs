@@ -5,7 +5,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::bootstrap::GIT_BIN_ENV;
+    use jig_git::GIT_BIN_ENV;
     use crate::test_env::{EnvVarGuard, lock_env};
 
     const LEGACY_RECEIPT_JOURNAL: &str = ".agent/state/receipts.jsonl";
