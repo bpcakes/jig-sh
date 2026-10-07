@@ -89,7 +89,10 @@ pub(crate) fn pending_transaction_marked(home: &Path) -> AnyResult<bool> {
     };
     store
         .target_has_pending_marker(&witness::target_key(&target))
-        .context("failed to inspect pending vault transactions")
+        .map_err(|error| {
+            let message = format!("failed to inspect pending vault transactions: {error}");
+            error.context(message)
+        })
 }
 
 impl VaultStore {

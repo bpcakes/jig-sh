@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result as AnyResult, bail};
 
 use crate::VaultErrorKind;
-use crate::error::classified;
+use crate::error::{classified, classify_source};
 
 use super::{HeldLock, IDS_DIR, Journal, WitnessRecord, WitnessStore, id_key, record};
 
@@ -190,13 +190,7 @@ impl WitnessStore {
             let Some(key) = record_key(&entry.file_name()) else {
                 continue;
             };
-            let record = self
-                .read_record_file(&entry.path())?
-                .ok_or_else(|| anyhow::anyhow!("a vault witness record vanished while scanning"))?;
-            record.validate(&record.vault_id)?;
-            if id_key(&record.vault_id) != key {
-                bail!("a vault witness record is stored under another vault's key");
-            }
+            let record = self.read_record_for_scan(&entry.path(), &key)?;
             if record
                 .pending
                 .as_ref()
@@ -207,6 +201,28 @@ impl WitnessStore {
             }
         }
         Ok(Some(naming))
+    }
+
+    fn read_record_for_scan(&self, path: &Path, key: &str) -> AnyResult<WitnessRecord> {
+        let read = || {
+            let record = self
+                .read_record_file(path)?
+                .ok_or_else(|| anyhow::anyhow!("a vault witness record vanished while scanning"))?;
+            record.validate(&record.vault_id)?;
+            if id_key(&record.vault_id) != key {
+                bail!("a vault witness record is stored under another vault's key");
+            }
+            Ok(record)
+        };
+        read().map_err(|error| {
+            classify_source(
+                VaultErrorKind::AuditTampered,
+                format!(
+                    "cannot verify vault witness record at {path:?}; this can block other vaults on this user profile. Operator step: preserve the vault and witness data and investigate the reported record; never delete or edit the rollback witness to bypass this refusal. Agents must ask the operator."
+                ),
+                error,
+            )
+        })
     }
 }
 

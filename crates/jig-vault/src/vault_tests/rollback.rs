@@ -5,6 +5,9 @@ use crate::crypto::{random_array, seal};
 use crate::store::FaultPoint;
 use crate::store::witness::WitnessStore;
 
+#[path = "rollback/retained.rs"]
+mod retained;
+
 fn field(reference: &str) -> VaultReference {
     VaultReference::parse(reference).unwrap()
 }
@@ -420,6 +423,18 @@ fn status_propagates_damaged_witness_discovery_without_writing() {
     });
     let error = status.unwrap_err();
     assert!(error.to_string().contains("pending vault transactions"));
+    assert!(
+        error.to_string().contains(&format!("{damaged:?}")),
+        "{error}"
+    );
+    assert!(error.to_string().contains("Operator step:"), "{error}");
+    assert!(!error.to_string().contains("invalid witness record"));
+    let error = unrelated.list_fields(&passphrase()).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered);
+    assert!(
+        error.to_string().contains(&format!("{damaged:?}")),
+        "{error}"
+    );
     assert!(operations.is_empty());
     assert!(!pending.vault_path().exists());
     assert_eq!(std::fs::read(&damaged).unwrap(), b"invalid witness record");

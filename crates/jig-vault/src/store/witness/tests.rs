@@ -185,6 +185,35 @@ fn pending_marker_must_advance_its_checkpoint() {
     record.validate(VAULT_ID).unwrap();
 }
 
+#[test]
+fn scanned_record_failures_identify_the_record_without_echoing_its_contents() {
+    let (_temp, store) = witness();
+    store.write_record(&committed_record(1)).unwrap();
+    let path = store.record_path(VAULT_ID);
+    let mut invalid = committed_record(1);
+    invalid.schema = 2;
+    let mut misfiled = committed_record(1);
+    misfiled.vault_id = "ExampleOtherVault".into();
+    let cases = [
+        b"ExamplePrivateMalformedContents".to_vec(),
+        serde_json::to_vec(&invalid).unwrap(),
+        serde_json::to_vec(&misfiled).unwrap(),
+        vec![b'x'; RECORD_READ_LIMIT as usize + 1],
+    ];
+    let key = target_key(Path::new("/example/home"));
+    for contents in cases {
+        fs::write(&path, &contents).unwrap();
+        let error = store.target_has_pending_marker(&key).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(&format!("{path:?}")), "{message}");
+        assert!(message.contains("Operator step:"), "{message}");
+        assert!(message.contains("never delete or edit"), "{message}");
+        assert!(!message.contains("ExamplePrivateMalformedContents"));
+        assert!(!message.contains("ExampleOtherVault"));
+        assert_eq!(fs::read(&path).unwrap(), contents);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_shared_or_oversized_records_fail_closed() {
