@@ -80,7 +80,7 @@ pub(crate) fn run_direct_file_budget(
                 )
             })
             .collect::<Vec<_>>();
-        let evaluated_at_ms = crate::state::now_ms();
+        let evaluated_at_ms = jig_state::now_ms();
         let mut result = result_with_findings(
             RunConclusion::Failure,
             findings,
@@ -105,7 +105,7 @@ pub(crate) fn run_direct_file_budget(
         return Ok(result);
     }
     if let ComparisonPreparationV1::ComparisonUnavailable { reason, .. } = &prepared.comparison {
-        let evaluated_at_ms = crate::state::now_ms();
+        let evaluated_at_ms = jig_state::now_ms();
         return Ok(terminal_result(
             RunConclusion::Blocked,
             "file_budget.baseline_unavailable",

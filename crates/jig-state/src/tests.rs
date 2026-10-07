@@ -3,6 +3,7 @@ use std::path::Path;
 
 use fs4::fs_std::FileExt;
 use jig_context::RepoContext;
+use jig_context::test_support::TestRepoBuilder;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -11,7 +12,6 @@ use super::jsonl::{
     state_lock_path, try_scan_jsonl_raw_from, with_jsonl_write_lock, write_jsonl_locked,
 };
 use super::*;
-use crate::test_env::TestRepoBuilder;
 
 fn write_fixture_repo(root: &Path) {
     TestRepoBuilder::new(root)

@@ -5,7 +5,7 @@ use anyhow::Result;
 use jig_context::RepoContext;
 use jig_contract::{ExecutionResourceV1, PlannedTarget};
 
-use crate::state::ResourceClaim;
+use jig_state::ResourceClaim;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ResolvedResources {

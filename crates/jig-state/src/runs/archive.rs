@@ -39,7 +39,7 @@ fn scan_run_archive_lifecycles(
     validator.finish()
 }
 
-pub(in crate::state) fn validate_run_stream(path: &Path) -> Result<()> {
+pub fn validate_run_stream(path: &Path) -> Result<()> {
     scan_run_archive_lifecycles(path, |observe| {
         let report = scan_jsonl_raw(path, &|| false, &mut *observe)?;
         Ok(report.unterminated_final_record)
@@ -47,7 +47,7 @@ pub(in crate::state) fn validate_run_stream(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(in crate::state) fn ensure_run_stream_replaceable(
+pub fn ensure_run_stream_replaceable(
     ctx: &RepoContext,
     path: &Path,
     guard: &JsonlWriteGuard,
@@ -191,7 +191,7 @@ fn validate_published_run_archive(
     }
 }
 
-pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Result<Value> {
+pub fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Result<Value> {
     ensure_state_layout(ctx)?;
     let before_ms = parse_archive_before_ms(before)?;
     let runs_path = ctx.state_file(RUNS_FILE);
@@ -264,7 +264,7 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
         };
         let recovery_backup_path = if runs_archived > 0 && !dry_run {
             Some(
-                crate::state::maintenance::create_runs_backup(
+                crate::maintenance::create_runs_backup(
                     ctx,
                     &runs_path,
                     "runs-archive-recovery",

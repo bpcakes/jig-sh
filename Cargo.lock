@@ -1569,6 +1569,7 @@ dependencies = [
  "jig-git",
  "jig-owned-process",
  "jig-rust",
+ "jig-state",
  "jig-tui",
  "jig-typescript",
  "jig-ui",
@@ -1604,6 +1605,26 @@ name = "jig-sqlx"
 version = "0.7.3-dev"
 dependencies = [
  "jig-contract",
+]
+
+[[package]]
+name = "jig-state"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "fs4",
+ "jig-context",
+ "jig-contract",
+ "libc",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "ulid",
+ "wait-timeout",
 ]
 
 [[package]]

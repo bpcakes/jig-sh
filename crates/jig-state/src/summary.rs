@@ -20,11 +20,11 @@ fn public_source_path(ctx: &RepoContext) -> String {
 }
 
 #[cfg(test)]
-pub(crate) fn state_summary(ctx: &RepoContext) -> Result<Value> {
+pub fn state_summary(ctx: &RepoContext) -> Result<Value> {
     state_summary_impl(ctx, &|| false, false)
 }
 
-pub(crate) fn state_summary_with_cancellation(
+pub fn state_summary_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {

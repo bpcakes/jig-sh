@@ -71,7 +71,7 @@ pub(super) fn validate_run_plan_structure(plan: &RunPlan) -> Result<()> {
     Ok(())
 }
 
-pub(in crate::state) fn is_recognized_run_event(event: &str) -> bool {
+pub fn is_recognized_run_event(event: &str) -> bool {
     matches!(
         event,
         EVENT_QUEUED
@@ -84,7 +84,7 @@ pub(in crate::state) fn is_recognized_run_event(event: &str) -> bool {
 }
 
 #[derive(Debug, Default)]
-pub(in crate::state) struct RunLifecycleValidator {
+pub struct RunLifecycleValidator {
     event_count: usize,
     known_event_count: usize,
     queued: bool,
@@ -97,19 +97,19 @@ pub(in crate::state) struct RunLifecycleValidator {
 /// consumers. Callers may feed records incrementally so compressed diagnostic
 /// scans retain their aggregate byte bound.
 #[derive(Debug, Default)]
-pub(in crate::state) struct RunStreamValidator {
+pub struct RunStreamValidator {
     lifecycles: BTreeMap<String, RunLifecycleValidator>,
 }
 
 impl RunStreamValidator {
-    pub(in crate::state) fn observe(&mut self, event: &RunEventRecord) -> Result<()> {
+    pub fn observe(&mut self, event: &RunEventRecord) -> Result<()> {
         self.lifecycles
             .entry(event.run_id.clone())
             .or_default()
             .observe(event)
     }
 
-    pub(in crate::state) fn finish(self) -> Result<BTreeMap<String, RunLifecycleValidator>> {
+    pub fn finish(self) -> Result<BTreeMap<String, RunLifecycleValidator>> {
         for (run_id, lifecycle) in &self.lifecycles {
             if lifecycle.known_event_count() > 0 && !lifecycle.queued() {
                 bail!("run '{run_id}' has no queued event");
@@ -120,7 +120,7 @@ impl RunStreamValidator {
 }
 
 impl RunLifecycleValidator {
-    pub(in crate::state) fn observe(&mut self, event: &RunEventRecord) -> Result<()> {
+    pub fn observe(&mut self, event: &RunEventRecord) -> Result<()> {
         let known = is_recognized_run_event(&event.event);
         if known {
             validate_run_id_for_lease(&event.run_id)?;
@@ -246,23 +246,23 @@ impl RunLifecycleValidator {
         Ok(())
     }
 
-    pub(in crate::state) fn event_count(&self) -> usize {
+    pub fn event_count(&self) -> usize {
         self.event_count
     }
 
-    pub(in crate::state) fn known_event_count(&self) -> usize {
+    pub fn known_event_count(&self) -> usize {
         self.known_event_count
     }
 
-    pub(in crate::state) fn queued(&self) -> bool {
+    pub fn queued(&self) -> bool {
         self.queued
     }
 
-    pub(in crate::state) fn completed(&self) -> bool {
+    pub fn completed(&self) -> bool {
         self.completed_at_ms.is_some()
     }
 
-    pub(in crate::state) fn completed_at_ms(&self) -> Option<u64> {
+    pub fn completed_at_ms(&self) -> Option<u64> {
         self.completed_at_ms
     }
 }

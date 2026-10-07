@@ -224,7 +224,8 @@ pub(super) fn stream_error(
     match result {
         Ok(_) => Ok(None),
         Err(error)
-            if crate::cancellation::is_status_collection_cancellation(&error) || cancelled() =>
+            if jig_state::cancellation::is_status_collection_cancellation(&error)
+                || cancelled() =>
         {
             Err(SourceError::Cancelled)
         }
@@ -287,7 +288,7 @@ pub(super) fn collection_error_for(
     error: anyhow::Error,
     cancelled: &dyn Fn() -> bool,
 ) -> SourceError {
-    if cancelled() || crate::cancellation::is_status_collection_cancellation(&error) {
+    if cancelled() || jig_state::cancellation::is_status_collection_cancellation(&error) {
         SourceError::Cancelled
     } else {
         SourceError::Collection {

@@ -1,10 +1,11 @@
 //! Admit without hold-and-wait, then publish only after the cohort source check.
+use jig_state::ResourceLease;
+
 use super::slots::AdmissionSnapshot;
 use super::*;
 use crate::repository::execution_resources::{self, ResolvedResources};
 use crate::runtime::run_execution::resources;
 use crate::runtime::run_execution::target::TargetBudget;
-use crate::state::ResourceLease;
 
 mod execution;
 use execution::{WaveOutcome, execute_wave, prepare_wave};

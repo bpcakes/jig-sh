@@ -39,7 +39,7 @@ pub(in crate::cli) fn run_status_command(opts: StatusOpts, json_output: bool) ->
 }
 
 fn status_run_output(ctx: &RepoContext, run_id: &str) -> Result<serde_json::Value> {
-    let run = crate::state::reconcile_run_for_inspection(ctx, run_id)?;
+    let run = jig_state::reconcile_run_for_inspection(ctx, run_id)?;
     let mut output = serde_json::to_value(run)?;
     output["ok"] = serde_json::json!(true);
     output["command"] = serde_json::json!("status run");
@@ -73,7 +73,7 @@ mod tests {
             )],
             vec![vec![target]],
         );
-        let (started, lease) = crate::state::start_run(&ctx, plan).unwrap();
+        let (started, lease) = jig_state::start_run(&ctx, plan).unwrap();
         drop(lease);
 
         let output = status_run_output(&ctx, &started.result.run_id).unwrap();

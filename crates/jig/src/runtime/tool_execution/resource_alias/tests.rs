@@ -3,8 +3,9 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc;
 
+use jig_state::ResourceLease;
+
 use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
-use crate::state::ResourceLease;
 
 use super::*;
 
@@ -272,7 +273,7 @@ impl Fixture {
         self.barriers.path().join("dependency-started")
     }
 
-    fn claims(&self, ctx: &RepoContext) -> Vec<crate::state::ResourceClaim> {
+    fn claims(&self, ctx: &RepoContext) -> Vec<jig_state::ResourceClaim> {
         let catalog = RepositoryCatalog::from_context(ctx).unwrap();
         let target: TargetId = "repo:check".parse().unwrap();
         let plan = plan_action_run_with_cancellation(

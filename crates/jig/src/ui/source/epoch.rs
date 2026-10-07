@@ -6,7 +6,7 @@ use jig_contract::{RunConclusion, TargetOutputTailV1};
 use jig_ui::dashboard::*;
 use sha2::{Digest, Sha256};
 
-use crate::state::{
+use jig_state::{
     CompletedTargetEvent, JsonlRecordTooLarge, RawJsonlRecord, RunHistoryEvent, run_history_event,
     scan_dashboard_jsonl_raw,
 };
@@ -65,7 +65,7 @@ impl LocalObservationEpoch {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self, SourceError> {
         ensure_active(cancelled)?;
-        let observed_at_ms = crate::state::now_ms();
+        let observed_at_ms = jig_state::now_ms();
         let (repository, status_repository_errors) =
             crate::status::dashboard_repository_snapshot_with_cancellation(context, cancelled)
                 .map_err(|error| {
@@ -79,7 +79,7 @@ impl LocalObservationEpoch {
             context, cancelled,
         ) {
             Ok(loops) => (Some(loops), None),
-            Err(error) if crate::cancellation::is_status_collection_cancellation(&error) => {
+            Err(error) if jig_state::cancellation::is_status_collection_cancellation(&error) => {
                 return Err(SourceError::Cancelled);
             }
             Err(error) => (

@@ -13,7 +13,7 @@ pub(super) struct RunCancellationProbe {
     run_id: String,
     pub(super) signalled: Arc<AtomicBool>,
     last_durable_check: Mutex<Option<Instant>>,
-    event_cursor: Mutex<crate::state::RunEventCursor>,
+    event_cursor: Mutex<jig_state::RunEventCursor>,
     poll_failure: Mutex<Option<String>>,
 }
 
@@ -21,7 +21,7 @@ impl RunCancellationProbe {
     pub(super) fn new(
         ctx: RepoContext,
         run_id: String,
-        event_cursor: crate::state::RunEventCursor,
+        event_cursor: jig_state::RunEventCursor,
     ) -> Self {
         Self {
             ctx,
@@ -72,12 +72,8 @@ impl RunCancellationProbe {
             Err(TryLockError::WouldBlock) => return Ok(false),
             Err(TryLockError::Poisoned(error)) => error.into_inner(),
         };
-        let requested = crate::state::run_cancel_requested_since(
-            &self.ctx,
-            &self.run_id,
-            &mut cursor,
-            &signalled,
-        );
+        let requested =
+            jig_state::run_cancel_requested_since(&self.ctx, &self.run_id, &mut cursor, &signalled);
         match requested {
             Ok(true) => {
                 self.signal();

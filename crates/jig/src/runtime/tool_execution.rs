@@ -148,7 +148,7 @@ fn native_result(
         findings,
         finding_count,
         evidence,
-        evaluated_at_ms: crate::state::now_ms(),
+        evaluated_at_ms: jig_state::now_ms(),
         valid_until_ms: None,
     }
 }
@@ -415,7 +415,7 @@ fn execute_action_alias(
     args: Value,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
-    repository_execution: crate::state::RepositoryExecutionLease,
+    repository_execution: jig_state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
     if !action.resources.is_empty() {
         return resource_alias::execute(ctx, tool, action, args, observer, repository_execution);

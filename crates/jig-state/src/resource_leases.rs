@@ -7,25 +7,25 @@ use std::process::Command;
 use anyhow::{Result, bail};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResourceClaimMode {
+pub enum ResourceClaimMode {
     Shared,
     Exclusive,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResourceClaim {
-    pub(crate) opaque_key: String,
-    pub(crate) mode: ResourceClaimMode,
+pub struct ResourceClaim {
+    pub opaque_key: String,
+    pub mode: ResourceClaimMode,
 }
 
-pub(crate) struct ResourceLease {
+pub struct ResourceLease {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     files: Vec<std::sync::Arc<std::fs::File>>,
 }
 
 impl ResourceLease {
     /// One nonblocking attempt; the caller owns cancellation and its deadline.
-    pub(crate) fn try_acquire(claims: &[ResourceClaim]) -> Result<Option<Self>> {
+    pub fn try_acquire(claims: &[ResourceClaim]) -> Result<Option<Self>> {
         let claims = normalized_claims(claims)?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
@@ -41,7 +41,7 @@ impl ResourceLease {
     /// Install before a literal-exec hook. Only this command's child clears
     /// CLOEXEC; unrelated execs cannot inherit these descriptors. The command
     /// retains ownership too, so dropping it is part of releasing the claim.
-    pub(crate) fn inherit_into(&self, command: &mut Command) -> Result<()> {
+    pub fn inherit_into(&self, command: &mut Command) -> Result<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             unix::inherit_into(&self.files, command)

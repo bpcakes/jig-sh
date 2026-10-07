@@ -11,15 +11,13 @@ use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 use ulid::Ulid;
 
-use crate::command::StateRestoreRequest;
-
-use super::MAINTENANCE_WRITER_COORDINATION_NOTE;
 use super::compression::{
     GzipWriteReport, create_dir_all_synced, decompress_gzip_to_temp, gzip_file_atomic, sha256_file,
     sync_directory,
 };
 use super::jsonl::with_jsonl_write_lock;
 use super::support::now_ms;
+use super::{MAINTENANCE_WRITER_COORDINATION_NOTE, StateRestoreRequest};
 
 const BACKUP_MANIFEST_VERSION: u32 = 1;
 const RUNS_STREAM: &str = "runs";
@@ -61,7 +59,7 @@ fn read_state_backup_manifest(path: &Path) -> Result<StateBackupManifest> {
         .with_context(|| format!("Failed to parse {}", path.display()))
 }
 
-pub(crate) fn restore_backup(ctx: &RepoContext, request: StateRestoreRequest) -> Result<Value> {
+pub fn restore_backup(ctx: &RepoContext, request: StateRestoreRequest) -> Result<Value> {
     let manifest_path = resolve_manifest_path(&request.backup);
     let manifest = read_state_backup_manifest(&manifest_path)?;
     let stream = validate_manifest(&manifest)?;
@@ -344,7 +342,7 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    use crate::test_env::TestRepoBuilder;
+    use jig_context::test_support::TestRepoBuilder;
 
     use super::*;
 

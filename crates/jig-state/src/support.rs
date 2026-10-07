@@ -9,23 +9,23 @@ use ulid::Ulid;
 
 use jig_context::RepoContext;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static TEST_NOW_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
-pub(crate) struct TestNowGuard(Option<u64>);
+#[cfg(any(test, feature = "test-support"))]
+pub struct TestNowGuard(Option<u64>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for TestNowGuard {
     fn drop(&mut self) {
         TEST_NOW_MS.set(self.0);
     }
 }
 
-#[cfg(test)]
-pub(crate) fn set_test_now_ms(value: u64) -> TestNowGuard {
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_test_now_ms(value: u64) -> TestNowGuard {
     let previous = TEST_NOW_MS.replace(Some(value));
     TestNowGuard(previous)
 }
@@ -52,8 +52,8 @@ impl Drop for AdvisoryLeaseFile {
     }
 }
 
-pub(crate) fn now_ms() -> u64 {
-    #[cfg(test)]
+pub fn now_ms() -> u64 {
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(value) = TEST_NOW_MS.get() {
         return value;
     }

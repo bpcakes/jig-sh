@@ -38,7 +38,7 @@ pub(super) struct TargetExecutionControl<'a> {
     budget: TargetBudget,
     run_control: &'a mut dyn RepositoryRunControl,
     poll_failure: Mutex<Option<String>>,
-    resource_lease: Option<&'a crate::state::ResourceLease>,
+    resource_lease: Option<&'a jig_state::ResourceLease>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,7 +74,7 @@ impl<'a> TargetExecutionControl<'a> {
     pub(super) fn with_budget(
         budget: TargetBudget,
         run_control: &'a mut dyn RepositoryRunControl,
-        resource_lease: Option<&'a crate::state::ResourceLease>,
+        resource_lease: Option<&'a jig_state::ResourceLease>,
     ) -> Self {
         Self {
             budget,

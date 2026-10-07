@@ -12,7 +12,7 @@ use super::{RUN_LEASE_DIR, run_lease_is_idle_at_root, validate_run_id_for_lease}
 /// Returns every currently held worker lease, including leases whose journal
 /// lifecycle is missing. Restore and read-only recovery diagnostics share this
 /// inventory so their destination preflight cannot disagree.
-pub(in crate::state) fn active_run_lease_ids(
+pub fn active_run_lease_ids(
     root: &Path,
     known_run_ids: impl IntoIterator<Item = String>,
 ) -> Result<Vec<String>> {

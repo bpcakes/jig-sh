@@ -87,7 +87,7 @@ impl ParallelTargetExecution {
 pub(super) fn execute_parallel_read_only_layer(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    run: &crate::state::DurableRun,
+    run: &jig_state::DurableRun,
     control: &mut dyn RepositoryRunControl,
     source_epoch: &mut ExecutionSourceEpoch,
     targets: &[(&PlannedTarget, PhasePosition)],
@@ -261,7 +261,7 @@ pub(super) fn execute_parallel_read_only_layer(
 fn execute_parallel_target(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    run: &crate::state::DurableRun,
+    run: &jig_state::DurableRun,
     (planned, position): (&PlannedTarget, PhasePosition),
     control: &mut dyn RepositoryRunControl,
     queued_source_epoch: Option<&Mutex<&mut ExecutionSourceEpoch>>,

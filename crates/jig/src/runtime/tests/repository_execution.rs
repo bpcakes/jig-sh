@@ -177,7 +177,7 @@ fn freshly_planned_check_reports_repository_lease_waiting() {
         },
     )
     .unwrap();
-    let held = crate::state::acquire_repository_execution_lease(
+    let held = jig_state::acquire_repository_execution_lease(
         &ctx,
         &[jig_contract::ActionEffect::Worktree],
     )
@@ -237,7 +237,7 @@ fn freshly_planned_check_can_cancel_while_waiting_for_repository_lease() {
         },
     )
     .unwrap();
-    let held = crate::state::acquire_repository_execution_lease(
+    let held = jig_state::acquire_repository_execution_lease(
         &ctx,
         &[jig_contract::ActionEffect::Worktree],
     )
@@ -325,7 +325,7 @@ fn accepted_empty_check_cannot_complete_under_changed_manifest_authority() {
 
     assert!(error.contains("execution authority changed"), "{error}");
     assert_eq!(
-        crate::state::run_by_id(&ctx, &run_id)
+        jig_state::run_by_id(&ctx, &run_id)
             .unwrap()
             .result
             .conclusion,

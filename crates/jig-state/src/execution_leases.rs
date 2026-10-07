@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -13,16 +13,16 @@ use super::support::{AdvisoryLeaseFile, ensure_state_layout};
 
 const REPOSITORY_EXECUTION_LEASE: &str = ".agent/.cache/repository-execution.lock";
 
-pub(crate) struct RepositoryExecutionLease {
+pub struct RepositoryExecutionLease {
     _file: AdvisoryLeaseFile,
     exclusive: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
-pub(crate) struct RepositoryExecutionBusy;
+pub struct RepositoryExecutionBusy;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl fmt::Display for RepositoryExecutionBusy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(
@@ -31,10 +31,10 @@ impl fmt::Display for RepositoryExecutionBusy {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl std::error::Error for RepositoryExecutionBusy {}
 
-pub(crate) fn try_acquire_repository_execution_lease(
+pub fn try_acquire_repository_execution_lease(
     ctx: &RepoContext,
     effects: &[ActionEffect],
 ) -> Result<Option<RepositoryExecutionLease>> {
@@ -59,8 +59,8 @@ pub(crate) fn try_acquire_repository_execution_lease(
     }))
 }
 
-#[cfg(test)]
-pub(crate) fn acquire_repository_execution_lease(
+#[cfg(any(test, feature = "test-support"))]
+pub fn acquire_repository_execution_lease(
     ctx: &RepoContext,
     effects: &[ActionEffect],
 ) -> Result<RepositoryExecutionLease> {
@@ -79,8 +79,8 @@ pub(crate) fn acquire_repository_execution_lease(
     })
 }
 
-#[cfg(test)]
-pub(crate) fn acquire_repository_execution_lease_without_wait(
+#[cfg(any(test, feature = "test-support"))]
+pub fn acquire_repository_execution_lease_without_wait(
     ctx: &RepoContext,
     effects: &[ActionEffect],
 ) -> Result<RepositoryExecutionLease> {
@@ -89,7 +89,7 @@ pub(crate) fn acquire_repository_execution_lease_without_wait(
 }
 
 impl RepositoryExecutionLease {
-    pub(crate) fn permits(&self, effects: &[ActionEffect]) -> bool {
+    pub fn permits(&self, effects: &[ActionEffect]) -> bool {
         self.exclusive || !requires_exclusive_execution(effects)
     }
 }

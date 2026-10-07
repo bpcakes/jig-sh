@@ -52,13 +52,13 @@ const REVERSE_RUN_READ_CHUNK: usize = 16 * 1024;
 
 /// The accepted plan and current state reconstructed from the append-only run log.
 #[derive(Clone, Debug, JsonSchema, Serialize)]
-pub(crate) struct DurableRun {
-    pub(crate) plan: RunPlan,
-    pub(crate) result: RunResult,
-    pub(crate) cancel_requested: bool,
+pub struct DurableRun {
+    pub plan: RunPlan,
+    pub result: RunResult,
+    pub cancel_requested: bool,
 }
 
-pub(crate) struct RunLease {
+pub struct RunLease {
     // The path is deliberately stable for the repository lifetime. Removing
     // an advisory-lock file after unlock permits another process to open and
     // lock a new inode while an inspector still holds the old inode.
@@ -72,14 +72,14 @@ struct RunEventIdentity {
     event: String,
 }
 
-#[cfg(test)]
-pub(crate) fn start_run(ctx: &RepoContext, plan: RunPlan) -> Result<(DurableRun, RunLease)> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn start_run(ctx: &RepoContext, plan: RunPlan) -> Result<(DurableRun, RunLease)> {
     let repository_execution =
         super::execution_leases::acquire_repository_execution_lease(ctx, &plan.effects)?;
     start_run_with_execution_lease(ctx, plan, repository_execution)
 }
 
-pub(crate) fn start_run_with_execution_lease(
+pub fn start_run_with_execution_lease(
     ctx: &RepoContext,
     plan: RunPlan,
     repository_execution: super::RepositoryExecutionLease,
@@ -90,7 +90,7 @@ pub(crate) fn start_run_with_execution_lease(
 }
 
 #[cfg(test)]
-pub(crate) fn start_run_with_event_cursor(
+pub fn start_run_with_event_cursor(
     ctx: &RepoContext,
     plan: RunPlan,
 ) -> Result<(DurableRun, RunLease, RunEventCursor)> {
@@ -99,7 +99,7 @@ pub(crate) fn start_run_with_event_cursor(
     start_run_with_event_cursor_and_execution_lease(ctx, plan, repository_execution)
 }
 
-pub(crate) fn start_run_with_event_cursor_and_execution_lease(
+pub fn start_run_with_event_cursor_and_execution_lease(
     ctx: &RepoContext,
     plan: RunPlan,
     repository_execution: super::RepositoryExecutionLease,
@@ -155,7 +155,7 @@ fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
     })
 }
 
-pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
+pub fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
     let run = run_by_id(ctx, run_id)?;
     if run.result.status == RunStatus::Completed {
         return Ok(run);
@@ -262,15 +262,15 @@ fn remove_run_lease(ctx: &RepoContext, run_id: &str) -> Result<bool> {
     }
 }
 
-pub(crate) fn mark_run_running(ctx: &RepoContext, run_id: &str) -> Result<()> {
+pub fn mark_run_running(ctx: &RepoContext, run_id: &str) -> Result<()> {
     append_simple_event(ctx, run_id, EVENT_RUNNING, None, None)
 }
 
-pub(crate) fn mark_target_started(ctx: &RepoContext, run_id: &str, target: TargetId) -> Result<()> {
+pub fn mark_target_started(ctx: &RepoContext, run_id: &str, target: TargetId) -> Result<()> {
     append_simple_event(ctx, run_id, EVENT_TARGET_STARTED, Some(target), None)
 }
 
-pub(crate) fn record_target_result(
+pub fn record_target_result(
     ctx: &RepoContext,
     run_id: &str,
     result: TargetRunResult,
@@ -290,15 +290,11 @@ pub(crate) fn record_target_result(
     )
 }
 
-pub(crate) fn complete_run(
-    ctx: &RepoContext,
-    run_id: &str,
-    conclusion: RunConclusion,
-) -> Result<()> {
+pub fn complete_run(ctx: &RepoContext, run_id: &str, conclusion: RunConclusion) -> Result<()> {
     append_simple_event(ctx, run_id, EVENT_COMPLETED, None, Some(conclusion))
 }
 
-pub(crate) fn block_nonterminal_run(ctx: &RepoContext, run_id: &str, message: &str) -> Result<()> {
+pub fn block_nonterminal_run(ctx: &RepoContext, run_id: &str, message: &str) -> Result<()> {
     let run = run_by_id(ctx, run_id)?;
     if run.result.status == RunStatus::Completed {
         return Ok(());
@@ -343,8 +339,8 @@ const fn run_conclusion_priority(conclusion: RunConclusion) -> u8 {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn request_run_cancel(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn request_run_cancel(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
     let run = run_by_id(ctx, run_id)?;
     if run.result.status == RunStatus::Completed || run.cancel_requested {
         return Ok(run);
@@ -353,7 +349,7 @@ pub(crate) fn request_run_cancel(ctx: &RepoContext, run_id: &str) -> Result<Dura
     run_by_id(ctx, run_id)
 }
 
-pub(crate) fn run_by_id(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
+pub fn run_by_id(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
     ensure_state_layout(ctx)?;
     let path = ctx.state_file(RUNS_FILE);
     let events = read_run_events_reverse(&path, run_id)?;
@@ -755,9 +751,9 @@ fn target_result_mut<'a>(
 mod archive;
 mod lease_inventory;
 pub(super) mod lifecycle;
-pub(crate) use archive::runs_archive;
+pub use archive::runs_archive;
 pub(super) use archive::{ensure_run_stream_replaceable, validate_run_stream};
-pub(in crate::state) use lease_inventory::active_run_lease_ids;
+pub use lease_inventory::active_run_lease_ids;
 
 #[cfg(test)]
 mod tests;
@@ -765,5 +761,5 @@ mod tests;
 mod cancellation;
 use cancellation::append_event_with_cursor;
 mod history;
-pub(crate) use cancellation::{RunEventCursor, run_cancel_requested_since};
-pub(crate) use history::{CompletedTargetEvent, RunHistoryEvent, run_history_event};
+pub use cancellation::{RunEventCursor, run_cancel_requested_since};
+pub use history::{CompletedTargetEvent, RunHistoryEvent, run_history_event};

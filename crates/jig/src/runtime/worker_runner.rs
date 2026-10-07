@@ -13,6 +13,7 @@ use jig_owned_process::{
     ProcessOutputLimits, ProcessOutputOverflowPolicy,
     run_owned_process_tree_with_output_policy_and_observer,
 };
+use jig_state::now_ms;
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 
@@ -20,7 +21,6 @@ use crate::execution::{
     EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionCommandError, ExecutionControl, ExecutionPhase,
     PhasePosition, ProcessExecutionObserver,
 };
-use crate::state::now_ms;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
 const WORKER_PROVIDER_PREVIEW_BYTES: usize = 4_000;

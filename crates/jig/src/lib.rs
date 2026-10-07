@@ -5,7 +5,6 @@ mod bootstrap;
 #[cfg(test)]
 #[path = "../build_identity.rs"]
 mod build_identity;
-mod cancellation;
 mod claude;
 mod cli;
 mod codex;
@@ -65,7 +64,6 @@ mod shell;
 mod signal_supervision;
 mod source_identity;
 mod source_projection;
-mod state;
 mod status;
 mod surface;
 #[cfg(test)]

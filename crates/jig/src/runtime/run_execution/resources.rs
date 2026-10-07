@@ -1,9 +1,10 @@
+use jig_state::ResourceLease;
+
 use super::*;
 use crate::repository::{
     cargo_resources,
     execution_resources::{self, ResolvedResources},
 };
-use crate::state::ResourceLease;
 use target::TargetBudget;
 mod execution;
 pub(super) use execution::capture_admitted;

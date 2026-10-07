@@ -1,10 +1,11 @@
+use jig_context::test_support::TestRepoBuilder;
 use jig_contract::{
     ActionIntent, ActionRunner, PlannedTarget, RunConclusion, RunPlan, RunStatus, SourceIdentity,
 };
 use tempfile::tempdir;
 
 use super::*;
-use crate::test_env::TestRepoBuilder;
+use crate::{StateArchiveRequest, StateRestoreRequest};
 
 mod lifecycle;
 
@@ -179,7 +180,7 @@ fn archive_and_restore_reject_queued_plans_with_invalid_structure() {
 
     let archive_error = super::super::state_archive(
         &ctx,
-        crate::command::StateArchiveRequest {
+        StateArchiveRequest {
             before: u64::MAX.to_string(),
             dry_run: true,
         },
@@ -202,8 +203,7 @@ fn archive_and_restore_reject_queued_plans_with_invalid_structure() {
     .unwrap();
     fs::write(&runs_path, b"").unwrap();
     let restore_error =
-        super::super::restore_backup(&ctx, crate::command::StateRestoreRequest { backup })
-            .unwrap_err();
+        super::super::restore_backup(&ctx, StateRestoreRequest { backup }).unwrap_err();
     assert!(
         format!("{restore_error:#}").contains("execution layers omit planned target(s): repo:test"),
         "{restore_error:#}"
@@ -240,7 +240,7 @@ fn archive_removes_completed_runs_and_keeps_recovery_artifacts() {
 
     let archived = super::super::state_archive(
         &ctx,
-        crate::command::StateArchiveRequest {
+        StateArchiveRequest {
             before: u64::MAX.to_string(),
             dry_run: false,
         },
@@ -255,11 +255,7 @@ fn archive_removes_completed_runs_and_keeps_recovery_artifacts() {
     assert!(recovery.join("manifest.json").is_file());
     assert!(run_by_id(&ctx, &completed_id).is_err());
 
-    super::super::restore_backup(
-        &ctx,
-        crate::command::StateRestoreRequest { backup: recovery },
-    )
-    .unwrap();
+    super::super::restore_backup(&ctx, StateRestoreRequest { backup: recovery }).unwrap();
     assert_eq!(
         run_by_id(&ctx, &completed_id).unwrap().result.status,
         RunStatus::Completed
@@ -423,7 +419,7 @@ fn restore_refuses_to_replace_a_live_run_journal() {
     let before_nonterminal_restore = fs::read(&runs_path).unwrap();
     let error = super::super::restore_backup(
         &ctx,
-        crate::command::StateRestoreRequest {
+        StateRestoreRequest {
             backup: backup.clone(),
         },
     )
@@ -435,7 +431,7 @@ fn restore_refuses_to_replace_a_live_run_journal() {
     let before_active_lease_restore = fs::read(&runs_path).unwrap();
     let error = super::super::restore_backup(
         &ctx,
-        crate::command::StateRestoreRequest {
+        StateRestoreRequest {
             backup: backup.clone(),
         },
     )
@@ -449,7 +445,7 @@ fn restore_refuses_to_replace_a_live_run_journal() {
     fs::write(&runs_path, b"").unwrap();
     let error = super::super::restore_backup(
         &ctx,
-        crate::command::StateRestoreRequest {
+        StateRestoreRequest {
             backup: backup.clone(),
         },
     )
@@ -458,8 +454,7 @@ fn restore_refuses_to_replace_a_live_run_journal() {
     assert!(fs::read(&runs_path).unwrap().is_empty());
 
     drop(active_lease);
-    let restored =
-        super::super::restore_backup(&ctx, crate::command::StateRestoreRequest { backup }).unwrap();
+    let restored = super::super::restore_backup(&ctx, StateRestoreRequest { backup }).unwrap();
     assert_eq!(restored["changed"], true);
     assert_eq!(
         run_by_id(&ctx, &backed_up.result.run_id)

@@ -228,7 +228,7 @@ fn apply_occurrence_attention(
     completion: &mut WorkflowCompletion,
     occurrence: &ScheduleOccurrence,
 ) {
-    if occurrence.requires_attention_at(crate::state::now_ms()) {
+    if occurrence.requires_attention_at(jig_state::now_ms()) {
         completion.outcome = WorkflowOutcome::NeedsAttention;
         if completion.error.is_none() {
             completion.error = occurrence.error.clone();

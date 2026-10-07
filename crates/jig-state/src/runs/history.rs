@@ -6,7 +6,7 @@ use jig_contract::{RunConclusion, TargetRunResult};
 use super::{EVENT_QUEUED, EVENT_TARGET_COMPLETED, RunEventRecord};
 
 /// A run-history record as read-only views need it.
-pub(crate) enum RunHistoryEvent {
+pub enum RunHistoryEvent {
     /// A run was queued. Every run has exactly one queued event.
     Queued,
     TargetCompleted(Box<CompletedTargetEvent>),
@@ -14,15 +14,15 @@ pub(crate) enum RunHistoryEvent {
 }
 
 /// One finished target read from run history.
-pub(crate) struct CompletedTargetEvent {
-    pub(crate) run_id: String,
-    pub(crate) result: TargetRunResult,
+pub struct CompletedTargetEvent {
+    pub run_id: String,
+    pub result: TargetRunResult,
 }
 
 impl CompletedTargetEvent {
     /// Whether the target failed, timed out, or was blocked. Cancelled and
     /// skipped targets are not failures.
-    pub(crate) fn failed(&self) -> bool {
+    pub fn failed(&self) -> bool {
         matches!(
             self.result.conclusion,
             Some(RunConclusion::Failure | RunConclusion::TimedOut | RunConclusion::Blocked)
@@ -32,7 +32,7 @@ impl CompletedTargetEvent {
 
 /// Classifies one run-history record. Only `target_completed` records are
 /// fully decoded, and fields retired from older records are ignored.
-pub(crate) fn run_history_event(record: &[u8]) -> serde_json::Result<RunHistoryEvent> {
+pub fn run_history_event(record: &[u8]) -> serde_json::Result<RunHistoryEvent> {
     #[derive(serde::Deserialize)]
     struct EventKind {
         event: String,

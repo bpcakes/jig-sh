@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use jig_context::RepoContext;
+use jig_state::now_ms;
 use serde_json::{Value, json};
 
 use crate::command::{LoopDispatchRequest, LoopRunRequest, LoopTickRequest};
@@ -8,7 +9,6 @@ use crate::execution::NoopExecutionObserver;
 use crate::execution::{
     AdditionalCancellationControl, ExecutionControl, ExecutionPhase, PhasePosition,
 };
-use crate::state::now_ms;
 
 use super::engine::{ScheduledTick, tick_scheduled_with_observer, tick_with_observer};
 use super::occurrence::{
