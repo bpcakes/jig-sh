@@ -44,6 +44,7 @@ use init_transaction::{
 #[cfg(test)]
 use initial_copy::seed_answers_toml;
 use initial_copy::{BootstrapCopyRequest, render_and_copy_bootstrap_template};
+pub(crate) use initial_template::record_build_template_pin_policy;
 #[cfg(test)]
 use initial_template::{
     BuildTemplatePinPolicy, TEST_BUILD_TEMPLATE_PIN_POLICY, build_template_pin_policy_from_env,

@@ -77,6 +77,7 @@ mod ui;
 /// Returns an error when command parsing, repository loading, command
 /// execution, structured output, or cleanup fails.
 pub fn run() -> anyhow::Result<()> {
+    bootstrap::record_build_template_pin_policy(option_env!("JIG_BUILD_OFFICIAL_TEMPLATE_PIN"));
     cli::run()
 }
 

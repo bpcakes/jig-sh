@@ -2,6 +2,7 @@ use std::borrow::Cow;
 #[cfg(test)]
 use std::cell::Cell;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 
@@ -102,6 +103,17 @@ fn official_initial_template_request(
     })
 }
 
+/// The official-template pin policy of the running binary, recorded once at
+/// startup by the CLI from its build script's `JIG_BUILD_OFFICIAL_TEMPLATE_PIN`.
+static BUILD_TEMPLATE_PIN_POLICY: OnceLock<BuildTemplatePinPolicy> = OnceLock::new();
+
+/// Records the binary's official-template pin policy from the value its build
+/// script emitted. Only the first call takes effect. Until it is called the
+/// policy is unknown, which keeps release-pin behavior.
+pub(crate) fn record_build_template_pin_policy(value: Option<&str>) {
+    let _ = BUILD_TEMPLATE_PIN_POLICY.set(build_template_pin_policy_from_env(value));
+}
+
 fn current_build_template_pin_policy() -> BuildTemplatePinPolicy {
     #[cfg(test)]
     {
@@ -112,7 +124,10 @@ fn current_build_template_pin_policy() -> BuildTemplatePinPolicy {
 
     #[cfg(not(test))]
     {
-        build_template_pin_policy_from_env(option_env!("JIG_BUILD_OFFICIAL_TEMPLATE_PIN"))
+        BUILD_TEMPLATE_PIN_POLICY
+            .get()
+            .copied()
+            .unwrap_or(BuildTemplatePinPolicy::Unknown)
     }
 }
 
