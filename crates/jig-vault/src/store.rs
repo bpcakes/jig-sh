@@ -182,6 +182,12 @@ impl VaultStore {
         &self.initialization_kdf
     }
 
+    /// Used under the target lock after recovery has ruled out a pending
+    /// restore. Reapply normal home privacy and durability before init.
+    pub(crate) fn prepare_init_home(&self) -> AnyResult<Self> {
+        prepare_private_dir(self.root.clone(), self.initialization_kdf.clone())
+    }
+
     pub(crate) fn vault_path(&self) -> PathBuf {
         self.root.join(VAULT_FILE)
     }

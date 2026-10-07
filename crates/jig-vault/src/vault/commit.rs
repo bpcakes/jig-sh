@@ -153,6 +153,14 @@ impl VaultStore {
             ));
         }
         validate_new_vault_passphrase_inner(passphrase)?;
+        if !self.root().exists() {
+            // An orphan restore journal kept resolution from creating this
+            // home. Recovery above has now proved it is safe to prepare it.
+            // The outer lock holds only the target lock for an absent home;
+            // reenter it and acquire the new home lock before any ID lock.
+            let prepared = self.prepare_init_home()?;
+            return prepared.with_lock(|| prepared.init_unlocked(passphrase));
+        }
         let material = NewVaultMaterial::generate(
             LATEST_FORMAT_VERSION,
             now_ms(),

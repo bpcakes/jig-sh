@@ -598,4 +598,5 @@ fn pending_staging_that_lost_its_privacy_is_never_installed() {
 }
 
 mod durability;
+mod integrity;
 mod ownership;

@@ -45,3 +45,12 @@ passphrase change rotates the data-encryption key, so a key recovered from an
 earlier copy cannot decrypt later state. Rotation is not revocation: earlier
 vault files and backups remain decryptable with the passphrase they were made
 with, the audit key does not change, and values revealed earlier stay exposed.
+
+Witness checkpoints and locks are local to one user profile. Independently
+enrolled profiles sharing a vault diverge after a mutation; a profile with
+an older checkpoint refuses the newer state as an unwitnessed fork. Use one
+persistent owning profile for ongoing access. Recovery from an accepting
+profile uses an authenticated encrypted backup and restore to an absent
+target on the refusing profile; it does not synchronize witnesses. See
+[rollback witness and recovery](docs/configuration.md#rollback-witness-and-recovery).
+Never delete or edit witness records to bypass a refusal.

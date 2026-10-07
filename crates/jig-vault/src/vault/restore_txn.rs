@@ -60,7 +60,15 @@ impl VaultStore {
                 .validate()?
                 .unlock(passphrase)?;
             let mut vault = OpenVault::from_unlocked(unlocked, sha256_hex(&bytes));
-            vault.verify_audit_unlocked(self).map_err(|error| {
+            // Check the archived checkpoint before replacing it with the
+            // restore event. Freshness against the live witness is deliberately
+            // separate: an intact older archive is valid recovery input.
+            let audit = if vault.state.v3.is_some() {
+                self.verify_mutation_anchor_unlocked(&vault)
+            } else {
+                vault.verify_audit_unlocked(self).map(|_| ())
+            };
+            audit.map_err(|error| {
                 classify_source(
                     VaultErrorKind::AuditTampered,
                     "restored vault audit chain verification failed",

@@ -103,7 +103,7 @@ impl VaultStore {
         compare_with_checkpoint(&checkpoint, committed)
     }
 
-    fn verify_mutation_anchor_unlocked(&self, vault: &OpenVault) -> AnyResult<()> {
+    pub(super) fn verify_mutation_anchor_unlocked(&self, vault: &OpenVault) -> AnyResult<()> {
         let fields = vault.state.v3.as_ref().expect("format 3 state");
         self.verify_anchor_unlocked(
             vault.audit_key.as_ref(),
@@ -251,17 +251,23 @@ fn compare_with_checkpoint(current: &Checkpoint, committed: &Checkpoint) -> AnyR
     if current.generation > committed.generation {
         return Err(classified(
             VaultErrorKind::AuditTampered,
-            "vault state is newer than its witnessed checkpoint without a recorded transaction; refusing an unwitnessed fork",
+            format!(
+                "vault state is newer than its witnessed checkpoint without a recorded transaction; refusing an unwitnessed fork. {PROFILE_RECOVERY_GUIDANCE}"
+            ),
         ));
     }
     if current != committed {
         return Err(classified(
             VaultErrorKind::AuditTampered,
-            "vault state forks from its witnessed checkpoint at the same generation",
+            format!(
+                "vault state forks from its witnessed checkpoint at the same generation. {PROFILE_RECOVERY_GUIDANCE}"
+            ),
         ));
     }
     Ok(())
 }
+
+const PROFILE_RECOVERY_GUIDANCE: &str = "Operator step: if another user profile can still authenticate the intended vault, create an encrypted backup there and restore it to an absent target on this profile using the documented recovery procedure. Agents must ask the operator. Never delete or edit the rollback witness to bypass this refusal.";
 
 fn legacy_replay_error() -> anyhow::Error {
     classified(

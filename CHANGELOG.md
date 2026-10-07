@@ -88,6 +88,13 @@
   audit write or pending transaction, keeping the existing vault usable.
 - Keep initialization available in the Vault TUI after an init interrupted
   before its pending marker; an orphan journal no longer advertises recovery.
+- Verify a format 3 backup's archived mutation checkpoint before restore
+  replaces it, refusing missing anchors and mismatched generations without
+  advancing the witness or installing the target.
+- Allow initialization on the first attempt after a restore interrupted
+  before its pending marker, while preserving abandoned staging.
+- Explain independent-profile witness divergence and operator backup/restore
+  recovery; newer-state and fork refusals now include recovery guidance.
 - On macOS, the Claude home picker's usage check no longer prompts for
   Keychain access as `jig`. It reads with system dialogs disabled, then
   requests permission through Apple's `/usr/bin/security` tool, whose
