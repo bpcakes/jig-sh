@@ -29,6 +29,7 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-codex-tui"
   "jig-ui"
   "jig-agents"
+  "jig-loops"
   "$PACKAGE_NAME"
 )
 BIN_NAME="jig"
@@ -121,6 +122,7 @@ crate_dir_for_package() {
     jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;
     jig-ui) printf '%s\n' "crates/jig-ui" ;;
     jig-agents) printf '%s\n' "crates/jig-agents" ;;
+    jig-loops) printf '%s\n' "crates/jig-loops" ;;
     jig-sh) printf '%s\n' "crates/jig" ;;
     *)
       echo "Unknown publish package: $1" >&2

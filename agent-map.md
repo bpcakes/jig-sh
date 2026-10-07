@@ -20,6 +20,7 @@ If the owning area is already clear, read its nearest guide directly.
 - [crates/jig-file-budget](./crates/jig-file-budget/AGENTS.md)
 - [crates/jig-git](./crates/jig-git/AGENTS.md)
 - [crates/jig-go](./crates/jig-go/AGENTS.md)
+- [crates/jig-loops](./crates/jig-loops/AGENTS.md)
 - [crates/jig-owned-process](./crates/jig-owned-process/AGENTS.md)
 - [crates/jig-rust](./crates/jig-rust/AGENTS.md)
 - [crates/jig-sqlx](./crates/jig-sqlx/AGENTS.md)

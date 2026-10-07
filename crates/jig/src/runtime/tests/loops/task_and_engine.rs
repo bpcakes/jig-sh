@@ -526,7 +526,7 @@ while :; do sleep 1; done
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let ctx = RepoContext::load_from(&repo_root).unwrap();
-        crate::runtime::loops::revoke_lease_for_test(&ctx, "checkout:repo").unwrap();
+        jig_loops::revoke_lease_for_test(&ctx, "checkout:repo").unwrap();
     });
 
     let error = crate::runtime::dispatch(

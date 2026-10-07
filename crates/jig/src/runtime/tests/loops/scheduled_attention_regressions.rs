@@ -29,7 +29,7 @@ printf 'task complete\n' > "$out"
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();
 
-    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+    let first = jig_loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
 
     assert_eq!(first["status"], "needs_attention", "{first:#}");
     assert_eq!(first["needs_attention_count"], 1, "{first:#}");
@@ -47,7 +47,7 @@ printf 'task complete\n' > "$out"
         "the main repository is not a linked worktree: {first:#}"
     );
 
-    let second = crate::runtime::loops::dispatch_due_at(
+    let second = jig_loops::dispatch_due_at(
         &ctx,
         dispatch_at.saturating_add(60_000),
     )
@@ -99,14 +99,14 @@ sleep 60
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();
 
-    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+    let first = jig_loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
 
     assert_eq!(first["status"], "needs_attention", "{first:#}");
     let task = &first["actions"][0]["tick"]["actions"][0];
     assert_eq!(task["status"], "needs_attention", "{first:#}");
     assert_eq!(task["checkout"]["dirty"], true, "{first:#}");
 
-    let second = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at + 60_000).unwrap();
+    let second = jig_loops::dispatch_due_at(&ctx, dispatch_at + 60_000).unwrap();
     assert_eq!(second["status"], "needs_attention", "{second:#}");
     assert_eq!(second["executed_count"], 0, "{second:#}");
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
@@ -187,7 +187,7 @@ esac
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();
 
-    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+    let first = jig_loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
 
     let action = &first["actions"][0];
     assert_eq!(first["status"], "needs_attention", "{first:#}");
@@ -211,7 +211,7 @@ esac
         "{first:#}"
     );
 
-    let second = crate::runtime::loops::dispatch_due_at(
+    let second = jig_loops::dispatch_due_at(
         &ctx,
         dispatch_at.saturating_add(60_000),
     )
@@ -295,10 +295,10 @@ while :; do sleep 1; done
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let ctx = RepoContext::load_from(&repo_root).unwrap();
-        crate::runtime::loops::revoke_lease_for_test(&ctx, "branch:codex/widgets").unwrap();
+        jig_loops::revoke_lease_for_test(&ctx, "branch:codex/widgets").unwrap();
     });
 
-    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+    let first = jig_loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
     revoker.join().unwrap();
 
     let dispatch_action = &first["actions"][0];
@@ -323,7 +323,7 @@ while :; do sleep 1; done
             .contains("partial scheduled repair")
     );
 
-    let second = crate::runtime::loops::dispatch_due_at(
+    let second = jig_loops::dispatch_due_at(
         &ctx,
         dispatch_at.saturating_add(60_000),
     )

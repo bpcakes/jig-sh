@@ -12,6 +12,7 @@ members = [
     "crates/jig-file-budget",
     "crates/jig-git",
     "crates/jig-go",
+    "crates/jig-loops",
     "crates/jig-owned-process",
     "crates/jig-rust",
     "crates/jig-sqlx",
@@ -80,6 +81,7 @@ jig-features = { path = "crates/jig-features", version = "=0.7.3-dev" }
 jig-file-budget = { path = "crates/jig-file-budget", version = "=0.7.3-dev" }
 jig-git = { path = "crates/jig-git", version = "=0.7.3-dev" }
 jig-go = { path = "crates/jig-go", version = "=0.7.3-dev" }
+jig-loops = { path = "crates/jig-loops", version = "=0.7.3-dev" }
 jig-owned-process = { path = "crates/jig-owned-process", version = "=0.7.3-dev" }
 jig-rust = { path = "crates/jig-rust", version = "=0.7.3-dev" }
 jig-sqlx = { path = "crates/jig-sqlx", version = "=0.7.3-dev" }

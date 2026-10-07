@@ -42,7 +42,7 @@ fn scheduled_pr_manager_rejects_corrupt_branch_authority_before_claiming() {
     fs::write(authority.join("branch_leases.json"), b"{").unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let output = crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+    let output = jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
 
     assert_eq!(output["status"], "failed", "{output:#}");
     assert_eq!(output["due_count"], 1, "{output:#}");

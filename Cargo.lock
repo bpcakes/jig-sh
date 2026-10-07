@@ -1556,6 +1556,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-loops"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "cap-fs-ext",
+ "cap-std",
+ "chrono",
+ "chrono-tz",
+ "croner",
+ "fs4",
+ "jig-agents",
+ "jig-context",
+ "jig-execution",
+ "jig-git",
+ "jig-owned-process",
+ "jig-state",
+ "jig-ui",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "ulid",
+]
+
+[[package]]
 name = "jig-owned-process"
 version = "0.7.3-dev"
 dependencies = [
@@ -1600,6 +1626,7 @@ dependencies = [
  "jig-features",
  "jig-file-budget",
  "jig-git",
+ "jig-loops",
  "jig-owned-process",
  "jig-rust",
  "jig-state",
