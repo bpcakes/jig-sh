@@ -27,7 +27,7 @@ pub(super) fn sqlx_migration_preflight(
     if let Err(stop) = control.remaining() {
         return Some(stopped_before_start(planned, stop));
     }
-    crate::policy::migration_versions::check(ctx)
+    jig_policy::migration_versions::check(ctx)
         .err()
         .map(|error| {
             TargetCapture::failed_with_output(

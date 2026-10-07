@@ -149,7 +149,7 @@ fn full_readoption_from_contract_eight_moves_tracker_ownership_and_reports_dropp
         ctx.contract_version(),
         jig_context::CURRENT_CONTRACT_VERSION
     );
-    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
+    assert_eq!(jig_policy::contract_check(&ctx).exit_status, 0);
 }
 
 #[test]

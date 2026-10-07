@@ -1,9 +1,9 @@
 use clap::Subcommand;
+use jig_commands::tool_defs;
 
 use super::MigrationAddOpts;
 use super::runtime_dispatch::RuntimeDispatch;
 use crate::command::{self, RuntimeCommand};
-use crate::tool_defs;
 
 pub(super) const SQLX_AFTER_HELP: &str = "\
 SQLx checks remain grouped with the other project checks under `jig check`.

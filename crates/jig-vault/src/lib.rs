@@ -33,6 +33,7 @@ pub use exec::{
     ExecEnvBinding, ExecOutcome, MAX_EXEC_ARGUMENT_BYTES, MAX_EXEC_ARGUMENTS,
     MAX_EXEC_ENV_BINDINGS, MAX_EXEC_ENV_TOTAL_BYTES, MAX_EXEC_ENV_VALUE_LEN,
     VAULT_NEW_PASSPHRASE_ENV, VAULT_PASSPHRASE_ENV, VaultExec, is_vault_passphrase_env,
+    withhold_vault_passphrase,
 };
 pub use output::{PreparedPrivateFile, PrivateFilePrecondition};
 pub use redact::Redactor;

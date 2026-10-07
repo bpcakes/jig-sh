@@ -234,7 +234,7 @@ fn minimal_frontend_keeps_metadata_without_enabling_web_harness_capabilities() {
             .iter()
             .all(|tool| !tool.contains("typescript"))
     );
-    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
+    assert_eq!(jig_policy::contract_check(&ctx).exit_status, 0);
 }
 
 #[test]

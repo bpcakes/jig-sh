@@ -10,11 +10,11 @@ use clap::{
     Parser,
     error::{ContextKind, ContextValue, ErrorKind},
 };
+use jig_commands::root_commands;
 
 use crate::cli::output::print_json;
 use crate::cli::structured_error::json_error_payload;
 use crate::cli::{Cli, CommandKind, bootstrap_hints, check};
-use crate::root_commands;
 
 pub(in crate::cli) fn parse_cli() -> Cli {
     let args = normalize_args(std::env::args_os().collect());

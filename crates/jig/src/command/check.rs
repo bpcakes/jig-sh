@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use jig_contract::ComparisonRequestV1;
 
-use crate::tool_defs::{cli_command, tool};
+use jig_commands::tool_defs::{cli_command, tool};
 
 #[derive(Debug)]
 pub(crate) enum CheckCommand {

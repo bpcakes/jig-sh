@@ -270,9 +270,10 @@ fn work_gate_value(gate: &WorkGate) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use jig_commands::tool_defs::tool;
+
     use super::*;
     use crate::test_env::TestRepoBuilder;
-    use crate::tool_defs::tool;
     use serde_json::json;
     use std::path::Path;
     use tempfile::tempdir;

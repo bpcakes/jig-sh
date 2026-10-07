@@ -85,7 +85,7 @@ pub(super) fn remove_existing_symlink(path: &Path) -> Result<()> {
 
 pub(super) fn run_post_render_tasks(destination: &Path) -> Result<()> {
     set_scripts_executable(destination)?;
-    crate::policy::write_agent_map(destination, Path::new(managed_paths::AGENT_MAP_PATH))
+    jig_policy::write_agent_map(destination, Path::new(managed_paths::AGENT_MAP_PATH))
 }
 
 #[cfg(unix)]

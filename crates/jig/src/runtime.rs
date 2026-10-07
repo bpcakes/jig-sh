@@ -3,15 +3,15 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::time::Duration;
 
+use jig_commands::tool_defs::tool;
 use jig_context::RepoContext;
 use jig_execution::{ExecutionControl, NoopExecutionObserver};
-
-use crate::command::{AgentMapCommand, CheckCommand, NamedCheck, RuntimeCommand, StateCommand};
-use crate::policy::{
+use jig_policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     SqlxTodoInput,
 };
-use crate::tool_defs::tool;
+
+use crate::command::{AgentMapCommand, CheckCommand, NamedCheck, RuntimeCommand, StateCommand};
 
 mod agent;
 mod file_budget;
@@ -30,8 +30,7 @@ pub(crate) use file_budget::{FileBudgetEvaluationMode, run_direct_file_budget};
 #[cfg(test)]
 pub(crate) use vault_withholding::VAULT_PASSPHRASE_WITHHELD_ENV;
 pub(crate) use vault_withholding::{
-    vault_passphrase_operator_guidance, withhold_vault_passphrase,
-    withhold_vault_passphrase_environment,
+    vault_passphrase_operator_guidance, withhold_vault_passphrase_environment,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,13 +88,13 @@ pub(crate) fn dispatch_with_observer(
         RuntimeCommand::Run(request) => repository_run::dispatch(ctx, request, observer),
         RuntimeCommand::MigrationAdd(request) => migration::add(ctx, request, observer),
         RuntimeCommand::Sqlx(command) => sqlx::dispatch_with_observer(ctx, command, observer),
-        RuntimeCommand::AgentMap(AgentMapCommand::Generate(opts)) => crate::policy::run_direct(
+        RuntimeCommand::AgentMap(AgentMapCommand::Generate(opts)) => jig_policy::run_direct(
             ctx,
             PolicyDirectCommand::AgentMapGenerate(AgentMapInput {
                 map_path: opts.map_path,
             }),
         ),
-        RuntimeCommand::GenerateSqlxUncheckedQueriesTodo(opts) => crate::policy::run_direct(
+        RuntimeCommand::GenerateSqlxUncheckedQueriesTodo(opts) => jig_policy::run_direct(
             ctx,
             PolicyDirectCommand::GenerateSqlxUncheckedQueriesTodo(SqlxTodoInput {
                 output: opts.output,
@@ -263,21 +262,21 @@ fn dispatch_check_with_observer(
     match command {
         CheckCommand::Repository(request) => dispatch_repository_check(ctx, request, observer),
         CheckCommand::Named(check) => dispatch_named_check(ctx, check, observer),
-        CheckCommand::AgentMap(opts) => crate::policy::run_check(
+        CheckCommand::AgentMap(opts) => jig_policy::run_check(
             ctx,
             PolicyCheckCommand::AgentMap(AgentMapInput {
                 map_path: opts.map_path,
             }),
         ),
-        CheckCommand::AgentGuides => crate::policy::run_check(ctx, PolicyCheckCommand::AgentGuides),
-        CheckCommand::MigrationImmutability(opts) => crate::policy::run_check(
+        CheckCommand::AgentGuides => jig_policy::run_check(ctx, PolicyCheckCommand::AgentGuides),
+        CheckCommand::MigrationImmutability(opts) => jig_policy::run_check(
             ctx,
             PolicyCheckCommand::MigrationImmutability(MigrationImmutabilityInput {
                 changed_against: opts.changed_against,
             }),
         ),
         CheckCommand::SqlxUncheckedNonTest => {
-            crate::policy::run_check(ctx, PolicyCheckCommand::SqlxUncheckedNonTest)
+            jig_policy::run_check(ctx, PolicyCheckCommand::SqlxUncheckedNonTest)
         }
     }
 }

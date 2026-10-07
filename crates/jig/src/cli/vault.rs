@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::{ArgAction, ArgGroup, Args, Subcommand};
 use jig_vault::{VaultItem, VaultReference};
 
-use crate::tool_defs;
+use jig_commands::tool_defs;
 
 mod convert;
 pub(super) mod render;

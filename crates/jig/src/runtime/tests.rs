@@ -623,5 +623,6 @@ mod common;
 mod foreground_run;
 mod legacy_loc;
 mod loops;
+mod policy_checks;
 mod repository_execution;
 mod validation_contexts;

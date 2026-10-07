@@ -1,8 +1,8 @@
 use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::root_commands::{self, RootCommand, RootCommandId};
-use crate::tool_defs::tool;
+use jig_commands::root_commands::{self, RootCommand, RootCommandId};
+use jig_commands::tool_defs::tool;
 
 use super::VaultCapability;
 

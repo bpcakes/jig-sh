@@ -766,6 +766,7 @@ mod inspect;
 mod planner;
 mod playwright_resources;
 
+pub mod path;
 pub mod shell;
 pub mod source_identity;
 pub mod source_projection;

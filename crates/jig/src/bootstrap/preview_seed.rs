@@ -2,11 +2,11 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use jig_policy::agent_guides::is_ignored_guide_component;
 
 use super::file_copy::{
     copy_file_or_symlink_with_permissions, prepare_copy_destination_and_read_metadata,
 };
-use crate::agent_guides::is_ignored_guide_component;
 
 pub(super) fn seed_preview_workspace(source_root: &Path, destination_root: &Path) -> Result<()> {
     fs::create_dir_all(destination_root)

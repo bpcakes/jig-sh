@@ -11,6 +11,7 @@ If the owning area is already clear, read its nearest guide directly.
 
 - [crates/jig-agents](./crates/jig-agents/AGENTS.md)
 - [crates/jig-codex-tui](./crates/jig-codex-tui/AGENTS.md)
+- [crates/jig-commands](./crates/jig-commands/AGENTS.md)
 - [crates/jig-context](./crates/jig-context/AGENTS.md)
 - [crates/jig-contract](./crates/jig-contract/AGENTS.md)
 - [crates/jig-core](./crates/jig-core/AGENTS.md)
@@ -22,6 +23,7 @@ If the owning area is already clear, read its nearest guide directly.
 - [crates/jig-go](./crates/jig-go/AGENTS.md)
 - [crates/jig-loops](./crates/jig-loops/AGENTS.md)
 - [crates/jig-owned-process](./crates/jig-owned-process/AGENTS.md)
+- [crates/jig-policy](./crates/jig-policy/AGENTS.md)
 - [crates/jig-repository](./crates/jig-repository/AGENTS.md)
 - [crates/jig-rust](./crates/jig-rust/AGENTS.md)
 - [crates/jig-sqlx](./crates/jig-sqlx/AGENTS.md)

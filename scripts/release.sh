@@ -19,12 +19,14 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-typescript"
   "jig-go"
   "jig-features"
+  "jig-commands"
   "jig-vault"
   "jig-dev-proxy"
   "jig-context"
   "jig-execution"
   "jig-state"
   "jig-repository"
+  "jig-policy"
   "jig-tui"
   "jig-vault-tui"
   "jig-codex-tui"
@@ -113,12 +115,14 @@ crate_dir_for_package() {
     jig-typescript) printf '%s\n' "crates/jig-typescript" ;;
     jig-go) printf '%s\n' "crates/jig-go" ;;
     jig-features) printf '%s\n' "crates/jig-features" ;;
+    jig-commands) printf '%s\n' "crates/jig-commands" ;;
     jig-vault) printf '%s\n' "crates/jig-vault" ;;
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
     jig-context) printf '%s\n' "crates/jig-context" ;;
     jig-execution) printf '%s\n' "crates/jig-execution" ;;
     jig-state) printf '%s\n' "crates/jig-state" ;;
     jig-repository) printf '%s\n' "crates/jig-repository" ;;
+    jig-policy) printf '%s\n' "crates/jig-policy" ;;
     jig-tui) printf '%s\n' "crates/jig-tui" ;;
     jig-vault-tui) printf '%s\n' "crates/jig-vault-tui" ;;
     jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;

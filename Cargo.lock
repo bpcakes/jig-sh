@@ -1431,6 +1431,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-commands"
+version = "0.7.3-dev"
+dependencies = [
+ "jig-contract",
+ "jig-features",
+]
+
+[[package]]
 name = "jig-context"
 version = "0.7.3-dev"
 dependencies = [
@@ -1592,6 +1600,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-policy"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "cap-fs-ext",
+ "cap-std",
+ "fs4",
+ "jig-commands",
+ "jig-context",
+ "jig-contract",
+ "jig-execution",
+ "jig-features",
+ "jig-git",
+ "jig-owned-process",
+ "jig-repository",
+ "jig-rust",
+ "jig-sqlx",
+ "jig-vault",
+ "libc",
+ "proc-macro2",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "syn 2.0.117",
+ "tempfile",
+ "time",
+ "toml",
+]
+
+[[package]]
 name = "jig-repository"
 version = "0.7.3-dev"
 dependencies = [
@@ -1631,7 +1669,6 @@ name = "jig-sh"
 version = "0.7.3-dev"
 dependencies = [
  "anyhow",
- "cap-fs-ext",
  "cap-std",
  "chrono",
  "chrono-tz",
@@ -1644,6 +1681,7 @@ dependencies = [
  "globset",
  "jig-agents",
  "jig-codex-tui",
+ "jig-commands",
  "jig-context",
  "jig-contract",
  "jig-core",
@@ -1654,9 +1692,9 @@ dependencies = [
  "jig-git",
  "jig-loops",
  "jig-owned-process",
+ "jig-policy",
  "jig-repository",
  "jig-rust",
- "jig-sqlx",
  "jig-state",
  "jig-tui",
  "jig-typescript",
@@ -1665,8 +1703,6 @@ dependencies = [
  "jig-vault-tui",
  "libc",
  "minijinja",
- "proc-macro2",
- "pulldown-cmark",
  "reqwest",
  "rpassword",
  "schemars",
@@ -1681,7 +1717,6 @@ dependencies = [
  "time",
  "tokio",
  "toml",
- "toml_edit",
  "ulid",
  "unicode-normalization",
  "wait-timeout",

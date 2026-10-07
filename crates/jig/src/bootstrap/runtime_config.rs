@@ -3,12 +3,12 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use jig_commands::tool_defs;
 use jig_context::{RepoContext, WORK_CONFIG_RETIRED_CONTRACT_VERSION, WorkConfig, WorkGate};
 
 use super::ANSWERS_FILE;
 use super::clippy_policy::is_generated_rust_clippy_command;
 use super::repository_model::{RUST_FILE_LOC_COMMAND_KEY, is_generated_rust_file_loc_command};
-use crate::tool_defs;
 
 const GENERATED_FRONTEND_COMMAND_DEFAULTS: &[(&str, &str)] = &[
     ("typescript_lint_command", "scripts/check-webapps.sh lint"),

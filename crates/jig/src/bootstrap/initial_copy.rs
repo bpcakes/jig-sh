@@ -26,8 +26,8 @@ use super::template_source::PrivateAnswerOverrides;
 use super::update_transaction::{RepositoryUpdateLock, RepositoryUpdateTransaction};
 #[cfg(test)]
 use super::{TEMPLATE_LOCAL_PATH_KEY, TEMPLATE_MODE_KEY};
-use crate::bootstrap::path::validate_portable_planned_file_collisions;
 use crate::progress::CliProgress;
+use jig_repository::path::validate_portable_planned_file_collisions;
 
 const ANSWERS_DETAIL: &str = ".jig.toml values and command defaults";
 const REQUIRED_FRONTEND_SCRIPTS: &[&str] = &["lint", "typecheck", "build:bundle", "test:coverage"];

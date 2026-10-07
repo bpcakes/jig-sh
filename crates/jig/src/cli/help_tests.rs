@@ -110,7 +110,7 @@ fn command_inventory_names_track_the_visible_root_surface() {
         .map(|command| command.get_name())
         .collect::<Vec<_>>();
 
-    let described_commands = crate::root_commands::ALL
+    let described_commands = jig_commands::root_commands::ALL
         .iter()
         .map(|command| command.name)
         .collect::<Vec<_>>();
@@ -135,10 +135,10 @@ fn top_level_help_includes_common_workflows() {
 fn top_level_help_groups_every_visible_command_by_user_intent() {
     let help = Cli::command().render_help().to_string();
 
-    for category in crate::root_commands::RootCommandCategory::ALL {
+    for category in jig_commands::root_commands::RootCommandCategory::ALL {
         assert_help_contains(&help, category.label());
     }
-    for command in crate::root_commands::ALL {
+    for command in jig_commands::root_commands::ALL {
         let group_line = help
             .lines()
             .find(|line| line.trim_start().starts_with(command.category.label()))

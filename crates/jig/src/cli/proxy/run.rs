@@ -4,6 +4,7 @@
 use std::process;
 
 use anyhow::Result;
+use jig_commands::root_commands;
 use jig_context::RepoContext;
 
 use crate::cli::output::{emit, print_json};
@@ -14,7 +15,7 @@ use crate::cli::structured_error::{
 use crate::cli::{DevOpts, ProxyCommand};
 use crate::command::RuntimeCommand;
 use crate::dev_proxy::commands::{can_run_without_context, dev_contextless, proxy_without_context};
-use crate::{root_commands, runtime};
+use crate::runtime;
 
 pub(in crate::cli) fn run_dev_command(opts: DevOpts, json_output: bool) -> Result<()> {
     let render = opts.renderer();

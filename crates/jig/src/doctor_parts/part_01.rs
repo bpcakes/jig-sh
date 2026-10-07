@@ -284,7 +284,7 @@ fn config_check(root: &Path, result: &Result<jig_context::RepoConfigProbe>) -> D
 }
 
 fn contract_check(ctx: &RepoContext) -> DoctorCheck {
-    let output = crate::policy::contract_check(ctx);
+    let output = jig_policy::contract_check(ctx);
     if output.exit_status == 0 {
         check(
             "contract",

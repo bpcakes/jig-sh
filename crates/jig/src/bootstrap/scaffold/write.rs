@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::bootstrap::path::{
+use jig_repository::path::{
     RepositoryFileCommit, RepositoryFileLeaf, read_repository_regular_file,
     validate_portable_planned_file_collisions, validate_repository_regular_file_leaf,
     write_repository_file_atomic, write_repository_file_atomic_guarded,

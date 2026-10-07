@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::answers::{HarnessFootprint, RenderAnswers};
-use super::path::{
+use jig_repository::path::{
     validate_no_reserved_git_metadata_components, validate_repository_relative_ancestors,
 };
 pub(super) const ROOT_AGENTS_PATH: &str = "AGENTS.md";

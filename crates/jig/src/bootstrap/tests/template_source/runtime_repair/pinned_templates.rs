@@ -149,7 +149,7 @@ fn recopy_preserves_legacy_check_policy_and_tracker_in_pinned_templates() {
                 ["repo:contract", "repo:test", "repo:test-locked"]
             );
         }
-        assert_eq!(crate::policy::contract_check(&refreshed).exit_status, 0);
+        assert_eq!(jig_policy::contract_check(&refreshed).exit_status, 0);
         assert!(output["warnings"].as_array().unwrap().is_empty());
     }
 }
