@@ -623,7 +623,8 @@ fn check_migration_immutability(
             dir,
         ],
     )?;
-    let violations = migration_immutability_violations(&bytes);
+    let mut violations = migration_immutability_violations(&bytes);
+    violations.extend(migration_versions::violations(ctx)?);
     Ok(json!({ "ok": violations.is_empty(), "violations": violations }))
 }
 
@@ -687,6 +688,7 @@ fn utc_timestamp_at(now: time::OffsetDateTime) -> String {
 mod agent_map;
 mod git;
 mod guide_check;
+pub mod migration_versions;
 mod schema;
 mod sqlx;
 #[cfg(test)]

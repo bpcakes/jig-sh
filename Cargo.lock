@@ -1617,6 +1617,7 @@ dependencies = [
  "jig-owned-process",
  "jig-repository",
  "jig-rust",
+ "jig-sqlx",
  "jig-vault",
  "libc",
  "proc-macro2",

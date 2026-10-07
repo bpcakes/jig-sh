@@ -542,7 +542,8 @@ fn run_target_with_control(
     planned: &PlannedTarget,
     control: &mut TargetExecutionControl<'_>,
 ) -> TargetCapture {
-    let capture = match &planned.runner {
+    let preflight = target::sqlx_migration_preflight(ctx, catalog, planned, control);
+    let capture = preflight.unwrap_or_else(|| match &planned.runner {
         ActionRunner::Command {
             command,
             working_directory,
@@ -629,7 +630,7 @@ fn run_target_with_control(
                 Err(error) => native_runner_error_capture(planned, operation, timeout, error),
             },
         },
-    };
+    });
     let capture = control
         .enforce_poll_health(capture)
         .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());

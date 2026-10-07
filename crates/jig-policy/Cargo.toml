@@ -30,6 +30,7 @@ jig-git.workspace = true
 jig-owned-process.workspace = true
 jig-repository.workspace = true
 jig-rust.workspace = true
+jig-sqlx.workspace = true
 jig-vault.workspace = true
 # The SQLx AST inventory retains source line numbers outside procedural macros.
 proc-macro2 = { workspace = true, features = ["span-locations"] }
