@@ -166,7 +166,7 @@ fn rust_only_late_failure_removes_new_destinations_and_restores_forced_preimages
         &git,
         "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"init\" ]; then\n    printf 'fatal: injected Rust-only rollback test\\n' >&2\n    exit 1\n  fi\ndone\nexec git \"$@\"\n",
     );
-    let _git = EnvVarGuard::set(GIT_BIN_ENV, &git);
+    let _git = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git);
 
     for preset in [ScaffoldPreset::RustLibrary, ScaffoldPreset::RustCli] {
         let created_parent = temp.path().join(format!("{}-new", preset.as_str()));

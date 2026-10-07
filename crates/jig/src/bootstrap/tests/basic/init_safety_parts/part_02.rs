@@ -183,7 +183,7 @@ fn existing_empty_default_init_succeeds_with_256_soft_handle_limit() {
             "--nocapture",
         ])
         .env(EXISTING_INIT_SOFT_HANDLE_LIMIT_HELPER_ENV, "1")
-        .env_remove(GIT_BIN_ENV)
+        .env_remove(jig_git::GIT_BIN_ENV)
         .env_remove(path::INVOCATION_CWD_ENV)
         .output()
         .unwrap();
@@ -395,7 +395,7 @@ fn late_init_failure_removes_managed_scaffold_agent_map_and_partial_git_outputs(
         &git,
         "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"init\" ]; then\n    mkdir -p .git/objects/aa\n    printf 'ref: refs/heads/main\\n' > .git/HEAD\n    printf 'partial\\n' > .git/objects/aa/object\n    printf 'fatal: injected late failure\\n' >&2\n    exit 1\n  fi\ndone\nexec git \"$@\"\n",
     );
-    let _git = EnvVarGuard::set(GIT_BIN_ENV, &git);
+    let _git = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git);
 
     let created_parent = temp.path().join("created-parent");
     let destination = created_parent.join("nested/repo");
@@ -438,7 +438,7 @@ fn late_forced_init_failure_restores_user_files_bytes_and_permissions() {
         &git,
         "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"init\" ]; then\n    printf 'fatal: injected rollback test\\n' >&2\n    exit 1\n  fi\ndone\nexec git \"$@\"\n",
     );
-    let _git = EnvVarGuard::set(GIT_BIN_ENV, &git);
+    let _git = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git);
     let destination = temp.path().join("existing");
     fs::create_dir(&destination).unwrap();
     fs::write(destination.join(".gitignore"), b"user bytes\n").unwrap();
@@ -478,7 +478,7 @@ fn late_init_rollback_preserves_foreign_file_changes_and_surfaces_both_failures(
         &git,
         "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"init\" ]; then\n    printf 'foreign concurrent contents\\n' > \"$JIG_TEST_FOREIGN_DESTINATION/.jig.toml\"\n    printf 'fatal: injected primary failure\\n' >&2\n    exit 1\n  fi\ndone\nexec git \"$@\"\n",
     );
-    let _git = EnvVarGuard::set(GIT_BIN_ENV, &git);
+    let _git = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git);
     let destination = temp.path().join("existing");
     fs::create_dir(&destination).unwrap();
     let _destination = EnvVarGuard::set("JIG_TEST_FOREIGN_DESTINATION", destination.as_os_str());
@@ -519,7 +519,7 @@ fn failed_staged_git_init_never_claims_concurrent_destination_metadata() {
         &git,
         "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"init\" ]; then\n    mkdir -p \"$JIG_TEST_CONCURRENT_GIT_DESTINATION/.git\"\n    printf 'foreign git metadata\\n' > \"$JIG_TEST_CONCURRENT_GIT_DESTINATION/.git/foreign\"\n    mkdir -p .git/objects\n    printf 'partial staged metadata\\n' > .git/HEAD\n    printf 'fatal: staged git failure\\n' >&2\n    exit 1\n  fi\ndone\nexec git \"$@\"\n",
     );
-    let _git = EnvVarGuard::set(GIT_BIN_ENV, &git);
+    let _git = EnvVarGuard::set(jig_git::GIT_BIN_ENV, &git);
     let _destination = EnvVarGuard::set(
         "JIG_TEST_CONCURRENT_GIT_DESTINATION",
         destination.as_os_str(),
