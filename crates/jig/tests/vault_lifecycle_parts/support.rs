@@ -270,7 +270,7 @@ fn assert_restored_vault(
     let payload = output_json(&restored);
     assert_eq!(payload["command"], "vault backup restore");
     assert_eq!(payload["restored"], true);
-    assert_eq!(payload["format_version"], 2);
+    assert_eq!(payload["format_version"], 3);
     assert_contains_no_lifecycle_secrets(&combined);
 
     let vault = Vault::resolve_for_test(Some(restored_home.to_path_buf())).unwrap();

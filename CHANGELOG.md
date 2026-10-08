@@ -1,5 +1,130 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add vault format 3. `vault init`, and vault setup in `jig init` and
+  `jig adopt --write`, now create format 3 vaults; existing vaults are never
+  migrated implicitly. `vault migrate --to 3` upgrades a format 1 or 2 vault
+  atomically, keeping its identity, values, field kinds, timestamps, and audit
+  history; `--to 2` still upgrades format 1, the current format is a verified
+  no-op, and downgrades are refused. The Vault TUI's `m` migrates to format 3.
+- Rotate the data-encryption key on a format 3 passphrase change, in the CLI
+  and the TUI: all state is resealed under a fresh key, so a key recovered from
+  an earlier copy cannot decrypt later state. Rotation is not revocation:
+  earlier vault files and backups remain decryptable with the passphrase they
+  were made with, the audit key stays the same, and previously revealed values
+  may still need rotating at their source. Format 2 keeps rewrapping its
+  unchanged key.
+- Detect vault rollback. For each format 3 vault, a per-user rollback witness
+  in `~/.jig/vault-witness`, outside every vault home, records the committed
+  generation, a digest of the exact encrypted vault file, and the audit event
+  that committed it. Authenticated commands refuse an older copy, a different
+  copy at the same generation, and an older-format copy of a witnessed vault.
+  The witness is local, not a remote authority: whole-profile rollback,
+  deleting or replacing the witness, same-user or root compromise, events
+  forged with a compromised audit key, and truncation of audit-only events
+  after the last state change remain outside the guarantee. Never delete the
+  witness to get past an error.
+- Finish interrupted format 3 changes. Init, field edits, imports, migration
+  to format 3, passphrase changes, and witnessed restores record a transaction
+  in the witness before touching the vault, and the next authenticated command
+  finishes an interrupted one instead of rolling it back. `vault status`
+  reports `pending_transaction` while one is recorded; a pending passphrase
+  change finishes only with the new passphrase, and an interrupted restore
+  finishes when the same backup is restored again or the restored home is
+  unlocked with the backup's passphrase.
+- Fence other copies on restore. Restoring a format 3 backup, or a format 2
+  backup of a vault already witnessed as format 3, reseals it as format 3
+  under a fresh key at a generation above both the backup and the witness, so
+  every other copy of that vault is refused afterwards. The result reports
+  `source_format_version`, `generation`, and `other_copies_stale`, and the CLI
+  and TUI say that other copies are stale. The restored vault opens with the
+  passphrase the backup was created with. A format 2 backup of an unwitnessed
+  vault restores as before.
+- Report the vault format. `vault status` adds `format_version`, `info` adds
+  `capabilities.vault_format_version`, and doctor's vault check shows it. The
+  value is read from the unauthenticated public header without a passphrase
+  or any write: discovery metadata, never proof of integrity, freshness, or
+  rollback safety.
+
+### Changed
+
+- **Breaking:** authenticated vault operations now require a writable per-user
+  `~/.jig/vault-witness`, including operations on format 1 and 2 vaults selected
+  with `--home` or `JIG_VAULT_HOME`. Shared witness locks serialize legacy
+  operations with migration of another copy of the same vault. A writable
+  vault home alone is no longer sufficient when the user profile is read-only;
+  `vault status` remains a read-only, non-creating probe.
+- **Breaking:** Jig 0.7.2 and earlier cannot read format 3 vaults or their
+  backups. Before migrating a vault or creating a new one, make sure every Jig
+  runtime that uses it, including one selected by a repository's runtime pin,
+  supports format 3. Keep an encrypted backup and a format-3-capable binary
+  until recovery is verified; copying old files or deleting the witness is not
+  a supported recovery.
+- **Breaking:** a newly chosen vault passphrase, at `vault init`, vault setup
+  in `jig init` and `jig adopt --write`, the TUI, or `vault passphrase change`,
+  must be at least 16 UTF-8 bytes and estimated by the pinned zxcvbn 3.1.1
+  estimator to need at least 2^40 guesses, replacing the 12-byte floor.
+  Rejections never reveal the candidate or its estimate. The estimate is
+  guesswork, not a measured entropy guarantee: it considers only the first 100
+  characters, and it scores dates against the current UTC year, so a
+  date-bearing passphrase near the threshold can be judged differently in a
+  later year. Existing passphrases are never revalidated; unlock, migration,
+  backup, and restore keep working.
+- Once a restore has recorded its transaction, its encrypted staging directory
+  (`.jig-vault-restore-*.tmp` beside the target) is never deleted
+  automatically. An abandoned restore leaves it for the operator to inspect
+  and remove; a new restore uses fresh staging.
+- Generated agent guidance adds a managed Vault rule: never delete, move, or
+  edit the vault rollback witness or its journals, and report rollback, fork,
+  and pending-transaction errors to the operator. `jig update` refreshes the
+  rule in existing repositories.
+
+### Fixed
+- Preserve operator guidance when an output or process failure also encounters
+  an audit integrity refusal, and keep malformed journal contents out of errors.
+- Let CLI and bootstrap initialization finish a recorded init even if today's
+  strength estimate rejects its authenticated credential; fresh credentials
+  still require the current policy.
+- Route integrity failures, including missing or mismatched recovery journals
+  and missing audit logs, to the operator with instructions to preserve recovery
+  data instead of editing the witness or its journals.
+- Serialize legacy vault restore installation with same-ID migration. If
+  migration wins before or after restore finalization, leave the target absent and
+  request a retry through witnessed recovery.
+- Report uncertain pending-marker publication with recovery guidance, including
+  retaining both passphrases after an interrupted credential change.
+- Retry complete output alias scans after transient witness entry disappearance,
+  while retaining fail-closed checks and a bounded retry limit.
+- Remove the lifetime witness entry-count cliff from authenticated vault
+  access and existing-file output checks. Scans still validate complete
+  authority, retain bounded state, and preserve witness history; their
+  filesystem work remains proportional to retained entries.
+
+- Reject an audit append that would exceed the log's read limit before any
+  audit write or pending transaction, keeping the existing vault usable.
+- Keep initialization available in the Vault TUI after an init interrupted
+  before its pending marker; an orphan journal no longer advertises recovery.
+- Verify a format 3 backup's archived mutation checkpoint before restore
+  replaces it, refusing missing anchors and mismatched generations without
+  advancing the witness or installing the target.
+- Allow initialization on the first attempt after a restore interrupted
+  before its pending marker, while preserving abandoned staging.
+- Explain independent-profile witness divergence and operator backup/restore
+  recovery; newer-state and fork refusals now include recovery guidance.
+- Explain operator recovery on rollback and older-format replay refusals,
+  including using the current or restored home without editing the witness.
+- On macOS, the Claude home picker's usage check no longer prompts for
+  Keychain access as `jig`. It reads with system dialogs disabled, then
+  requests permission through Apple's `/usr/bin/security` tool, whose
+  "Always Allow" approval survives Jig rebuilds and upgrades.
+- `jig check contract` with any `--comparison-*` option runs with repository
+  scope in the runtime, as the generated launcher already expects.
+- `jig init` with options but no path now also prints the missing-path hint,
+  and usage hints no longer depend on the executable being named `jig`.
+
 ## v0.7.2 - 2026-10-05
 
 ### Fixed

@@ -186,6 +186,11 @@ fn prepare_bootstrap_vault_with_availability(
 ) -> Result<BootstrapVaultPlan> {
     let plan = BootstrapVaultPlan::resolve(intent, input_mode, availability, command)?;
     if plan == BootstrapVaultPlan::PreCaptured {
+        // Rendering may reuse an existing vault, through `adopt --write` or a
+        // forced `init` that keeps an existing `[vault].scope_id`, whose
+        // historical credential predates the new-passphrase policy. Capture
+        // now, before any child process starts; the core validates a fresh
+        // credential only after checking for a recorded initialization.
         runtime::capture_new_vault_passphrase()?;
     }
     // Rendering, Git, and template commands run next. Pre-capture already
@@ -625,3 +630,6 @@ fn array_len(value: &serde_json::Value) -> usize {
 #[cfg(test)]
 #[path = "bootstrap_run_tests.rs"]
 mod bootstrap_run_tests;
+#[cfg(test)]
+#[path = "bootstrap_run_vault_policy_tests.rs"]
+mod bootstrap_run_vault_policy_tests;

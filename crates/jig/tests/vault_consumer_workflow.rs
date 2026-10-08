@@ -298,7 +298,7 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
     let source_home = assert_initialized(&initialized);
 
     let migrated = jig_command(&repo, &vault_base, INITIAL_PASSPHRASE, None)
-        .args(["--json", "vault", "migrate", "--to", "2"])
+        .args(["--json", "vault", "migrate", "--to", "3"])
         .output()
         .unwrap();
     structured_output("vault migration", &migrated);

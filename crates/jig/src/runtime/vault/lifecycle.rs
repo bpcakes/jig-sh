@@ -8,7 +8,7 @@ use std::sync::{Mutex, MutexGuard};
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
     BrokeredRun, SecretBytes, VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV,
-    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, validate_new_vault_passphrase,
+    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
@@ -36,6 +36,10 @@ static CAPTURED_PASSPHRASES: Mutex<CapturedPassphrases> = Mutex::new(CapturedPas
 });
 
 pub(crate) fn preflight_scoped_command(command: &mut VaultCommand) -> Result<()> {
+    preflight_scoped_command_inner(command).map_err(super::recovery::operator_guidance)
+}
+
+fn preflight_scoped_command_inner(command: &mut VaultCommand) -> Result<()> {
     match command {
         VaultCommand::Backup(VaultBackupCommand::Create(request)) => {
             if request.output == Path::new("-") {
@@ -56,10 +60,10 @@ pub(crate) fn preflight_scoped_command(command: &mut VaultCommand) -> Result<()>
             }
             let resolved = resolve_vault_runtime(&request.vault)?;
             let target_home = concrete_vault_home(&resolved)?;
-            request.prepared = Some(Vault::preflight_backup_restore(
-                &request.input,
-                target_home,
-            )?);
+            request.prepared = Some(
+                Vault::preflight_backup_restore(&request.input, target_home)
+                    .map_err(super::recovery::vault_operator_guidance)?,
+            );
             Ok(())
         }
         VaultCommand::Passphrase(VaultPassphraseCommand::Change(request)) => {
@@ -160,6 +164,10 @@ pub(super) fn restore_backup(mut request: VaultBackupRestoreRequest) -> Result<V
         "restored": true,
         "vault_id": result.vault_id,
         "format_version": result.format_version,
+        "source_format_version": result.source_format_version,
+        "generation": result.generation,
+        // A witnessed restore fences every older copy of this vault ID.
+        "other_copies_stale": result.generation.is_some(),
     });
     add_vault_scope_fields(&mut output, &resolved);
     Ok(output)
@@ -188,19 +196,10 @@ pub(crate) fn take_optional_tui_passphrase() -> Result<Option<SecretBytes>> {
     )))
 }
 
+/// Capture and confirm exactly what the operator supplied. Only the core can
+/// distinguish a fresh credential from completion of a recorded initialization.
 pub(crate) fn capture_new_passphrase() -> Result<()> {
-    capture_passphrase_with_prompt(PromptKind::NewVault)?;
-    let validation = {
-        let captured = captured_passphrase_lock()?;
-        validate_new_vault_passphrase(captured.current.as_ref().ok_or_else(|| {
-            anyhow!("vault passphrase capture unexpectedly produced no passphrase")
-        })?)
-    };
-    if let Err(error) = validation {
-        clear_captured_passphrase()?;
-        return Err(error.into());
-    }
-    Ok(())
+    capture_passphrase_with_prompt(PromptKind::NewVault)
 }
 
 pub(crate) fn capture_passphrase_change() -> Result<()> {
@@ -213,7 +212,8 @@ pub(crate) fn capture_passphrase_change() -> Result<()> {
         clear_captured_passphrase()?;
         let current = prompt_passphrase(PromptKind::Unlock)?;
         let new = prompt_passphrase(PromptKind::NewVault)?;
-        validate_new_vault_passphrase(&new)?;
+        // Only the core can distinguish a new credential from completion of
+        // an already recorded rekey whose strength estimate has changed.
         return set_captured_passphrase_pair(current, new);
     }
     Err(passphrase_change_prompt_unavailable())
@@ -308,12 +308,10 @@ pub(crate) fn capture_passphrase_pair_from_env() -> Result<()> {
     let new_value = std::env::var_os(NEW_PASSPHRASE_ENV).ok_or_else(incomplete_passphrase_pair)?;
     let current = passphrase_from_os(current_value, PASSPHRASE_ENV)?;
     let new = passphrase_from_os(new_value, NEW_PASSPHRASE_ENV)?;
-    // Match new-vault capture: once both values are valid UTF-8, consume the
-    // process copies before policy validation. The parent shell is unaffected.
+    // Once both values are valid UTF-8, consume the process copies. The core
+    // applies policy after distinguishing a recorded rekey retry. The parent
+    // shell is unaffected.
     strip_passphrase_environment();
-    if let Err(error) = validate_new_vault_passphrase(&new) {
-        return Err(error.into());
-    }
     set_captured_passphrase_pair(current, new)
 }
 
@@ -678,29 +676,29 @@ mod tests {
     }
 
     #[test]
-    fn rejected_new_change_passphrase_clears_both_environment_values_and_capture() {
+    fn change_capture_defers_policy_to_authenticated_core_recovery() {
         let _env = lock_env();
         clear_captured_passphrase().unwrap();
         let _current = EnvVarGuard::set(PASSPHRASE_ENV, "correct horse battery staple");
         let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "short");
 
-        let error = capture_passphrase_pair_from_env().unwrap_err().to_string();
-
-        assert!(error.contains("at least 12 bytes"));
+        capture_passphrase_pair_from_env().unwrap();
         assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
         assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
+        let (current, new) = passphrase_pair().unwrap();
+        assert_eq!(current.expose_secret(), "correct horse battery staple");
+        assert_eq!(new.expose_secret(), "short");
         assert!(passphrase_pair().is_err());
     }
 
     #[test]
-    fn rejected_new_passphrase_clears_captured_value() {
+    fn new_passphrase_capture_defers_policy_and_consumes_the_capture() {
         let _env = lock_env();
         let _passphrase = EnvVarGuard::set(PASSPHRASE_ENV, "short");
 
-        let error = capture_new_passphrase().unwrap_err().to_string();
-
-        assert!(error.contains("at least 12 bytes"));
+        capture_new_passphrase().unwrap();
         assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
+        assert_eq!(passphrase().unwrap().expose_secret(), "short");
         assert!(
             passphrase()
                 .unwrap_err()

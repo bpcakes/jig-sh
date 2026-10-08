@@ -121,6 +121,11 @@ fn assert_vault_root_commands() {
         }
         other => panic!("expected vault migrate command, got {other:?}"),
     }
+    let migrate_latest = Cli::try_parse_from(["jig", "vault", "migrate", "--to", "3"]).unwrap();
+    match migrate_latest.command {
+        CommandKind::Vault(VaultCommand::Migrate(opts)) => assert_eq!(opts.to, 3),
+        other => panic!("expected vault migrate command, got {other:?}"),
+    }
 }
 
 fn assert_vault_field_commands() {
@@ -409,7 +414,8 @@ fn parses_vault_commands() {
 #[test]
 fn rejects_invalid_vault_field_inputs_during_clap_parsing() {
     for args in [
-        vec!["jig", "vault", "migrate", "--to", "3"],
+        vec!["jig", "vault", "migrate", "--to", "1"],
+        vec!["jig", "vault", "migrate", "--to", "4"],
         vec!["jig", "vault", "migrate", "--to", "two"],
         vec!["jig", "vault", "field", "list", "jig://Production/extra"],
         vec!["jig", "vault", "field", "set", "jig://Production"],

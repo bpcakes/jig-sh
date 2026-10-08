@@ -15,21 +15,29 @@ use crate::error::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::format::V1_FORMAT_VERSION;
-use crate::format::{FORMAT_VERSION, VaultFile, validate_header};
+use crate::format::{LATEST_FORMAT_VERSION, VaultFile, supports_field_kinds, validate_header};
 use crate::store::VaultStore;
 use crate::{Result, VaultError, VaultErrorKind};
 
 use super::envelope::RekeyedVaultEnvelope;
-use super::{OpenVault, Vault, validate_new_vault_passphrase_inner};
+use super::transaction::InPlaceCommit;
+use super::{OpenVault, Vault};
+use crate::passphrase_policy::validate_new_vault_passphrase_inner;
+use crate::store::witness::TransactionKind;
 
 impl Vault {
-    /// Re-encrypts a version-two vault under a new passphrase without changing
-    /// its identity, data-encryption key, state, or audit key.
+    /// Re-encrypts a version 2 or 3 vault under a new passphrase without
+    /// changing its identity, logical state, or audit key. A version 3 change
+    /// rotates the data-encryption key (a fresh key, salt, and nonces reseal
+    /// all state, so a key recovered from an earlier envelope cannot decrypt
+    /// the new one) and commits the next state generation. Version 2 keeps its
+    /// frozen contract of rewrapping the unchanged key. Rotation never makes
+    /// older envelopes, backups, or previously revealed values unreadable.
     pub fn change_passphrase(&self, current: &SecretString, new: &SecretString) -> Result<()> {
         self.store.change_passphrase(current, new)
     }
 
-    /// Validates an existing version-two vault before passphrase capture,
+    /// Validates an existing version 2 or 3 vault before passphrase capture,
     /// without creating a vault home, lock, file, or audit event.
     pub fn preflight_passphrase_change(home: PathBuf) -> Result<()> {
         VaultStore::preflight_passphrase_change(home)
@@ -75,15 +83,24 @@ impl Vault {
 impl VaultStore {
     pub(crate) fn preflight_passphrase_change(home: PathBuf) -> Result<()> {
         let store = VaultStore::open_existing(home)?;
+        if store
+            .has_pending_transaction()
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?
+        {
+            // Credential capture may proceed; the change finishes the
+            // recorded transaction first and checks the recovered format
+            // under its locks.
+            return Ok(());
+        }
         let text = store
             .read_vault_text()
-            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?
-            .ok_or_else(|| {
-                VaultError::new(
-                    VaultErrorKind::NotFound,
-                    format!("vault does not exist at {}", store.vault_path().display()),
-                )
-            })?;
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?;
+        let text = text.ok_or_else(|| {
+            VaultError::new(
+                VaultErrorKind::NotFound,
+                format!("vault does not exist at {}", store.vault_path().display()),
+            )
+        })?;
         let file: VaultFile = serde_json::from_str(&text).map_err(|error| {
             VaultError::from_anyhow(
                 VaultErrorKind::Serialization,
@@ -92,11 +109,11 @@ impl VaultStore {
         })?;
         validate_header(&file.header)
             .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Serialization, error))?;
-        if file.header.version != FORMAT_VERSION {
+        if !supports_field_kinds(file.header.version) {
             return Err(VaultError::new(
                 VaultErrorKind::InvalidInput,
                 format!(
-                    "vault format {} does not support passphrase change; run `jig vault migrate --to {FORMAT_VERSION}` first",
+                    "vault format {} does not support passphrase change; run `jig vault migrate --to {LATEST_FORMAT_VERSION}` first",
                     file.header.version
                 ),
             ));
@@ -127,8 +144,22 @@ impl VaultStore {
         new: &SecretString,
         kdf: KdfParams,
     ) -> Result<()> {
-        validate_new_vault_passphrase_inner(new)
-            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        if let Err(policy_error) = validate_new_vault_passphrase_inner(new) {
+            return self
+                .with_lock(
+                    || match self.recover_pending_passphrase_change_unlocked(new) {
+                        Ok(true) => Ok(()),
+                        Ok(false) => Err(policy_error),
+                        Err(error)
+                            if classified_kind(&error) == Some(VaultErrorKind::Authentication) =>
+                        {
+                            Err(policy_error)
+                        }
+                        Err(error) => Err(error),
+                    },
+                )
+                .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error));
+        }
         self.with_lock(|| self.change_passphrase_unlocked(current, new, kdf))
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
@@ -139,7 +170,20 @@ impl VaultStore {
         new: &SecretString,
         kdf: KdfParams,
     ) -> AnyResult<()> {
-        let vault = self.open_unlocked(current)?;
+        // A retry of a change that crashed after its pending marker finishes
+        // with the new passphrase; that completed change is this request.
+        // The new passphrase is tried first, so a change to the same
+        // passphrase is recognized too.
+        if self
+            .recover_pending_unlocked(&[new, current])?
+            .is_some_and(|recovered| {
+                recovered.kind == TransactionKind::PassphraseChange
+                    && recovered.credential_index == 0
+            })
+        {
+            return Ok(());
+        }
+        let mut vault = self.open_unlocked(current)?;
         vault.verify_audit_unlocked(self).map_err(|error| {
             classify_source(
                 VaultErrorKind::AuditTampered,
@@ -147,12 +191,12 @@ impl VaultStore {
                 error,
             )
         })?;
-        if vault.format_version() != FORMAT_VERSION {
+        let format_version = vault.format_version();
+        if !supports_field_kinds(format_version) {
             return Err(classified(
                 VaultErrorKind::InvalidInput,
                 format!(
-                    "vault format {} does not support passphrase change; run `jig vault migrate --to {FORMAT_VERSION}` first",
-                    vault.format_version()
+                    "vault format {format_version} does not support passphrase change; run `jig vault migrate --to {LATEST_FORMAT_VERSION}` first"
                 ),
             ));
         }
@@ -160,6 +204,9 @@ impl VaultStore {
         // Complete every fallible cryptographic and serialization step before
         // appending intent so invalid input and RNG/serialization failures do
         // not advance the audit chain.
+        let details = serde_json::json!({ "format_version": format_version });
+        let prepared =
+            vault.stage_v3_mutation(self, AuditAction::PassphraseChange, details.clone())?;
         let envelope = RekeyedVaultEnvelope::seal(&vault.file, new, &vault.dek, &vault.state, kdf)?;
         let file_text = envelope.serialize_pretty()?;
         self.validate_vault_text_len(&file_text).map_err(|error| {
@@ -169,12 +216,23 @@ impl VaultStore {
                 error,
             )
         })?;
+        if let Some(prepared) = prepared {
+            let generation = vault
+                .state
+                .v3
+                .as_ref()
+                .map_or(0, |fields| fields.generation);
+            return self.commit_in_place_unlocked(InPlaceCommit {
+                kind: TransactionKind::PassphraseChange,
+                vault_id: &vault.file.header.vault_id,
+                previous_envelope_sha256: Some(&vault.envelope_sha256),
+                candidate: &file_text,
+                generation,
+                prepared: &prepared,
+            });
+        }
         vault
-            .append_audit_unlocked(
-                self,
-                AuditAction::PassphraseChange,
-                serde_json::json!({ "format_version": FORMAT_VERSION }),
-            )
+            .append_audit_unlocked(self, AuditAction::PassphraseChange, details)
             .map_err(|error| {
                 classify_source(
                     VaultErrorKind::AuditTampered,
@@ -199,6 +257,9 @@ impl VaultStore {
         operation_id: String,
     ) -> Result<BackupSnapshot> {
         self.with_lock(|| {
+            // Finish any recorded transaction first so the bounds below
+            // describe the recovered state.
+            self.recover_pending_unlocked(&[passphrase])?;
             // Bound the audit before opening it. Audit verification otherwise
             // accepts the broader persistent-log cap, while backup is an
             // explicitly smaller one-shot operation.
@@ -210,11 +271,11 @@ impl VaultStore {
             })?;
             let (pre_start_id, pre_start_version) =
                 inspect_embedded_vault(&pre_start_vault_bytes)?;
-            if pre_start_version != FORMAT_VERSION {
+            if !supports_field_kinds(pre_start_version) {
                 return Err(classified(
                     VaultErrorKind::InvalidInput,
                     format!(
-                        "vault format {pre_start_version} cannot be backed up; run `jig vault migrate --to {FORMAT_VERSION}` first"
+                        "vault format {pre_start_version} cannot be backed up; run `jig vault migrate --to {LATEST_FORMAT_VERSION}` first"
                     ),
                 ));
             }
@@ -226,7 +287,7 @@ impl VaultStore {
             let audit_len = self.audit_len()?.ok_or_else(|| {
                 classified(
                     VaultErrorKind::AuditTampered,
-                    "vault audit log is missing; restore audit.jsonl before creating a backup",
+                    "vault audit log is missing",
                 )
             })?;
             if audit_len > max_before_start as u64 {
@@ -246,13 +307,11 @@ impl VaultStore {
                     error,
                 )
             })?;
-            if vault.format_version() != FORMAT_VERSION {
+            let source_format_version = vault.format_version();
+            if source_format_version != pre_start_version {
                 return Err(classified(
-                    VaultErrorKind::InvalidInput,
-                    format!(
-                        "vault format {} cannot be backed up; run `jig vault migrate --to {FORMAT_VERSION}` first",
-                        vault.format_version()
-                    ),
+                    VaultErrorKind::Serialization,
+                    "vault format changed while preparing backup",
                 ));
             }
             let source_vault_id = vault.file.header.vault_id.clone();
@@ -263,7 +322,7 @@ impl VaultStore {
                     serde_json::json!({
                         "operation_id": operation_id,
                         "source_vault_id": source_vault_id,
-                        "source_format_version": FORMAT_VERSION,
+                        "source_format_version": source_format_version,
                     }),
                 )
                 .map_err(|error| {
@@ -282,7 +341,7 @@ impl VaultStore {
                     )
                 })?;
                 let (captured_id, captured_version) = inspect_embedded_vault(&vault_bytes)?;
-                if captured_id != source_vault_id || captured_version != FORMAT_VERSION {
+                if captured_id != source_vault_id || captured_version != source_format_version {
                     return Err(classified(
                         VaultErrorKind::Serialization,
                         "vault identity changed while preparing backup",
@@ -325,13 +384,13 @@ impl VaultStore {
                     ));
                 }
             };
-            let OpenVault { audit_key, .. } = vault;
+            let audit_key = vault.into_retained_audit_key();
             Ok(BackupSnapshot {
                 store: self.clone(),
                 audit_key,
                 operation_id,
                 source_vault_id,
-                source_format_version: FORMAT_VERSION,
+                source_format_version,
                 vault_bytes,
                 audit_bytes,
             })
@@ -354,7 +413,20 @@ impl VaultStore {
         backup_created_at_ms: i128,
     ) -> Result<()> {
         self.with_lock(|| {
-            let vault = self.open_unlocked(passphrase)?;
+            let vault = self.open_unlocked(passphrase).map_err(|error| {
+                // The staging home and ID locks are held here. Only the
+                // authenticated legacy-replay refusal means this restore
+                // lost its eligibility to a same-ID migration; preserve all
+                // other integrity and pending-transaction diagnostics.
+                if error
+                    .chain()
+                    .any(|cause| cause.is::<super::witnessed::LegacyReplay>())
+                {
+                    crate::backup::legacy_restore_retry_error()
+                } else {
+                    error
+                }
+            })?;
             vault.verify_audit_unlocked(self).map_err(|error| {
                 classify_source(
                     VaultErrorKind::AuditTampered,
@@ -366,7 +438,7 @@ impl VaultStore {
                 return Err(classified(
                     VaultErrorKind::InvalidInput,
                     format!(
-                        "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {FORMAT_VERSION}` and create a new backup"
+                        "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {LATEST_FORMAT_VERSION}` and create a new backup"
                     ),
                 ));
             }

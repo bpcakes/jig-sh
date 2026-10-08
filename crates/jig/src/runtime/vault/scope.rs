@@ -19,7 +19,7 @@ mod tests;
 
 /// Precedes recovery that passes `--home` or moves vault directories. Agents
 /// act on error text, and the generated Vault rules make both operator-only.
-const VAULT_STORAGE_OPERATOR_STEP: &str = "Operator step (agents must stop and ask the operator instead of passing --home or moving, renaming, or removing vault directories themselves):";
+pub(super) const VAULT_STORAGE_OPERATOR_STEP: &str = "Operator step (agents must stop and ask the operator instead of passing --home or moving, renaming, or removing vault directories themselves):";
 
 /// Physical vault home selected for a repo scope.
 pub(super) struct ScopedVaultHome {

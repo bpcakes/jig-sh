@@ -30,6 +30,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Run only `scripts/jig vault status` and, when the operator has already provided `JIG_VAULT_PASSPHRASE` to the session, `scripts/jig vault exec --env-file REFS_FILE -- COMMAND` with the refs file the operator provided and the task's command. `scripts/jig vault run` with the operator's references is the constrained alternative for short non-interactive commands. Every other vault subcommand is operator-only.
 - `COMMAND` is the underlying task command itself. Never wrap `scripts/jig check`, `scripts/jig run`, or another Jig runner in `vault exec` or `vault run`: a failing target records its stdout and stderr in `.agent/state/runs.jsonl` outside vault redaction, so incidental failure output can persist an injected value.
 - Never pass `--home` or `--global` to vault commands, and never set `JIG_VAULT_HOME`.
+- Never delete, move, or edit the vault rollback witness in `~/.jig/vault-witness` or its journals, even to get past a rollback, fork, or pending-transaction error; report the error to the operator.
 - Never request, print, inspect, test, choose, store, or set the passphrase, including with `echo` or `printenv`. Run the command, and stop if it reports a missing passphrase or prompts for one.
 - Never create or edit refs files or add references. Copying the operator's refs file unchanged from the main checkout into a worktree is fine.
 - Never wrap commands that print, encode, or transmit injected values, and never write revealed values to files such as `.env.local`.
@@ -114,7 +115,7 @@ scripts/jig-dev --json info
 
 For runtime, launcher, template, or build configuration changes, use `scripts/jig check repo:source-runtime-check` when validating the current implementation through the launcher. The same target is available in the `verify` profile. `JIG_DEV_BIN` remains an explicit override for an already-built binary; its freshness is the caller's responsibility.
 
-The managed Vault rules protect the operator's vault. Vault tests in this source tree create their own throwaway vault homes and test-only passphrases; when a manual check of edited vault behavior needs a vault, use a throwaway `--home` directory in a scratch location outside the repository, never the operator's vault or passphrase.
+The managed Vault rules protect the operator's vault. Vault tests in this source tree create their own throwaway vault homes, rollback witness roots, and test-only passphrases. When a manual check of edited vault behavior needs a vault, use a throwaway `--home` directory in a scratch location outside the repository with a test-support build, `cargo run --locked -p jig-sh --features jig-vault/test-utils -- vault ...`, which keeps the rollback witness beside that home. `scripts/jig-dev` and release builds record every format 3 vault they open, including a throwaway one, in the per-user witness `~/.jig/vault-witness`. Never use the operator's vault, witness, or passphrase.
 
 <!-- bv-agent-instructions-v3 -->
 

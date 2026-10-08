@@ -7,9 +7,9 @@ use anyhow::Result;
 #[cfg(all(unix, not(test)))]
 use anyhow::anyhow;
 use jig_vault::{
-    PreparedPrivateFile, PrivateFilePrecondition, SecretBytes, Vault, VaultError, VaultErrorKind,
-    VaultHomeState, VaultImportPrecondition, VaultReference, VaultRevision, VaultSnapshot,
-    validate_new_vault_passphrase,
+    LATEST_VAULT_FORMAT_VERSION, PreparedPrivateFile, PrivateFilePrecondition, SecretBytes, Vault,
+    VaultError, VaultErrorKind, VaultHomeState, VaultImportPrecondition, VaultReference,
+    VaultRevision, VaultSnapshot, validate_new_vault_passphrase,
 };
 use jig_vault_tui::{
     ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
@@ -109,13 +109,14 @@ impl VaultTuiBackend {
         let resolved = resolve_vault_runtime(&request.vault)?;
         // `Vault::status` is deliberately non-creating, so an absent target
         // remains truly absent for the future restore flow.
-        let status = Vault::status(resolved.home.clone())?;
+        let status = Vault::status(resolved.home.clone())
+            .map_err(super::recovery::vault_operator_guidance)?;
         let descriptor = VaultDescriptor {
             scope: resolved.scope.to_owned(),
             scope_id: resolved.scope_id.clone(),
             repo_name: resolved.repo_name.clone(),
+            home_state: presented_home_state(&status),
             home: status.root,
-            home_state: status.home_state,
         };
         Ok(Self {
             resolved,
@@ -402,7 +403,7 @@ impl VaultBackend for VaultTuiBackend {
 
     fn home_state(&self) -> std::result::Result<VaultHomeState, VaultUiError> {
         Vault::status(Some(self.descriptor.home.clone()))
-            .map(|status| status.home_state)
+            .map(|status| presented_home_state(&status))
             .map_err(map_vault_error)
     }
 
@@ -453,8 +454,10 @@ impl VaultBackend for VaultTuiBackend {
     fn execute(&self, action: VaultAction) -> std::result::Result<VaultActionResult, VaultUiError> {
         match action {
             VaultAction::Refresh => self.refresh().map(VaultActionResult::Snapshot),
-            VaultAction::MigrateToV2 => {
-                self.with_vault(|selected, passphrase| selected.migrate(passphrase, 2))?;
+            VaultAction::MigrateToLatest => {
+                self.with_vault(|selected, passphrase| {
+                    selected.migrate(passphrase, LATEST_VAULT_FORMAT_VERSION)
+                })?;
                 Ok(self.finish_committed(VaultCommittedAction::Migrated))
             }
             VaultAction::Mutate { revision, mutation } => self.execute_mutation(revision, mutation),
@@ -518,6 +521,7 @@ impl VaultBackend for VaultTuiBackend {
                     root: restored.root,
                     vault_id: restored.vault_id,
                     format_version: restored.format_version,
+                    other_copies_stale: restored.generation.is_some(),
                 })
             }
             VaultAction::ChangePassphrase { new_passphrase } => {
@@ -601,9 +605,21 @@ impl VaultTuiBackend {
     }
 }
 
+/// A home with an interrupted witnessed transaction is presented as
+/// initialized so the TUI routes to unlock, where authentication finishes
+/// the recorded transaction. Header-only screen selection must never hide
+/// that recovery behind initialization or restore choices.
+fn presented_home_state(status: &jig_vault::VaultStatus) -> VaultHomeState {
+    if status.pending_transaction {
+        VaultHomeState::Initialized
+    } else {
+        status.home_state
+    }
+}
+
 fn map_vault_error(error: VaultError) -> VaultUiError {
     let kind = map_vault_error_kind(error.kind());
-    VaultUiError::new(kind, error.message())
+    VaultUiError::new(kind, super::recovery::message(&error))
 }
 
 fn map_vault_error_kind(kind: VaultErrorKind) -> VaultUiErrorKind {
@@ -622,6 +638,12 @@ fn map_vault_error_kind(kind: VaultErrorKind) -> VaultUiErrorKind {
 }
 
 fn map_anyhow_error(error: anyhow::Error) -> VaultUiError {
+    if let Some(error) = error.downcast_ref::<VaultError>() {
+        return VaultUiError::new(
+            map_vault_error_kind(error.kind()),
+            super::recovery::message(error),
+        );
+    }
     VaultUiError::new(VaultUiErrorKind::Other, error.to_string())
 }
 
