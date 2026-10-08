@@ -100,7 +100,7 @@ When a backend package or crate has an `AGENTS.md`, use these sections:
 
 This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, contract, and run-history paths that generated repos use.
 
-Follow [local validation](docs/local-validation.md) to choose between focused checks, the preflight profile, and the full `verify` profile.
+Follow [local validation](docs/local-validation.md) to choose between focused checks, the preflight profile, and the full `verify` profile. For ordinary Rust changes, test with `scripts/jig check repo:source-affected-test`, which runs only the tests the change can affect; keep the full `verify` profile for broad changes before handoff.
 
 In this source checkout, `scripts/jig` uses the released runtime selected by `.jig/source-runtime-version`. Routine checks remain available while the source is changing or does not compile. Rust tests still compile and exercise the edited source.
 

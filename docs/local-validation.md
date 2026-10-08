@@ -51,6 +51,12 @@ preflight profile is an execution convenience, not a dependency of tests or an
 additional delivery requirement; direct `scripts/jig check test` remains
 available. Each run executes its targets; Jig does not reuse earlier results.
 
+Preflight runs the same checks as CI's formatting and repository-policy jobs,
+including two that plain Cargo commands miss: `scripts/check-rust-format.sh`
+also formats the `include!`d doctor sources, and `repo:file-budget` compares
+with the merge base, so it fails when a file already over its budget grows.
+Run it before pushing a change that moves or rewrites code.
+
 When testing an edited implementation, build it first and select the resulting
 binary with `JIG_DEV_BIN`, or use `scripts/jig-dev` for the individual checks.
 An override must refer to the current build. Routine work can use the released
