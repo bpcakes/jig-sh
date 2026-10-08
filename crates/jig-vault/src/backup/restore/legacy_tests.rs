@@ -123,6 +123,15 @@ fn pending_migration_before_legacy_finalization_preserves_recovery_metadata() {
 
 #[test]
 fn migration_after_legacy_finalization_leaves_target_absent_and_retryable() {
+    assert_migration_race_is_retryable(false);
+}
+
+#[test]
+fn migration_before_legacy_finalization_leaves_target_absent_and_retryable() {
+    assert_migration_race_is_retryable(true);
+}
+
+fn assert_migration_race_is_retryable(before_finalize: bool) {
     let (temp, archive, target) = fixture();
     let source_home = temp.path().join("source");
     let store = VaultStore::resolve_for_test(Some(source_home.clone())).unwrap();
@@ -130,10 +139,15 @@ fn migration_after_legacy_finalization_leaves_target_absent_and_retryable() {
     let source = Vault::resolve_for_test(Some(source_home)).unwrap();
     let request = Vault::preflight_backup_restore(&archive, target.clone()).unwrap();
     let _clear = ClearHooks;
-    BEFORE_LOCK.with(|slot| {
+    let hook = if before_finalize {
+        &BEFORE_FINALIZE
+    } else {
+        &BEFORE_LOCK
+    };
+    hook.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(move || {
-            // Staging has authenticated and appended its restore event, but
-            // the target is still absent. A same-ID copy now wins migration.
+            // Legacy restore has selected its path, but the target is still
+            // absent. A same-ID copy wins migration at the selected boundary.
             std::thread::spawn(move || {
                 source
                     .migrate(&generated_v2_passphrase(), V3_FORMAT_VERSION)
@@ -145,6 +159,9 @@ fn migration_after_legacy_finalization_leaves_target_absent_and_retryable() {
     });
 
     let error = Vault::restore_backup(&generated_v2_passphrase(), request).unwrap_err();
+    assert!(hook.with(|slot| slot.borrow().is_none()));
+    assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
+    assert_eq!(error.recovery(), None);
     assert!(error.to_string().contains("retry"), "{error}");
     assert!(!target.exists());
     assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
@@ -164,6 +181,45 @@ fn migration_after_legacy_finalization_leaves_target_absent_and_retryable() {
     assert_eq!(
         vault.list_fields(&generated_v2_passphrase()).unwrap().len(),
         2
+    );
+}
+
+#[test]
+fn damaged_witness_before_legacy_finalization_keeps_integrity_guidance() {
+    let (temp, archive, target) = fixture();
+    let source_home = temp.path().join("source");
+    let store = VaultStore::resolve_for_test(Some(source_home.clone())).unwrap();
+    install_generated_v2_fixture(&store);
+    let source = Vault::resolve_for_test(Some(source_home)).unwrap();
+    let request = Vault::preflight_backup_restore(&archive, target.clone()).unwrap();
+    let record_path = WitnessLocation::for_home(&target)
+        .unwrap()
+        .root()
+        .join("ids")
+        .join(format!("{}.json", id_key(GENERATED_V2_VAULT_ID)));
+    let damaged_path = record_path.clone();
+    let _clear = ClearHooks;
+    BEFORE_FINALIZE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            std::thread::spawn(move || {
+                source
+                    .migrate(&generated_v2_passphrase(), V3_FORMAT_VERSION)
+                    .unwrap();
+                fs::write(damaged_path, "malformed witness").unwrap();
+            })
+            .join()
+            .unwrap();
+        }));
+    });
+
+    let error = Vault::restore_backup(&generated_v2_passphrase(), request).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AuditTampered);
+    assert_eq!(error.recovery(), Some(VaultRecovery::Integrity));
+    assert!(!error.to_string().contains("retry the restore"), "{error}");
+    assert!(!target.exists());
+    assert_eq!(
+        fs::read_to_string(record_path).unwrap(),
+        "malformed witness"
     );
 }
 

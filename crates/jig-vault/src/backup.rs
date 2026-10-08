@@ -24,7 +24,9 @@ use codec::seal_archive;
 use codec::{ParsedBackupArchive, decrypt_archive, parse_archive_bytes};
 pub(crate) use payload::{inspect_embedded_vault, max_backup_audit_bytes};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) use restore::{finish_pending_restore, read_candidate as read_restore_candidate};
+pub(crate) use restore::{
+    finish_pending_restore, legacy_restore_retry_error, read_candidate as read_restore_candidate,
+};
 
 pub const BACKUP_FORMAT_VERSION: u32 = 1;
 pub const MAX_BACKUP_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;

@@ -92,7 +92,7 @@
   and missing audit logs, to the operator with instructions to preserve recovery
   data instead of editing the witness or its journals.
 - Serialize legacy vault restore installation with same-ID migration. If
-  migration wins after restore finalization, leave the target absent and
+  migration wins before or after restore finalization, leave the target absent and
   request a retry through witnessed recovery.
 - Report uncertain pending-marker publication with recovery guidance, including
   retaining both passphrases after an interrupted credential change.

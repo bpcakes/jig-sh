@@ -271,12 +271,26 @@ const PROFILE_RECOVERY_GUIDANCE: &str = "Operator step: if another user profile 
 
 const STALE_COPY_RECOVERY_GUIDANCE: &str = "Operator step: use the current vault home, or the restored home if a backup was restored. If the current copy is unavailable, use the documented authenticated backup recovery procedure to restore to an absent target. Agents must ask the operator. Never delete or edit the rollback witness or its journals to bypass this refusal.";
 
+/// Distinguishes a witnessed legacy copy from other integrity failures so
+/// backup finalization can report a racing migration as a retry.
+#[derive(Debug)]
+pub(super) struct LegacyReplay;
+
+impl std::fmt::Display for LegacyReplay {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("legacy vault ID has a format 3 witness")
+    }
+}
+
+impl std::error::Error for LegacyReplay {}
+
 fn legacy_replay_error() -> anyhow::Error {
-    classified(
+    classify_source(
         VaultErrorKind::AuditTampered,
         format!(
             "this vault ID was already witnessed as format 3; refusing an older-format copy. {STALE_COPY_RECOVERY_GUIDANCE}"
         ),
+        LegacyReplay.into(),
     )
 }
 

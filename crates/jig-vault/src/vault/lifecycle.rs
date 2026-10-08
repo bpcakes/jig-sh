@@ -413,7 +413,20 @@ impl VaultStore {
         backup_created_at_ms: i128,
     ) -> Result<()> {
         self.with_lock(|| {
-            let vault = self.open_unlocked(passphrase)?;
+            let vault = self.open_unlocked(passphrase).map_err(|error| {
+                // The staging home and ID locks are held here. Only the
+                // authenticated legacy-replay refusal means this restore
+                // lost its eligibility to a same-ID migration; preserve all
+                // other integrity and pending-transaction diagnostics.
+                if error
+                    .chain()
+                    .any(|cause| cause.is::<super::witnessed::LegacyReplay>())
+                {
+                    crate::backup::legacy_restore_retry_error()
+                } else {
+                    error
+                }
+            })?;
             vault.verify_audit_unlocked(self).map_err(|error| {
                 classify_source(
                     VaultErrorKind::AuditTampered,

@@ -309,10 +309,7 @@ fn restore_legacy(
     let install_lock = (|| {
         let id = witness.lock_id(&decoded.source_vault_id)?;
         if witness.read_record(&decoded.source_vault_id)?.is_some() {
-            return Err(classified(
-                VaultErrorKind::AlreadyExists,
-                "vault became witnessed during legacy restore; target was not installed; retry the restore to use witnessed recovery",
-            ));
+            return Err(legacy_restore_retry_error());
         }
         Ok(id)
     })();
@@ -330,6 +327,13 @@ fn restore_legacy(
         source_format_version: decoded.source_format_version,
         generation: None,
     })
+}
+
+pub(crate) fn legacy_restore_retry_error() -> anyhow::Error {
+    classified(
+        VaultErrorKind::AlreadyExists,
+        "vault became witnessed during legacy restore; target was not installed; retry the restore to use witnessed recovery",
+    )
 }
 
 fn revalidate_target(target: &RestoreTarget) -> AnyResult<()> {
