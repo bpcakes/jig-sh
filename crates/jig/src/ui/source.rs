@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use jig_ui::dashboard::{
+use jig_dashboard::{
     DashboardSource, RecorderEpochId, RecorderMode, RecorderRefresh, RecorderRequest, SourceError,
 };
 

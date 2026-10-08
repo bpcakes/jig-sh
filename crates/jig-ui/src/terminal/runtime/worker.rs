@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
+use jig_dashboard::{DashboardSource, RecorderRefresh, SourceError};
+
 use super::scheduler::ScheduledRequest;
-use crate::{
-    dashboard::{DashboardSource, RecorderRefresh, SourceError},
-    terminal::model::App,
-};
+use crate::terminal::model::App;
 use anyhow::Result;
 use jig_tui::CooperativeWorker;
 

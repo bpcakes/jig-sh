@@ -1,0 +1,23 @@
+[package]
+name = "jig-dashboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Typed data contracts for Jig's unified terminal dashboard."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lib]
+name = "jig_dashboard"
+
+[features]
+# Parity checks and scenario fixtures for dependents' tests.
+test-support = []
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true

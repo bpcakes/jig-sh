@@ -23,10 +23,7 @@ fn local_status_schema_three_omits_removed_sections() {
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
         keys,
-        jig_ui::dashboard::STATUS_ROOT_FIELDS
-            .iter()
-            .copied()
-            .collect()
+        jig_dashboard::STATUS_ROOT_FIELDS.iter().copied().collect()
     );
     assert_eq!(snapshot["schema_version"], 4);
     assert_eq!(snapshot["command"], "status");
@@ -36,8 +33,7 @@ fn local_status_schema_three_omits_removed_sections() {
     assert!(!encoded.contains("work_packages"));
     assert!(!encoded.contains("input_freshness"));
 
-    let typed: jig_ui::dashboard::StatusSnapshot =
-        serde_json::from_value(snapshot.clone()).unwrap();
+    let typed: jig_dashboard::StatusSnapshot = serde_json::from_value(snapshot.clone()).unwrap();
     assert_eq!(serde_json::to_value(typed).unwrap(), snapshot);
 }
 

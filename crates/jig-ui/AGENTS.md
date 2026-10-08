@@ -2,12 +2,11 @@
 
 ## Purpose
 
-`crates/jig-ui` contains the unified read-only terminal dashboard used by `jig ui` and `jig status --tui`. The owning `jig-sh` CLI supplies typed recorder and status snapshots through the `DashboardSource` boundary.
+`crates/jig-ui` contains the unified read-only terminal dashboard used by `jig ui` and `jig status --tui`. The owning `jig-sh` CLI supplies typed recorder and status snapshots through the `DashboardSource` boundary defined in [jig-dashboard](../jig-dashboard/AGENTS.md).
 
 ## Key entrypoints
 
-- `src/lib.rs`: public dashboard and terminal module boundary.
-- `src/dashboard.rs`: bounded snapshot contracts and the typed source interface.
+- `src/lib.rs`: public terminal module boundary.
 - `src/terminal.rs`: dashboard options and public TUI entrypoint.
 - `src/terminal/model.rs`: three-tab (Status, Timeline, Health) application state and typed view projection.
 - `src/terminal/render.rs`: Ratatui layout, widgets, colors, and responsive presentation.
@@ -15,7 +14,7 @@
 
 ## Edit here for X
 
-- Change recorder/status wire contracts or bounds: `src/dashboard/`. A removed or renamed wire field bumps `RECORDER_SCHEMA_VERSION` or `STATUS_SCHEMA_VERSION`.
+- Change recorder/status wire contracts or bounds: [jig-dashboard](../jig-dashboard/AGENTS.md).
 - Change tabs, navigation, selection preservation, filters, or detail state: `src/terminal/model/`.
 - Change terminal layout or presentation: `src/terminal/render/`.
 - Change refresh timing, preemption, keyboard events, or terminal cleanup: `src/terminal/runtime/`.

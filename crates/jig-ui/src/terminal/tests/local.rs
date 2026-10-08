@@ -1,11 +1,10 @@
-use crate::{
-    dashboard::{
-        BoundedRows, BoundedText, CollectionDomain, LimitId, LoopStateError, RecorderEpochId,
-        RecorderRefresh, RecorderSnapshot, Remediation, ScheduledOccurrence, SnapshotError,
-        SnapshotErrorCode, TimelineRow, scenarios,
-    },
-    terminal::model::{App, Tab},
+use jig_dashboard::{
+    BoundedRows, BoundedText, CollectionDomain, LimitId, LoopStateError, RecorderEpochId,
+    RecorderRefresh, RecorderSnapshot, Remediation, ScheduledOccurrence, SnapshotError,
+    SnapshotErrorCode, TimelineRow, scenarios,
 };
+
+use crate::terminal::model::{App, Tab};
 
 use super::{normalized, render_text, status_local};
 

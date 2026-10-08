@@ -1,4 +1,4 @@
-use crate::dashboard::Remediation;
+use jig_dashboard::Remediation;
 
 use super::*;
 

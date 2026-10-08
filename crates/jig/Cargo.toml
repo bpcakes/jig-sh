@@ -56,6 +56,7 @@ jig-agents.workspace = true
 jig-bootstrap.workspace = true
 jig-commands.workspace = true
 jig-context.workspace = true
+jig-dashboard.workspace = true
 jig-contract.workspace = true
 jig-codex-tui.workspace = true
 jig-core.workspace = true

@@ -15,10 +15,11 @@ categories = ["command-line-utilities", "development-tools"]
 name = "jig_ui"
 
 [features]
-test-support = []
+test-support = ["jig-dashboard/test-support"]
 
 [dependencies]
 anyhow.workspace = true
+jig-dashboard.workspace = true
 crossterm.workspace = true
 jig-tui.workspace = true
 ratatui.workspace = true

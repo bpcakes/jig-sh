@@ -63,7 +63,7 @@ impl<T> BoundedRows<T> {
         self.omitted
     }
 
-    pub(crate) fn validate_for_limit(&self, id: LimitId) -> Result<(), LimitError> {
+    pub fn validate_for_limit(&self, id: LimitId) -> Result<(), LimitError> {
         let spec = limit_spec(id, LimitShape::NestedRows)?;
         if self.applied != spec.ceiling {
             return Err(LimitError::AppliedMismatch {
@@ -152,7 +152,7 @@ impl BoundedText {
         self.omitted_chars
     }
 
-    pub(crate) fn validate_for_limit(&self, id: LimitId) -> Result<(), LimitError> {
+    pub fn validate_for_limit(&self, id: LimitId) -> Result<(), LimitError> {
         let spec = limit_spec(id, LimitShape::NestedText)?;
         if self.applied_chars != spec.ceiling {
             return Err(LimitError::AppliedMismatch {

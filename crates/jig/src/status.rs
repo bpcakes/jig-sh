@@ -16,7 +16,7 @@ pub(crate) mod git;
 
 use git::{GitProbeError, git_text_with_cancellation, observe_git_checkout_with_cancellation};
 
-const STATUS_SCHEMA_VERSION: u64 = jig_ui::dashboard::STATUS_SCHEMA_VERSION;
+const STATUS_SCHEMA_VERSION: u64 = jig_dashboard::STATUS_SCHEMA_VERSION;
 
 #[cfg(test)]
 pub(crate) fn snapshot(ctx: &RepoContext) -> Result<Value> {

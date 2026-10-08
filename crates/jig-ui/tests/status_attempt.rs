@@ -1,4 +1,4 @@
-use jig_ui::dashboard::{StatusExhaustedAttempt, StatusLoopAttempt};
+use jig_dashboard::{StatusExhaustedAttempt, StatusLoopAttempt};
 use serde_json::json;
 
 #[test]

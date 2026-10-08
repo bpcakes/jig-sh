@@ -1,7 +1,7 @@
 //! Typed contracts for the unified terminal dashboard.
 //!
-//! The CLI owns repository access and supplies data through these contracts;
-//! this crate owns only bounded projection and presentation.
+//! The CLI and loops own repository access and supply data through these
+//! contracts; this crate owns their bounded projection. `jig-ui` renders them.
 
 mod bounded;
 mod identity;

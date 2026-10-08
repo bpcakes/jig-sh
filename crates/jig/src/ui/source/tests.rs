@@ -1,9 +1,7 @@
 use std::fs;
 
 use jig_context::RepoContext;
-use jig_ui::dashboard::{
-    DashboardSource, RecorderMode, RecorderRequest, SourceError, TimelineLimit,
-};
+use jig_dashboard::{DashboardSource, RecorderMode, RecorderRequest, SourceError, TimelineLimit};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -212,7 +210,7 @@ fn recorder_refresh_pairs_one_epoch_and_reuse_performs_no_refresh() {
         .unwrap();
     assert_eq!(first.recorder.epoch_id, first.status_local.epoch_id);
     let encoded = serde_json::to_value(&first.recorder).unwrap();
-    let _: jig_ui::dashboard::RecorderSnapshot = serde_json::from_value(encoded).unwrap();
+    let _: jig_dashboard::RecorderSnapshot = serde_json::from_value(encoded).unwrap();
     assert_eq!(first.recorder.timeline.len(), 1);
 
     jig_state::reset_dashboard_scan_counts();

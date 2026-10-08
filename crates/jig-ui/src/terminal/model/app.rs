@@ -1,4 +1,4 @@
-use crate::dashboard::{RECORDER_SCHEMA_VERSION, RecorderRefresh, RecorderSnapshot};
+use jig_dashboard::{RECORDER_SCHEMA_VERSION, RecorderRefresh, RecorderSnapshot};
 
 use super::*;
 

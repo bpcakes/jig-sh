@@ -1,6 +1,6 @@
 use jig_context::RepoContext;
 use jig_contract::TargetOutputTailV1;
-use jig_ui::dashboard::{CollectionDomain, DashboardSource, LimitId, RecorderMode, TimelineLimit};
+use jig_dashboard::{CollectionDomain, DashboardSource, LimitId, RecorderMode, TimelineLimit};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -36,7 +36,7 @@ fn recorder_reports_exact_root_and_nested_omissions() {
     let source = RepoDashboardSource::new(context);
     let refresh = source
         .recorder(
-            jig_ui::dashboard::RecorderRequest {
+            jig_dashboard::RecorderRequest {
                 mode: RecorderMode::Refresh,
                 timeline_limit: TimelineLimit::new(5).unwrap(),
             },

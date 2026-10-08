@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::dashboard::{RecorderMode, RecorderRequest, TimelineLimit};
+use jig_dashboard::{RecorderMode, RecorderRequest, TimelineLimit};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ScheduledRequest {

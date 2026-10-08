@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use jig_ui::dashboard::{
+use jig_dashboard::{
     DEFAULT_TIMELINE_ROWS, LIMIT_SPECS, RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION,
     SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
 };
@@ -73,7 +73,8 @@ fn production_tree_contains_no_http_surface() {
         );
     }
 
-    let dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    let mut dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    dashboard_source.push_str(&read_rust_tree(&root.join("crates/jig-dashboard/src")));
     let mut cli_source = fs::read_to_string(root.join("crates/jig/src/ui.rs")).unwrap();
     cli_source.push_str(&read_rust_tree(&root.join("crates/jig/src/ui")));
     cli_source.push_str(&fs::read_to_string(root.join("crates/jig/src/status.rs")).unwrap());
@@ -113,7 +114,8 @@ fn external_status_subsystem_is_absent() {
         );
     }
 
-    let dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    let mut dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    dashboard_source.push_str(&read_rust_tree(&root.join("crates/jig-dashboard/src")));
     let mut status_source = fs::read_to_string(root.join("crates/jig/src/status.rs")).unwrap();
     status_source.push_str(&read_rust_tree(&root.join("crates/jig/src/status")));
     for forbidden in [

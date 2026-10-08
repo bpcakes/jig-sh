@@ -1,4 +1,4 @@
-use crate::dashboard::{
+use jig_dashboard::{
     StatusCollectionError, StatusLocalSnapshot, StatusLoopObservation, StatusRepositoryObservation,
     UpstreamObservation,
 };

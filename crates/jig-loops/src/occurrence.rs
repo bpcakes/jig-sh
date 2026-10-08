@@ -87,8 +87,8 @@ impl ScheduleOccurrence {
         )
     }
 
-    pub(super) fn status_view(&self) -> jig_ui::dashboard::StatusScheduledOccurrence {
-        jig_ui::dashboard::StatusScheduledOccurrence {
+    pub(super) fn status_view(&self) -> jig_dashboard::StatusScheduledOccurrence {
+        jig_dashboard::StatusScheduledOccurrence {
             occurrence_id: self.occurrence_id.clone(),
             workflow_id: self.workflow_id.clone(),
             scheduled_at_ms: self.scheduled_at_ms,

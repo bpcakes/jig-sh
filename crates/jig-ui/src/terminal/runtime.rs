@@ -1,11 +1,12 @@
 use std::time::Duration;
 
+use jig_dashboard::DashboardSource;
+
 use super::{
     DashboardOptions, InitialTab,
     model::{App, Tab},
     render,
 };
-use crate::dashboard::DashboardSource;
 use anyhow::{Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use jig_tui::{TerminalSession, is_actionable_key, require_terminal};

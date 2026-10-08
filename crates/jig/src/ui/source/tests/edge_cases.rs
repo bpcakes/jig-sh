@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::sync::Arc;
 
-use jig_ui::dashboard::{
+use jig_dashboard::{
     CollectionDomain, DashboardSource, RecorderEpochId, RecorderMode, SnapshotErrorCode,
     SourceError, TimelineRow,
 };

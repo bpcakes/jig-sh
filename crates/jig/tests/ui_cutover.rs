@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use jig_ui::dashboard::{RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION};
+use jig_dashboard::{RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION};
 use serde_json::Value;
 
 #[path = "shared/pty.rs"]
