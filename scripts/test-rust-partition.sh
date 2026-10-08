@@ -10,7 +10,7 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 
-frontend_filter='package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime))'
+frontend_filter='package(jig-bootstrap) & (test(tests::frontend_adoption) | test(tests::basic::scaffold_generation) | test(tests::basic::scaffold_runtime))'
 process_filter='(package(jig-sh) & (binary(claude_launcher) | binary(codex_launcher) | binary(dev_launcher_loss) | binary(dev_lifecycle) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
 vault_filter='package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'
 status_args=(--status-level fail --final-status-level fail)

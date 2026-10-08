@@ -11,9 +11,10 @@ use tempfile::tempdir;
 use wait_timeout::ChildExt;
 
 const CURRENT_GENERATED_LAUNCHER_TEMPLATE: &str =
-    include_str!("../bootstrap/embedded_template_snapshots/scripts/jig.jinja");
-const CURRENT_GENERATED_INSTALLER: &str =
-    include_str!("../bootstrap/embedded_template_snapshots/scripts/install-jig.sh.jinja");
+    include_str!("../../../jig-bootstrap/src/embedded_template_snapshots/scripts/jig.jinja");
+const CURRENT_GENERATED_INSTALLER: &str = include_str!(
+    "../../../jig-bootstrap/src/embedded_template_snapshots/scripts/install-jig.sh.jinja"
+);
 
 fn current_generated_launcher() -> String {
     CURRENT_GENERATED_LAUNCHER_TEMPLATE.replace(

@@ -16,7 +16,7 @@ fn init_opts(args: &[&str]) -> InitOpts {
     }
 }
 
-fn prepare(opts: &mut InitOpts) -> Result<bootstrap::PreparedInitAnswers> {
+fn prepare(opts: &mut InitOpts) -> Result<jig_bootstrap::PreparedInitAnswers> {
     prepare_init_interaction_with_io(opts, &mut Cursor::new(Vec::<u8>::new()), &mut Vec::new())
 }
 
@@ -53,7 +53,7 @@ fn explicit_rust_library_is_complete_in_strict_and_defaults_modes() {
         assert!(!opts.scaffold.has_frontends());
         assert_eq!(
             opts.answers.backend_language,
-            Some(crate::bootstrap::BackendLanguage::Rust)
+            Some(jig_context::backend::BackendLanguage::Rust)
         );
         assert_eq!(opts.answers.sqlx_enabled, Some(false));
     }
@@ -535,7 +535,7 @@ workspace_discovery = true
     ]);
     opts.template = Some(template.display().to_string());
     let reads = Cell::new(0);
-    let mut prepared = bootstrap::PreparedInitAnswers::from_opts_at_with_reader(
+    let mut prepared = jig_bootstrap::PreparedInitAnswers::from_opts_at_with_reader(
         &opts.answers,
         temp.path(),
         |path| {
@@ -562,7 +562,7 @@ workspace_discovery = true
     )
     .unwrap();
 
-    bootstrap::run_prepared_init(opts, prepared).unwrap();
+    jig_bootstrap::run_prepared_init(opts, prepared).unwrap();
 
     let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(rendered.contains("repo_name = \"frozenlibrary\""));
@@ -603,7 +603,7 @@ fn bootstrap_guard_rejects_forbidden_rust_library_input_without_the_wizard() {
     ]);
     opts.template = Some("/missing/ExampleProject-template".into());
 
-    let error = bootstrap::run_init(opts).unwrap_err().to_string();
+    let error = jig_bootstrap::run_init(opts).unwrap_err().to_string();
 
     assert!(error.contains("rust-library"), "{error}");
     assert!(error.contains("unexpected_shape_authority"), "{error}");
@@ -658,7 +658,7 @@ targets = [{ component = "custom", action = "check" }]
     ]);
     opts.template = Some("/missing/ExampleProject-template".into());
 
-    let error = bootstrap::run_init(opts).unwrap_err().to_string();
+    let error = jig_bootstrap::run_init(opts).unwrap_err().to_string();
 
     assert!(
         error.contains(

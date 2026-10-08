@@ -3,13 +3,13 @@ use std::io::{self, BufRead, IsTerminal, Write};
 
 use anyhow::{Context, Result, bail};
 
-use crate::bootstrap::{
+use jig_bootstrap::{
     self, InitOpts, ScaffoldDb, ScaffoldFrontend, ScaffoldPreset, parse_scaffold_frontend,
 };
 
 pub(super) fn prepare_init_interaction(
     opts: &mut InitOpts,
-) -> Result<bootstrap::PreparedInitAnswers> {
+) -> Result<jig_bootstrap::PreparedInitAnswers> {
     let mut prepared = prepare_init_answers(opts)?;
     prepared.move_effective_to(&mut opts.answers)?;
     let terminals_available = io::stdin().is_terminal() && io::stderr().is_terminal();
@@ -51,7 +51,7 @@ fn prepare_init_interaction_with_io<R: BufRead, W: Write>(
     opts: &mut InitOpts,
     input: &mut R,
     output: &mut W,
-) -> Result<bootstrap::PreparedInitAnswers> {
+) -> Result<jig_bootstrap::PreparedInitAnswers> {
     let mut prepared = prepare_init_answers(opts)?;
     prepared.move_effective_to(&mut opts.answers)?;
     let policy = InitInteractionPolicy::resolve(opts, true);
@@ -65,7 +65,7 @@ fn prepare_init_interaction_with_terminal<R: BufRead, W: Write>(
     terminals_available: bool,
     input: &mut R,
     output: &mut W,
-) -> Result<bootstrap::PreparedInitAnswers> {
+) -> Result<jig_bootstrap::PreparedInitAnswers> {
     let mut prepared = prepare_init_answers(opts)?;
     prepared.move_effective_to(&mut opts.answers)?;
     let policy = InitInteractionPolicy::resolve(opts, terminals_available);
@@ -73,8 +73,8 @@ fn prepare_init_interaction_with_terminal<R: BufRead, W: Write>(
     Ok(prepared)
 }
 
-fn prepare_init_answers(opts: &InitOpts) -> Result<bootstrap::PreparedInitAnswers> {
-    bootstrap::prepare_init_answers_for_interaction(&opts.answers).map_err(|error| {
+fn prepare_init_answers(opts: &InitOpts) -> Result<jig_bootstrap::PreparedInitAnswers> {
+    jig_bootstrap::prepare_init_answers_for_interaction(&opts.answers).map_err(|error| {
         if let Some(preset @ (ScaffoldPreset::RustLibrary | ScaffoldPreset::RustCli)) =
             opts.scaffold.preset
         {
@@ -113,7 +113,7 @@ impl InitInteractionPolicy {
 
 fn prepare_merged_init_interaction<R: BufRead, W: Write>(
     opts: &mut InitOpts,
-    prepared: &mut bootstrap::PreparedInitAnswers,
+    prepared: &mut jig_bootstrap::PreparedInitAnswers,
     policy: InitInteractionPolicy,
     input: &mut R,
     output: &mut W,
@@ -442,7 +442,7 @@ fn default_go_module_for_init(opts: &InitOpts) -> String {
         .as_deref()
         .or_else(|| opts.path.file_name().and_then(|value| value.to_str()))
         .unwrap_or("app");
-    bootstrap::default_go_module(repo_name)
+    jig_bootstrap::default_go_module(repo_name)
 }
 
 fn prompt_go_module<R: BufRead, W: Write>(
@@ -453,7 +453,7 @@ fn prompt_go_module<R: BufRead, W: Write>(
     let prompt = format!("Go module [{default}] (for example github.com/acme/my-app): ");
     loop {
         let module = prompt_value(input, output, &prompt, default, "Go module")?;
-        match bootstrap::validate_go_module(&module) {
+        match jig_bootstrap::validate_go_module(&module) {
             Ok(()) => return Ok(module),
             Err(error) => writeln!(output, "  {error}")?,
         }

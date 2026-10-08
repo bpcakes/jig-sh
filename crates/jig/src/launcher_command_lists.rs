@@ -10,7 +10,7 @@ const LAUNCHER_REFRESH_COMMAND: &str = "JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 car
 /// packaged with the crate.
 const LAUNCHER_COPIES: &[&str] = &[
     "templates/project/scripts/jig.jinja",
-    "crates/jig/src/bootstrap/embedded_template_snapshots/scripts/jig.jinja",
+    "crates/jig-bootstrap/src/embedded_template_snapshots/scripts/jig.jinja",
     "scripts/jig",
 ];
 
@@ -81,7 +81,8 @@ fn generated_launcher_command_lists_match_the_registry() {
         return;
     }
 
-    let launcher = include_str!("bootstrap/embedded_template_snapshots/scripts/jig.jinja");
+    let launcher =
+        include_str!("../../jig-bootstrap/src/embedded_template_snapshots/scripts/jig.jinja");
     assert!(
         launcher == with_registry_command_lists(launcher),
         "the generated launcher's command lists drifted from the root command registry; \

@@ -1455,6 +1455,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-bootstrap"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dotenvy",
+ "fs4",
+ "globset",
+ "jig-commands",
+ "jig-context",
+ "jig-contract",
+ "jig-core",
+ "jig-dev-proxy",
+ "jig-execution",
+ "jig-features",
+ "jig-file-budget",
+ "jig-git",
+ "jig-owned-process",
+ "jig-policy",
+ "jig-repository",
+ "jig-rust",
+ "jig-typescript",
+ "libc",
+ "minijinja",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "syn 2.0.117",
+ "tempfile",
+ "time",
+ "toml",
+ "ulid",
+]
+
+[[package]]
 name = "jig-codex-tui"
 version = "0.7.3-dev"
 dependencies = [
@@ -1716,6 +1752,7 @@ dependencies = [
  "fs4",
  "globset",
  "jig-agents",
+ "jig-bootstrap",
  "jig-codex-tui",
  "jig-commands",
  "jig-context",

@@ -540,8 +540,7 @@
       "process"
     ],
     "inputs": [
-      "crates/jig/src/bootstrap.rs",
-      "crates/jig/src/bootstrap/**",
+      "crates/jig-bootstrap/**",
       "crates/jig-git/**",
       "Cargo.toml",
       "Cargo.lock",
@@ -712,6 +711,46 @@
     },
     "target": {
       "action": "source-vault-test",
+      "component": "repo"
+    }
+  },
+  {
+    "description": "Run only the Rust tests that changes since the merge base with origin/master can affect.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "crates/**",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain*",
+      ".cargo/**",
+      "nextest.toml",
+      ".config/nextest.toml",
+      ".jig.toml",
+      "templates/**",
+      "scripts/**",
+      "examples/**",
+      "tests/**"
+    ],
+    "intent": "check",
+    "provenance": {
+      "effects": "declared",
+      "inputs": "declared",
+      "intent": "declared",
+      "runner": "declared",
+      "source_state": "declared",
+      "target": "declared"
+    },
+    "runner": {
+      "args": [],
+      "kind": "argv",
+      "program": "scripts/test-rust-affected.py"
+    },
+    "source_state": "worktree",
+    "target": {
+      "action": "source-affected-test",
       "component": "repo"
     }
   }
