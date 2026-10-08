@@ -12,6 +12,17 @@ case "$mode" in
 esac
 if [ "$mode" = minimal-focused ]; then profile=minimal-ci; fi
 
+# Pull requests set JIG_TEST_AFFECTED_BASE to run only the workspace tests
+# their changes can affect; master, merge queues, and manual runs leave it
+# unset and run the whole suite. Every target is still compiled.
+scope='all()'
+scope_args=()
+if [ "$mode" = workspace ] && [ -n "${JIG_TEST_AFFECTED_BASE:-}" ]; then
+  scope="$(python3 scripts/test-rust-affected.py --base "$JIG_TEST_AFFECTED_BASE" --filterset)"
+  scope_args=(--no-tests=pass)
+  echo "Affected-test scope since $JIG_TEST_AFFECTED_BASE: $scope"
+fi
+
 metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/jig-test-build.XXXXXX")"
 trap 'rm -rf "$metadata_dir"' EXIT
 # Expanding an empty array requires this form on macOS's Bash 3.2.
@@ -43,7 +54,8 @@ if [ "$mode" = minimal-focused ]; then
 fi
 
 status=0
-run_phase non-vault -E "not ($vault_filter)" || status=$?
-run_phase vault -E "($vault_filter) & not ($pty_filter)" || status=$?
-run_phase vault-pty -E "$pty_filter" -j 1 || status=$?
+# Expanding an empty array requires this form on macOS's Bash 3.2.
+run_phase non-vault -E "($scope) & not ($vault_filter)" ${scope_args[@]+"${scope_args[@]}"} || status=$?
+run_phase vault -E "($scope) & ($vault_filter) & not ($pty_filter)" ${scope_args[@]+"${scope_args[@]}"} || status=$?
+run_phase vault-pty -E "($scope) & ($pty_filter)" -j 1 ${scope_args[@]+"${scope_args[@]}"} || status=$?
 exit "$status"

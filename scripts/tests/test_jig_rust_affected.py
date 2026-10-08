@@ -63,6 +63,13 @@ class AffectedPackagesTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    def test_scope_filterset_covers_full_empty_and_scoped_selections(self):
+        self.assertEqual(affected.scope_filterset(None), "all()")
+        self.assertEqual(affected.scope_filterset(set()), "none()")
+        self.assertEqual(
+            affected.scope_filterset({"jig-sh"}), "rdeps(=jig-sh) | rdeps(=jig-ui)"
+        )
+
     def test_full_suite_command_has_no_filter(self):
         command = affected.nextest_command(None, ["--no-fail-fast"])
         self.assertEqual(command[:5], ["cargo", "nextest", "run", "--workspace", "-P"])
