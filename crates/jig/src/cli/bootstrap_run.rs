@@ -2,12 +2,13 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
+use jig_bootstrap as bootstrap;
 use jig_context::RepoContext;
 use serde_json::Value;
 
 use super::init_wizard::{preflight_init_package_manager, prepare_init_interaction};
 use super::output::print_json;
-use crate::{bootstrap, runtime};
+use crate::runtime;
 
 pub(super) fn run_init_command(mut opts: bootstrap::InitOpts, json_output: bool) -> Result<()> {
     bootstrap::preflight_init_destination(&opts)?;

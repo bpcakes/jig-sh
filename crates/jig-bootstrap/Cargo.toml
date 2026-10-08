@@ -1,0 +1,59 @@
+[package]
+name = "jig-bootstrap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Jig init, adopt, and update: template rendering, adoption inference, and transactional writes."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+build = "build.rs"
+
+[lib]
+name = "jig_bootstrap"
+
+[features]
+# Builds that include the local dev proxy generate proxy-aware launchers and
+# validate generated dev app names with jig-dev-proxy's DNS label rules.
+dev-proxy = ["dep:jig-dev-proxy"]
+# Direct init and answer-preparation entry points for dependents' tests.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dotenvy.workspace = true
+fs4.workspace = true
+globset.workspace = true
+jig-commands.workspace = true
+jig-context.workspace = true
+jig-contract.workspace = true
+jig-core.workspace = true
+jig-dev-proxy = { workspace = true, optional = true }
+jig-execution.workspace = true
+jig-features.workspace = true
+jig-file-budget.workspace = true
+jig-git.workspace = true
+jig-owned-process.workspace = true
+jig-policy.workspace = true
+jig-repository.workspace = true
+jig-rust.workspace = true
+jig-typescript.workspace = true
+libc.workspace = true
+minijinja = { version = "2.19.0", features = ["custom_syntax", "json"] }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+sha2.workspace = true
+syn = { workspace = true, features = ["visit"] }
+tempfile.workspace = true
+time.workspace = true
+toml.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+jig-context = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use jig_bootstrap as bootstrap;
 use jig_commands::root_commands;
 use jig_commands::tool_defs;
 
-use crate::bootstrap;
 use crate::command::{self, RuntimeCommand};
 use runtime_dispatch::RuntimeDispatch;
 

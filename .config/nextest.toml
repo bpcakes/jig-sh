@@ -18,17 +18,18 @@ inherits = "ci"
 # PRs compile every minimal-feature test target, but execute the boundaries
 # affected by removing dev-proxy. Master, merge queues, and manual runs still
 # execute the complete minimal-feature suite. Keep this aligned with feature
-# gates in jig-sh and jig-context; the full default-feature matrix always runs
-# on both OSes.
+# gates in jig-sh, jig-context, and jig-bootstrap; the full default-feature
+# matrix always runs on both OSes.
 default-filter = '''
 package(jig-context) | (package(jig-sh) & (
   binary(=cli_json) | binary(=launcher_repair) |
   test(no_dev_proxy_feature_tests::) |
-  test(info::commands::tests::) | test(cli::run::tests::) |
-  test(bootstrap::answers::dev::tests::) |
-  test(bootstrap::tests::template_source::runtime_repair::) |
-  test(bootstrap::tests::launcher_repair_cache_) |
-  test(bootstrap::tests::repair_seed_)
+  test(info::commands::tests::) | test(cli::run::tests::)
+)) | (package(jig-bootstrap) & (
+  test(answers::dev::tests::) |
+  test(tests::template_source::runtime_repair::) |
+  test(tests::launcher_repair_cache_) |
+  test(tests::repair_seed_)
 ))
 '''
 
@@ -60,7 +61,7 @@ threads-required = "num-test-threads"
 # evidence-backed 16-process ceiling. Beyond that, nested shell/Node process
 # trees contend with timing-sensitive core tests even on a 64-thread host.
 # The default profile retains its conservative CI limit below.
-filter = 'package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime))'
+filter = 'package(jig-bootstrap) & (test(tests::frontend_adoption) | test(tests::basic::scaffold_generation) | test(tests::basic::scaffold_runtime))'
 test-group = 'frontend-node-local'
 
 [[profile.local.overrides]]
@@ -74,7 +75,7 @@ threads-required = "num-test-threads"
 [[profile.default.overrides]]
 # Keep this group at a uniform weight. cargo-nextest 0.9.130 can strand
 # heavier queued group members when unrelated tests saturate global slots.
-filter = 'package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime))'
+filter = 'package(jig-bootstrap) & (test(tests::frontend_adoption) | test(tests::basic::scaffold_generation) | test(tests::basic::scaffold_runtime))'
 test-group = 'frontend-node'
 
 [[profile.default.overrides]]

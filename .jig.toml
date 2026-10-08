@@ -426,8 +426,7 @@ effects = [
     "process",
 ]
 inputs = [
-    "crates/jig/src/bootstrap.rs",
-    "crates/jig/src/bootstrap/**",
+    "crates/jig-bootstrap/**",
     "crates/jig-git/**",
     "Cargo.toml",
     "Cargo.lock",

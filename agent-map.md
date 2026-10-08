@@ -10,6 +10,7 @@ If the owning area is already clear, read its nearest guide directly.
 ## Nested guides
 
 - [crates/jig-agents](./crates/jig-agents/AGENTS.md)
+- [crates/jig-bootstrap](./crates/jig-bootstrap/AGENTS.md)
 - [crates/jig-codex-tui](./crates/jig-codex-tui/AGENTS.md)
 - [crates/jig-commands](./crates/jig-commands/AGENTS.md)
 - [crates/jig-context](./crates/jig-context/AGENTS.md)
@@ -34,7 +35,6 @@ If the owning area is already clear, read its nearest guide directly.
 - [crates/jig-vault-tui](./crates/jig-vault-tui/AGENTS.md)
 - [crates/jig-vault](./crates/jig-vault/AGENTS.md)
 - [crates/jig](./crates/jig/AGENTS.md)
-- [crates/jig/src/bootstrap](./crates/jig/src/bootstrap/AGENTS.md)
 - [crates/jig/src/runtime/vault](./crates/jig/src/runtime/vault/AGENTS.md)
 
 ## Suggested usage pattern

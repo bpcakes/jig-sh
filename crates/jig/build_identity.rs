@@ -36,11 +36,6 @@ impl BuildSourceLayout {
     pub(crate) const fn is_checkout(&self) -> bool {
         self.checkout
     }
-
-    pub(crate) fn live_template_root(&self, subdirectory: &str) -> Option<PathBuf> {
-        self.checkout
-            .then(|| self.root.join("templates").join(subdirectory))
-    }
 }
 
 pub(crate) fn cargo_rerun_environment_keys(

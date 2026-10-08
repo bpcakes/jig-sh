@@ -341,15 +341,19 @@ legacy_aliases = ["jig.migration_add"]"#,
         ],
     );
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    // A long shell-looking value proves both legacy length compatibility and
+    // byte-exact environment delivery without shell evaluation.
+    let name = format!("Create Examples $(touch injected) {}", "x".repeat(201));
     let result = execute_manifest_tool_with_observer(
         &ctx,
         tool::MIGRATION_ADD,
-        serde_json::json!({"name": "Create Examples"}),
+        serde_json::json!({"name": name}),
         &mut jig_execution::NoopExecutionObserver,
     )
     .unwrap();
     assert_eq!(result["result"]["exit_status"], 0);
-    assert_eq!(result["result"]["stdout"], "Create Examples");
+    assert_eq!(result["result"]["stdout"], name.as_str());
+    assert!(!temp.path().join("injected").exists());
 }
 
 #[test]

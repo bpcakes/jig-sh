@@ -47,7 +47,7 @@ Adoption is optimized for low surprise:
 - `jig adopt` previews by default; `--write` applies the reviewed render after confirmation unless `--defaults` or `--no-input` is supplied, and records an undo-oriented cache receipt with backups for overwritten managed files.
 - Template-managed files are not overwritten during `jig update` unless the caller passes `--force`.
 - `.jig.toml` rejects unknown keys so stale answers and typos fail early.
-- Local template dogfooding can use embedded templates from an unreleased binary by default, an explicit committed template source for checkout metadata, or an explicit VCS ref for remote template code. Template edits must refresh the checked-in embedded snapshot with `JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh`.
+- Local template dogfooding can use embedded templates from an unreleased binary by default, an explicit committed template source for checkout metadata, or an explicit VCS ref for remote template code. Template edits must refresh the checked-in embedded snapshot with `JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-bootstrap`.
 
 This makes the adoption path friendly to established repositories. Jig adds an operating harness around the repo instead of trying to reorganize the application.
 

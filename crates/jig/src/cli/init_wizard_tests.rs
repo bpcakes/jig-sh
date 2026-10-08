@@ -70,7 +70,7 @@ fn go_react_defaults_derive_module_and_web_shape() {
     );
     assert_eq!(
         opts.answers.backend_language,
-        Some(crate::bootstrap::BackendLanguage::Go)
+        Some(jig_context::backend::BackendLanguage::Go)
     );
     assert_eq!(opts.answers.sqlx_enabled, Some(false));
 }

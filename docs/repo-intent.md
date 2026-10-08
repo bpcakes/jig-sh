@@ -79,7 +79,7 @@ A shorter product phrasing is:
 
 The template source metadata is a trust boundary. In generated or adopted repos, `scripts/install-jig.sh` may install from the exact `_commit` recorded in `.jig.toml` when that value is a hex git revision, so changing `_src_path` or `_commit` is equivalent to changing the source used to install the repo-local Jig runtime.
 
-`crates/jig/src/bootstrap.rs` and its submodules implement template application:
+`crates/jig-bootstrap` implements template application:
 
 - `init` renders the harness into a new destination and initializes git.
 - `adopt` renders the harness into an existing repo while preserving repo-owned root `AGENTS.md` content.
@@ -173,7 +173,7 @@ For runtime changes, read `crates/jig/AGENTS.md` and use its entrypoint map:
 - command and legacy make dispatch: `crates/jig/src/runtime.rs`
 - run history and state maintenance: `crates/jig-state/`
 - loops, occurrence evidence, and `loop show`: `crates/jig-loops/`
-- bootstrap and template rendering: `crates/jig/src/bootstrap.rs` and `crates/jig/src/bootstrap/`
+- bootstrap and template rendering: `crates/jig-bootstrap/`
 - generated outputs: `templates/project/`
 
 When changing the public contract, update the manifest template, runtime dispatch, generated scripts/docs, and tests together.

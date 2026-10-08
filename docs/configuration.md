@@ -87,7 +87,7 @@ scripts/jig check test
 
 Setup creates `Cargo.lock`; commit it for either preset so locked checks and CI use the same dependency resolution.
 
-Unreleased binaries render from checked-in embedded project and scaffold snapshots when `--template` is omitted. Template maintainers must refresh both generated snapshot sources with `JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh` after changing either template tree; do not edit the generated snapshot copies independently. Release builds package those snapshots, and acceptance tests compare their raw files and rendered Rust-only output with live template rendering.
+Unreleased binaries render from checked-in embedded project and scaffold snapshots when `--template` is omitted. Template maintainers must refresh both generated snapshot sources with `JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-bootstrap` after changing either template tree; do not edit the generated snapshot copies independently. Release builds package those snapshots, and acceptance tests compare their raw files and rendered Rust-only output with live template rendering.
 
 When Git has an explicit `GIT_TEMPLATE_DIR` or configured `init.templateDir`, init mirrors that template into private staging before invoking Git. Only identity-stable regular files and real directories are accepted; symlinks, special files, linked-worktree markers, and object-store redirections are rejected before Git can follow or mutate them.
 

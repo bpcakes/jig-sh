@@ -129,6 +129,14 @@ class ChangedPathTests(unittest.TestCase):
         )
 
 
+# Files that name another package's directory only inside synthetic fixture
+# repositories they create, never reading the real package's files.
+FIXTURE_ONLY_REFERENCES = {
+    ("crates/jig-bootstrap/src/tests/template_source.rs", "crates/jig"),
+    ("crates/jig-bootstrap/src/tests/template_source/source_stamp.rs", "crates/jig"),
+}
+
+
 class WorkspaceEdgeTests(unittest.TestCase):
     def test_cross_package_file_reads_are_covered(self):
         """A package whose sources name another package's directory must be one
@@ -166,6 +174,8 @@ class WorkspaceEdgeTests(unittest.TestCase):
                     if owner is None or owner == reader:
                         continue
                     if reader in reverse_closure(owner) or reader in affected.EXTRA_CONSUMERS.get(owner, ()):
+                        continue
+                    if (path.relative_to(REPO).as_posix(), match) in FIXTURE_ONLY_REFERENCES:
                         continue
                     uncovered.append(f"{reader} reads {match} ({path.relative_to(REPO)})")
         self.assertEqual(uncovered, [], "add these readers to EXTRA_CONSUMERS")
