@@ -13,6 +13,92 @@ fn assert_integrity_guidance(error: &str) {
 }
 
 #[test]
+fn damaged_pending_restore_data_preserves_kinds_and_routes_both_retries_to_the_operator() {
+    for damage in [
+        "missing-vault",
+        "missing-audit",
+        "invalid-utf8",
+        "audit-directory",
+        "public-staging",
+    ] {
+        let temp = private_tempdir();
+        let (_, _, archive) = source_with_backup(temp.path(), "ExampleSource");
+        let target = temp.path().join("ExampleRestoredVault");
+        pending_restore(&archive, &target, TransactionFaultPoint::AfterPending);
+        let staging = std::fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".jig-vault-restore-")
+            })
+            .unwrap();
+        match damage {
+            "missing-vault" => std::fs::remove_file(staging.join("vault.json")).unwrap(),
+            "missing-audit" => std::fs::remove_file(staging.join("audit.jsonl")).unwrap(),
+            "invalid-utf8" => std::fs::write(staging.join("vault.json"), [0xff]).unwrap(),
+            "audit-directory" => {
+                std::fs::remove_file(staging.join("audit.jsonl")).unwrap();
+                std::fs::create_dir(staging.join("audit.jsonl")).unwrap();
+            }
+            "public-staging" => {
+                std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap()
+            }
+            _ => unreachable!(),
+        }
+        let witness = temp.path().join(".jig-vault-witness");
+        let recorded: Vec<_> = ["journals", "ids"]
+            .into_iter()
+            .flat_map(|dir| {
+                std::fs::read_dir(witness.join(dir))
+                    .unwrap()
+                    .map(|entry| {
+                        let path = entry.unwrap().path();
+                        let bytes = std::fs::read(&path).unwrap();
+                        (path, bytes)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let request = Vault::preflight_backup_restore(&archive, target.clone()).unwrap();
+        let error = Vault::restore_backup(&passphrase(), request).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            jig_vault::VaultErrorKind::Io,
+            "{damage}: {error}"
+        );
+        assert_eq!(error.recovery(), Some(jig_vault::VaultRecovery::Integrity));
+        let vault = Vault::resolve_for_test(Some(target.clone())).unwrap();
+        let error = vault.snapshot(&passphrase()).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            jig_vault::VaultErrorKind::NotFound,
+            "{damage}: {error}"
+        );
+        assert_eq!(error.recovery(), Some(jig_vault::VaultRecovery::Integrity));
+        for args in [
+            vec!["backup", "restore", "--in", archive.to_str().unwrap()],
+            vec!["field", "list"],
+        ] {
+            let error = failure(&jig(&args, &target));
+            assert_integrity_guidance(&error);
+            assert!(!error.contains("recovery value"));
+        }
+        assert!(!target.exists());
+        assert!(staging.exists());
+        assert_eq!(
+            json(&jig(&["status"], &target))["pending_transaction"],
+            true
+        );
+        for (path, bytes) in recorded {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
+    }
+}
+
+#[test]
 fn missing_or_mismatched_pending_journals_route_to_the_operator_without_repairing_data() {
     for missing in [true, false] {
         let temp = private_tempdir();

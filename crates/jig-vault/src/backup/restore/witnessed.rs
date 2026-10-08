@@ -25,7 +25,7 @@ use crate::store::witness::{
 };
 use crate::store::{AUDIT_TEXT_READ_LIMIT, FaultPoint, VaultStore};
 use crate::vault::{
-    RestoreSource, authenticate_restore_candidate_text, fail_closed, pending_publication_error,
+    RestoreSource, fail_closed, pending_publication_error, recover_recorded_restore,
     restore_pending_error,
 };
 use crate::{VaultErrorKind, VaultRecovery};
@@ -221,9 +221,7 @@ fn resume_matching_retry(
             "a restore of a different archive is pending for this target; retry with the same archive or finish it with an authenticated vault command",
         ));
     }
-    let candidate = read_candidate(&journal, payload, &target.home)?;
-    authenticate_restore_candidate_text(&journal, &candidate, &[passphrase])?;
-    finish_pending_restore(witness, &journal, record, &target.home)?;
+    recover_recorded_restore(witness, &journal, record, &target.home, &[passphrase])?;
     Ok(Some(result_for(
         &journal,
         decoded.source_format_version,

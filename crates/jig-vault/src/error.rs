@@ -85,6 +85,22 @@ pub(crate) fn context_with_secondary_recovery(
     })
 }
 
+/// Add fallback recovery guidance without changing the caller-owned kind or
+/// replacing a more specific action already attached to the failure.
+pub(crate) fn context_with_recovery(
+    error: anyhow::Error,
+    recovery: VaultRecovery,
+    message: impl Into<String>,
+) -> anyhow::Error {
+    if recovery_from_anyhow(&error).is_some() {
+        return error;
+    }
+    error.context(RecoveryContext {
+        recovery: Some(recovery),
+        message: message.into(),
+    })
+}
+
 #[derive(Debug)]
 pub struct VaultError {
     kind: VaultErrorKind,

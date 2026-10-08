@@ -171,7 +171,7 @@ impl VaultStore {
 
 /// Authenticates a pending restore candidate's exact envelope text and
 /// checks its bindings to the journal.
-pub(crate) fn authenticate_restore_candidate_text(
+fn authenticate_restore_candidate_text(
     journal: &Journal,
     candidate: &str,
     credentials: &[&SecretString],
@@ -206,6 +206,35 @@ pub(crate) fn restore_pending_error(error: anyhow::Error) -> anyhow::Error {
     pending_error(TransactionKind::Restore, error)
 }
 
+/// Both archive retries and credentialed opens recover the same recorded
+/// data. Plain filesystem/decoding failures need preservation guidance too;
+/// keep their original kinds and any more specific credential/conflict action.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn recover_recorded_restore(
+    witness: &WitnessStore,
+    journal: &Journal,
+    record: WitnessRecord,
+    home: &std::path::Path,
+    credentials: &[&SecretString],
+) -> AnyResult<usize> {
+    (|| {
+        let JournalPayload::Restore(payload) = &journal.payload else {
+            bail!("vault transaction journal does not describe a restore");
+        };
+        let candidate = crate::backup::read_restore_candidate(journal, payload, home)?;
+        let (_, index) = authenticate_restore_candidate_text(journal, &candidate, credentials)?;
+        crate::backup::finish_pending_restore(witness, journal, record, home)?;
+        Ok(index)
+    })()
+    .map_err(|error| {
+        crate::error::context_with_recovery(
+            error,
+            VaultRecovery::Integrity,
+            "pending restore could not recover its recorded data",
+        )
+    })
+}
+
 impl VaultStore {
     /// Generic credentialed-open recovery of a pending restore for this
     /// home, which needs no access to the original archive.
@@ -216,19 +245,13 @@ impl VaultStore {
         record: WitnessRecord,
         credentials: &[&SecretString],
     ) -> AnyResult<usize> {
-        let JournalPayload::Restore(payload) = &journal.payload else {
-            bail!("vault transaction journal does not describe a restore");
-        };
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            let candidate = crate::backup::read_restore_candidate(journal, payload, self.root())?;
-            let (_, index) = authenticate_restore_candidate_text(journal, &candidate, credentials)?;
-            crate::backup::finish_pending_restore(witness, journal, record, self.root())?;
-            Ok(index)
+            recover_recorded_restore(witness, journal, record, self.root(), credentials)
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
-            let _ = (witness, payload, record, credentials);
+            let _ = (witness, journal, record, credentials);
             bail!("vault restore recovery is unsupported on this platform")
         }
     }

@@ -55,9 +55,9 @@ mod transaction;
 mod witnessed;
 
 use envelope::{ResealedVaultEnvelope, UnlockedVaultEnvelope};
-pub(crate) use restore_txn::{
-    RestoreSource, authenticate_restore_candidate_text, restore_pending_error,
-};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use restore_txn::recover_recorded_restore;
+pub(crate) use restore_txn::{RestoreSource, restore_pending_error};
 pub(crate) use transaction::fail_closed;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use transaction::pending_publication_error;

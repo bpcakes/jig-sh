@@ -236,7 +236,7 @@ fn draw_initialize(
             Line::from(confirmation),
             Line::from(""),
             Line::from(Span::styled(
-                "Use 12+ bytes; held only while this vault is unlocked.",
+                "Use 16+ bytes and a longer, less predictable passphrase.",
                 Style::default().fg(MUTED),
             )),
             Line::from("Tab field · Enter create · Esc cancel · Ctrl-U clear"),
