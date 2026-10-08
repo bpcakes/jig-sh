@@ -298,7 +298,8 @@ fn restore_legacy(
         revalidate_target(&target)
     })();
     if let Err(error) = prepared {
-        return Err(staging.abandon(error.context("restore failed")));
+        let message = format!("restore failed: {error}");
+        return Err(staging.abandon(error.context(message)));
     }
     #[cfg(test)]
     legacy_tests::before_install_lock();
