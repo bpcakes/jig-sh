@@ -357,7 +357,7 @@ fn failed_exec_and_retained_audit_refusal_keep_integrity_recovery() {
         .join("ExampleMissingExecutable")
         .to_string_lossy()
         .into_owned();
-    let request = VaultExec::new(vec![missing], vec![]).unwrap();
+    let request = VaultExec::new(vec![missing.into()], vec![]).unwrap();
     let prepared = vault.store.prepare_exec(&passphrase(), request).unwrap();
     let envelope = std::fs::read(vault.store.vault_path()).unwrap();
     std::fs::write(vault.store.audit_path(), b"").unwrap();
