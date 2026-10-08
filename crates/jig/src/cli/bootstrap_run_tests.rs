@@ -258,26 +258,6 @@ fn noninteractive_bootstrap_vault_error_explains_an_outer_withheld_passphrase() 
 }
 
 #[test]
-fn pre_capture_rejects_short_or_guessable_new_vault_passphrases() {
-    for rejected in ["short", "passwordpasswordpassword"] {
-        let _env = lock_env();
-        let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", rejected);
-
-        let error = runtime::capture_new_vault_passphrase()
-            .unwrap_err()
-            .to_string();
-
-        assert!(
-            error.contains(jig_vault::NEW_VAULT_PASSPHRASE_POLICY),
-            "{error}"
-        );
-        assert!(error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
-        assert!(!error.contains(rejected), "{error}");
-        assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
-    }
-}
-
-#[test]
 fn ensure_bootstrap_vault_initializes_repo_scope_and_reports_created() {
     let _env = lock_env();
     let temp = tempfile::tempdir().unwrap();

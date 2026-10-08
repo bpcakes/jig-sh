@@ -34,7 +34,7 @@ fn init_retry_accepts_a_recorded_credential_that_now_fails_policy() {
     assert_eq!(
         events
             .lines()
-            .filter(|line| line.contains("\"action\":\"init\""))
+            .filter(|line| line.contains("\"action\":\"vault_initialized\""))
             .count(),
         1
     );

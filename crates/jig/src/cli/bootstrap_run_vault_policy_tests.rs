@@ -82,27 +82,35 @@ fn bootstrap_reusing_an_existing_vault_keeps_its_historical_credential() {
 
 #[test]
 fn bootstrap_rejects_a_guessable_candidate_only_when_initializing() {
-    let _env = lock_env();
-    let temp = tempfile::tempdir().unwrap();
-    let repo = repo_with_vault_scope(temp.path());
-    let _vault_home = EnvVarGuard::set("JIG_VAULT_HOME", temp.path().join("vault-base"));
-    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", HISTORICAL_PASSPHRASE);
+    for plan in [
+        BootstrapVaultPlan::PreCaptured,
+        BootstrapVaultPlan::CaptureAfterRender,
+    ] {
+        for candidate in ["short", "passwordpasswordpassword"] {
+            let _env = lock_env();
+            let temp = tempfile::tempdir().unwrap();
+            let repo = repo_with_vault_scope(temp.path());
+            let _vault_home = EnvVarGuard::set("JIG_VAULT_HOME", temp.path().join("vault-base"));
+            let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", candidate);
 
-    assert_eq!(pre_capture_adopt(), BootstrapVaultPlan::PreCaptured);
-    let error = ensure_bootstrap_vault(repo.to_str().unwrap(), BootstrapVaultPlan::PreCaptured)
-        .unwrap_err();
-    let error = format!("{error:#}");
-    assert!(
-        error.contains(jig_vault::NEW_VAULT_PASSPHRASE_POLICY),
-        "{error}"
-    );
-    assert!(
-        error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE),
-        "{error}"
-    );
-    assert!(error.contains("repo files were written"), "{error}");
-    assert!(!error.contains(HISTORICAL_PASSPHRASE), "{error}");
-    assert_eq!(scoped_vault_status(&repo)["exists"], false);
+            if plan == BootstrapVaultPlan::PreCaptured {
+                assert_eq!(pre_capture_adopt(), plan);
+            }
+            let error = ensure_bootstrap_vault(repo.to_str().unwrap(), plan).unwrap_err();
+            let error = format!("{error:#}");
+            assert!(
+                error.contains(jig_vault::NEW_VAULT_PASSPHRASE_POLICY),
+                "{error}"
+            );
+            assert!(
+                error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE),
+                "{error}"
+            );
+            assert!(error.contains("repo files were written"), "{error}");
+            assert!(!error.contains(candidate), "{error}");
+            assert_eq!(scoped_vault_status(&repo)["exists"], false);
+        }
+    }
 }
 
 #[test]
