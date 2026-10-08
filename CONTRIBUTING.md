@@ -20,7 +20,7 @@ Release `jig init` and `jig adopt` builds use the official remote template at th
 When editing `templates/project`, refresh the checked-in embedded-template snapshot before committing:
 
 ```sh
-JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
+JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-bootstrap
 ```
 
 Top-level commands are declared once in `crates/jig/src/root_commands.rs`. After adding one or changing its launcher scope, regenerate the command lists in every launcher copy (the template, its embedded snapshot, and `scripts/jig`):
