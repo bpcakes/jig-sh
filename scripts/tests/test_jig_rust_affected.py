@@ -129,11 +129,14 @@ class ChangedPathTests(unittest.TestCase):
         )
 
 
-# Files that name another package's directory only inside synthetic fixture
-# repositories they create, never reading the real package's files.
-FIXTURE_ONLY_REFERENCES = {
+# Files that name another package's directory without their own tests reading
+# it: synthetic fixture repositories, and the dashboard parity table whose
+# listed sources jig-ui's contract tests read (covered by EXTRA_CONSUMERS).
+NON_READING_REFERENCES = {
     ("crates/jig-bootstrap/src/tests/template_source.rs", "crates/jig"),
     ("crates/jig-bootstrap/src/tests/template_source/source_stamp.rs", "crates/jig"),
+    ("crates/jig-dashboard/src/parity.rs", "crates/jig"),
+    ("crates/jig-dashboard/src/parity.rs", "crates/jig-ui"),
 }
 
 
@@ -175,7 +178,7 @@ class WorkspaceEdgeTests(unittest.TestCase):
                         continue
                     if reader in reverse_closure(owner) or reader in affected.EXTRA_CONSUMERS.get(owner, ()):
                         continue
-                    if (path.relative_to(REPO).as_posix(), match) in FIXTURE_ONLY_REFERENCES:
+                    if (path.relative_to(REPO).as_posix(), match) in NON_READING_REFERENCES:
                         continue
                     uncovered.append(f"{reader} reads {match} ({path.relative_to(REPO)})")
         self.assertEqual(uncovered, [], "add these readers to EXTRA_CONSUMERS")

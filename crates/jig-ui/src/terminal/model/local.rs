@@ -1,6 +1,6 @@
 use time::OffsetDateTime;
 
-use crate::dashboard::{
+use jig_dashboard::{
     AppliedLimit, BoundedRows, BoundedText, ExhaustedAttempt, Failure, HarnessObservation,
     LoopAttempt, LoopLease, LoopObservation, LoopStateError, LoopWorkflow, RecorderEpochId,
     RecorderLimits, RecorderSnapshot, ScheduledOccurrence, SnapshotError, TargetStat, TimelineRow,
@@ -75,8 +75,8 @@ pub(crate) struct LocalRepositoryView {
     pub(crate) detached: bool,
 }
 
-impl From<crate::dashboard::RepositoryObservation> for LocalRepositoryView {
-    fn from(repo: crate::dashboard::RepositoryObservation) -> Self {
+impl From<jig_dashboard::RepositoryObservation> for LocalRepositoryView {
+    fn from(repo: jig_dashboard::RepositoryObservation) -> Self {
         Self {
             name: sanitize_text(&repo.name),
             default_branch: sanitize_text(&repo.default_branch),

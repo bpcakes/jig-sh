@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use jig_dashboard::{RecorderMode, TimelineLimit};
+
 use super::{
     App, DashboardOptions, DashboardSource, EVENT_POLL_INTERVAL, Result, RuntimeAction,
     TerminalSession, event, handle_event, render,
 };
-use crate::dashboard::{RecorderMode, TimelineLimit};
 use anyhow::Context;
 
 use super::scheduler::{ScheduledRequest, Scheduler};
@@ -198,8 +199,9 @@ fn shutdown(
 mod tests {
     use std::time::Instant;
 
+    use jig_dashboard::{RecorderRefresh, RecorderRequest, StatusLocalSnapshot, scenarios};
+
     use super::*;
-    use crate::dashboard::{RecorderRefresh, RecorderRequest, StatusLocalSnapshot, scenarios};
     use crate::terminal::model::Tab;
 
     #[test]

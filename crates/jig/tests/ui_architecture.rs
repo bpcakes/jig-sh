@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use jig_ui::dashboard::{
+use jig_dashboard::{
     DEFAULT_TIMELINE_ROWS, LIMIT_SPECS, RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION,
     SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
 };

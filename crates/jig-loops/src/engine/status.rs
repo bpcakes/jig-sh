@@ -22,7 +22,7 @@ pub fn typed_status_with_cancellation(
     ctx: &RepoContext,
     request: LoopStatusRequest,
     cancelled: &dyn Fn() -> bool,
-) -> Result<jig_ui::dashboard::StatusLoopObservation> {
+) -> Result<jig_dashboard::StatusLoopObservation> {
     typed_status_at_with_cancellation(ctx, request, cancelled, now_ms())
 }
 
@@ -46,7 +46,7 @@ fn typed_status_at_with_cancellation(
     request: LoopStatusRequest,
     cancelled: &dyn Fn() -> bool,
     checked_at_ms: u64,
-) -> Result<jig_ui::dashboard::StatusLoopObservation> {
+) -> Result<jig_dashboard::StatusLoopObservation> {
     ensure_status_active(cancelled)?;
     let resolved_workflows = if let Some(workflow) = request.workflow.as_deref() {
         vec![resolve_workflow(
@@ -100,7 +100,7 @@ fn typed_status_at_with_cancellation(
                     latest.as_ref().map(|record| record.scheduled_at_ms),
                 ) {
                     Ok(window) => {
-                        view.schedule_state = Some(jig_ui::dashboard::LoopScheduleState {
+                        view.schedule_state = Some(jig_dashboard::LoopScheduleState {
                             due_at_ms: window.due_at_ms,
                             next_at_ms: window.next_at_ms,
                             last_scheduled_at_ms: latest
@@ -114,7 +114,7 @@ fn typed_status_at_with_cancellation(
                     Err(error) => {
                         let error = format!("Failed to evaluate workflow schedule: {error:#}");
                         view.schedule_state_error = Some(error.clone());
-                        schedule_state_errors.push(jig_ui::dashboard::LoopStateError {
+                        schedule_state_errors.push(jig_dashboard::LoopStateError {
                             kind: "workflow_schedule".to_string(),
                             workflow_id: Some(workflow.id.clone()),
                             error,
@@ -131,7 +131,7 @@ fn typed_status_at_with_cancellation(
         .cloned()
         .collect::<Vec<_>>();
 
-    Ok(jig_ui::dashboard::StatusLoopObservation {
+    Ok(jig_dashboard::StatusLoopObservation {
         ok: schedule_state_errors.is_empty(),
         command: "loop status".to_string(),
         workflows,
@@ -148,7 +148,7 @@ fn typed_status_at_with_cancellation(
             .collect(),
         state_error_count: u64::try_from(schedule_state_errors.len()).unwrap_or(u64::MAX),
         state_errors: schedule_state_errors,
-        needs_attention: jig_ui::dashboard::StatusLoopAttention {
+        needs_attention: jig_dashboard::StatusLoopAttention {
             exhausted_attempts: attempt_sections
                 .needs_attention
                 .iter()

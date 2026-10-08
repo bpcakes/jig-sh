@@ -157,7 +157,7 @@ pub(super) fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
         "Detail · epoch {} · observed {observed}{} · Esc closes",
         app.detail
             .item_epoch
-            .map_or(0, crate::dashboard::RecorderEpochId::get),
+            .map_or(0, jig_dashboard::RecorderEpochId::get),
         if stale { " · stale" } else { "" }
     );
     draw_document(

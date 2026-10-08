@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use crate::dashboard::{SourceError, TimelineLimit};
+use jig_dashboard::{SourceError, TimelineLimit};
 
 mod model;
 mod render;
@@ -60,7 +60,7 @@ impl DashboardOptions {
 /// Returns an error when terminal setup, collection, input, rendering, or
 /// restoration fails.
 pub fn run(
-    source: impl crate::dashboard::DashboardSource + 'static,
+    source: impl jig_dashboard::DashboardSource + 'static,
     options: DashboardOptions,
 ) -> anyhow::Result<()> {
     runtime::run(source, options)
@@ -72,7 +72,7 @@ pub fn run(
 /// the normal Rust drop path.
 #[doc(hidden)]
 pub fn run_with_cancellation(
-    source: impl crate::dashboard::DashboardSource + 'static,
+    source: impl jig_dashboard::DashboardSource + 'static,
     options: DashboardOptions,
     externally_cancelled: impl Fn() -> bool,
 ) -> anyhow::Result<()> {

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use jig_context::RepoContext;
 use jig_contract::{RunConclusion, TargetOutputTailV1};
-use jig_ui::dashboard::*;
+use jig_dashboard::*;
 use sha2::{Digest, Sha256};
 
 use jig_state::{

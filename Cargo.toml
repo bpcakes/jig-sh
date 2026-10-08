@@ -8,6 +8,7 @@ members = [
     "crates/jig-context",
     "crates/jig-contract",
     "crates/jig-core",
+    "crates/jig-dashboard",
     "crates/jig-dev-proxy",
     "crates/jig-execution",
     "crates/jig-features",
@@ -76,6 +77,7 @@ hyper = { version = "1.7.0", features = ["full"] }
 hyper-util = { version = "0.1.17", features = ["full"] }
 jig-agents = { path = "crates/jig-agents", version = "=0.7.3-dev" }
 jig-bootstrap = { path = "crates/jig-bootstrap", version = "=0.7.3-dev" }
+jig-dashboard = { path = "crates/jig-dashboard", version = "=0.7.3-dev" }
 jig-dev-proxy = { path = "crates/jig-dev-proxy", version = "=0.7.3-dev" }
 jig-commands = { path = "crates/jig-commands", version = "=0.7.3-dev" }
 jig-context = { path = "crates/jig-context", version = "=0.7.3-dev" }

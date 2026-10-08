@@ -1,16 +1,16 @@
+use jig_dashboard::{RecorderRefresh, StatusLocalSnapshot, StatusSnapshot, scenarios};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
 use super::{
     model::{App, Tab},
     render::{self, LayoutTier},
 };
-use crate::dashboard::{RecorderRefresh, StatusLocalSnapshot, StatusSnapshot, scenarios};
 
 mod local;
 
 fn status_local(
     status: StatusSnapshot,
-    recorder: &crate::dashboard::RecorderSnapshot,
+    recorder: &jig_dashboard::RecorderSnapshot,
 ) -> StatusLocalSnapshot {
     StatusLocalSnapshot {
         epoch_id: recorder.epoch_id,
@@ -81,7 +81,7 @@ fn status_view_surfaces_local_repository_harness_loops_and_errors() {
     }
 
     let mut status = scenarios::status_snapshot();
-    status.errors.push(crate::dashboard::StatusCollectionError {
+    status.errors.push(jig_dashboard::StatusCollectionError {
         scope: "loops".to_string(),
         code: "loop_status_unavailable".to_string(),
         message: "example failure".to_string(),

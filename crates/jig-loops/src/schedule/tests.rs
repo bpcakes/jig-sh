@@ -363,7 +363,7 @@ timezone = "UTC"
             .is_some()
     );
     assert_eq!(status["scheduled_occurrences"].as_array().unwrap().len(), 1);
-    serde_json::from_value::<jig_ui::dashboard::StatusLoopObservation>(status).unwrap();
+    serde_json::from_value::<jig_dashboard::StatusLoopObservation>(status).unwrap();
 }
 
 #[test]

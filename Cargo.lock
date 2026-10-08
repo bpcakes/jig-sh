@@ -1548,6 +1548,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-dashboard"
+version = "0.7.3-dev"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "jig-dev-proxy"
 version = "0.7.3-dev"
 dependencies = [
@@ -1648,11 +1655,11 @@ dependencies = [
  "fs4",
  "jig-agents",
  "jig-context",
+ "jig-dashboard",
  "jig-execution",
  "jig-git",
  "jig-owned-process",
  "jig-state",
- "jig-ui",
  "libc",
  "serde",
  "serde_json",
@@ -1758,6 +1765,7 @@ dependencies = [
  "jig-context",
  "jig-contract",
  "jig-core",
+ "jig-dashboard",
  "jig-dev-proxy",
  "jig-execution",
  "jig-features",
@@ -1846,6 +1854,7 @@ version = "0.7.3-dev"
 dependencies = [
  "anyhow",
  "crossterm",
+ "jig-dashboard",
  "jig-tui",
  "jig-ui",
  "libc",

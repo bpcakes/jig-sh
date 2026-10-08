@@ -14,7 +14,7 @@
 - `src/state.rs` and `src/state/`: loop leases, attempts, and JSON caches.
 - `src/codex_task.rs`, `src/worker_runner.rs`: Codex task checkout, preflight, and worker execution.
 - `src/pr_manager.rs` and `src/pr_manager/`: PR repair, review threads, and pushes.
-- `src/dashboard.rs`: typed loop status for `jig-ui`.
+- `src/dashboard.rs`: typed loop status in `jig-dashboard`'s contracts.
 
 ## Edit here for X
 

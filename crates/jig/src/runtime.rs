@@ -155,7 +155,7 @@ pub(crate) fn loop_status_snapshot_with_cancellation(
 pub(crate) fn typed_loop_status_snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
-) -> Result<jig_ui::dashboard::StatusLoopObservation> {
+) -> Result<jig_dashboard::StatusLoopObservation> {
     jig_loops::typed_status_with_cancellation(
         ctx,
         crate::command::LoopStatusRequest { workflow: None },

@@ -1,8 +1,8 @@
 use super::state::{AttemptRecord, LeaseRecord};
 use super::workflow::ResolvedWorkflow;
 
-pub(super) fn lease_status(lease: &LeaseRecord) -> jig_ui::dashboard::LoopLease {
-    jig_ui::dashboard::LoopLease {
+pub(super) fn lease_status(lease: &LeaseRecord) -> jig_dashboard::LoopLease {
+    jig_dashboard::LoopLease {
         key: lease.key.clone(),
         owner: lease.owner.clone(),
         acquired_at_ms: lease.acquired_at_ms,
@@ -10,8 +10,8 @@ pub(super) fn lease_status(lease: &LeaseRecord) -> jig_ui::dashboard::LoopLease 
     }
 }
 
-pub(super) fn attempt_status(attempt: &AttemptRecord) -> jig_ui::dashboard::StatusLoopAttempt {
-    jig_ui::dashboard::StatusLoopAttempt {
+pub(super) fn attempt_status(attempt: &AttemptRecord) -> jig_dashboard::StatusLoopAttempt {
+    jig_dashboard::StatusLoopAttempt {
         key: attempt.key.clone(),
         workflow_id: attempt.workflow_id.clone(),
         item_key: attempt.item_key.clone(),
@@ -26,10 +26,8 @@ pub(super) fn attempt_status(attempt: &AttemptRecord) -> jig_ui::dashboard::Stat
     }
 }
 
-pub(super) fn workflow_status(
-    workflow: &ResolvedWorkflow,
-) -> jig_ui::dashboard::StatusLoopWorkflow {
-    jig_ui::dashboard::StatusLoopWorkflow {
+pub(super) fn workflow_status(workflow: &ResolvedWorkflow) -> jig_dashboard::StatusLoopWorkflow {
+    jig_dashboard::StatusLoopWorkflow {
         id: workflow.id.clone(),
         kind: workflow.kind.clone(),
         enabled: workflow.enabled,
@@ -44,7 +42,7 @@ pub(super) fn workflow_status(
         schedule: workflow
             .schedule
             .as_ref()
-            .map(|schedule| jig_ui::dashboard::LoopSchedule {
+            .map(|schedule| jig_dashboard::LoopSchedule {
                 cron: schedule.expression().to_string(),
                 timezone: schedule.timezone_name().to_string(),
             }),
@@ -53,7 +51,7 @@ pub(super) fn workflow_status(
         codex_task: workflow
             .codex_task
             .as_ref()
-            .map(|task| jig_ui::dashboard::LoopCodexTask {
+            .map(|task| jig_dashboard::LoopCodexTask {
                 prompt_file: task.prompt_file.display().to_string(),
                 model: task.model.clone(),
                 sandbox: task.sandbox.clone(),

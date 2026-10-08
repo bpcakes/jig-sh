@@ -11,6 +11,7 @@ PACKAGE_NAME="jig-sh"
 PUBLISH_PACKAGE_NAMES=(
   "jig-contract"
   "jig-core"
+  "jig-dashboard"
   "jig-file-budget"
   "jig-git"
   "jig-owned-process"
@@ -108,6 +109,7 @@ crate_dir_for_package() {
   case "$1" in
     jig-contract) printf '%s\n' "crates/jig-contract" ;;
     jig-core) printf '%s\n' "crates/jig-core" ;;
+    jig-dashboard) printf '%s\n' "crates/jig-dashboard" ;;
     jig-file-budget) printf '%s\n' "crates/jig-file-budget" ;;
     jig-git) printf '%s\n' "crates/jig-git" ;;
     jig-owned-process) printf '%s\n' "crates/jig-owned-process" ;;

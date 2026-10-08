@@ -1,4 +1,4 @@
-use crate::dashboard::RecorderEpochId;
+use jig_dashboard::RecorderEpochId;
 use unicode_width::UnicodeWidthStr;
 
 use super::DetailDocument;

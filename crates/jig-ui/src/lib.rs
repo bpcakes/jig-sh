@@ -4,5 +4,4 @@
 //! [`dashboard::DashboardSource`] boundary, keeping repository state and
 //! runtime policy in the CLI crate that owns it.
 
-pub mod dashboard;
 pub mod terminal;

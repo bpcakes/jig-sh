@@ -5,7 +5,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use jig_ui::dashboard::{DashboardSource, RecorderMode, RecorderRequest, TimelineLimit};
+use jig_dashboard::{DashboardSource, RecorderMode, RecorderRequest, TimelineLimit};
 use jig_ui::terminal::{DashboardOptions, InitialTab};
 
 use jig_context::RepoContext;

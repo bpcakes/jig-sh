@@ -5,7 +5,7 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
-use jig_ui::dashboard::{
+use jig_dashboard::{
     RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
 };
 

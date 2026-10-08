@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use jig_ui::dashboard::{
+use jig_dashboard::{
     BoundUnit, BoundedRows, BoundedText, CollectionDomain, LIMIT_SPECS, LimitError, LimitId,
     LimitShape, PARITY_REGISTRY, RECORDER_ROOT_FIELDS, ROOT_LIMIT_KEYS, RecorderEpochId,
     SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS, SnapshotError,
@@ -49,13 +49,12 @@ fn recorder_schema_four_matches_checked_in_golden() {
 #[test]
 fn versioned_snapshots_round_trip_without_contract_loss() {
     let recorder = serde_json::to_value(scenarios::recorder_snapshot()).unwrap();
-    let decoded: jig_ui::dashboard::RecorderSnapshot =
+    let decoded: jig_dashboard::RecorderSnapshot =
         serde_json::from_value(recorder.clone()).unwrap();
     assert_eq!(serde_json::to_value(decoded).unwrap(), recorder);
 
     let status = serde_json::to_value(scenarios::status_snapshot()).unwrap();
-    let decoded: jig_ui::dashboard::StatusSnapshot =
-        serde_json::from_value(status.clone()).unwrap();
+    let decoded: jig_dashboard::StatusSnapshot = serde_json::from_value(status.clone()).unwrap();
     assert_eq!(serde_json::to_value(decoded).unwrap(), status);
 }
 
@@ -87,7 +86,7 @@ fn raw_identity_controls_selection_when_display_text_collides() {
 
     let aliases = [
         left.clone(),
-        jig_ui::dashboard::SelectableIdentity::new(left.raw(), "different display"),
+        jig_dashboard::SelectableIdentity::new(left.raw(), "different display"),
     ];
     assert_eq!(aliases[0], aliases[1]);
 
@@ -490,7 +489,7 @@ fn timeline_limits_reject_invalid_requests_at_the_boundary() {
 
 #[test]
 fn recorder_documents_reject_limit_metadata_drift() {
-    let custom = jig_ui::dashboard::RecorderSnapshot::new(
+    let custom = jig_dashboard::RecorderSnapshot::new(
         RecorderEpochId::FIRST,
         1_700_000_000_000,
         TimelineLimit::new(500).unwrap(),
@@ -501,15 +500,15 @@ fn recorder_documents_reject_limit_metadata_drift() {
 
     let mut recorder_wire = serde_json::to_value(scenarios::recorder_snapshot()).unwrap();
     recorder_wire["limits"]["failures"]["applied"] = Value::from(9);
-    assert!(serde_json::from_value::<jig_ui::dashboard::RecorderSnapshot>(recorder_wire).is_err());
+    assert!(serde_json::from_value::<jig_dashboard::RecorderSnapshot>(recorder_wire).is_err());
 
     let mut nested_wire = serde_json::to_value(scenarios::recorder_snapshot()).unwrap();
     nested_wire["failures"][0]["output_tail"]["applied_chars"] = Value::from(399);
-    assert!(serde_json::from_value::<jig_ui::dashboard::RecorderSnapshot>(nested_wire).is_err());
+    assert!(serde_json::from_value::<jig_dashboard::RecorderSnapshot>(nested_wire).is_err());
 
     let mut timeline_wire = serde_json::to_value(scenarios::recorder_snapshot()).unwrap();
     timeline_wire["timeline"][0]["output_tail"]["applied_chars"] = Value::from(401);
-    assert!(serde_json::from_value::<jig_ui::dashboard::RecorderSnapshot>(timeline_wire).is_err());
+    assert!(serde_json::from_value::<jig_dashboard::RecorderSnapshot>(timeline_wire).is_err());
 }
 
 #[test]
@@ -568,7 +567,7 @@ fn snapshot_errors_use_registered_domains_and_codes() {
 
 #[test]
 fn source_contracts_keep_modes_and_partial_data_distinct() {
-    use jig_ui::dashboard::{Observation, RecorderMode, RecorderRequest};
+    use jig_dashboard::{Observation, RecorderMode, RecorderRequest};
 
     let request = RecorderRequest {
         mode: RecorderMode::ReuseCurrent,

@@ -83,7 +83,7 @@ pub fn typed_status_with_cancellation(
     ctx: &RepoContext,
     request: LoopStatusRequest,
     cancelled: &dyn Fn() -> bool,
-) -> Result<jig_ui::dashboard::StatusLoopObservation> {
+) -> Result<jig_dashboard::StatusLoopObservation> {
     engine::typed_status_with_cancellation(ctx, request, cancelled)
 }
 
