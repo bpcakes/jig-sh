@@ -124,7 +124,7 @@ impl VaultStore {
             return Err(classified(
                 VaultErrorKind::AuditTampered,
                 format!(
-                    "vault audit log is missing at {}; restore audit.jsonl before continuing",
+                    "vault audit log is missing at {}",
                     self.audit_path().display()
                 ),
             ));

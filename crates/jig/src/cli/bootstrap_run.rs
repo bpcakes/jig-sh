@@ -188,9 +188,9 @@ fn prepare_bootstrap_vault_with_availability(
         // Rendering may reuse an existing vault, through `adopt --write` or a
         // forced `init` that keeps an existing `[vault].scope_id`, whose
         // historical credential predates the new-passphrase policy. Capture
-        // now, before any child process starts, but validate only once
-        // `ensure_bootstrap_vault` knows a new vault will be initialized.
-        runtime::capture_new_vault_passphrase_candidate()?;
+        // now, before any child process starts; the core validates a fresh
+        // credential only after checking for a recorded initialization.
+        runtime::capture_new_vault_passphrase()?;
     }
     // Rendering, Git, and template commands run next. Pre-capture already
     // consumed the passphrase; also drop a stale JIG_VAULT_NEW_PASSPHRASE that
@@ -266,11 +266,6 @@ fn ensure_bootstrap_vault(
     if plan == BootstrapVaultPlan::CaptureAfterRender {
         runtime::capture_new_vault_passphrase().context(
             "vault auto-init passphrase capture failed after repo files were written; rerun `jig vault init` from the repo after fixing the reported vault issue",
-        )?;
-    } else {
-        // A pre-captured passphrase becomes a new credential only here.
-        runtime::validate_captured_new_vault_passphrase().context(
-            "vault auto-init rejected the new vault passphrase after repo files were written; rerun `jig vault init` from the repo after fixing the reported vault issue",
         )?;
     }
     let init = runtime::dispatch_vault(crate::command::VaultCommand::Init(

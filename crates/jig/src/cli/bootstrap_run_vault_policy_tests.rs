@@ -123,3 +123,41 @@ fn every_bootstrap_command_defers_policy_until_initialization() {
         assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
     }
 }
+
+#[test]
+fn bootstrap_capture_paths_finish_init_with_a_recorded_credential() {
+    use jig_vault::test_support::{
+        TransactionFaultPoint, arm_transaction_fault, with_passphrase_estimate_for_test,
+    };
+
+    for plan in [
+        BootstrapVaultPlan::PreCaptured,
+        BootstrapVaultPlan::CaptureAfterRender,
+    ] {
+        let _env = lock_env();
+        let temp = tempfile::tempdir().unwrap();
+        let repo = repo_with_vault_scope(temp.path());
+        let _vault_home = EnvVarGuard::set("JIG_VAULT_HOME", temp.path().join("vault-base"));
+        let home = scoped_vault_status(&repo)["vault_home"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let vault = jig_vault::Vault::resolve_for_test(Some(home.into())).unwrap();
+        let recorded = SecretString::from("passwordpasswordpassword".to_owned());
+        arm_transaction_fault(TransactionFaultPoint::AfterPending);
+        with_passphrase_estimate_for_test(u64::MAX, || {
+            assert!(vault.init(&recorded).is_err());
+        });
+        assert!(jig_vault::validate_new_vault_passphrase(&recorded).is_err());
+        assert_eq!(scoped_vault_status(&repo)["pending_transaction"], true);
+        let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "passwordpasswordpassword");
+        if plan == BootstrapVaultPlan::PreCaptured {
+            assert_eq!(pre_capture_adopt(), plan);
+        }
+        let report = ensure_bootstrap_vault(repo.to_str().unwrap(), plan).unwrap();
+        assert_eq!(serde_json::to_value(report).unwrap()["created"], true);
+        assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
+        assert_eq!(scoped_vault_status(&repo)["pending_transaction"], false);
+        vault.snapshot(&recorded).unwrap();
+    }
+}

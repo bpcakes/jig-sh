@@ -22,6 +22,14 @@ pub enum VaultErrorKind {
 pub enum VaultRecovery {
     StorageConflict,
     Credential,
+    Integrity,
+}
+
+const fn default_recovery(kind: VaultErrorKind) -> Option<VaultRecovery> {
+    match kind {
+        VaultErrorKind::AuditTampered => Some(VaultRecovery::Integrity),
+        _ => None,
+    }
 }
 
 #[derive(Debug)]
@@ -36,7 +44,7 @@ impl VaultError {
     pub fn new(kind: VaultErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            recovery: None,
+            recovery: default_recovery(kind),
             message: message.into(),
             source: None,
         }
@@ -58,7 +66,8 @@ impl VaultError {
         let message = error.to_string();
         let recovery = error
             .downcast_ref::<ClassifiedVaultError>()
-            .and_then(|error| error.recovery);
+            .and_then(|error| error.recovery)
+            .or(default_recovery(kind));
         let has_distinct_source = error
             .downcast_ref::<ClassifiedVaultError>()
             .is_none_or(|error| error.source.is_some());
@@ -114,7 +123,7 @@ impl ClassifiedVaultError {
     fn new(kind: VaultErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            recovery: None,
+            recovery: default_recovery(kind),
             message: message.into(),
             source: None,
         }
@@ -129,7 +138,8 @@ impl ClassifiedVaultError {
             kind,
             recovery: source
                 .downcast_ref::<Self>()
-                .and_then(|error| error.recovery),
+                .and_then(|error| error.recovery)
+                .or(default_recovery(kind)),
             message: message.into(),
             source: Some(source),
         }
@@ -174,9 +184,14 @@ pub(crate) fn classify_recovery_source(
     message: impl Into<String>,
     source: anyhow::Error,
 ) -> anyhow::Error {
+    // Preserve the cause's recovery instruction before applying this wrapper's
+    // explicit instruction; a kind-based default is only a fallback.
+    let recovery = source
+        .downcast_ref::<ClassifiedVaultError>()
+        .and_then(|error| error.recovery)
+        .unwrap_or(recovery);
     let mut error = ClassifiedVaultError::with_source(kind, message, source);
-    // A specific storage conflict takes precedence over generic retry guidance.
-    error.recovery = error.recovery.or(Some(recovery));
+    error.recovery = Some(recovery);
     error.into()
 }
 
@@ -230,6 +245,46 @@ mod tests {
         assert_eq!(source.to_string(), "failed to parse vault file");
         let cause = source.source().expect("classified cause should be kept");
         assert_eq!(cause.to_string(), "expected value");
+    }
+
+    #[test]
+    fn integrity_metadata_survives_public_and_internal_wrappers() {
+        use super::{VaultRecovery, classify_recovery_source, vault_error_from_anyhow};
+
+        let direct = VaultError::new(VaultErrorKind::AuditTampered, "audit missing");
+        assert_eq!(direct.recovery(), Some(VaultRecovery::Integrity));
+        let wrapped = classify_recovery_source(
+            VaultErrorKind::Io,
+            VaultRecovery::Credential,
+            "pending operation failed",
+            classified(VaultErrorKind::AuditTampered, "journal mismatch")
+                .context("recovery failed"),
+        );
+        let public = vault_error_from_anyhow(VaultErrorKind::Internal, wrapped);
+        assert_eq!(public.kind(), VaultErrorKind::Io);
+        assert_eq!(public.recovery(), Some(VaultRecovery::Integrity));
+        let roundtrip =
+            vault_error_from_anyhow(VaultErrorKind::Internal, public.into_classified_anyhow());
+        assert_eq!(roundtrip.recovery(), Some(VaultRecovery::Integrity));
+        let unclassified = VaultError::from_anyhow(
+            VaultErrorKind::AuditTampered,
+            anyhow::anyhow!("audit failed"),
+        );
+        assert_eq!(unclassified.recovery(), Some(VaultRecovery::Integrity));
+    }
+
+    #[test]
+    fn explicit_recovery_takes_precedence_over_the_error_kind_default() {
+        use super::{VaultRecovery, classify_recovery_source, vault_error_from_anyhow};
+
+        let wrapped = classify_recovery_source(
+            VaultErrorKind::AuditTampered,
+            VaultRecovery::Credential,
+            "authentication required",
+            anyhow::anyhow!("credential needed"),
+        );
+        let error = vault_error_from_anyhow(VaultErrorKind::Internal, wrapped);
+        assert_eq!(error.recovery(), Some(VaultRecovery::Credential));
     }
 
     #[test]

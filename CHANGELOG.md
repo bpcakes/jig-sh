@@ -83,6 +83,12 @@
   rule in existing repositories.
 
 ### Fixed
+- Let CLI and bootstrap initialization finish a recorded init even if today's
+  strength estimate rejects its authenticated credential; fresh credentials
+  still require the current policy.
+- Route integrity failures, including missing or mismatched recovery journals
+  and missing audit logs, to the operator with instructions to preserve recovery
+  data instead of editing the witness or its journals.
 - Serialize legacy vault restore installation with same-ID migration. If
   migration wins after restore finalization, leave the target absent and
   request a retry through witnessed recovery.

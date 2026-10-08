@@ -7,6 +7,7 @@ use crate::command::{VaultRuntimeOptions, VaultTuiRequest};
 
 mod core;
 mod formats;
+mod integrity;
 mod lifecycle;
 mod rekey_policy;
 mod stale_copy;

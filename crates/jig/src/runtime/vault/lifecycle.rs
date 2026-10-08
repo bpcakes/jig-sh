@@ -8,7 +8,7 @@ use std::sync::{Mutex, MutexGuard};
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
     BrokeredRun, SecretBytes, VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV,
-    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, VaultError, validate_new_vault_passphrase,
+    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
@@ -196,43 +196,10 @@ pub(crate) fn take_optional_tui_passphrase() -> Result<Option<SecretBytes>> {
     )))
 }
 
+/// Capture and confirm exactly what the operator supplied. Only the core can
+/// distinguish a fresh credential from completion of a recorded initialization.
 pub(crate) fn capture_new_passphrase() -> Result<()> {
-    capture_new_passphrase_candidate()?;
-    validate_captured_new_passphrase()
-}
-
-/// Captures a new-vault passphrase (prompting with confirmation when no
-/// environment value exists) without applying the new-passphrase policy.
-/// Bootstrap uses this before rendering, when it cannot yet know whether an
-/// existing vault will be reused instead of initialized.
-pub(crate) fn capture_new_passphrase_candidate() -> Result<()> {
     capture_passphrase_with_prompt(PromptKind::NewVault)
-}
-
-/// Applies the new-passphrase policy to the captured passphrase immediately
-/// before it becomes a new credential, clearing the capture on rejection.
-pub(crate) fn validate_captured_new_passphrase() -> Result<()> {
-    let validation = {
-        let captured = captured_passphrase_lock()?;
-        validate_chosen_passphrase(captured.current.as_ref().ok_or_else(|| {
-            anyhow!("vault passphrase capture unexpectedly produced no passphrase")
-        })?)
-    };
-    if let Err(error) = validation {
-        clear_captured_passphrase()?;
-        return Err(error);
-    }
-    Ok(())
-}
-
-/// Applies the core new-passphrase policy to an operator-chosen candidate.
-/// A rejection keeps the core's single value-free message and routes the
-/// retry to the operator, who alone may choose a replacement.
-fn validate_chosen_passphrase(passphrase: &SecretString) -> Result<()> {
-    validate_new_vault_passphrase(passphrase).map_err(|error| {
-        let guidance = vault_passphrase_operator_guidance();
-        VaultError::new(error.kind(), format!("{} {guidance}", error.message())).into()
-    })
 }
 
 pub(crate) fn capture_passphrase_change() -> Result<()> {
@@ -725,15 +692,13 @@ mod tests {
     }
 
     #[test]
-    fn rejected_new_passphrase_clears_captured_value() {
+    fn new_passphrase_capture_defers_policy_and_consumes_the_capture() {
         let _env = lock_env();
         let _passphrase = EnvVarGuard::set(PASSPHRASE_ENV, "short");
 
-        let error = capture_new_passphrase().unwrap_err().to_string();
-
-        assert!(error.contains(jig_vault::NEW_VAULT_PASSPHRASE_POLICY));
-        assert_operator_guidance(&error);
+        capture_new_passphrase().unwrap();
         assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
+        assert_eq!(passphrase().unwrap().expose_secret(), "short");
         assert!(
             passphrase()
                 .unwrap_err()

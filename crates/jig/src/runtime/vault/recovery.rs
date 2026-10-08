@@ -2,6 +2,10 @@ use jig_vault::{VaultError, VaultErrorKind, VaultRecovery};
 
 pub(super) fn message(error: &VaultError) -> String {
     match error.recovery() {
+        Some(VaultRecovery::Integrity) => format!(
+            "{} Operator step: preserve the vault, audit log, and recovery data for investigation. Never delete or edit the rollback witness or its journals to bypass this refusal. Agents must ask the operator to resolve the integrity failure.",
+            error.message(),
+        ),
         Some(VaultRecovery::StorageConflict) => format!(
             "{} {} Resolve the conflict without deleting the vault rollback witness or its journals, then rerun the same restore or an authenticated vault command for the affected home.",
             error.message(),
