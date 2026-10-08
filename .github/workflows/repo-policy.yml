@@ -165,7 +165,7 @@ jobs:
         run: scripts/jig check clippy
       - name: Run no-default-features clippy
         if: ${{ !cancelled() && steps.scope.outputs.rust != 'false' }}
-        run: cargo clippy -p jig-sh --no-default-features --all-targets --locked -- -D warnings
+        run: cargo clippy -p jig-sh -p jig-bootstrap --no-default-features --all-targets --locked -- -D warnings
       - name: Run serial dev proxy tests
         if: ${{ !cancelled() && steps.scope.outputs.rust != 'false' }}
         # Preserve the standard harness's process-global signal/trust coverage

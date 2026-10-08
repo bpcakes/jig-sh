@@ -341,7 +341,7 @@ Release builds of `jig init` and `jig adopt` use the official `jig-sh` template 
 When editing this repository's files under `templates/project`, refresh the packaged snapshot before committing:
 
 ```sh
-JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
+JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-bootstrap
 ```
 
 ## Documentation

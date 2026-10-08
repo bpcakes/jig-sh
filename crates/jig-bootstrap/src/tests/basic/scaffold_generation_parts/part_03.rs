@@ -111,7 +111,7 @@ fn generated_dependency_failure_names_the_exact_bootstrap_recovery_command() {
 }
 
 // Repeat the dependency-backed proof with:
-// cargo test -p jig-sh bootstrap::tests::basic::scaffold_generation::generated_spa_coverage_counts_uncovered_future_production_modules -- --ignored --exact --nocapture
+// cargo test -p jig-bootstrap tests::basic::scaffold_generation::generated_spa_coverage_counts_uncovered_future_production_modules -- --ignored --exact --nocapture
 #[cfg(unix)]
 #[test]
 #[ignore = "requires npm registry access and a local Node/npm toolchain"]

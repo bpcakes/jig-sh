@@ -23,7 +23,8 @@ mod tests {
         EMBEDDED_SCAFFOLD_TEMPLATE_FILES, EMBEDDED_SCAFFOLD_TEMPLATE_FILES_FROM_SNAPSHOT, snapshot,
     };
 
-    const REFRESH_COMMAND: &str = "JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh";
+    const REFRESH_COMMAND: &str =
+        "JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-bootstrap";
 
     #[test]
     fn embedded_scaffold_template_snapshot_matches_live_templates() {
