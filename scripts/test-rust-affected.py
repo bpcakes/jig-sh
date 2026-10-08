@@ -8,7 +8,11 @@ depends on it through nextest's `rdeps()`, and any package listed as reading
 its files. Paths that no test reads are ignored; any other change outside a
 package runs the whole workspace suite.
 
-Usage: scripts/test-rust-affected.py [--base REF] [--print] [-- NEXTEST_ARGS...]
+Usage: scripts/test-rust-affected.py [--base REF] [--print | --filterset] [-- NEXTEST_ARGS...]
+
+--filterset prints only the selection as a nextest filterset: `all()` when
+the whole suite must run, `none()` when no Rust package changed, and an
+`rdeps(...)` expression otherwise. CI combines it with its phase filters.
 """
 
 from __future__ import annotations
@@ -122,6 +126,15 @@ def filterset(packages: set[str]) -> str:
     return " | ".join(f"rdeps(={package})" for package in sorted(packages))
 
 
+def scope_filterset(packages: set[str] | None) -> str:
+    """The selection as a nextest filterset; None selects everything."""
+    if packages is None:
+        return "all()"
+    if not packages:
+        return "none()"
+    return filterset(with_extra_consumers(packages))
+
+
 def nextest_command(packages: set[str] | None, extra_args: list[str]) -> list[str]:
     """The nextest invocation; None selects the whole workspace suite."""
     command = ["cargo", "nextest", "run", "--workspace", *NEXTEST_ARGS]
@@ -134,6 +147,9 @@ def main(argv: list[str], root: Path = ROOT) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", help="Git revision to compare against.")
     parser.add_argument("--print", action="store_true", help="Show the selection without running it.")
+    parser.add_argument(
+        "--filterset", action="store_true", help="Print only the selection as a nextest filterset."
+    )
     parser.add_argument("nextest_args", nargs="*", help="Extra arguments for cargo nextest run (after --).")
     options = parser.parse_args(argv)
 
@@ -147,9 +163,15 @@ def main(argv: list[str], root: Path = ROOT) -> int:
     try:
         packages = affected_packages(changed_paths(root, base), package_roots(metadata))
     except FullSuite as reason:
+        if options.filterset:
+            print(scope_filterset(None))
+            return 0
         print(f"Running the full suite: {reason.path} is outside any workspace package.")
         command = nextest_command(None, options.nextest_args)
     else:
+        if options.filterset:
+            print(scope_filterset(packages))
+            return 0
         if not packages:
             print(f"No Rust package changed since {base[:12]}; nothing to test.")
             return 0

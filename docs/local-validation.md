@@ -79,6 +79,15 @@ rebuild after test-only dependency features have been enabled. The Linux
 no-default-features test job first runs the explicit no-default-features build
 check, sharing checkout, toolchain setup, and cache restoration.
 
+On pull requests, the Linux and macOS `test-locked` jobs still compile every
+target but run only the tests the pull request can affect: they set
+`JIG_TEST_AFFECTED_BASE` to the merge commit's first parent, and
+`scripts/ci/test-rust.sh` intersects each phase with
+`scripts/test-rust-affected.py --filterset`. Pushes to `master`, merge queues,
+and manual runs leave it unset and run the whole suite, so `master` is always
+tested in full, after merge if not before. The selection is printed in the job
+log.
+
 The Repo Policy workflow builds Jig once on each of Linux and macOS, then reuses
 that binary for Clippy and file-budget checks. Each platform job also runs
 no-default-features Clippy and the serial dev-proxy test harness; Linux retains

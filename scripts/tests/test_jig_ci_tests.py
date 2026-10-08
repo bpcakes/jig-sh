@@ -98,6 +98,52 @@ class TestBuildReuseTests(unittest.TestCase):
         self.env["EXAMPLE_TEST_FAIL"] = "1"
         self.assertEqual(self.invoke("minimal-focused").returncode, 42)
 
+    def runs(self):
+        return [args for args in self.calls() if args[:2] == ["nextest", "run"]]
+
+    def stub_affected_selection(self, scope):
+        selector = self.repo / "scripts/test-rust-affected.py"
+        selector.write_text("#!" + sys.executable + "\n" + textwrap.dedent(f'''\
+            import json, os, pathlib, sys
+            root = pathlib.Path(os.environ["EXAMPLE_ROOT"])
+            (root / "selector-args.json").write_text(json.dumps(sys.argv[1:]))
+            print({scope!r})
+        '''))
+
+    def test_workspace_without_affected_base_runs_every_test(self):
+        result = self.invoke("workspace")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runs = self.runs()
+        self.assertEqual(len(runs), 3)
+        for args in runs:
+            self.assertTrue(args[args.index("-E") + 1].startswith("(all()) & "))
+            self.assertNotIn("--no-tests=pass", args)
+
+    def test_pull_request_scope_narrows_every_phase(self):
+        self.stub_affected_selection("rdeps(=example-core)")
+        self.env["JIG_TEST_AFFECTED_BASE"] = "HEAD^1"
+        result = self.invoke("workspace")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        selector_args = json.loads((self.repo / "selector-args.json").read_text())
+        self.assertEqual(selector_args, ["--base", "HEAD^1", "--filterset"])
+        self.assertEqual(sum(args[:2] == ["nextest", "list"] for args in self.calls()), 1)
+        runs = self.runs()
+        self.assertEqual(len(runs), 3)
+        for args in runs:
+            self.assertTrue(args[args.index("-E") + 1].startswith("(rdeps(=example-core)) & "))
+            self.assertIn("--no-tests=pass", args)
+        self.assertIn("-j", runs[-1])
+        self.assertIn("Affected-test scope since HEAD^1: rdeps(=example-core)", result.stdout)
+
+    def test_affected_base_does_not_narrow_minimal_modes(self):
+        self.stub_affected_selection("none()")
+        self.env["JIG_TEST_AFFECTED_BASE"] = "HEAD^1"
+        result = self.invoke("minimal")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.repo / "selector-args.json").exists())
+        for args in self.runs():
+            self.assertNotIn("--no-tests=pass", args)
+
     def test_later_success_cannot_mask_failed_phase(self):
         self.env["EXAMPLE_TEST_FAIL"] = "1"
         self.assertEqual(self.invoke().returncode, 42)
