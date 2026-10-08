@@ -2,13 +2,12 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::{Arc, atomic::AtomicBool};
 
 use anyhow::{Context, Result as AnyResult, bail};
 
 use crate::crypto::KdfParams;
-use crate::{Result, VaultError, VaultErrorKind};
+use crate::error::classify_recovery_source;
+use crate::{Result, VaultError, VaultErrorKind, VaultRecovery};
 
 use super::{AUDIT_FILE, VAULT_FILE, VaultStore, ensure_tree_has_no_symlinks};
 
@@ -21,25 +20,42 @@ impl VaultStore {
     }
 
     pub(crate) fn revalidate_existing(&self) -> AnyResult<()> {
-        validate_existing_private_dir(&self.root)
+        let pending = self.has_pending_transaction()?;
+        if pending && is_absent(&self.root)? {
+            return validate_pending_absent_parent(&self.root);
+        }
+        // Backup request revalidation historically reports InvalidInput;
+        // opening a home reports Io. Recovery metadata must preserve both.
+        validate_existing_private_dir(&self.root, pending, VaultErrorKind::InvalidInput)
     }
 }
 
 fn open_existing_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
     let root = crate::path_security::physical_path(&root, "existing vault")?;
-    validate_existing_private_dir(&root)?;
+    // An interrupted restore keeps its final target absent until the
+    // authenticated operation installs it; only its parent can be checked.
+    if let Some(store) = super::pending::pending_absent_target(&root, &KdfParams::production())? {
+        validate_pending_absent_parent(&root)?;
+        return Ok(store);
+    }
+    // An interrupted transaction may have left one state file missing; the
+    // authenticated operation finishes it, so a recorded journal lets
+    // preflight reach credential capture without waiving any other check.
+    let pending = super::pending_transaction_recorded(&root);
+    validate_existing_private_dir(&root, pending, VaultErrorKind::Io)?;
     let root = fs::canonicalize(&root)
         .with_context(|| format!("failed to canonicalize vault home {}", root.display()))?;
-    validate_existing_private_dir(&root)?;
-    Ok(VaultStore {
-        root,
-        initialization_kdf: KdfParams::production(),
-        #[cfg(test)]
-        fail_next_vault_write: Arc::new(AtomicBool::new(false)),
-    })
+    validate_existing_private_dir(&root, pending, VaultErrorKind::Io)?;
+    let witness = super::WitnessLocation::for_home(&root)?;
+    witness.ensure_disjoint(&root)?;
+    Ok(VaultStore::at(root, KdfParams::production(), witness))
 }
 
-fn validate_existing_private_dir(root: &Path) -> AnyResult<()> {
+fn validate_existing_private_dir(
+    root: &Path,
+    allow_missing_state: bool,
+    missing_state_kind: VaultErrorKind,
+) -> AnyResult<()> {
     reject_symlinked_path_components(root)?;
     let metadata = fs::symlink_metadata(root)
         .with_context(|| format!("failed to inspect existing vault home {}", root.display()))?;
@@ -52,9 +68,22 @@ fn validate_existing_private_dir(root: &Path) -> AnyResult<()> {
     ensure_owned_private_directory(root, &metadata)?;
     ensure_tree_has_no_symlinks(root, root)?;
     for path in [root.join(VAULT_FILE), root.join(AUDIT_FILE)] {
-        let metadata = fs::symlink_metadata(&path).with_context(|| {
-            format!("existing vault is missing required file {}", path.display())
-        })?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Err(error) if allow_missing_state && error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(classify_recovery_source(
+                    missing_state_kind,
+                    VaultRecovery::Integrity,
+                    format!("existing vault is missing required file {}", path.display()),
+                    error.into(),
+                ));
+            }
+            result => result.with_context(|| {
+                format!("existing vault is missing required file {}", path.display())
+            })?,
+        };
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             bail!(
                 "existing vault file must be a regular non-symlink file: {}",
@@ -62,6 +91,40 @@ fn validate_existing_private_dir(root: &Path) -> AnyResult<()> {
             );
         }
         ensure_owned_private_file(&path, &metadata)?;
+    }
+    Ok(())
+}
+
+fn is_absent(path: &Path) -> AnyResult<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", path.display())),
+    }
+}
+
+/// The parent of an absent pending restore target must be a real directory
+/// owned by the current user and reached without symlinks. Installation
+/// repeats the restore's own trusted-ancestor checks.
+fn validate_pending_absent_parent(root: &Path) -> AnyResult<()> {
+    let parent = root
+        .parent()
+        .with_context(|| format!("vault home has no parent directory: {}", root.display()))?;
+    reject_symlinked_path_components(parent)?;
+    let metadata = fs::symlink_metadata(parent)
+        .with_context(|| format!("failed to inspect vault home parent {}", parent.display()))?;
+    if !metadata.is_dir() {
+        bail!(
+            "vault home parent must be a real directory: {}",
+            parent.display()
+        );
+    }
+    #[cfg(unix)]
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        bail!(
+            "vault home parent is not owned by the current user: {}",
+            parent.display()
+        );
     }
     Ok(())
 }

@@ -1017,7 +1017,7 @@ fn short_initialization_passphrase_is_rejected_without_consuming_either_input() 
     assert_eq!(confirmation.len(), "too-short".len());
     assert_eq!(
         app.status.as_ref().unwrap().text,
-        "New vault passphrases must contain at least 12 bytes."
+        jig_vault::NEW_VAULT_PASSPHRASE_POLICY
     );
 }
 

@@ -12,7 +12,9 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::crypto::{KEY_LEN, KdfParams, NONCE_LEN, SALT_LEN};
-use crate::format::{AEAD_ALGORITHM, FORMAT_VERSION, MAGIC, V1_FORMAT_VERSION};
+use crate::format::{
+    AEAD_ALGORITHM, MAGIC, V1_FORMAT_VERSION, V2_FORMAT_VERSION, V3_FORMAT_VERSION,
+};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::{FieldKind, FieldMutation, SecretBytes, Vault, VaultReference};
 
@@ -22,6 +24,12 @@ use super::codec::{
     BACKUP_AAD_DOMAIN, BACKUP_MAGIC, BackupEnvelope, backup_aad, parse_archive_bytes,
 };
 use super::*;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod rotation;
+mod versions;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod witnessed_restore;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn test_passphrase() -> SecretString {
@@ -52,7 +60,7 @@ fn syntactically_complete_vault_value() -> serde_json::Value {
     serde_json::json!({
         "header": {
             "magic": MAGIC,
-            "version": FORMAT_VERSION,
+            "version": V2_FORMAT_VERSION,
             "vault_id": "01TESTVAULTIDENTIFIER000000",
             "created_at_ms": 1,
             "kdf": KdfParams::default(),
@@ -115,7 +123,7 @@ fn embedded_vault_validation_requires_complete_strict_v2_envelope() {
     let (vault_id, version) =
         inspect_embedded_vault(&serde_json::to_vec(&complete).unwrap()).unwrap();
     assert_eq!(vault_id, "01TESTVAULTIDENTIFIER000000");
-    assert_eq!(version, FORMAT_VERSION);
+    assert_eq!(version, V2_FORMAT_VERSION);
 
     let incomplete = serde_json::json!({ "header": complete["header"].clone() });
     let error = inspect_embedded_vault(&serde_json::to_vec(&incomplete).unwrap()).unwrap_err();
@@ -142,7 +150,7 @@ fn embedded_vault_validation_requires_complete_strict_v2_envelope() {
         crate::error::classified_kind(&error),
         Some(VaultErrorKind::InvalidInput)
     );
-    assert!(error.to_string().contains("migrate --to 2"));
+    assert!(error.to_string().contains("migrate --to 3"));
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -216,7 +224,7 @@ fn backup_create_preflight_is_noncreating_and_rejects_v1_before_capture() {
     }
     let error = Vault::preflight_backup_create(legacy.clone(), &output, false).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert!(error.to_string().contains("migrate --to 2"));
+    assert!(error.to_string().contains("migrate --to 3"));
     assert!(!legacy.join("vault.lock").exists());
     assert!(!output.exists());
 }
@@ -482,7 +490,7 @@ fn assert_restore_round_trip(temp: &Path, output: &Path) {
     let restored = Vault::restore_backup(&test_passphrase(), request).unwrap();
     // Restore reports the physical home, so macOS /var temp paths resolve.
     assert_eq!(restored.root, fs::canonicalize(&target).unwrap());
-    assert_eq!(restored.format_version, FORMAT_VERSION);
+    assert_eq!(restored.format_version, V3_FORMAT_VERSION);
     assert_eq!(
         fs::metadata(&restored.root).unwrap().permissions().mode() & 0o777,
         0o700

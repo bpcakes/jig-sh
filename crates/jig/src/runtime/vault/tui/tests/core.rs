@@ -53,7 +53,7 @@ fn failed_unlock_retains_no_session_and_lock_drops_a_valid_session() {
     let snapshot = backend
         .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
         .unwrap();
-    assert_eq!(snapshot.format_version, 2);
+    assert_eq!(snapshot.format_version, 3);
     backend.lock();
     assert_eq!(
         backend.refresh().unwrap_err().kind(),

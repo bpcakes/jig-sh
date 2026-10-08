@@ -42,7 +42,7 @@ fn snapshot_is_a_verified_disjoint_canonical_and_legacy_view() {
         .unwrap();
 
     let snapshot = vault.snapshot(&passphrase()).unwrap();
-    assert_eq!(snapshot.format_version, FORMAT_VERSION);
+    assert_eq!(snapshot.format_version, V3_FORMAT_VERSION);
     assert!(!snapshot.vault_id.is_empty());
     assert_eq!(snapshot.fields.len(), 1);
     assert_eq!(
@@ -539,7 +539,7 @@ fn legacy_conversion_rejects_canonical_sources_and_destination_collisions() {
 }
 
 #[test]
-fn management_mutations_require_version_two_without_writing() {
+fn management_mutations_require_field_kind_format_without_writing() {
     let temp = tempfile::tempdir().unwrap();
     let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     install_cli_generated_v1_fixture(&vault.store);
@@ -556,7 +556,7 @@ fn management_mutations_require_version_two_without_writing() {
         .unwrap_err();
 
     assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert!(error.to_string().contains("jig vault migrate --to 2"));
+    assert!(error.to_string().contains("jig vault migrate --to 3"));
     assert_eq!(
         vault.store.read_vault_text().unwrap().unwrap(),
         before_vault

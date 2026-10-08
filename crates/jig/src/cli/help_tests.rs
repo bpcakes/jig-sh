@@ -232,7 +232,7 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_help, "Both concealed and text fields are encrypted");
     assert_help_contains(&vault_help, "jig vault init");
     assert_help_contains(&vault_help, "jig vault tui");
-    assert_help_contains(&vault_help, "jig vault migrate --to 2");
+    assert_help_contains(&vault_help, "jig vault migrate --to 3");
     assert_help_contains(
         &vault_help,
         "jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt",
@@ -283,7 +283,14 @@ fn vault_help_includes_quick_start_examples() {
         "Agents must ask the operator to run this command in a terminal",
     );
     assert_help_contains(&vault_init_help, "jig vault init");
+    assert_help_contains(&vault_init_help, "Creates a version 3 vault");
+    assert_help_contains(&vault_init_help, "at least 16 UTF-8 bytes");
     assert_help_omits(&vault_init_help, "export JIG_VAULT_PASSPHRASE");
+
+    let vault_status_help = rendered_help(&["vault", "status"]);
+    assert_help_contains(&vault_status_help, "unauthenticated public header");
+    assert_help_contains(&vault_status_help, "pending_transaction");
+    assert_help_contains(&vault_status_help, "detects rollback");
 
     let vault_tui_help = rendered_help(&["vault", "tui"]);
     assert_help_contains(&vault_tui_help, "keyboard-first full-screen vault manager");
@@ -304,10 +311,12 @@ fn vault_help_includes_quick_start_examples() {
     );
 
     let vault_migrate_help = rendered_help(&["vault", "migrate"]);
+    assert_help_contains(&vault_migrate_help, "jig vault migrate --to 3");
     assert_help_contains(&vault_migrate_help, "jig vault migrate --to 2");
     assert_help_contains(&vault_migrate_help, "--to <TO>");
     assert_help_contains(&vault_migrate_help, "version 1 vaults");
-    assert_help_contains(&vault_migrate_help, "old Jig rejects");
+    assert_help_contains(&vault_migrate_help, "downgrades are refused");
+    assert_help_contains(&vault_migrate_help, "Older Jig rejects");
 
     let vault_field_set_help = rendered_help(&["vault", "field", "set"]);
     assert_help_contains(&vault_field_set_help, "--text");
@@ -357,6 +366,16 @@ fn vault_help_includes_quick_start_examples() {
         &vault_passphrase_help,
         "never accepted as command-line arguments",
     );
+    assert_help_contains(&vault_passphrase_help, "version 2 or 3 vault");
+    assert_help_contains(
+        &vault_passphrase_help,
+        "also rotates the data-encryption key",
+    );
+    assert_help_contains(&vault_passphrase_help, "Rotation is not");
+    assert_help_contains(
+        &vault_passphrase_help,
+        "finishes only with the new passphrase",
+    );
 
     let vault_backup_create_help = rendered_help(&["vault", "backup", "create"]);
     assert_help_contains(&vault_backup_create_help, "--out <FILE>");
@@ -380,6 +399,11 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_backup_restore_help, "The target home must be absent");
     assert_help_contains(&vault_backup_restore_help, "--in -");
     assert_help_contains(&vault_backup_restore_help, "supported on Linux and macOS");
+    assert_help_contains(&vault_backup_restore_help, "every other copy of that vault");
+    assert_help_contains(
+        &vault_backup_restore_help,
+        "passphrase the backup was created with",
+    );
 
     let vault_field_list_help = rendered_help(&["vault", "field", "list"]);
     assert_help_contains(&vault_field_list_help, "jig://ITEM");

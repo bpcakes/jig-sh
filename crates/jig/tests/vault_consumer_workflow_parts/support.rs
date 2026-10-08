@@ -90,7 +90,7 @@ pub(super) fn assert_restored(
 ) -> PathBuf {
     let payload = structured_output("vault restore", output);
     assert_eq!(payload["restored"], true);
-    assert_eq!(payload["format_version"], 2);
+    assert_eq!(payload["format_version"], 3);
     assert_eq!(payload["vault_scope"], "repo");
     let restored_home = PathBuf::from(
         payload["vault_home"]

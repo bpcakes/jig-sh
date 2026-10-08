@@ -1,4 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use jig_vault::LATEST_VAULT_FORMAT_VERSION;
 
 use crate::{
     VaultAction,
@@ -20,7 +21,7 @@ pub(crate) enum UiCommand {
     ExportField,
     PeekField,
     Refresh,
-    MigrateToV2,
+    MigrateToLatest,
     Activity,
     VerifyAudit,
     ImportOnePassword,
@@ -53,6 +54,12 @@ impl PlatformCapabilities {
     #[cfg(test)]
     pub(crate) const RESTORE_ONLY: Self = Self {
         private_output: false,
+        backup_restore: true,
+    };
+
+    #[cfg(test)]
+    pub(crate) const ALL: Self = Self {
+        private_output: true,
         backup_restore: true,
     };
 }
@@ -93,7 +100,7 @@ impl UiCommand {
         Self::ExportField,
         Self::PeekField,
         Self::Refresh,
-        Self::MigrateToV2,
+        Self::MigrateToLatest,
         Self::Activity,
         Self::VerifyAudit,
         Self::ImportOnePassword,
@@ -116,7 +123,7 @@ impl UiCommand {
             Self::ExportField => "Export field to private file",
             Self::PeekField => "Controlled terminal preview",
             Self::Refresh => "Refresh authenticated metadata",
-            Self::MigrateToV2 => "Migrate vault to version 2",
+            Self::MigrateToLatest => "Migrate vault to version 3",
             Self::Activity => "Verified activity",
             Self::VerifyAudit => "Verify audit chain",
             Self::ImportOnePassword => "Import 1Password dotenv",
@@ -140,7 +147,7 @@ impl UiCommand {
             Self::ExportField => "export",
             Self::PeekField => "peek",
             Self::Refresh => "refresh",
-            Self::MigrateToV2 => "migrate",
+            Self::MigrateToLatest => "migrate",
             Self::Activity => "activity",
             Self::VerifyAudit => "audit",
             Self::ImportOnePassword => "1Password import",
@@ -162,7 +169,7 @@ impl UiCommand {
             | Self::ConvertLegacy
             | Self::DeleteSelection => "Manage",
             Self::ExportField | Self::PeekField => "Reveal",
-            Self::Refresh | Self::MigrateToV2 | Self::Activity | Self::VerifyAudit => "Inspect",
+            Self::Refresh | Self::MigrateToLatest | Self::Activity | Self::VerifyAudit => "Inspect",
             Self::ImportOnePassword
             | Self::CreateBackup
             | Self::ChangePassphrase
@@ -173,7 +180,7 @@ impl UiCommand {
 
     pub(crate) const fn safety(self) -> CommandSafety {
         match self {
-            Self::DeleteSelection | Self::MigrateToV2 | Self::RestoreBackup => {
+            Self::DeleteSelection | Self::MigrateToLatest | Self::RestoreBackup => {
                 CommandSafety::Destructive
             }
             Self::ExportField | Self::PeekField => CommandSafety::Disclosure,
@@ -194,7 +201,7 @@ impl UiCommand {
             Self::ExportField => Some(CommandBinding::plain('x', "x")),
             Self::PeekField => Some(CommandBinding::plain('p', "p")),
             Self::Refresh => Some(CommandBinding::plain('r', "r")),
-            Self::MigrateToV2 => Some(CommandBinding::plain('m', "m")),
+            Self::MigrateToLatest => Some(CommandBinding::plain('m', "m")),
             Self::Lock => Some(CommandBinding::shifted('L', "L")),
             Self::Activity
             | Self::VerifyAudit
@@ -232,12 +239,14 @@ impl UiCommand {
 
     fn state_availability(self, app: &App) -> CommandAvailability {
         let format_version = app.snapshot().map(|snapshot| snapshot.format_version);
-        let writable = format_version == Some(2);
+        let writable = format_version.is_some_and(supports_field_kinds);
         if self.requires_v2_management() && !writable {
-            return CommandAvailability::Disabled("Vault management requires version 2.");
+            return CommandAvailability::Disabled("Vault management requires version 2 or later.");
         }
         if self.requires_unlocked_v2() && !writable {
-            return CommandAvailability::Disabled("An unlocked version 2 vault is required.");
+            return CommandAvailability::Disabled(
+                "An unlocked version 2 or later vault is required.",
+            );
         }
         match self {
             Self::CreateItem | Self::AddLegacy => CommandAvailability::Enabled,
@@ -273,9 +282,13 @@ impl UiCommand {
                     CommandAvailability::Disabled("Unlock the vault first.")
                 }
             }
-            Self::MigrateToV2 => match format_version {
-                Some(1) => CommandAvailability::Enabled,
-                Some(_) => CommandAvailability::Disabled("The vault already uses version 2."),
+            Self::MigrateToLatest => match format_version {
+                Some(version) if version < LATEST_VAULT_FORMAT_VERSION => {
+                    CommandAvailability::Enabled
+                }
+                Some(_) => {
+                    CommandAvailability::Disabled("The vault already uses the latest version.")
+                }
                 None => CommandAvailability::Disabled("Unlock the vault first."),
             },
             Self::ImportOnePassword | Self::CreateBackup | Self::ChangePassphrase => {
@@ -328,7 +341,7 @@ impl UiCommand {
             | Self::DeleteSelection
             | Self::PeekField
             | Self::Refresh
-            | Self::MigrateToV2
+            | Self::MigrateToLatest
             | Self::Activity
             | Self::VerifyAudit
             | Self::ChangePassphrase
@@ -343,9 +356,18 @@ impl UiCommand {
         match app.snapshot().map(|snapshot| snapshot.format_version) {
             Some(1) => matches!(
                 self,
-                Self::Refresh | Self::MigrateToV2 | Self::Activity | Self::VerifyAudit | Self::Lock
+                Self::Refresh
+                    | Self::MigrateToLatest
+                    | Self::Activity
+                    | Self::VerifyAudit
+                    | Self::Lock
             ),
-            Some(2) => self != Self::MigrateToV2 && self != Self::RestoreBackup,
+            // Field-kind formats share the complete management surface; only
+            // formats older than the latest offer explicit migration.
+            Some(LATEST_VAULT_FORMAT_VERSION) => {
+                self != Self::MigrateToLatest && self != Self::RestoreBackup
+            }
+            Some(version) if supports_field_kinds(version) => self != Self::RestoreBackup,
             _ => false,
         }
     }
@@ -358,7 +380,7 @@ impl UiCommand {
             .snapshot()
             .is_some_and(|snapshot| snapshot.format_version == 1)
         {
-            return self == Self::MigrateToV2;
+            return self == Self::MigrateToLatest;
         }
         match app.focus {
             Focus::Items => matches!(
@@ -412,6 +434,17 @@ impl UiCommand {
             |binding| format!("{} {}", binding.label, self.short_label()),
         )
     }
+}
+
+// Migration labels and messages name the latest format literally.
+const _: () = assert!(
+    LATEST_VAULT_FORMAT_VERSION == 3,
+    "update the Vault TUI migration labels and messages for the new latest format"
+);
+
+/// Formats with encrypted field kinds share the complete management surface.
+pub(crate) const fn supports_field_kinds(version: u32) -> bool {
+    version >= 2 && version <= LATEST_VAULT_FORMAT_VERSION
 }
 
 const fn enabled_if(condition: bool, disabled_reason: &'static str) -> CommandAvailability {

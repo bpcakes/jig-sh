@@ -91,6 +91,7 @@ fn assert_backup_restores(temp: &tempfile::TempDir) {
     let VaultActionResult::Restored {
         root,
         format_version,
+        other_copies_stale,
         ..
     } = backend
         .execute(VaultAction::RestoreBackup {
@@ -103,7 +104,8 @@ fn assert_backup_restores(temp: &tempfile::TempDir) {
     };
     // Restore reports the physical home, so macOS /var temp paths resolve.
     assert_eq!(root, std::fs::canonicalize(&restored_home).unwrap());
-    assert_eq!(format_version, 2);
+    assert_eq!(format_version, 3);
+    assert!(other_copies_stale, "a witnessed restore fences the source");
     let restored = backend
         .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
         .unwrap();
@@ -137,11 +139,6 @@ fn lifecycle_tools_backup_restore_rotate_verify_and_project_activity() {
     assert_activity_and_audit(&backend);
     assert_export_and_peek(&backend, &temp);
     assert_backup_created(&backend, &temp);
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        assert_backup_restores(&temp);
-    }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -193,6 +190,11 @@ fn lifecycle_tools_backup_restore_rotate_verify_and_project_activity() {
     .unwrap();
     let tampered = backend.execute(VaultAction::VerifyAudit).unwrap_err();
     assert_eq!(tampered.kind(), VaultUiErrorKind::Audit);
+
+    // A witnessed restore fences every older copy of the vault ID, so it
+    // runs after the source is no longer used.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    assert_backup_restores(&temp);
 }
 
 #[cfg(unix)]

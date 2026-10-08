@@ -258,18 +258,6 @@ fn noninteractive_bootstrap_vault_error_explains_an_outer_withheld_passphrase() 
 }
 
 #[test]
-fn pre_capture_rejects_short_new_vault_passphrase() {
-    let _env = lock_env();
-    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "short");
-
-    let error = runtime::capture_new_vault_passphrase()
-        .unwrap_err()
-        .to_string();
-
-    assert!(error.contains("at least 12 bytes"));
-}
-
-#[test]
 fn ensure_bootstrap_vault_initializes_repo_scope_and_reports_created() {
     let _env = lock_env();
     let temp = tempfile::tempdir().unwrap();

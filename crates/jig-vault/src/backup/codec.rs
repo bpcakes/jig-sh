@@ -95,6 +95,10 @@ pub(super) struct ParsedBackupArchive {
     ciphertext: Zeroizing<Vec<u8>>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) serialized_len: usize,
+    /// SHA-256 of the exact encrypted archive bytes, binding a pending
+    /// restore to the archive it started from.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) archive_sha256: String,
 }
 
 pub(super) struct SealedBackupArchive {
@@ -241,6 +245,8 @@ pub(super) fn parse_archive_bytes(bytes: Zeroizing<Vec<u8>>) -> AnyResult<Parsed
         ciphertext,
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         serialized_len: bytes.len(),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        archive_sha256: crate::store::witness::sha256_hex(&bytes),
     })
 }
 
@@ -254,6 +260,7 @@ pub(super) fn decrypt_archive(
         salt,
         nonce,
         ciphertext,
+        archive_sha256,
         ..
     } = archive;
     let key =
@@ -271,7 +278,7 @@ pub(super) fn decrypt_archive(
             error,
         )
     })?;
-    decode_backup_payload(plaintext, header.created_at_ms)
+    decode_backup_payload(plaintext, header.created_at_ms, archive_sha256)
 }
 
 fn validate_backup_header(header: &BackupHeader) -> AnyResult<([u8; SALT_LEN], [u8; NONCE_LEN])> {

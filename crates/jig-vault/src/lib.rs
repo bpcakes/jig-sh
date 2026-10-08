@@ -11,12 +11,15 @@ mod exec_output;
 mod exec_process;
 mod format;
 mod output;
+mod passphrase_policy;
 mod path_security;
 mod redact;
 mod run;
 mod secret;
 mod store;
 mod template;
+#[cfg(test)]
+mod test_fixtures;
 mod types;
 mod vault;
 
@@ -28,7 +31,7 @@ pub use backup::{
     BackupRestoreResult, MAX_BACKUP_ARCHIVE_BYTES,
 };
 pub use broker::{BrokeredEnv, BrokeredFile, BrokeredRun};
-pub use error::{Result, VaultError, VaultErrorKind};
+pub use error::{Result, VaultError, VaultErrorKind, VaultRecovery};
 pub use exec::{
     ExecEnvBinding, ExecOutcome, MAX_EXEC_ARGUMENT_BYTES, MAX_EXEC_ARGUMENTS,
     MAX_EXEC_ENV_BINDINGS, MAX_EXEC_ENV_TOTAL_BYTES, MAX_EXEC_ENV_VALUE_LEN,
@@ -36,6 +39,10 @@ pub use exec::{
     withhold_vault_passphrase,
 };
 pub use output::{PreparedPrivateFile, PrivateFilePrecondition};
+pub use passphrase_policy::{
+    MIN_MASTER_PASSPHRASE_GUESSES, MIN_MASTER_PASSPHRASE_LEN, NEW_VAULT_PASSPHRASE_POLICY,
+    validate_new_vault_passphrase, validate_new_vault_passphrase_bytes,
+};
 pub use redact::Redactor;
 pub use run::RunOutput;
 pub use secret::{SecretBytes, SecretBytesCapacityError};
@@ -43,7 +50,30 @@ pub use template::{InjectionTemplate, MAX_TEMPLATE_INPUT_LEN, MAX_TEMPLATE_OUTPU
 pub use types::{EnvVarName, FieldKind, SecretName, VaultItem, VaultReference};
 pub use vault::{
     FieldBatchResult, FieldKindChangeResult, FieldMutation, FieldRecord, LegacyConversionResult,
-    MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN, RevealResult, SecretRecord, Vault,
-    VaultHomeState, VaultImportPrecondition, VaultMigration, VaultMutation, VaultRevision,
-    VaultSnapshot, VaultStatus, VaultWriteMode, validate_new_vault_passphrase,
+    MAX_SECRET_VALUE_LEN, RevealResult, SecretRecord, Vault, VaultHomeState,
+    VaultImportPrecondition, VaultMigration, VaultMutation, VaultRevision, VaultSnapshot,
+    VaultStatus, VaultWriteMode,
 };
+
+/// Crash injection and durability recording for tests of the witnessed
+/// transaction protocol. Only this crate's tests and `test-utils` consumers
+/// can arm a crash point, record durability operations, or inject a sync
+/// failure; each applies to the calling thread only.
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub mod test_support {
+    pub use crate::passphrase_policy::with_passphrase_estimate_for_test;
+    pub use crate::store::FaultPoint as TransactionFaultPoint;
+    pub use crate::store::durable::recording::{
+        FsOp, Publication, fail_next_sync_of, fail_sync_after, fail_sync_after_publication,
+        forget_durable_entries_under, record as record_fs_ops,
+    };
+
+    pub fn arm_transaction_fault(point: TransactionFaultPoint) {
+        crate::store::arm_fault_for_test(point);
+    }
+}
+
+/// Envelope format created by initialization and the newest explicit
+/// migration target.
+pub const LATEST_VAULT_FORMAT_VERSION: u32 = format::LATEST_FORMAT_VERSION;

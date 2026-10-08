@@ -44,6 +44,9 @@ tempfile.workspace = true
 time.workspace = true
 ulid.workspace = true
 zeroize.workspace = true
+# Pinned estimator for the new-passphrase policy. Only the first 100 Unicode
+# characters are estimated; its date scoring uses the process's current UTC year.
+zxcvbn.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
