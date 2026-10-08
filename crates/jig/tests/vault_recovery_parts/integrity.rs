@@ -64,8 +64,15 @@ fn missing_audit_routes_all_formats_and_preflight_paths_to_the_operator() {
         let envelope = std::fs::read(home.join("vault.json")).unwrap();
         std::fs::remove_file(home.join("audit.jsonl")).unwrap();
         let output = temp.path().join("ExampleVault.backup");
+        let listed = jig(&["field", "list"], &home);
+        if version == 3 {
+            assert_integrity_guidance(&failure(&listed));
+        } else {
+            // Legacy metadata listing does not verify audit history; retain
+            // that behavior while testing the operations that do refuse it.
+            assert!(json(&listed)["fields"].as_array().unwrap().is_empty());
+        }
         for args in [
-            vec!["field", "list"],
             vec!["audit", "verify"],
             vec!["backup", "create", "--out", output.to_str().unwrap()],
             vec!["passphrase", "change"],
