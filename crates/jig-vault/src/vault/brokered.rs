@@ -48,9 +48,13 @@ impl BrokeredRunHandle {
         if let Err(audit_error) = self.record_failure(store, stage) {
             return VaultError::from_anyhow(
                 kind,
-                error.context(format!(
-                    "brokered run failed; additionally failed to append failure audit event: {audit_error}"
-                )),
+                crate::error::context_with_secondary_recovery(
+                    error,
+                    &audit_error,
+                    format!(
+                        "brokered run failed; additionally failed to append failure audit event: {audit_error}"
+                    ),
+                ),
             );
         }
         VaultError::from_anyhow(kind, error)
@@ -167,9 +171,13 @@ fn brokered_failure_error_unlocked(
         return classify_source(
             kind,
             "brokered run failed; additionally failed to append failure audit event",
-            error.context(format!(
-                "additional audit failure while recording brokered run failure: {audit_error}"
-            )),
+            crate::error::context_with_secondary_recovery(
+                error,
+                &audit_error,
+                format!(
+                    "additional audit failure while recording brokered run failure: {audit_error}"
+                ),
+            ),
         );
     }
     error
@@ -229,6 +237,35 @@ mod tests {
 
     fn credential(text: &str) -> SecretString {
         SecretString::from(text.to_owned())
+    }
+
+    #[test]
+    fn failed_broker_and_retained_audit_refusal_keep_integrity_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("ExampleVault"))).unwrap();
+        let passphrase = credential("correct horse battery staple");
+        store.init(&passphrase).unwrap();
+        let missing = temp
+            .path()
+            .join("ExampleMissingExecutable")
+            .to_string_lossy()
+            .into_owned();
+        let request = BrokeredRun::new(vec![missing], vec![]).unwrap();
+        let prepared = store.prepare_brokered_run(&passphrase, request).unwrap();
+        let envelope = std::fs::read(store.vault_path()).unwrap();
+        std::fs::write(store.audit_path(), b"").unwrap();
+        let process_error = run_brokered(prepared.resolved).unwrap_err();
+        let error = prepared.handle.failure_error(
+            &store,
+            "process",
+            VaultErrorKind::Process,
+            process_error,
+        );
+        assert_eq!(error.kind(), VaultErrorKind::Process);
+        assert_eq!(error.recovery(), Some(crate::VaultRecovery::Integrity));
+        assert!(error.message().contains("not anchored"));
+        assert_eq!(std::fs::read(store.vault_path()).unwrap(), envelope);
+        assert!(std::fs::read(store.audit_path()).unwrap().is_empty());
     }
 
     #[test]

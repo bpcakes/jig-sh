@@ -349,8 +349,18 @@ impl WitnessStore {
             return Ok(None);
         };
         let digest = sha256_hex(&bytes);
-        let journal: Journal =
-            serde_json::from_slice(&bytes).context("vault transaction journal is malformed")?;
+        // Serde can quote malformed values or field names. Drop its source
+        // entirely, while retaining location and kind-independent recovery.
+        let journal: Journal = serde_json::from_slice(&bytes).map_err(|error| {
+            crate::error::recovery_error(
+                crate::VaultRecovery::Integrity,
+                format!(
+                    "vault transaction journal is malformed at line {}, column {}",
+                    error.line(),
+                    error.column(),
+                ),
+            )
+        })?;
         journal.validate()?;
         if journal.target.target_key != target_key {
             bail!("vault transaction journal does not belong to this target");

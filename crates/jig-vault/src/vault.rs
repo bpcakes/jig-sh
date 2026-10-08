@@ -1095,10 +1095,14 @@ impl RevealLifecycle {
             Ok(()) => VaultError::from_anyhow(kind, error),
             Err(audit_error) => VaultError::from_anyhow(
                 kind,
-                error.context(format!(
-                    "{} output failed; additionally failed to append terminal audit event: {audit_error}",
-                    self.operation.label()
-                )),
+                crate::error::context_with_secondary_recovery(
+                    error,
+                    &audit_error,
+                    format!(
+                        "{} output failed; additionally failed to append terminal audit event: {audit_error}",
+                        self.operation.label()
+                    ),
+                ),
             ),
         }
     }
@@ -1114,10 +1118,14 @@ impl RevealLifecycle {
             ),
             Err(failure_error) => VaultError::from_anyhow(
                 VaultErrorKind::AuditTampered,
-                error.context(format!(
-                    "{} output completed, but both finish and failure audit events failed: {failure_error}",
-                    self.operation.label()
-                )),
+                crate::error::context_with_secondary_recovery(
+                    error,
+                    &failure_error,
+                    format!(
+                        "{} output completed, but both finish and failure audit events failed: {failure_error}",
+                        self.operation.label()
+                    ),
+                ),
             ),
         }
     }
@@ -1264,9 +1272,13 @@ impl PreparedExec {
                         )),
                         Err(failure_error) => Err(VaultError::from_anyhow(
                             VaultErrorKind::AuditTampered,
-                            finish_error.context(format!(
-                                "additionally failed to append vault exec failure event: {failure_error}"
-                            )),
+                            crate::error::context_with_secondary_recovery(
+                                finish_error,
+                                &failure_error,
+                                format!(
+                                    "additionally failed to append vault exec failure event: {failure_error}"
+                                ),
+                            ),
                         )),
                     };
                 }
@@ -1280,9 +1292,13 @@ impl PreparedExec {
                 {
                     return Err(VaultError::from_anyhow(
                         VaultErrorKind::Process,
-                        process_error.context(format!(
-                            "additionally failed to append vault exec failure event: {audit_error}"
-                        )),
+                        crate::error::context_with_secondary_recovery(
+                            process_error,
+                            &audit_error,
+                            format!(
+                                "additionally failed to append vault exec failure event: {audit_error}"
+                            ),
+                        ),
                     ));
                 }
                 Err(VaultError::from_anyhow(
@@ -2811,9 +2827,13 @@ fn exec_prepare_failure_unlocked(
         Err(audit_error) => classify_source(
             kind,
             "vault exec preparation failed; additionally failed to append failure audit event",
-            error.context(format!(
-                "additional audit failure while recording vault exec failure: {audit_error}"
-            )),
+            crate::error::context_with_secondary_recovery(
+                error,
+                &audit_error,
+                format!(
+                    "additional audit failure while recording vault exec failure: {audit_error}"
+                ),
+            ),
         ),
     }
 }
@@ -2967,9 +2987,11 @@ fn reveal_prepare_failure_unlocked(
                 "{} preparation failed; additionally failed to append failure audit event",
                 operation.label()
             ),
-            error.context(format!(
-                "additional audit failure while recording reveal failure: {audit_error}"
-            )),
+            crate::error::context_with_secondary_recovery(
+                error,
+                &audit_error,
+                format!("additional audit failure while recording reveal failure: {audit_error}"),
+            ),
         ),
     }
 }

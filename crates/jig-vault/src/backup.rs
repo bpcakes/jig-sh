@@ -184,9 +184,13 @@ impl BackupLifecycle {
             Ok(()) => VaultError::from_anyhow(kind, error),
             Err(audit_error) => VaultError::from_anyhow(
                 kind,
-                error.context(format!(
-                    "vault backup failed; additionally failed to append terminal audit event: {audit_error}"
-                )),
+                crate::error::context_with_secondary_recovery(
+                    error,
+                    &audit_error,
+                    format!(
+                        "vault backup failed; additionally failed to append terminal audit event: {audit_error}"
+                    ),
+                ),
             ),
         }
     }
@@ -195,15 +199,17 @@ impl BackupLifecycle {
         match self.record_failure("audit_finish") {
             Ok(()) => VaultError::from_anyhow(
                 VaultErrorKind::AuditTampered,
-                error.context(
-                    "backup output was installed, but its finish audit event failed",
-                ),
+                error.context("backup output was installed, but its finish audit event failed"),
             ),
             Err(failure_error) => VaultError::from_anyhow(
                 VaultErrorKind::AuditTampered,
-                error.context(format!(
-                    "backup output was installed, but both finish and failure audit events failed: {failure_error}"
-                )),
+                crate::error::context_with_secondary_recovery(
+                    error,
+                    &failure_error,
+                    format!(
+                        "backup output was installed, but both finish and failure audit events failed: {failure_error}"
+                    ),
+                ),
             ),
         }
     }

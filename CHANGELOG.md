@@ -83,6 +83,8 @@
   rule in existing repositories.
 
 ### Fixed
+- Preserve operator guidance when an output or process failure also encounters
+  an audit integrity refusal, and keep malformed journal contents out of errors.
 - Let CLI and bootstrap initialization finish a recorded init even if today's
   strength estimate rejects its authenticated credential; fresh credentials
   still require the current policy.

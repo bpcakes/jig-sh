@@ -130,3 +130,48 @@ fn audit_removed_after_backup_preflight_preserves_the_revalidation_error_kind() 
     assert!(!home.join("audit.jsonl").exists());
     assert!(!output.exists());
 }
+
+#[test]
+fn malformed_journal_diagnostics_never_quote_values_or_field_names() {
+    const SENTINEL: &str = "ExamplePrivateJournalSentinel";
+    for unknown_field in [false, true] {
+        let temp = private_tempdir();
+        let home = temp.path().join("ExampleVault");
+        let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+        arm_transaction_fault(TransactionFaultPoint::AfterPending);
+        assert!(vault.init(&passphrase()).is_err());
+        let witness = temp.path().join(".jig-vault-witness");
+        let journal = std::fs::read_dir(witness.join("journals"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let record = std::fs::read_dir(witness.join("ids"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let record_bytes = std::fs::read(&record).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+        if unknown_field {
+            value[SENTINEL] = serde_json::json!(true);
+        } else {
+            value["schema"] = serde_json::json!(SENTINEL);
+        }
+        let malformed = serde_json::to_vec(&value).unwrap();
+        std::fs::write(&journal, &malformed).unwrap();
+        for args in [vec!["init"], vec!["field", "list"]] {
+            let error = failure(&jig(&args, &home));
+            assert!(error.contains("journal is malformed at line"), "{error}");
+            assert!(!error.contains(SENTINEL), "{error}");
+            assert_integrity_guidance(&error);
+        }
+        assert_eq!(std::fs::read(&journal).unwrap(), malformed);
+        assert_eq!(std::fs::read(&record).unwrap(), record_bytes);
+        assert!(!home.join("vault.json").exists());
+        assert_eq!(json(&jig(&["status"], &home))["pending_transaction"], true);
+    }
+}

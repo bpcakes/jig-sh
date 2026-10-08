@@ -346,3 +346,25 @@ fn brokered_run_reports_missing_canonical_reference_in_reference_form() {
         "vault secret 'Production/MISSING' does not exist"
     );
 }
+
+#[test]
+fn failed_exec_and_retained_audit_refusal_keep_integrity_recovery() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("ExampleVault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+    let missing = temp
+        .path()
+        .join("ExampleMissingExecutable")
+        .to_string_lossy()
+        .into_owned();
+    let request = VaultExec::new(vec![missing], vec![]).unwrap();
+    let prepared = vault.store.prepare_exec(&passphrase(), request).unwrap();
+    let envelope = std::fs::read(vault.store.vault_path()).unwrap();
+    std::fs::write(vault.store.audit_path(), b"").unwrap();
+    let error = prepared.execute().unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::Process);
+    assert_eq!(error.recovery(), Some(crate::VaultRecovery::Integrity));
+    assert!(error.message().contains("not anchored"));
+    assert_eq!(std::fs::read(vault.store.vault_path()).unwrap(), envelope);
+    assert!(std::fs::read(vault.store.audit_path()).unwrap().is_empty());
+}

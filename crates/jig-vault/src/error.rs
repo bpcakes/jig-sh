@@ -32,6 +32,59 @@ const fn default_recovery(kind: VaultErrorKind) -> Option<VaultRecovery> {
     }
 }
 
+/// Recovery metadata for a diagnostic whose kind is owned by its caller.
+/// This also lets combined failures retain secondary recovery information
+/// without replacing the primary operation's I/O or process classification.
+#[derive(Debug)]
+struct RecoveryContext {
+    recovery: Option<VaultRecovery>,
+    message: String,
+}
+
+impl fmt::Display for RecoveryContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RecoveryContext {}
+
+fn recovery_from_anyhow(error: &anyhow::Error) -> Option<VaultRecovery> {
+    error
+        .downcast_ref::<ClassifiedVaultError>()
+        .and_then(|error| error.recovery)
+        .or_else(|| {
+            error
+                .downcast_ref::<VaultError>()
+                .and_then(|error| error.recovery)
+        })
+        .or_else(|| {
+            error
+                .downcast_ref::<RecoveryContext>()
+                .and_then(|error| error.recovery)
+        })
+}
+
+pub(crate) fn recovery_error(recovery: VaultRecovery, message: impl Into<String>) -> anyhow::Error {
+    RecoveryContext {
+        recovery: Some(recovery),
+        message: message.into(),
+    }
+    .into()
+}
+
+pub(crate) fn context_with_secondary_recovery(
+    primary: anyhow::Error,
+    secondary: &anyhow::Error,
+    message: impl Into<String>,
+) -> anyhow::Error {
+    let recovery = recovery_from_anyhow(&primary).or_else(|| recovery_from_anyhow(secondary));
+    primary.context(RecoveryContext {
+        recovery,
+        message: message.into(),
+    })
+}
+
 #[derive(Debug)]
 pub struct VaultError {
     kind: VaultErrorKind,
@@ -64,10 +117,7 @@ impl VaultError {
 
     pub(crate) fn from_anyhow(kind: VaultErrorKind, error: anyhow::Error) -> Self {
         let message = error.to_string();
-        let recovery = error
-            .downcast_ref::<ClassifiedVaultError>()
-            .and_then(|error| error.recovery)
-            .or(default_recovery(kind));
+        let recovery = recovery_from_anyhow(&error).or(default_recovery(kind));
         let has_distinct_source = error
             .downcast_ref::<ClassifiedVaultError>()
             .is_none_or(|error| error.source.is_some());
@@ -136,10 +186,7 @@ impl ClassifiedVaultError {
     ) -> Self {
         Self {
             kind,
-            recovery: source
-                .downcast_ref::<Self>()
-                .and_then(|error| error.recovery)
-                .or(default_recovery(kind)),
+            recovery: recovery_from_anyhow(&source).or(default_recovery(kind)),
             message: message.into(),
             source: Some(source),
         }
@@ -186,10 +233,7 @@ pub(crate) fn classify_recovery_source(
 ) -> anyhow::Error {
     // Preserve the cause's recovery instruction before applying this wrapper's
     // explicit instruction; a kind-based default is only a fallback.
-    let recovery = source
-        .downcast_ref::<ClassifiedVaultError>()
-        .and_then(|error| error.recovery)
-        .unwrap_or(recovery);
+    let recovery = recovery_from_anyhow(&source).unwrap_or(recovery);
     let mut error = ClassifiedVaultError::with_source(kind, message, source);
     error.recovery = Some(recovery);
     error.into()
@@ -285,6 +329,52 @@ mod tests {
         );
         let error = vault_error_from_anyhow(VaultErrorKind::Internal, wrapped);
         assert_eq!(error.recovery(), Some(VaultRecovery::Credential));
+    }
+
+    #[test]
+    fn combined_failures_retain_secondary_recovery_and_primary_classification() {
+        use super::{
+            VaultRecovery, context_with_secondary_recovery, recovery_error, vault_error_from_anyhow,
+        };
+        for kind in [VaultErrorKind::Io, VaultErrorKind::Process] {
+            let secondary = classified(VaultErrorKind::AuditTampered, "mutation anchor missing");
+            let combined = context_with_secondary_recovery(
+                classified(kind, "operation failed"),
+                &secondary,
+                "operation and audit failed",
+            );
+            let error = vault_error_from_anyhow(VaultErrorKind::Internal, combined);
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.recovery(), Some(VaultRecovery::Integrity));
+            let roundtrip =
+                vault_error_from_anyhow(VaultErrorKind::Internal, error.into_classified_anyhow());
+            assert_eq!(roundtrip.recovery(), Some(VaultRecovery::Integrity));
+        }
+        let secondary = recovery_error(VaultRecovery::Integrity, "journal malformed");
+        let primary = super::classified_recovery(
+            VaultErrorKind::AlreadyExists,
+            VaultRecovery::StorageConflict,
+            "target occupied",
+        );
+        let error = vault_error_from_anyhow(
+            VaultErrorKind::Internal,
+            context_with_secondary_recovery(primary, &secondary, "two failures"),
+        );
+        assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
+        assert_eq!(error.recovery(), Some(VaultRecovery::StorageConflict));
+    }
+
+    #[test]
+    fn recovery_only_diagnostics_preserve_the_callers_kind() {
+        use super::{VaultRecovery, recovery_error, vault_error_from_anyhow};
+        for kind in [VaultErrorKind::Io, VaultErrorKind::AuditTampered] {
+            let error = vault_error_from_anyhow(
+                kind,
+                recovery_error(VaultRecovery::Integrity, "journal malformed"),
+            );
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.recovery(), Some(VaultRecovery::Integrity));
+        }
     }
 
     #[test]

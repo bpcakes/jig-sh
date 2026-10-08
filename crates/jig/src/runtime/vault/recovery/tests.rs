@@ -205,3 +205,52 @@ fn ordinary_collision_does_not_get_directory_recovery_guidance() {
         VaultErrorKind::AlreadyExists
     );
 }
+
+#[test]
+fn failed_reveal_sink_and_retained_audit_refusal_keep_operator_guidance() {
+    struct FailedSink(PathBuf);
+    impl std::io::Write for FailedSink {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            std::fs::write(&self.0, b"").unwrap();
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "ExampleSinkSentinel",
+            ))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("ExampleVault");
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+    let passphrase = SecretString::from(PASSPHRASE.to_owned());
+    vault.init(&passphrase).unwrap();
+    let reference: jig_vault::VaultReference = "jig://Example/TOKEN".parse().unwrap();
+    vault
+        .set_field(
+            &passphrase,
+            reference.clone(),
+            jig_vault::FieldKind::Concealed,
+            jig_vault::SecretBytes::new(b"ExampleConcealedValue".to_vec()),
+        )
+        .unwrap();
+    let envelope = std::fs::read(home.join("vault.json")).unwrap();
+    let error = vault
+        .read_field_to(
+            &passphrase,
+            reference,
+            &mut FailedSink(home.join("audit.jsonl")),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::Io);
+    assert_eq!(error.recovery(), Some(VaultRecovery::Integrity));
+    let rendered = format!("{:#}", super::operator_guidance(error.into()));
+    assert!(rendered.contains("not anchored"));
+    assert!(rendered.contains("Operator step: preserve the vault"));
+    assert!(rendered.contains("Agents must ask the operator"));
+    assert!(!rendered.contains("ExampleConcealedValue"));
+    assert!(!rendered.contains("ExampleSinkSentinel"));
+    assert_eq!(std::fs::read(home.join("vault.json")).unwrap(), envelope);
+    assert!(std::fs::read(home.join("audit.jsonl")).unwrap().is_empty());
+}
