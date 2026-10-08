@@ -226,13 +226,7 @@ pub(crate) fn recover_recorded_restore(
         crate::backup::finish_pending_restore(witness, journal, record, home)?;
         Ok(index)
     })()
-    .map_err(|error| {
-        crate::error::context_with_recovery(
-            error,
-            VaultRecovery::Integrity,
-            "pending restore could not recover its recorded data",
-        )
-    })
+    .map_err(|error| crate::error::with_recovery(error, VaultRecovery::Integrity))
 }
 
 impl VaultStore {
