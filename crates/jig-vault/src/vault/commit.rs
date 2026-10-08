@@ -147,7 +147,7 @@ impl VaultStore {
             return Err(classified(
                 VaultErrorKind::AuditTampered,
                 format!(
-                    "vault audit log already exists at {}; remove the stale vault home before init",
+                    "vault audit log already exists at {}",
                     self.audit_path().display()
                 ),
             ));

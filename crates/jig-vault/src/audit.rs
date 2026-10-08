@@ -282,7 +282,7 @@ pub(crate) fn verify_chain_unlocked(
 ) -> Result<AuditVerification> {
     let text = store.read_audit_text()?.ok_or_else(|| {
         anyhow::anyhow!(
-            "vault audit log is missing at {}; remove the stale vault home or restore audit.jsonl before continuing",
+            "vault audit log is missing at {}",
             store.audit_path().display()
         )
     })?;
@@ -296,7 +296,7 @@ pub(crate) fn verified_activity_unlocked(
 ) -> Result<VerifiedVaultActivity> {
     let text = store.read_audit_text()?.ok_or_else(|| {
         anyhow::anyhow!(
-            "vault audit log is missing at {}; remove the stale vault home or restore audit.jsonl before continuing",
+            "vault audit log is missing at {}",
             store.audit_path().display()
         )
     })?;
@@ -335,7 +335,7 @@ fn verify_chain_for_append_unlocked(
         None if allow_missing => Ok(empty_verified_audit_log()),
         None if !store.exists()? => Ok(empty_verified_audit_log()),
         None => Err(anyhow::anyhow!(
-            "vault audit log is missing at {}; remove the stale vault home or restore audit.jsonl before continuing",
+            "vault audit log is missing at {}",
             store.audit_path().display()
         )),
     }

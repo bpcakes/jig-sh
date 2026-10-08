@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result as AnyResult, bail};
 
 use crate::crypto::KdfParams;
-use crate::{Result, VaultError, VaultErrorKind};
+use crate::error::classify_recovery_source;
+use crate::{Result, VaultError, VaultErrorKind, VaultRecovery};
 
 use super::{AUDIT_FILE, VAULT_FILE, VaultStore, ensure_tree_has_no_symlinks};
 
@@ -23,7 +24,9 @@ impl VaultStore {
         if pending && is_absent(&self.root)? {
             return validate_pending_absent_parent(&self.root);
         }
-        validate_existing_private_dir(&self.root, pending)
+        // Backup request revalidation historically reports InvalidInput;
+        // opening a home reports Io. Recovery metadata must preserve both.
+        validate_existing_private_dir(&self.root, pending, VaultErrorKind::InvalidInput)
     }
 }
 
@@ -39,16 +42,20 @@ fn open_existing_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
     // authenticated operation finishes it, so a recorded journal lets
     // preflight reach credential capture without waiving any other check.
     let pending = super::pending_transaction_recorded(&root);
-    validate_existing_private_dir(&root, pending)?;
+    validate_existing_private_dir(&root, pending, VaultErrorKind::Io)?;
     let root = fs::canonicalize(&root)
         .with_context(|| format!("failed to canonicalize vault home {}", root.display()))?;
-    validate_existing_private_dir(&root, pending)?;
+    validate_existing_private_dir(&root, pending, VaultErrorKind::Io)?;
     let witness = super::WitnessLocation::for_home(&root)?;
     witness.ensure_disjoint(&root)?;
     Ok(VaultStore::at(root, KdfParams::production(), witness))
 }
 
-fn validate_existing_private_dir(root: &Path, allow_missing_state: bool) -> AnyResult<()> {
+fn validate_existing_private_dir(
+    root: &Path,
+    allow_missing_state: bool,
+    missing_state_kind: VaultErrorKind,
+) -> AnyResult<()> {
     reject_symlinked_path_components(root)?;
     let metadata = fs::symlink_metadata(root)
         .with_context(|| format!("failed to inspect existing vault home {}", root.display()))?;
@@ -64,6 +71,14 @@ fn validate_existing_private_dir(root: &Path, allow_missing_state: bool) -> AnyR
         let metadata = match fs::symlink_metadata(&path) {
             Err(error) if allow_missing_state && error.kind() == std::io::ErrorKind::NotFound => {
                 continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(classify_recovery_source(
+                    missing_state_kind,
+                    VaultRecovery::Integrity,
+                    format!("existing vault is missing required file {}", path.display()),
+                    error.into(),
+                ));
             }
             result => result.with_context(|| {
                 format!("existing vault is missing required file {}", path.display())

@@ -3,7 +3,7 @@ use jig_vault::test_support::{TransactionFaultPoint, arm_transaction_fault};
 
 #[test]
 fn integrity_refusals_keep_their_kind_and_operator_guidance_in_tui() {
-    for pending in [false, true] {
+    for (version, pending) in [(1, false), (2, false), (3, false), (3, true)] {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("ExampleVault");
         let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
@@ -19,7 +19,7 @@ fn integrity_refusals_keep_their_kind_and_operator_guidance_in_tui() {
                 .path();
             std::fs::remove_file(journal).unwrap();
         } else {
-            vault.init(&passphrase).unwrap();
+            vault.init_format_for_test(&passphrase, version).unwrap();
             std::fs::remove_file(home.join("audit.jsonl")).unwrap();
         }
         let backend = VaultTuiBackend::new(request(home)).unwrap();
@@ -39,5 +39,7 @@ fn integrity_refusals_keep_their_kind_and_operator_guidance_in_tui() {
         );
         assert!(error.message().contains("Agents must ask the operator"));
         assert!(!error.message().contains("correct horse battery staple"));
+        assert!(!error.message().contains("remove the stale vault home"));
+        assert!(!error.message().contains("restore audit.jsonl"));
     }
 }

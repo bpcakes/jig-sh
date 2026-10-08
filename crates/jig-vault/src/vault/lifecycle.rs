@@ -287,7 +287,7 @@ impl VaultStore {
             let audit_len = self.audit_len()?.ok_or_else(|| {
                 classified(
                     VaultErrorKind::AuditTampered,
-                    "vault audit log is missing; restore audit.jsonl before creating a backup",
+                    "vault audit log is missing",
                 )
             })?;
             if audit_len > max_before_start as u64 {
