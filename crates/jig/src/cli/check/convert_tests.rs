@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::NamedCheckCommand;
+use crate::cli::check::CheckComparisonOpts;
 
 #[test]
 fn external_check_selectors_accept_execution_flags_after_targets() {

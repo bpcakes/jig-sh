@@ -1,12 +1,9 @@
 use anyhow::{Result, bail};
-use clap::ValueEnum;
 
-use crate::cli::CliExactTreeProvenance;
 use crate::command;
 
-use super::{
-    CheckCommand, CheckComparisonOpts, CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts,
-};
+use self::external_check::normalize_external_check_args;
+use super::{CheckCommand, CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts};
 
 impl TryFrom<CheckOpts> for command::CheckCommand {
     type Error = anyhow::Error;
@@ -85,7 +82,7 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
     }
 }
 
-include!("external_check.rs");
+mod external_check;
 
 fn direct_check_command(command: CheckCommand) -> command::CheckCommand {
     match command {

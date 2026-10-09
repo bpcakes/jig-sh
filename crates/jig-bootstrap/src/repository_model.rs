@@ -781,10 +781,11 @@ mod finish;
 use finish::CommandScope;
 
 mod frontend;
+use self::ids::{component_id, target_id};
 pub(super) use frontend::frontend_component_id;
 use frontend::*;
 
-include!("repository_model/ids.rs");
+mod ids;
 
 #[cfg(test)]
 mod tests;

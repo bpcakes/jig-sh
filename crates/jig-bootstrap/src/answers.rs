@@ -211,18 +211,8 @@ impl PreparedInitAnswers {
     }
 }
 
-include!("answers/input.rs");
-
-fn nonempty_answer_string(value: &str) -> bool {
-    !value.trim().is_empty()
-}
-
-fn reject_rust_only_input(preset: ScaffoldPreset, input: &str) -> Result<()> {
-    bail!(
-        "--preset {} cannot be combined with incompatible input `{input}`; remove that input or select a matching preset",
-        preset.as_str()
-    )
-}
+mod input;
+pub(crate) use self::input::EffectiveSqlx;
 
 impl AnswerInputShape {
     pub(super) fn from_table(table: &toml::Table) -> Self {
@@ -703,69 +693,11 @@ fn normalize_legacy_command_default(command: &mut Option<String>, legacy_default
     }
 }
 
-include!("answers/frontend_validation.rs");
-
-fn is_safe_frontend_app_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.trim() == value
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-}
-
-fn is_supported_frontend_app_kind(value: &str) -> bool {
-    matches!(value, "vite" | "env-port")
-}
-
-fn is_supported_frontend_app_role(value: &str) -> bool {
-    matches!(value, "spa" | "admin" | "astro")
-}
-
-fn validate_frontend_app_dir(app_name: &str, value: &str) -> Result<()> {
-    if value.is_empty() || value.trim() != value {
-        bail!("frontend app '{app_name}' dir must be a non-empty relative path");
-    }
-    if !value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
-    {
-        bail!(
-            "frontend app '{app_name}' dir '{value}' contains unsupported characters. Use a repo-relative path with ASCII letters, numbers, '/', '.', '-' or '_'; use forward slashes on every platform."
-        );
-    }
-
-    let path = Path::new(value);
-    if path.is_absolute() {
-        bail!("frontend app '{app_name}' dir '{value}' must be relative");
-    }
-    if value.split('/').any(str::is_empty) {
-        bail!("frontend app '{app_name}' dir '{value}' must not contain empty path components");
-    }
-    if value == "." {
-        return Ok(());
-    }
-    if value.split('/').any(|segment| segment == ".") {
-        bail!("frontend app '{app_name}' dir '{value}' must not contain '.' path components");
-    }
-
-    for component in path.components() {
-        match component {
-            Component::Normal(_) => {}
-            Component::CurDir => {
-                bail!(
-                    "frontend app '{app_name}' dir '{value}' must not contain '.' path components"
-                );
-            }
-            Component::ParentDir => {
-                bail!("frontend app '{app_name}' dir '{value}' must not contain '..'");
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                bail!("frontend app '{app_name}' dir '{value}' must be relative");
-            }
-        }
-    }
-    Ok(())
-}
+mod frontend_validation;
+pub(super) use self::frontend_validation::validate_frontend_apps;
+use self::frontend_validation::{
+    is_safe_frontend_app_name, is_supported_frontend_app_kind, validate_frontend_app_dir,
+};
 
 pub(super) fn web_install_command(package_manager: &str) -> &'static str {
     match package_manager {
