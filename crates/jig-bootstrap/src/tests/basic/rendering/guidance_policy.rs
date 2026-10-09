@@ -5,45 +5,67 @@ const VALID_POLICY: &str =
 const EXPIRED_POLICY: &str = "version=1\n[[rules]]\nid=\"source\"\ninclude=[\"**/*.rs\"]\nmax_lines=100000\n[[waivers]]\nid=\"legacy\"\nrule=\"source\"\npath=\"src/legacy.rs\"\nceiling_lines=200000\nreason=\"tracked\"\nexpires=2001-01-01\n";
 
 #[test]
-fn rendered_launcher_and_seed_policy_keep_exactly_one_terminal_newline() {
+fn rendered_managed_files_keep_exactly_one_terminal_newline() {
     let _guard = lock_env();
     let template = materialize_template_worktree();
     let temp = tempdir().unwrap();
-    for (name, source) in [
+    for (source_name, source) in [
         ("filesystem", template.path().display().to_string()),
         ("embedded", "embedded:jig-sh".to_owned()),
     ] {
-        let destination = temp.path().join(name);
-        run_init(InitOpts {
-            path: destination.clone(),
-            scaffold: ScaffoldOpts {
-                preset: Some(ScaffoldPreset::RustLibrary),
-                ..ScaffoldOpts::default()
-            },
-            template: Some(source),
-            template_mode: None,
-            vcs_ref: None,
-            force: false,
-            defaults: false,
-            no_input: true,
-            no_vault: true,
-            answers: AnswerOpts {
-                repo_name: Some("ExampleProject".into()),
-                ..AnswerOpts::default()
-            },
-        })
-        .unwrap();
+        for (preset, db) in [
+            (ScaffoldPreset::RustLibrary, None),
+            (ScaffoldPreset::RustReact, Some(ScaffoldDb::Postgres)),
+            (ScaffoldPreset::GoReact, Some(ScaffoldDb::None)),
+            (ScaffoldPreset::GoReact, Some(ScaffoldDb::Postgres)),
+        ] {
+            let name = format!("{source_name}-{preset:?}-{db:?}");
+            let destination = temp.path().join(&name);
+            run_init(InitOpts {
+                path: destination.clone(),
+                scaffold: ScaffoldOpts {
+                    preset: Some(preset),
+                    db,
+                    ..ScaffoldOpts::default()
+                },
+                template: Some(source.clone()),
+                template_mode: None,
+                vcs_ref: None,
+                force: false,
+                defaults: false,
+                no_input: true,
+                no_vault: true,
+                answers: AnswerOpts {
+                    repo_name: Some("ExampleProject".into()),
+                    go_module: (preset == ScaffoldPreset::GoReact)
+                        .then(|| "example.com/example-project".into()),
+                    ..AnswerOpts::default()
+                },
+            })
+            .unwrap();
 
-        for path in ["scripts/jig", ".jig/file-budget.toml"] {
-            let rendered = fs::read(destination.join(path)).unwrap();
-            assert!(
-                rendered.ends_with(b"\n"),
-                "{name}: {path} must end with a newline"
-            );
-            assert!(
-                !rendered.ends_with(b"\n\n"),
-                "{name}: {path} has an extra terminal newline"
-            );
+            let mut paths = vec![
+                "scripts/jig",
+                ".jig/file-budget.toml",
+                ".github/workflows/repo-policy.yml",
+            ];
+            if preset == ScaffoldPreset::GoReact {
+                paths.push(".github/workflows/go-tests.yml");
+            }
+            if preset != ScaffoldPreset::RustLibrary {
+                paths.push(".github/workflows/webapp-checks.yml");
+            }
+            for path in paths {
+                let rendered = fs::read(destination.join(path)).unwrap();
+                assert!(
+                    rendered.ends_with(b"\n"),
+                    "{name}: {path} must end with a newline"
+                );
+                assert!(
+                    !rendered.ends_with(b"\n\n"),
+                    "{name}: {path} has an extra terminal newline"
+                );
+            }
         }
     }
 }

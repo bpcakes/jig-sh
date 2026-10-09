@@ -123,3 +123,43 @@ fn preview_workspace_rechecks_tracked_guide_directory_boundaries() {
     assert!(!destination.path().join("component").exists());
     assert!(!destination.path().join("vendor").exists());
 }
+
+#[test]
+fn preview_workspace_ignores_ambient_git_repository_selectors() {
+    let _guard = lock_env();
+    let source = tempdir().unwrap();
+    let other = tempdir().unwrap();
+    let destination = tempdir().unwrap();
+    for (root, guide) in [
+        (source.path(), "kept/AGENTS.md"),
+        (other.path(), "foreign/AGENTS.md"),
+    ] {
+        fs::create_dir_all(root.join(guide).parent().unwrap()).unwrap();
+        fs::write(root.join(guide), "repository guide\n").unwrap();
+        for args in [vec!["init", "-q"], vec!["add", "."]] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(root)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
+    // A foreign index entry must not make an ignored local scratch guide eligible.
+    fs::create_dir(source.path().join("foreign")).unwrap();
+    fs::write(source.path().join("foreign/AGENTS.md"), "scratch guide\n").unwrap();
+    fs::write(source.path().join(".gitignore"), "foreign/\nkept/\n").unwrap();
+    let _git_dir = EnvVarGuard::set("GIT_DIR", other.path().join(".git"));
+    let _git_work_tree = EnvVarGuard::set("GIT_WORK_TREE", other.path());
+    let _git_index = EnvVarGuard::set("GIT_INDEX_FILE", other.path().join(".git/index"));
+
+    assert_eq!(
+        jig_policy::list_agent_guides(source.path()).unwrap(),
+        ["kept/AGENTS.md"]
+    );
+    seed_preview_workspace(source.path(), destination.path()).unwrap();
+    assert!(destination.path().join("kept/AGENTS.md").is_file());
+    assert!(!destination.path().join("foreign").exists());
+}
