@@ -1,3 +1,5 @@
+use super::*;
+
 fn rust_only_library_descriptor() -> Value {
     json!({
         "name": "rust-library",
@@ -302,7 +304,10 @@ fn rust_only_invalid_process_invocations_emit_one_json_object_without_stderr() {
         command.args(extra);
         let output = command.output().unwrap();
 
-        assert!(!output.status.success(), "invalid {preset} invocation succeeded");
+        assert!(
+            !output.status.success(),
+            "invalid {preset} invocation succeeded"
+        );
         assert!(output.stderr.is_empty(), "{preset} contaminated stderr");
         let objects = serde_json::Deserializer::from_slice(&output.stdout)
             .into_iter::<Value>()
@@ -317,7 +322,10 @@ fn rust_only_invalid_process_invocations_emit_one_json_object_without_stderr() {
         assert!(message.contains(expected_flag), "{message}");
         if expected_kind == "command_failed" {
             assert!(message.contains(preset), "{message}");
-            assert!(!message.contains("Failed to inspect template source"), "{message}");
+            assert!(
+                !message.contains("Failed to inspect template source"),
+                "{message}"
+            );
         }
         assert!(!destination.exists());
     }

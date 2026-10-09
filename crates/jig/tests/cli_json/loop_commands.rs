@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn failed_loop_tick_and_dispatch_exit_nonzero_after_json_output() {
@@ -61,11 +63,7 @@ fn needs_attention_tick_and_run_exit_nonzero_after_json_output() {
             "--json",
         ],
     ] {
-        let output = jig()
-            .current_dir(repo.path())
-            .args(args)
-            .output()
-            .unwrap();
+        let output = jig().current_dir(repo.path()).args(args).output().unwrap();
 
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
@@ -242,8 +240,8 @@ fn loop_clear_attempt_accepts_a_removed_workflow_key() {
     assert_eq!(value["workflow_id"], "removed-workflow");
     assert_eq!(value["item_key"], "pr-7");
     assert_eq!(value["cleared"], true);
-    let attempts: Value = serde_json::from_slice(&fs::read(cache.join("attempts.json")).unwrap())
-        .unwrap();
+    let attempts: Value =
+        serde_json::from_slice(&fs::read(cache.join("attempts.json")).unwrap()).unwrap();
     assert_eq!(attempts["attempts"].as_object().unwrap().len(), 0);
 }
 
@@ -348,18 +346,17 @@ timezone = "UTC"
     )
     .unwrap();
 
-    let schedule_locks = [".agent/.cache/loop", ".agent/runtime/loop"]
-        .map(|relative| {
-            let directory = repo.path().join(relative);
-            fs::create_dir_all(&directory).unwrap();
-            OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(directory.join("schedule.lock"))
-                .unwrap()
-        });
+    let schedule_locks = [".agent/.cache/loop", ".agent/runtime/loop"].map(|relative| {
+        let directory = repo.path().join(relative);
+        fs::create_dir_all(&directory).unwrap();
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(directory.join("schedule.lock"))
+            .unwrap()
+    });
     for lock in &schedule_locks {
         lock.lock_exclusive().unwrap();
     }
@@ -416,8 +413,8 @@ exec "$@""#,
     assert!(second.status.success(), "{second:?}");
     let first: Value = serde_json::from_slice(&first.stdout).unwrap();
     let second: Value = serde_json::from_slice(&second.stdout).unwrap();
-    let executed = first["executed_count"].as_u64().unwrap()
-        + second["executed_count"].as_u64().unwrap();
+    let executed =
+        first["executed_count"].as_u64().unwrap() + second["executed_count"].as_u64().unwrap();
     assert_eq!(executed, 1, "first={first:#}\nsecond={second:#}");
 
     let ledger: Value = serde_json::from_slice(
@@ -426,10 +423,7 @@ exec "$@""#,
     .unwrap();
     let occurrences = ledger["occurrences"].as_object().unwrap();
     assert_eq!(occurrences.len(), 1, "{ledger:#}");
-    assert_eq!(
-        occurrences.values().next().unwrap()["status"],
-        "succeeded"
-    );
+    assert_eq!(occurrences.values().next().unwrap()["status"], "succeeded");
 }
 
 #[cfg(unix)]
@@ -479,8 +473,7 @@ printf 'nested Jig completed\n' > "$out"
         fs::read_to_string(&nested_log).unwrap_or_default()
     );
     assert_eq!(
-        dispatch["actions"][0]["tick"]["actions"][0]["checkout"]["dirty"],
-        false,
+        dispatch["actions"][0]["tick"]["actions"][0]["checkout"]["dirty"], false,
         "{dispatch:#}"
     );
     assert!(!repo.path().join(".agent/state/receipts.jsonl").exists());

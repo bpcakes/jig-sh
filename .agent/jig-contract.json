@@ -728,7 +728,6 @@
       "crates/jig/tests/vault_*.rs",
       "crates/jig/tests/cli_json.rs",
       "crates/jig/tests/cli_json/**",
-      "crates/jig/tests/cli_json_parts/**",
       "Cargo.toml",
       "Cargo.lock",
       "rust-toolchain*",

@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn rust_cli_init_has_exact_json_process_summary() {
     let template_parent = tempdir().unwrap();
