@@ -1,12 +1,19 @@
+use std::ffi::OsString;
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use super::{GithubSnapshotClient, RepositorySnapshot, parse_gh_json};
+
 use std::collections::BTreeMap;
 
 #[derive(Default)]
-struct RepositoryPermissionCache {
+pub(super) struct RepositoryPermissionCache {
     by_login: BTreeMap<String, Value>,
 }
 
 impl RepositoryPermissionCache {
-    fn author_snapshot(
+    pub(super) fn author_snapshot(
         &mut self,
         client: &mut GithubSnapshotClient<'_>,
         repository: &RepositorySnapshot,
@@ -24,14 +31,12 @@ impl RepositoryPermissionCache {
         let endpoint = format!(
             "repos/{encoded_owner}/{encoded_name}/collaborators/{encoded_login}/permission"
         );
-        let output = client.output(
-            vec![
-                OsString::from("api"),
-                OsString::from("--method"),
-                OsString::from("GET"),
-                OsString::from(endpoint),
-            ],
-        )?;
+        let output = client.output(vec![
+            OsString::from("api"),
+            OsString::from("--method"),
+            OsString::from("GET"),
+            OsString::from(endpoint),
+        ])?;
         let permission = match output.status_code {
             Some(0) => parse_gh_json(&output.stdout, "gh collaborator permission")?
                 .get("permission")
@@ -50,7 +55,7 @@ impl RepositoryPermissionCache {
     }
 }
 
-fn untrusted_author_snapshot(login: Option<&str>) -> Value {
+pub(super) fn untrusted_author_snapshot(login: Option<&str>) -> Value {
     json!({
         "login": login,
         "permission": Value::Null,
@@ -58,11 +63,11 @@ fn untrusted_author_snapshot(login: Option<&str>) -> Value {
     })
 }
 
-fn permission_is_trusted(permission: &str) -> bool {
+pub(super) fn permission_is_trusted(permission: &str) -> bool {
     matches!(permission, "admin" | "write")
 }
 
-fn encode_path_segment(value: &str) -> String {
+pub(super) fn encode_path_segment(value: &str) -> String {
     value
         .bytes()
         .map(|byte| {

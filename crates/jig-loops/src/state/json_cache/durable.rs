@@ -1,3 +1,5 @@
+use super::*;
+
 #[derive(Debug)]
 struct DurableJsonCommitMayHaveLanded {
     path: String,
@@ -21,7 +23,7 @@ impl std::error::Error for DurableJsonCommitMayHaveLanded {
 }
 
 #[cfg(test)]
-fn durable_json_commit_may_have_landed(error: &anyhow::Error) -> bool {
+pub(super) fn durable_json_commit_may_have_landed(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<DurableJsonCommitMayHaveLanded>()
@@ -29,7 +31,7 @@ fn durable_json_commit_may_have_landed(error: &anyhow::Error) -> bool {
     })
 }
 
-fn publish_durable_json(
+pub(super) fn publish_durable_json(
     data_path: &Path,
     write_and_sync_temp: impl FnOnce() -> Result<()>,
     replace: impl FnOnce() -> Result<()>,
@@ -47,7 +49,11 @@ fn publish_durable_json(
 
 impl StateDirectory {
     #[cfg(unix)]
-    fn sync_durable_json_publication(&self, _data_name: &OsStr, data_path: &Path) -> Result<()> {
+    pub(super) fn sync_durable_json_publication(
+        &self,
+        _data_name: &OsStr,
+        data_path: &Path,
+    ) -> Result<()> {
         let mut options = OpenOptions::new();
         options
             .read(true)
