@@ -20,6 +20,8 @@ pub(crate) struct App {
     list_viewport: ListViewportState,
     pub(crate) completed: usize,
     pub(crate) inspection_finished: bool,
+    /// At least one refresh has started since the picker opened.
+    pub(crate) refreshed: bool,
     pub(crate) inspection_error: Option<String>,
     inspection_error_messages: HashSet<String>,
     pub(crate) discovery_warnings: Vec<String>,
@@ -47,6 +49,7 @@ impl App {
             list_viewport: ListViewportState::default(),
             completed: 0,
             inspection_finished: false,
+            refreshed: false,
             inspection_error: None,
             inspection_error_messages: HashSet::new(),
             discovery_warnings: discovery_warnings
@@ -121,9 +124,11 @@ impl App {
             ));
             return;
         };
-        if !matches!(row.inspection(), Inspection::Ready(_)) {
+        if !row.reported {
+            row.reported = true;
             self.completed += 1;
         }
+        row.refreshing = false;
         row.set_inspection(Inspection::Ready(Details::from_value(
             update.details,
             observed_at,
@@ -138,8 +143,33 @@ impl App {
             self.record_inspection_error(&error);
         }
         for row in &mut self.rows {
+            // A row the refresh did not reach keeps its previous sample.
+            row.refreshing = false;
             if matches!(row.inspection(), Inspection::Loading) {
                 row.set_inspection(Inspection::Unavailable);
+            }
+        }
+    }
+
+    /// Inspection can run again once the previous round has finished.
+    pub(crate) fn can_refresh(&self) -> bool {
+        !self.static_configuration && self.inspection_finished && self.exit_state.is_none()
+    }
+
+    /// Starts a new inspection round. Rows keep their previous sample, marked
+    /// as refreshing, until their new one arrives.
+    pub(crate) fn begin_refresh(&mut self) {
+        self.refreshed = true;
+        self.inspection_finished = false;
+        self.completed = 0;
+        self.inspection_error = None;
+        self.inspection_error_messages.clear();
+        for row in &mut self.rows {
+            row.reported = false;
+            match row.inspection() {
+                Inspection::Ready(_) => row.refreshing = true,
+                Inspection::Unavailable => row.set_inspection(Inspection::Loading),
+                Inspection::Loading => {}
             }
         }
     }

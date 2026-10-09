@@ -13,7 +13,7 @@ use super::{
     panel, stale_projection_style, stale_usage_style,
     wrap::{Detail, wrap},
 };
-use crate::model::{Focus, Inspection, WindowRole, WindowView};
+use crate::model::{App, Details, Focus, Inspection, WindowRole, WindowView};
 use jig_tui::format_percent;
 
 const STALE_PREFIX: &str = "stale · ";
@@ -108,37 +108,7 @@ fn detail_lines(view: &View<'_>, width: usize) -> Vec<Detail> {
                 lines.push(blank());
             }
             Inspection::Ready(details) => {
-                // Align every bucket's meters on one column.
-                let role_width = details
-                    .buckets
-                    .iter()
-                    .flat_map(|bucket| details.windows_at(bucket, view.now))
-                    .map(|window| window_name(&window).width())
-                    .max()
-                    .unwrap_or(0);
-                for bucket in &details.buckets {
-                    lines.push(styled(
-                        &format!("{} usage", bucket.label()),
-                        Style::default().fg(theme.accent()).bold(),
-                    ));
-                    if bucket.plan != "-" && bucket.plan != details.plan {
-                        lines.push(styled(&format!("Plan: {}", bucket.plan), Style::default()));
-                    }
-                    if bucket.reached != "-" {
-                        lines.push(styled(
-                            &format!("Reached: {}", bucket.reached),
-                            Style::default(),
-                        ));
-                    }
-                    let windows = details.windows_at(bucket, view.now);
-                    for (position, window) in windows.iter().enumerate() {
-                        if position > 0 {
-                            lines.push(blank());
-                        }
-                        lines.extend(window_lines(view, window, role_width, width));
-                    }
-                    lines.push(blank());
-                }
+                lines.extend(usage_lines(view, details, width));
                 account_facts = 4;
                 facts.extend([
                     ("Account".to_owned(), details.account_label().to_owned()),
@@ -148,10 +118,8 @@ fn detail_lines(view: &View<'_>, width: usize) -> Vec<Detail> {
                 ]);
                 if let Some(sample_age) = details.usage_sample_age_label_at(view.now) {
                     account_facts += 1;
-                    facts.push((
-                        "Usage sample".to_owned(),
-                        format!("{sample_age} · reopen to refresh"),
-                    ));
+                    let next = refresh_hint(app, row.refreshing);
+                    facts.push(("Usage sample".to_owned(), format!("{sample_age} · {next}")));
                 }
                 if let Some(error) = &details.inspection_error {
                     errors.push(("Inspection", error.clone()));
@@ -196,6 +164,53 @@ fn detail_lines(view: &View<'_>, width: usize) -> Vec<Detail> {
         lines.push(error_line(theme.warn(), "Discovery warning: ", warning));
     }
     lines
+}
+
+/// Every bucket's windows, with their meters aligned on one column.
+fn usage_lines(view: &View<'_>, details: &Details, width: usize) -> Vec<Detail> {
+    let theme = view.theme;
+    let role_width = details
+        .buckets
+        .iter()
+        .flat_map(|bucket| details.windows_at(bucket, view.now))
+        .map(|window| window_name(&window).width())
+        .max()
+        .unwrap_or(0);
+    let mut lines = Vec::new();
+    for bucket in &details.buckets {
+        lines.push(styled(
+            &format!("{} usage", bucket.label()),
+            Style::default().fg(theme.accent()).bold(),
+        ));
+        if bucket.plan != "-" && bucket.plan != details.plan {
+            lines.push(styled(&format!("Plan: {}", bucket.plan), Style::default()));
+        }
+        if bucket.reached != "-" {
+            lines.push(styled(
+                &format!("Reached: {}", bucket.reached),
+                Style::default(),
+            ));
+        }
+        for (position, window) in details.windows_at(bucket, view.now).iter().enumerate() {
+            if position > 0 {
+                lines.push(blank());
+            }
+            lines.extend(window_lines(view, window, role_width, width));
+        }
+        lines.push(blank());
+    }
+    lines
+}
+
+/// What happens next to a usage sample.
+fn refresh_hint(app: &App, refreshing: bool) -> &'static str {
+    if refreshing {
+        "refreshing…"
+    } else if app.can_refresh() {
+        "press r to refresh"
+    } else {
+        "r refreshes once inspection finishes"
+    }
 }
 
 /// A usage window. Wide panes put the label, a long meter, and the used quota

@@ -81,8 +81,14 @@ impl HomeLine {
             ),
             _ => {
                 let stale = assessment.projection_is_stale() || assessment.quota_is_stale();
+                let label = stale_snapshot_label(projection.short_label(short_role), stale);
                 (
-                    stale_snapshot_label(projection.short_label(short_role), stale),
+                    // The previous sample stays until the refreshed one arrives.
+                    if row.refreshing {
+                        format!("{} {label}", SPINNER[app.tick % SPINNER.len()])
+                    } else {
+                        label
+                    },
                     stale_projection_style(view.theme, projection, stale),
                 )
             }

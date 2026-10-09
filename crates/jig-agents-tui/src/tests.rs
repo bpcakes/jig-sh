@@ -922,4 +922,5 @@ fn bidi_controls_are_sanitized_while_script_joiners_are_preserved() {
 }
 
 mod projection_rendering;
+mod refresh;
 mod window_roles;
