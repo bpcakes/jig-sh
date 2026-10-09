@@ -22,7 +22,7 @@ Owns persistence for `<<[ repo_name ]>>`, including database pools, migrations, 
 
 - Run migrations through `Db::migrate` before serving readiness. Migrations run on one leased connection that is retired on failure or cancellation; cancellation does not roll back committed migrations.
 [% if jobs_enabled %]
-- Runledger's history is applied first and shares `_sqlx_migrations`; the application migrator ignores Runledger versions, and schema compatibility is verified afterward.
+- Runledger's history is applied first and shares `_sqlx_migrations`; the application migrator recognizes both bundled histories while retaining SQLx's missing-version and checksum checks. Schema compatibility is verified afterward.
 [% endif %]
 - Reserve and register PostgreSQL pool cleanup before awaiting connectivity; local closure does not imply remote rollback.
 - The health monitor probes the pool on its own schedule. Readiness reads its last observation without I/O; keep probes cheap and bounded.

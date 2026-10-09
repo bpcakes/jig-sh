@@ -38,6 +38,8 @@ fn shutdown_budget() -> anyhow::Result<ShutdownBudget> {
 async fn migrated_database_is_ready_through_the_public_boundary() -> anyhow::Result<()> {
     with_migrated_database(|db| async move {
         let context = OperationOwner::new(Duration::from_secs(5))?.into_context();
+        db.migrate(&context).await?;
+        db.migrate(&context).await?;
         batter::sqlx::probe(db.pool(), &context).await?;
         let _applied: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
             .fetch_one(db.pool())
@@ -90,6 +92,58 @@ async fn health_monitor_observes_the_database_under_supervision() -> anyhow::Res
     .await
 }
 [% if jobs_enabled %]
+
+#[tokio::test]
+#[ignore = "run with the root test:postgres package script"]
+async fn migrations_reject_a_missing_application_version() -> anyhow::Result<()> {
+    use batter::sqlx::PgLease;
+    use sqlx::{
+        SqlSafeStr,
+        migrate::{MigrateError, Migration, MigrationType, Migrator},
+    };
+
+    with_migrated_database(|db| async move {
+        let context = OperationOwner::new(Duration::from_secs(10))?.into_context();
+        let application = app_db_crate::application_migrator();
+        let version = application
+            .iter()
+            .map(|migration| migration.version)
+            .max()
+            .unwrap_or_default()
+            .checked_add(1)
+            .context("test migration version overflow")?;
+        let mut migrations = application.iter().cloned().collect::<Vec<_>>();
+        migrations.push(Migration::new(
+            version,
+            "example application migration".into(),
+            MigrationType::Simple,
+            "CREATE TABLE example_missing_migration (id BIGINT PRIMARY KEY)".into_sql_str(),
+            false,
+        ));
+        let newer = Migrator::with_migrations(migrations);
+        for _ in 0..2 {
+            let lease = PgLease::acquire(db.pool(), &context).await?;
+            context
+                .run("test.migrate.newer", |_| lease.migrate(&newer))
+                .await?;
+        }
+
+        // The deployed bundle omits the newly applied application migration.
+        // Repeat the rejection to catch a failed lease retaining the DDL lock.
+        for _ in 0..2 {
+            let error = db.migrate(&context).await.unwrap_err();
+            let migration_error = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<MigrateError>());
+            assert!(
+                matches!(migration_error, Some(MigrateError::VersionMissing(missing)) if *missing == version),
+                "expected the missing application version, got {error:#}"
+            );
+        }
+        Ok(())
+    })
+    .await
+}
 
 #[tokio::test]
 #[ignore = "run with the root test:postgres package script"]

@@ -130,10 +130,12 @@ fn rust_react_service_options_add_metrics_export_and_a_runledger_worker() {
             "runledger::migrate_after_idempotency_cutover(&self.database)",
             "lease.migrate(&application)",
             "runledger::ensure_schema_compatible_after_idempotency_cutover(&self.database)",
-            "migrator.set_ignore_missing(true);",
+            "Migrator::with_migrations(",
+            ".chain(runledger::MIGRATOR.iter())",
         ],
     );
     assert!(!db.contains("batter::sqlx::pool_in"));
+    assert!(!db.contains("set_ignore_missing"));
     let config = fs::read_to_string(root.join("crates/my-app/src/config.rs")).unwrap();
     assert_contains_all(
         &config,

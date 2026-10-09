@@ -58,8 +58,9 @@ invocations are not prompted. `--jobs runledger` requires `--db postgres`.
   closes only after the worker settles. The admin API does not run a worker. The
   pool becomes a profiled `RunledgerDatabase`. Runledger's migration history is
   applied before the application's in the shared `_sqlx_migrations` table, and the
-  application migrator ignores Runledger's versions. Set `JOBS_WORKER_ID` for a
-  stable worker identity; otherwise each process derives a unique one.
+  application migrator recognizes both bundled histories. SQLx still rejects
+  missing application versions and checksum mismatches. Set `JOBS_WORKER_ID` for
+  a stable worker identity; otherwise each process derives a unique one.
 
 ## Ownership in the generated workspace
 

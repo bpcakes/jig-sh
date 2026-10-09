@@ -172,7 +172,7 @@ impl Db {
 [% if jobs_enabled %]
     /// Apply Runledger's history, then application migrations, and verify that
     /// the combined schema is compatible. Both histories share `_sqlx_migrations`,
-    /// so the application migrator ignores Runledger's recorded versions.
+    /// so the application migrator recognizes both bundled histories.
     pub async fn migrate(&self, context: &OperationContext) -> anyhow::Result<()> {
         let operation = context.child(DEFAULT_DB_TIMEOUT)?.into_context();
         operation
@@ -234,14 +234,17 @@ impl Db {
 }
 [% if jobs_enabled %]
 
-/// Runledger records its own versions in the shared migration table.
+/// Recognize both histories without disabling SQLx's missing-version checks.
+/// Runledger's own migration API runs first; its bundled entries are already
+/// applied when this plan validates history and applies application migrations.
 pub fn application_migrator() -> Migrator {
-    let mut migrator = sqlx::migrate!(
-        // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
-        "<<[ migration_path ]>>"
-    );
-    migrator.set_ignore_missing(true);
-    migrator
+    Migrator::with_migrations(
+        MIGRATOR
+            .iter()
+            .chain(runledger::MIGRATOR.iter())
+            .cloned()
+            .collect(),
+    )
 }
 [% endif %]
 

@@ -47,7 +47,8 @@ authentication or key policy that a starter cannot supply.
 - Configuration is captured once into `batter::settings::SettingsSource`;
   `DATABASE_URL` is a `SecretString`, so `AppConfig` Debug cannot leak it.
 - The Runledger worker runs in the public API process only. Runledger history
-  is applied first and the application migrator ignores Runledger versions.
+  is applied first; the application migration plan then recognizes both bundled
+  histories, preserving SQLx's missing-version and checksum checks.
 
 ## Validation
 

@@ -18,7 +18,7 @@ Owns durable background jobs: Runledger handlers, the job catalog, worker settin
 
 - Register the worker only through `register`, which synchronizes definitions and passes inert native preparation to `batter::runledger::register_in`. Never start a live native supervisor directly.
 - Worker identities must be unique per running process. Set `JOBS_WORKER_ID` for a stable identity; otherwise one is derived per process.
-- Runledger's migration history shares `_sqlx_migrations` with the application history; `Db::migrate` applies Runledger's first and the application migrator ignores its versions.
+- Runledger's migration history shares `_sqlx_migrations` with the application history; `Db::migrate` applies Runledger's first, then validates both bundled histories with SQLx's missing-version and checksum checks enabled.
 - Handlers must be idempotent: a job can run again after a lease expires or a process stops mid-attempt. Use idempotency keys when enqueueing.
 - A committed enqueue does not mean the job's external effects succeeded; record outcomes durably inside the handler.
 

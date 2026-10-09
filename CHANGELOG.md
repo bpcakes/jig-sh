@@ -118,6 +118,9 @@
 
 ### Fixed
 
+- Generated Runledger applications retain SQLx's missing-migration guard for
+  application history, rejecting a deployed bundle that omits an applied
+  application migration while accepting the bundled Runledger history.
 - Reject `rust-react` repository names whose generated packages would collide
   with Batter-owned packages that the selected shape adds, such as
   `runledger-core` for a repository named `runledger` with `--jobs runledger`.
