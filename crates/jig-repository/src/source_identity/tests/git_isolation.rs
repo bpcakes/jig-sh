@@ -1,3 +1,14 @@
+use super::*;
+
+const REDIRECT_HELPER_ENV: &str = "JIG_TEST_GIT_SOURCE_REDIRECT_HELPER";
+
+const REDIRECT_HELPER_ROOT_ENV: &str = "JIG_TEST_GIT_SOURCE_REDIRECT_ROOT";
+
+const REDIRECT_HELPER_WHOLE_ENV: &str = "JIG_TEST_GIT_SOURCE_REDIRECT_WHOLE";
+
+const REDIRECT_HELPER_TEST: &str =
+    "source_identity::tests::git_isolation::repository_redirect_environment_helper";
+
 #[test]
 fn read_only_git_commands_disable_optional_locks() {
     let mut command = Command::new("git");
@@ -111,61 +122,6 @@ fn whole_worktree_fingerprint_disables_external_diff_and_textconv_configuration(
     assert!(
         !marker.exists(),
         "diff program was executed after content changed"
-    );
-}
-
-#[test]
-fn whole_worktree_fingerprint_fails_closed_on_large_binary_diff_output() {
-    let _env = crate::test_env::lock_env();
-    let temp = tempdir().unwrap();
-    run_git(temp.path(), &["init"]);
-    run_git(
-        temp.path(),
-        &["config", "user.email", "fixture@example.com"],
-    );
-    run_git(temp.path(), &["config", "user.name", "Fixture"]);
-    std::fs::write(temp.path().join("asset.bin"), [0_u8; 32]).unwrap();
-    run_git(temp.path(), &["add", "."]);
-    run_git(temp.path(), &["commit", "-m", "baseline"]);
-    let mut state = 0x1234_5678_u32;
-    let changed = (0..16_384)
-        .map(|_| {
-            state ^= state << 13;
-            state ^= state >> 17;
-            state ^= state << 5;
-            state as u8
-        })
-        .collect::<Vec<_>>();
-    std::fs::write(temp.path().join("asset.bin"), changed).unwrap();
-
-    WORKTREE_PROOF_GIT_OUTPUT_LIMIT_OVERRIDE.set(Some(256));
-    let result = repo_worktree_fingerprint(temp.path());
-    WORKTREE_PROOF_GIT_OUTPUT_LIMIT_OVERRIDE.set(None);
-    let error = result.unwrap_err();
-
-    assert!(
-        format!("{error:#}").contains("worktree proof Git output limit of 256 bytes"),
-        "{error:#}"
-    );
-}
-
-#[test]
-fn whole_worktree_fingerprint_fails_closed_on_too_many_status_entries() {
-    let _env = crate::test_env::lock_env();
-    let temp = tempdir().unwrap();
-    run_git(temp.path(), &["init"]);
-    for name in ["one.txt", "two.txt", "three.txt"] {
-        std::fs::write(temp.path().join(name), name).unwrap();
-    }
-
-    WORKTREE_STATUS_ENTRY_LIMIT_OVERRIDE.set(Some(2));
-    let result = repo_worktree_fingerprint(temp.path());
-    WORKTREE_STATUS_ENTRY_LIMIT_OVERRIDE.set(None);
-    let error = result.unwrap_err();
-
-    assert!(
-        format!("{error:#}").contains("worktree proof entry limit of 2"),
-        "{error:#}"
     );
 }
 

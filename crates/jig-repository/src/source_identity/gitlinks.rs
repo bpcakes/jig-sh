@@ -1,21 +1,4 @@
-pub(super) fn ensure_staged_deletion_has_no_worktree_replacement(
-    root: &Path,
-    path: &str,
-) -> Result<()> {
-    let full_path = root.join(path);
-    match fs::symlink_metadata(&full_path) {
-        Ok(_) => bail!(
-            "Cannot attest staged deletion {path}: the repository path still exists in the worktree and may be an ignored same-path replacement; remove the replacement, or restore and stage the checked version before recording gate evidence"
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| {
-            format!(
-                "Failed to inspect staged deletion replacement {}",
-                full_path.display()
-            )
-        }),
-    }
-}
+use super::*;
 
 pub(super) fn literal_path_chunks<T>(
     paths: &[T],
@@ -260,66 +243,4 @@ pub(super) fn git_status_is_dirty(
     })?;
     collection.ensure_active()?;
     Ok(!output.stdout.is_empty())
-}
-
-pub(super) fn hash_field(digest: &mut Sha256, value: &[u8]) {
-    digest.update((value.len() as u64).to_be_bytes());
-    digest.update(value);
-}
-
-pub(super) fn canonical_binary_diff_args(
-    order_file: &Path,
-    cached: bool,
-    baseline_oid: Option<&str>,
-) -> Vec<OsString> {
-    let mut args = vec![
-        OsString::from("-c"),
-        OsString::from("core.fileMode=true"),
-        OsString::from("-c"),
-        OsString::from("diff.ignoreSubmodules=none"),
-        OsString::from("-c"),
-        OsString::from("diff.algorithm=myers"),
-        OsString::from("-c"),
-        OsString::from("diff.indentHeuristic=false"),
-        OsString::from("-c"),
-        OsString::from("diff.renames=false"),
-        OsString::from("-c"),
-        OsString::from("diff.context=3"),
-        OsString::from("-c"),
-        OsString::from("diff.interHunkContext=0"),
-        OsString::from("-c"),
-        OsString::from("diff.relative=false"),
-        OsString::from("diff"),
-    ];
-    if cached {
-        args.push(OsString::from("--cached"));
-    }
-    args.extend(
-        [
-            "--binary",
-            "--full-index",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-renames",
-            "--no-indent-heuristic",
-            "--diff-algorithm=myers",
-            "--unified=3",
-            "--inter-hunk-context=0",
-            "--no-relative",
-            "--ignore-submodules=none",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-        ]
-        .into_iter()
-        .map(OsString::from),
-    );
-    let mut order_arg = OsString::from("-O");
-    order_arg.push(order_file.as_os_str());
-    args.push(order_arg);
-    if let Some(baseline_oid) = baseline_oid {
-        args.push(OsString::from(baseline_oid));
-    }
-    args.push(OsString::from("--"));
-    args
 }

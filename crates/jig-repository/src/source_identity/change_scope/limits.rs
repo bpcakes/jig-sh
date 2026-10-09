@@ -1,4 +1,6 @@
-fn scope_git_output(
+use super::*;
+
+pub(super) fn scope_git_output(
     root: &Path,
     args: &[&str],
     label: &str,
@@ -13,7 +15,7 @@ fn scope_git_output(
     )
 }
 
-fn scope_rename_limit() -> usize {
+pub(super) fn scope_rename_limit() -> usize {
     #[cfg(test)]
     if let Some(limit) = SCOPE_RENAME_LIMIT_OVERRIDE.get() {
         return limit;
@@ -22,7 +24,10 @@ fn scope_rename_limit() -> usize {
 }
 
 #[cfg(test)]
-pub(super) fn with_scope_rename_limit<T>(limit: usize, operation: impl FnOnce() -> T) -> T {
+pub(in crate::source_identity) fn with_scope_rename_limit<T>(
+    limit: usize,
+    operation: impl FnOnce() -> T,
+) -> T {
     SCOPE_RENAME_LIMIT_OVERRIDE.with(|override_limit| {
         let previous = override_limit.replace(Some(limit));
         let result = operation();

@@ -371,4 +371,21 @@ pub(super) fn require_nul_terminated(stdout: &[u8], label: &str) -> Result<()> {
     Ok(())
 }
 
-include!("scope/tail.rs");
+pub(super) fn ensure_staged_deletion_has_no_worktree_replacement(
+    root: &Path,
+    path: &str,
+) -> Result<()> {
+    let full_path = root.join(path);
+    match fs::symlink_metadata(&full_path) {
+        Ok(_) => bail!(
+            "Cannot attest staged deletion {path}: the repository path still exists in the worktree and may be an ignored same-path replacement; remove the replacement, or restore and stage the checked version before recording gate evidence"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "Failed to inspect staged deletion replacement {}",
+                full_path.display()
+            )
+        }),
+    }
+}
