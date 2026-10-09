@@ -601,6 +601,13 @@ pub fn render_agent_map(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
     agent_map::render(root, map_path)
 }
 
+/// The `AGENTS.md` guides that belong to the repository at `root`: tracked or
+/// untracked and not ignored when `root` is inside a Git work tree, every
+/// guide outside `.git`, `target`, and nested repositories otherwise.
+pub fn list_agent_guides(root: &Path) -> Result<Vec<String>> {
+    agent_map::list_guides(root)
+}
+
 fn check_migration_immutability(
     ctx: &RepoContext,
     opts: &MigrationImmutabilityInput,

@@ -393,6 +393,9 @@ fn render_template_files_pass(
             .build()?,
     );
     environment.set_undefined_behavior(UndefinedBehavior::Strict);
+    // Templates end with a newline; keep it so rendered files are complete
+    // text files and match the launcher parity check.
+    environment.set_keep_trailing_newline(true);
 
     let mut render = TemplateRender {
         environment: &mut environment,

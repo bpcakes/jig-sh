@@ -315,6 +315,50 @@ fn symlink_guides_targets_and_ancestors_never_read_outside_content() {
 }
 
 #[test]
+fn nested_repositories_are_outside_discovery_but_ignored_guides_are_not() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture(temp.path(), "rust", None);
+    for root in [temp.path().to_path_buf(), temp.path().join("vendor")] {
+        fs::create_dir_all(&root).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    fs::write(temp.path().join(".gitignore"), "scratch/\n").unwrap();
+    fs::write(temp.path().join("AGENTS.md"), "# Guide\n").unwrap();
+    for guide in [
+        "crates/api/AGENTS.md",
+        "scratch/trial/AGENTS.md",
+        "vendor/AGENTS.md",
+    ] {
+        let path = temp.path().join(guide);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "[broken](missing.md)\n").unwrap();
+    }
+
+    let result = check(&ctx).unwrap();
+
+    // Git ignore rules do not exclude existing guides, so the ignored scratch
+    // guide is still checked; the nested repository's guide belongs to it.
+    assert_eq!(result["ok"], false);
+    let guides = result["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|diagnostic| diagnostic["guide"].as_str().unwrap().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        guides.into_iter().collect::<Vec<_>>(),
+        ["crates/api/AGENTS.md", "scratch/trial/AGENTS.md"]
+    );
+}
+
+#[test]
 fn guide_reads_are_bounded_and_reject_invalid_utf8() {
     let temp = tempdir().unwrap();
     let ctx = fixture(temp.path(), "rust", None);
