@@ -1,18 +1,18 @@
 [package]
-name = "jig-codex-tui"
+name = "jig-agents-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Internal shared home picker with Codex inspection used by the matching jig-sh CLI release."
+description = "Internal Claude and Codex home picker used by the matching jig-sh CLI release."
 repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
-keywords = ["codex", "terminal", "tui", "development-tools"]
+keywords = ["claude", "codex", "terminal", "tui", "development-tools"]
 categories = ["command-line-utilities", "development-tools"]
 
 [lib]
-name = "jig_codex_tui"
+name = "jig_agents_tui"
 
 [dependencies]
 anyhow.workspace = true

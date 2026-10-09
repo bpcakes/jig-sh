@@ -55,8 +55,8 @@ known names. Other buckets retain generic duration labels. With no primary bucke
 usage may still be displayed but the picker does not recommend a configuration
 based on subscription headroom. Missing/invalid usage remains unknown.
 
-The crate package name `jig-codex-tui` and its old public selection functions remain
-for compatibility. New integrations use `select_provider_with_cancellation`, which
+The picker lives in `jig-agents-tui`, which was published as `jig-codex-tui`
+through v0.7.2. Integrations use `select_provider_with_cancellation`, which
 accepts provider presentation, optional inspection, and explicit quota semantics.
 No new provider-dependent JSON fields are required.
 

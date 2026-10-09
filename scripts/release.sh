@@ -31,7 +31,7 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-bootstrap"
   "jig-tui"
   "jig-vault-tui"
-  "jig-codex-tui"
+  "jig-agents-tui"
   "jig-ui"
   "jig-agents"
   "jig-loops"
@@ -129,7 +129,7 @@ crate_dir_for_package() {
     jig-bootstrap) printf '%s\n' "crates/jig-bootstrap" ;;
     jig-tui) printf '%s\n' "crates/jig-tui" ;;
     jig-vault-tui) printf '%s\n' "crates/jig-vault-tui" ;;
-    jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;
+    jig-agents-tui) printf '%s\n' "crates/jig-agents-tui" ;;
     jig-ui) printf '%s\n' "crates/jig-ui" ;;
     jig-agents) printf '%s\n' "crates/jig-agents" ;;
     jig-loops) printf '%s\n' "crates/jig-loops" ;;

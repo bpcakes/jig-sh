@@ -35,7 +35,7 @@
 - Add a named `jig check` subcommand: `NamedCheck` in `src/command/check.rs` ties its selector to its legacy manifest tool, and `NamedCheckCommand` in `src/cli/check.rs` is its clap variant.
 - Change which commands may keep the reserved vault passphrase variables past startup: `src/cli/run/vault_environment.rs` (read the vault runtime guide first).
 - Add an agent provider, or change Claude/Codex home discovery, credentials, or usage: [jig-agents](../jig-agents/AGENTS.md). `src/cli/agent_run.rs` owns common homes/launch orchestration and signal supervision. See [agent providers](../../docs/agent-providers.md).
-- Change shared operation signal supervision: `src/signal_supervision.rs`, with the process-wide signal session in `src/signal_supervision/session.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
+- Change shared operation signal supervision: `src/signal_supervision.rs`, with the process-wide signal session in `src/signal_supervision/session.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-agents-tui`.
 - Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
 - Change how a command's result is shown to people: its formatter in `src/cli/<family>/render.rs`, or in `src/cli/output.rs` for the summaries that still live there (check, run, setup, migration, agent-map and manifest tools). The command passes that function to `emit` (or names it in its `RuntimeDispatch`); there is no central output table to extend.
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.

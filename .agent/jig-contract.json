@@ -643,7 +643,7 @@
       "crates/jig/src/cli/agent_run/**",
       "crates/jig/src/cli/home_picker.rs",
       "crates/jig/src/cli/codex/**",
-      "crates/jig-codex-tui/**",
+      "crates/jig-agents-tui/**",
       "crates/jig/src/cli/output/command_display.rs",
       "crates/jig/src/cli/claude*.rs",
       "crates/jig/src/cli/claude/**",
