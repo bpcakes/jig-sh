@@ -1,5 +1,4 @@
-// State maintenance summaries. Included from `output_tests_parts.rs` inside
-// the `cli::output::tests` module.
+use super::*;
 
 #[test]
 fn state_diagnose_summary_reports_integrity_without_claiming_run_linkage() {
