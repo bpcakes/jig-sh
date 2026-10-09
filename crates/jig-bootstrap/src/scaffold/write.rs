@@ -118,6 +118,8 @@ impl ScaffoldReport {
                 ScaffoldDb::None => "none",
                 ScaffoldDb::Postgres => "postgres",
             },
+            "metrics": plan.project.metrics().as_str(),
+            "jobs": plan.project.jobs().as_str(),
             "frontends": plan.frontends().iter().map(|frontend| {
                 json!({
                     "name": frontend.name,

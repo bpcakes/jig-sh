@@ -13,7 +13,8 @@ use super::super::templates::{
 };
 use super::super::write::{ScaffoldFile, scaffold_file};
 use super::super::{
-    FrontendApp, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldPreset,
+    FrontendApp, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldJobs, ScaffoldMetrics,
+    ScaffoldPreset,
 };
 use super::templates::{
     ASTRO_TEMPLATES, SPA_SHADCN_TEMPLATES, VITE_REACT_TEMPLATES, admin_template_files,
@@ -36,6 +37,8 @@ pub(in crate::scaffold) struct FrontendDatabaseContext<'a> {
 pub(in crate::scaffold) struct FrontendBackendContext<'a> {
     pub(in crate::scaffold) preset: ScaffoldPreset,
     pub(in crate::scaffold) root: &'a str,
+    pub(in crate::scaffold) metrics: ScaffoldMetrics,
+    pub(in crate::scaffold) jobs: ScaffoldJobs,
     pub(in crate::scaffold) database: FrontendDatabaseContext<'a>,
 }
 

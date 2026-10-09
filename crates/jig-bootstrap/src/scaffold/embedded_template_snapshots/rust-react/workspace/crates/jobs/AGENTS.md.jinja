@@ -1,0 +1,28 @@
+# <<[ package_name ]>>-jobs
+
+## Purpose
+
+Owns durable background jobs: Runledger handlers, the job catalog, worker settings, and enqueue helpers. Runledger stores, claims, retries, and settles jobs in PostgreSQL; Batter supervises the worker inside the public API process.
+
+## Key entrypoints
+
+- `src/lib.rs`: `ExampleJob`, `catalog`, `worker_config`, `register`, and `enqueue_example`.
+
+## Edit here for X
+
+- Add a job: define a `JobType`, implement `JobHandler`, and add the handler to `catalog`.
+- Enqueue from application code with `batter::runledger::run_atomic` on `Db::runledger`, together with the application writes the job depends on, so both commit or neither does.
+- Keep business decisions in `crates/<<[ package_name ]>>`; handlers translate payloads and call use cases.
+
+## Invariants
+
+- Register the worker only through `register`, which synchronizes definitions and passes inert native preparation to `batter::runledger::register_in`. Never start a live native supervisor directly.
+- Worker identities must be unique per running process. Set `JOBS_WORKER_ID` for a stable identity; otherwise one is derived per process.
+- Runledger's migration history shares `_sqlx_migrations` with the application history; `Db::migrate` applies Runledger's first and the application migrator ignores its versions.
+- Handlers must be idempotent: a job can run again after a lease expires or a process stops mid-attempt. Use idempotency keys when enqueueing.
+- A committed enqueue does not mean the job's external effects succeeded; record outcomes durably inside the handler.
+
+## Common commands
+
+- `cargo test -p <<[ package_name ]>>-jobs`
+- `bash scripts/test-postgres.sh` runs the worker against a disposable PostgreSQL 18 database.

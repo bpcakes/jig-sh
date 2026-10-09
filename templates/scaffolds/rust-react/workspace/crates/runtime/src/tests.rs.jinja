@@ -1,0 +1,124 @@
+use super::{cleanup_budget, shutdown_budget};
+use batter::{
+    cleanup::CleanupOutcome,
+    lifecycle::{Readiness, Supervisor},
+    operation::OperationOwner,
+    startup::{InitializationError, Startup, StartupCause, StartupError, StartupOutcome},
+};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+
+#[test]
+fn shutdown_and_cleanup_budgets_are_valid() {
+    shutdown_budget().expect("constant shutdown budget is valid");
+    cleanup_budget().expect("constant cleanup budget is valid");
+}
+
+#[tokio::test]
+async fn protected_startup_failure_closes_reserved_resources() {
+    let closed = Arc::new(AtomicUsize::new(0));
+    let count = closed.clone();
+    let mut starting = Startup::scoped(
+        Supervisor::new(shutdown_budget().unwrap()),
+        OperationOwner::new(Duration::from_secs(1))
+            .unwrap()
+            .into_context(),
+        cleanup_budget().unwrap(),
+        move |scope| {
+            Box::pin(async move {
+                scope.stage("test.initialize").unwrap();
+                scope
+                    .reserve_cleanup("test.resource")
+                    .unwrap()
+                    .register(move || async move {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    });
+                Err::<(), _>(std::io::Error::other("startup failed"))
+            })
+        },
+    )
+    .start();
+    let observer = starting.observer();
+    let report = match tokio::time::timeout(Duration::from_secs(2), starting.wait())
+        .await
+        .expect("protected startup failure should be reported promptly")
+    {
+        Err(StartupError::Failed(report)) => report,
+        Err(StartupError::Coordinator(_)) => panic!("expected reported startup failure"),
+        Ok(_) => panic!("expected startup failure"),
+    };
+    let observed = tokio::time::timeout(Duration::from_secs(2), observer.wait())
+        .await
+        .expect("startup observer should report the failure promptly");
+    let StartupOutcome::Failed(StartupError::Failed(observed)) = observed else {
+        panic!("expected observed startup failure")
+    };
+    assert!(Arc::ptr_eq(&report, &observed));
+    assert!(matches!(
+        report.cause,
+        StartupCause::Failed(InitializationError::Application(_))
+    ));
+    assert_eq!(report.stage, "test.initialize");
+    assert_eq!(report.cleanup.records.len(), 1);
+    assert_eq!(report.cleanup.records[0].name, "test.resource");
+    assert_eq!(report.cleanup.records[0].outcome, CleanupOutcome::Succeeded);
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn protected_startup_owner_drop_cancels_initialization_and_closes_resources() {
+    let entered = Arc::new(AtomicUsize::new(0));
+    let entered_flag = entered.clone();
+    let closed = Arc::new(AtomicUsize::new(0));
+    let count = closed.clone();
+    let supervisor = Supervisor::new(shutdown_budget().unwrap());
+    let lifecycle = supervisor.status();
+    let starting = Startup::scoped(
+        supervisor,
+        OperationOwner::new(Duration::from_secs(10))
+            .unwrap()
+            .into_context(),
+        cleanup_budget().unwrap(),
+        move |scope| {
+            Box::pin(async move {
+                scope.stage("test.wait").unwrap();
+                scope
+                    .reserve_cleanup("test.resource")
+                    .unwrap()
+                    .register(move || async move {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    });
+                entered_flag.store(1, Ordering::SeqCst);
+                std::future::pending::<Result<(), std::io::Error>>().await
+            })
+        },
+    )
+    .start();
+    let observer = starting.observer();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while entered.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("protected startup initialization should begin promptly");
+    drop(starting);
+    let observed = tokio::time::timeout(Duration::from_secs(2), observer.wait())
+        .await
+        .expect("startup observer should report owner cancellation promptly");
+    let StartupOutcome::Failed(StartupError::Failed(report)) = observed else {
+        panic!("expected drained startup failure")
+    };
+    assert!(matches!(report.cause, StartupCause::Draining));
+    assert!(report.cleanup.is_success());
+    assert_eq!(report.cleanup.records.len(), 1);
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
+    assert_eq!(lifecycle.readiness(), Readiness::Draining);
+}

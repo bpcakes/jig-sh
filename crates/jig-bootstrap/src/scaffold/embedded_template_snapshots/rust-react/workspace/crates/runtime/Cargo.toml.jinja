@@ -10,13 +10,18 @@ workspace = true
 
 [dependencies]
 <<[ package_name ]>> = { path = "../<<[ package_name ]>>" }
+[% if metrics_enabled %]
+<<[ package_name ]>>-core = { path = "../<<[ package_name ]>>-core" }
+[% endif %]
+[% if jobs_enabled %]
+<<[ package_name ]>>-jobs = { path = "../<<[ package_name ]>>-jobs", optional = true }
+[% endif %]
 anyhow.workspace = true
-axum.workspace = true
 batter.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [% if db_enabled %]
 [features]
-db = ["<<[ package_name ]>>/db"]
+db = ["<<[ package_name ]>>/db"[% if jobs_enabled %], "dep:<<[ package_name ]>>-jobs"[% endif %]]
 [% endif %]

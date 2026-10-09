@@ -103,20 +103,18 @@ fn irrelevant_rust_templates_do_not_crowd_out_sqlx_path_warnings() {
 
 #[test]
 fn production_shaped_rust_sources_preserve_migration_signals() {
-    let scaffold = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../templates/scaffolds/rust-react/workspace/crates/db/src/lib.rs.jinja"
-    ))
-    .replace("<<[ db_pool ]>>", "PgPool")
-    .replace("<<[ db_database ]>>", "Postgres")
-    .replace("<<[ migration_path ]>>", "./migrations");
     // Exercise a larger maintained module as well as the generated database
-    // source; broad item/block structure must not exhaust the parser budget.
+    // sources; broad item/block structure must not exhaust the parser budget.
     let module = format!(
         "{}\nfn example_migrations() {{ sqlx::migrate!(); }}",
         include_str!("../rust_sqlx.rs")
     );
-    for source in [scaffold, module] {
+    let sources = [
+        rendered_database_source(crate::ScaffoldJobs::None),
+        rendered_database_source(crate::ScaffoldJobs::Runledger),
+        module,
+    ];
+    for source in sources {
         let (enabled, warnings) = infer_source(&source);
         assert!(enabled, "{warnings:?}");
         assert!(
@@ -126,4 +124,30 @@ fn production_shaped_rust_sources_preserve_migration_signals() {
             "{warnings:?}"
         );
     }
+}
+
+/// Render the generated database crate exactly as `jig init` would.
+fn rendered_database_source(jobs: crate::ScaffoldJobs) -> String {
+    let destination = tempfile::tempdir().unwrap();
+    let plan = crate::scaffold::InitScaffoldPlan::from_opts(
+        &crate::ScaffoldOpts {
+            preset: Some(crate::ScaffoldPreset::RustReact),
+            db: Some(crate::ScaffoldDb::Postgres),
+            jobs: Some(jobs),
+            ..crate::ScaffoldOpts::default()
+        },
+        &crate::AnswerOpts {
+            repo_name: Some("example-project".into()),
+            ..crate::AnswerOpts::default()
+        },
+        destination.path(),
+    )
+    .unwrap()
+    .unwrap();
+    plan.render_files()
+        .unwrap()
+        .into_iter()
+        .find(|file| file.relative == "crates/example-project-db/src/lib.rs")
+        .expect("database crate source is rendered")
+        .contents
 }

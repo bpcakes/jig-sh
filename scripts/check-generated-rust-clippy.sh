@@ -387,4 +387,16 @@ assert_mod_module_files_rejected \
   online \
   workspace
 
+# The optional Batter services render additional crates and modules: metrics
+# export in the runtime and a Runledger jobs crate wired into PostgreSQL.
+services_repo="$fixture_root/ExampleProject-services"
+init_repo "$services_repo" \
+  --preset rust-react \
+  --repo-name ExampleProject \
+  --db postgres \
+  --frontends web,admin \
+  --metrics otlp \
+  --jobs runledger
+prepare_and_check "$services_repo" "$rust_react_toolchain" online
+
 echo "Generated Rust Clippy validation passed."

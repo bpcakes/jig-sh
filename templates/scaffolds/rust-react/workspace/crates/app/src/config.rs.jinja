@@ -1,0 +1,224 @@
+//! Typed application configuration, captured from explicit settings once.
+
+use std::net::{IpAddr, SocketAddr};
+
+use ::<<[ module_name ]>>_core::AppVersion;
+[% if db_enabled %]
+#[cfg(feature = "db")]
+use batter::settings::SecretString;
+[% endif %]
+use batter::settings::{SettingsError, SettingsSource};
+
+/// Startup configuration. Secrets use `SecretString`, so `Debug` output and
+/// settings errors never contain their values.
+#[derive(Clone, Debug)]
+pub struct AppConfig {
+    version: AppVersion,
+    bind_addr: SocketAddr,
+[% if db_enabled %]
+    #[cfg(feature = "db")]
+    database_url: Option<SecretString>,
+[% endif %]
+[% if metrics_enabled %]
+    metrics_endpoint: Option<String>,
+[% endif %]
+[% if jobs_enabled %]
+    #[cfg(feature = "db")]
+    jobs_worker_id: Option<String>,
+[% endif %]
+}
+
+impl AppConfig {
+    /// Capture the process environment once, after `.env` loading, and parse it.
+    pub fn from_env() -> Result<Self, SettingsError> {
+        Self::from_source(&SettingsSource::from_pairs(std::env::vars_os())?)
+    }
+
+    pub fn from_source(source: &SettingsSource) -> Result<Self, SettingsError> {
+        Self::from_source_with_version(source, env!("CARGO_PKG_VERSION"))
+    }
+
+    pub fn from_source_with_version(
+        source: &SettingsSource,
+        version: impl Into<String>,
+    ) -> Result<Self, SettingsError> {
+        let bind_addr = resolve_bind_addr(
+            present(source.text("HOST")?),
+            present(source.text("PORT")?),
+            present(source.text("BIND_ADDR")?),
+        )?;
+        Ok(Self {
+            version: AppVersion::new(version),
+            bind_addr,
+[% if db_enabled %]
+            #[cfg(feature = "db")]
+            database_url: Some(SecretString::new(source.required("DATABASE_URL")?)),
+[% endif %]
+[% if metrics_enabled %]
+            metrics_endpoint: present(source.text("METRICS_OTLP_ENDPOINT")?).map(str::to_owned),
+[% endif %]
+[% if jobs_enabled %]
+            #[cfg(feature = "db")]
+            jobs_worker_id: present(source.text("JOBS_WORKER_ID")?).map(str::to_owned),
+[% endif %]
+        })
+    }
+
+    pub fn for_tests() -> Self {
+        Self::for_tests_with_version(env!("CARGO_PKG_VERSION"))
+    }
+
+    pub fn for_tests_with_version(version: impl Into<String>) -> Self {
+        Self {
+            version: AppVersion::new(version),
+            bind_addr: "127.0.0.1:0".parse().expect("test bind address is valid"),
+[% if db_enabled %]
+            #[cfg(feature = "db")]
+            database_url: None,
+[% endif %]
+[% if metrics_enabled %]
+            metrics_endpoint: None,
+[% endif %]
+[% if jobs_enabled %]
+            #[cfg(feature = "db")]
+            jobs_worker_id: None,
+[% endif %]
+        }
+    }
+
+    pub fn bind_addr(&self) -> SocketAddr {
+        self.bind_addr
+    }
+
+    pub fn version(&self) -> &AppVersion {
+        &self.version
+    }
+[% if db_enabled %]
+
+    #[cfg(feature = "db")]
+    pub fn database_url(&self) -> Option<&SecretString> {
+        self.database_url.as_ref()
+    }
+
+    /// Select a database explicitly, for example a disposable test database.
+    #[cfg(feature = "db")]
+    pub fn with_database_url(mut self, database_url: impl Into<String>) -> Self {
+        self.database_url = Some(SecretString::new(database_url));
+        self
+    }
+[% endif %]
+[% if metrics_enabled %]
+
+    /// OTLP/HTTP collector endpoint; absent keeps metrics export disabled.
+    pub fn metrics_endpoint(&self) -> Option<&str> {
+        self.metrics_endpoint.as_deref()
+    }
+[% endif %]
+[% if jobs_enabled %]
+
+    /// Stable Runledger worker identity; absent derives a unique one per process.
+    #[cfg(feature = "db")]
+    pub fn jobs_worker_id(&self) -> Option<&str> {
+        self.jobs_worker_id.as_deref()
+    }
+[% endif %]
+}
+
+/// Treat an empty value like an absent one, as `.env` placeholders often are.
+fn present(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.is_empty())
+}
+
+fn resolve_bind_addr(
+    host: Option<&str>,
+    port: Option<&str>,
+    configured_bind_addr: Option<&str>,
+) -> Result<SocketAddr, SettingsError> {
+    if let (Some(host), Some(port)) = (host, port) {
+        let host = host.parse::<IpAddr>().map_err(|error| {
+            SettingsError::new("HOST", "expected an IP address").with_cause(error)
+        })?;
+        let port = port
+            .parse::<u16>()
+            .map_err(|error| SettingsError::new("PORT", "expected a TCP port").with_cause(error))?;
+        return Ok(SocketAddr::new(host, port));
+    }
+
+    configured_bind_addr
+        .unwrap_or("127.0.0.1:0")
+        .parse()
+        .map_err(|error| {
+            SettingsError::new("BIND_ADDR", "expected a socket address").with_cause(error)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn source(pairs: &[(&str, &str)]) -> SettingsSource {
+        SettingsSource::from_pairs(
+            pairs
+                .iter()
+                .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        )
+        .expect("test settings are unique")
+    }
+
+    #[test]
+    fn test_config_uses_loopback_bind_addr() {
+        assert_eq!(
+            AppConfig::for_tests().bind_addr().to_string(),
+            "127.0.0.1:0"
+        );
+    }
+
+    #[test]
+    fn injected_host_and_port_override_the_dotenv_bind_address() {
+        assert_eq!(
+            resolve_bind_addr(Some("127.0.0.1"), Some("4317"), Some("127.0.0.1:3000")).unwrap(),
+            "127.0.0.1:4317".parse().unwrap()
+        );
+        assert_eq!(
+            resolve_bind_addr(Some("::1"), Some("4318"), Some("127.0.0.1:3000")).unwrap(),
+            "[::1]:4318".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn partial_jig_bind_values_fall_back_to_bind_addr() {
+        assert_eq!(
+            resolve_bind_addr(Some("127.0.0.1"), None, Some("127.0.0.1:3000")).unwrap(),
+            "127.0.0.1:3000".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_settings_name_the_field_without_echoing_the_value() {
+        let error = AppConfig::from_source(&source(&[("BIND_ADDR", "private-marker")]))
+            .expect_err("an invalid bind address is rejected");
+        assert_eq!(error.field(), "BIND_ADDR");
+        assert!(!format!("{error} {error:?}").contains("private-marker"));
+    }
+[% if db_enabled %]
+
+    #[cfg(feature = "db")]
+    #[test]
+    fn database_url_is_required_and_redacted() {
+        let missing = AppConfig::from_source(&source(&[])).expect_err("DATABASE_URL is required");
+        assert_eq!(missing.field(), "DATABASE_URL");
+
+        let config = AppConfig::from_source(&source(&[(
+            "DATABASE_URL",
+            "postgres://user:private-marker@localhost/example",
+        )]))
+        .expect("a database URL is accepted");
+        assert!(!format!("{config:?}").contains("private-marker"));
+        assert_eq!(
+            config.database_url().map(SecretString::expose_secret),
+            Some("postgres://user:private-marker@localhost/example")
+        );
+    }
+[% endif %]
+}

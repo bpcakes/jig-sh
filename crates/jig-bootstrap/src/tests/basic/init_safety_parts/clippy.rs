@@ -12,6 +12,8 @@ fn rust_scaffolds_treat_clippy_config_as_project_owned_whole_file() {
                 db: (preset == ScaffoldPreset::RustReact).then_some(ScaffoldDb::None),
                 frontends: Vec::new(),
                 frontend_list: Vec::new(),
+                metrics: None,
+                jobs: None,
             },
             &AnswerOpts {
                 repo_name: Some("ExampleProject".into()),

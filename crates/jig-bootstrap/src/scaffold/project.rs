@@ -1,6 +1,9 @@
 use jig_context::backend::{BackendLanguage, GoDatabase};
 
-use crate::{APPLICATION_BACKEND_DEV_APP_NAME, DevApp, ScaffoldDb, ScaffoldPreset};
+use crate::{
+    APPLICATION_BACKEND_DEV_APP_NAME, DevApp, ScaffoldDb, ScaffoldJobs, ScaffoldMetrics,
+    ScaffoldPreset,
+};
 
 use super::frontend::FrontendScaffold;
 
@@ -28,6 +31,20 @@ impl ScaffoldProjectPlan {
                 GoDatabase::Postgres => ScaffoldDb::Postgres,
             },
             Self::RustOnly(_) => ScaffoldDb::None,
+        }
+    }
+
+    pub(super) const fn metrics(&self) -> ScaffoldMetrics {
+        match self {
+            Self::RustReact(project) => project.backend.metrics,
+            Self::GoReact(_) | Self::RustOnly(_) => ScaffoldMetrics::None,
+        }
+    }
+
+    pub(super) const fn jobs(&self) -> ScaffoldJobs {
+        match self {
+            Self::RustReact(project) => project.backend.jobs,
+            Self::GoReact(_) | Self::RustOnly(_) => ScaffoldJobs::None,
         }
     }
 
@@ -164,6 +181,8 @@ pub(super) struct ReactScaffoldPlan {
 pub(super) struct ReactBackendRenderContext<'a> {
     pub(super) preset: ScaffoldPreset,
     pub(super) database: ScaffoldDb,
+    pub(super) metrics: ScaffoldMetrics,
+    pub(super) jobs: ScaffoldJobs,
     pub(super) root: &'a str,
     pub(super) migration_dir: &'a str,
     pub(super) sqlx_metadata_dir: &'a str,
@@ -172,6 +191,8 @@ pub(super) struct ReactBackendRenderContext<'a> {
 #[derive(Clone, Debug)]
 pub(super) struct RustScaffoldPlan {
     pub(super) database: ScaffoldDb,
+    pub(super) metrics: ScaffoldMetrics,
+    pub(super) jobs: ScaffoldJobs,
     pub(super) migration_dir: String,
     pub(super) sqlx_metadata_dir: String,
 }

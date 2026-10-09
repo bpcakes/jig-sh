@@ -2,28 +2,59 @@ mod public;
 
 use ::<<[ module_name ]>>::AppState;
 use ::<<[ module_name ]>>_http_common::not_found;
-use axum::Router;
-use batter::lifecycle::{LifecycleStatus, OperationAdmission, ShutdownHandle};
+use ::<<[ module_name ]>>_http_common::probes;
+use ::<<[ module_name ]>>_http_common::requests;
+use ::<<[ module_name ]>>_http_common::route_inventory;
+use batter::{
+    BoxError,
+    axum::{
+        AssembledHttp, GuardedRouter, HttpBoundary, InProcessClient, ProbePath, ReadinessPolicy,
+    },
+    lifecycle::{OperationAdmission, ShutdownHandle},
+    readiness::ReadinessCondition,
+};
 use utoipa::openapi::OpenApi;
 
-pub fn router(state: AppState) -> Router {
-    let (shutdown, approval) = ShutdownHandle::new_with_readiness_approval();
-    let lifecycle = shutdown.status();
-    let admission = shutdown.operation_admission();
-    approval.approve();
-    router_with_lifecycle(state, lifecycle, admission)
+/// Assemble the public surface for protected serving.
+///
+/// The runtime supplies its supervisor's operation admission and a readiness
+/// policy combining lifecycle with any dependency health. Batter's boundary
+/// owns the layer order: correlation and one HTTP observer outermost, probes
+/// outside admission, and admission plus the request deadline around every
+/// documented route and the fallback.
+pub async fn assemble<E>(
+    state: AppState,
+    admission: OperationAdmission,
+    readiness: ReadinessPolicy<E>,
+) -> Result<AssembledHttp, BoxError>
+where
+    E: Send + Sync + 'static,
+{
+    let readiness = readiness.with_condition(ReadinessCondition::new("application-state")?, {
+        let state = state.clone();
+        move || state.is_ready()
+    });
+    let (router, document) = public::application_routes().split_for_parts();
+    let application = GuardedRouter::from_router(router, route_inventory(&document)?)
+        .with_state(state)
+        .fallback(not_found);
+    let boundary = HttpBoundary::new(requests::policy(admission))
+        .with_rendered_liveness(ProbePath::new(public::HEALTH_PATH)?, probes::liveness)?;
+    Ok(probes::mount(boundary, readiness)?
+        .assemble(application)
+        .await?)
 }
 
-pub fn router_with_lifecycle(
-    state: AppState,
-    lifecycle: LifecycleStatus,
-    admission: OperationAdmission,
-) -> Router {
-    let router = public::operational_routes(lifecycle, admission).fallback(not_found);
-
-    router
-        .with_state(state)
-        .layer(axum::middleware::from_fn(batter::axum::operational_http))
+/// Dispatch requests through the same boundary with an independent, approved
+/// lifecycle. Responses prove response construction only: not serving,
+/// signals, or native resource cleanup.
+pub async fn in_process(state: AppState) -> Result<InProcessClient, BoxError> {
+    let (shutdown, approval) = ShutdownHandle::new_with_readiness_approval();
+    approval.approve();
+    let readiness = ReadinessPolicy::lifecycle_only(shutdown.status());
+    Ok(assemble(state, shutdown.operation_admission(), readiness)
+        .await?
+        .in_process())
 }
 
 pub fn public_openapi() -> OpenApi {
@@ -33,6 +64,7 @@ pub fn public_openapi() -> OpenApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn committed_public_openapi_is_current() {
@@ -44,6 +76,26 @@ mod tests {
             )),
             "public",
         );
+    }
+
+    #[test]
+    fn documented_paths_are_served_routes_or_boundary_probes() {
+        let documented = public_openapi()
+            .paths
+            .paths
+            .into_keys()
+            .collect::<BTreeSet<_>>();
+        let (_, application) = public::application_routes().split_for_parts();
+        let mut served = application.paths.paths.into_keys().collect::<BTreeSet<_>>();
+        served.extend(
+            [
+                public::HEALTH_PATH,
+                probes::LIVENESS_PATH,
+                probes::READINESS_PATH,
+            ]
+            .map(str::to_owned),
+        );
+        assert_eq!(documented, served);
     }
 
     fn assert_document_matches(document: OpenApi, expected: &str, name: &str) {

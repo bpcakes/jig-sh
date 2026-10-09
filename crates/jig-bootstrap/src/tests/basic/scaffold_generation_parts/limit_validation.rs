@@ -30,6 +30,8 @@ fn rust_react_rejects_batter_dependency_collisions_before_destination_mutation()
                         db: Some(db),
                         frontends: Vec::new(),
                         frontend_list: Vec::new(),
+                        metrics: None,
+                        jobs: None,
                     },
                     template: None,
                     template_mode: None,
@@ -68,6 +70,9 @@ fn rust_react_rejects_batter_dependency_collisions_before_destination_mutation()
 
 #[test]
 fn rust_react_batter_sqlx_collision_is_postgres_only_and_preflighted() {
+    // Successful inits run git; hold the environment lock so tests that replace
+    // the git binary cannot interleave.
+    let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
     for requested_name in ["batter-sqlx", "Batter_Sqlx"] {
@@ -90,6 +95,8 @@ fn rust_react_batter_sqlx_collision_is_postgres_only_and_preflighted() {
                         db: Some(db),
                         frontends: Vec::new(),
                         frontend_list: Vec::new(),
+                        metrics: None,
+                        jobs: None,
                     },
                     template: Some(template.path().display().to_string()),
                     template_mode: None,
@@ -175,6 +182,8 @@ fn rust_react_package_stem_limit_is_applied_before_destination_mutation() {
             db: Some(ScaffoldDb::None),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some(accepted_name.clone()),
@@ -222,6 +231,8 @@ fn rust_react_package_stem_limit_is_applied_before_destination_mutation() {
             db: Some(ScaffoldDb::None),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         template: Some(materialize_template_worktree().path().display().to_string()),
         template_mode: None,

@@ -16,7 +16,7 @@ fn init_opts(args: &[&str]) -> InitOpts {
 #[test]
 fn bare_init_guides_preset_database_and_multiple_frontends() {
     let mut opts = init_opts(&["jig", "init", "demo", "--no-vault"]);
-    let mut input = Cursor::new("rust-react\npostgres\nweb,admin\n");
+    let mut input = Cursor::new("rust-react\npostgres\nweb,admin\notlp\nrunledger\n");
     let mut output = Vec::new();
 
     prepare_init_interaction_with_io(&mut opts, &mut input, &mut output).unwrap();
@@ -24,15 +24,58 @@ fn bare_init_guides_preset_database_and_multiple_frontends() {
     assert_eq!(opts.scaffold.preset, Some(ScaffoldPreset::RustReact));
     assert_eq!(opts.scaffold.db, Some(ScaffoldDb::Postgres));
     assert_eq!(opts.scaffold.frontends.len(), 2);
+    assert_eq!(opts.scaffold.metrics, Some(ScaffoldMetrics::Otlp));
+    assert_eq!(opts.scaffold.jobs, Some(ScaffoldJobs::Runledger));
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("Rust API workspace plus shadcn React"));
     assert!(output.contains("shadcn Vite React admin app in admin-panel/"));
+    assert!(output.contains("Metrics export? [none/otlp] (none): "));
+    assert!(output.contains("Background jobs? [none/runledger] (none): "));
+}
+
+#[test]
+fn guided_service_options_retry_invalid_answers() {
+    let mut opts = init_opts(&["jig", "init", "demo", "--no-vault"]);
+    let mut input = Cursor::new("rust-react\npostgres\nweb\nprometheus\notlp\nredis\nnone\n");
+    let mut output = Vec::new();
+
+    prepare_init_interaction_with_io(&mut opts, &mut input, &mut output).unwrap();
+
+    assert_eq!(opts.scaffold.metrics, Some(ScaffoldMetrics::Otlp));
+    assert_eq!(opts.scaffold.jobs, Some(ScaffoldJobs::None));
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("Enter none or otlp."));
+    assert!(output.contains("Enter none or runledger."));
+}
+
+#[test]
+fn explicit_project_shape_flags_skip_service_option_prompts() {
+    let mut opts = init_opts(&[
+        "jig",
+        "init",
+        "demo",
+        "--preset",
+        "rust-react",
+        "--db",
+        "postgres",
+        "--frontend",
+        "web",
+        "--no-vault",
+    ]);
+    let mut input = Cursor::new(Vec::<u8>::new());
+    let mut output = Vec::new();
+
+    prepare_init_interaction_with_io(&mut opts, &mut input, &mut output).unwrap();
+
+    assert_eq!(opts.scaffold.metrics, None);
+    assert_eq!(opts.scaffold.jobs, None);
+    assert!(String::from_utf8(output).unwrap().is_empty());
 }
 
 #[test]
 fn bare_init_defaults_to_rust_react_with_no_database_and_web() {
     let mut opts = init_opts(&["jig", "init", "demo", "--no-vault"]);
-    let mut input = Cursor::new("\n\n\n");
+    let mut input = Cursor::new("\n\n\n\n");
     let mut output = Vec::new();
 
     prepare_init_interaction_with_io(&mut opts, &mut input, &mut output).unwrap();
@@ -40,7 +83,14 @@ fn bare_init_defaults_to_rust_react_with_no_database_and_web() {
     assert_eq!(opts.scaffold.preset, Some(ScaffoldPreset::RustReact));
     assert_eq!(opts.scaffold.db, Some(ScaffoldDb::None));
     assert_eq!(opts.scaffold.frontends.len(), 1);
+    assert_eq!(opts.scaffold.metrics, Some(ScaffoldMetrics::None));
+    assert_eq!(opts.scaffold.jobs, None);
     assert_eq!(opts.answers.migration_dir, None);
+    assert!(
+        !String::from_utf8(output)
+            .unwrap()
+            .contains("Background jobs?")
+    );
 }
 
 #[test]
@@ -383,7 +433,7 @@ role = "spa"
         answers_file.to_str().unwrap(),
         "--no-vault",
     ]);
-    let mut input = Cursor::new("none\n");
+    let mut input = Cursor::new("none\n\n");
     let mut output = Vec::new();
 
     prepare_init_interaction_with_io(&mut opts, &mut input, &mut output).unwrap();
@@ -495,7 +545,7 @@ fn custom_bare_frontend_name_can_cancel_before_writes() {
 #[test]
 fn interactively_selected_rust_react_rejects_backend_name_before_custom_confirmation() {
     let mut opts = init_opts(&["jig", "init", "demo", "--frontends", "API", "--no-vault"]);
-    let mut input = Cursor::new("rust-react\nnone\n");
+    let mut input = Cursor::new("rust-react\nnone\n\n");
     let mut output = Vec::new();
 
     let error = prepare_init_interaction_with_io(&mut opts, &mut input, &mut output)

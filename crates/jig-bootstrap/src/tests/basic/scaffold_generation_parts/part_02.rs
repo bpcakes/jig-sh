@@ -15,6 +15,8 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
                 parse_scaffold_frontend("landing").unwrap(),
                 parse_scaffold_frontend("admin").unwrap(),
             ],
+            metrics: None,
+            jobs: None,
         },
         template: Some(template.path().display().to_string()),
         template_mode: None,

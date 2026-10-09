@@ -167,8 +167,11 @@ cd ./ExampleProject && scripts/jig setup
 The application presets generate more than a skeleton. `rust-react` renders a
 Cargo workspace with an API binary, core, HTTP, runtime, and test-support
 crates, an optional SQLx database crate, crate-level agent guides, and shadcn
-Vite React, Astro, or admin frontends, with the service lifecycle owned by
-[Batter](https://github.com/bpcakes/batter). `go-react` renders a chi/Huma Go
+Vite React, Astro, or admin frontends, with the service lifecycle and HTTP
+boundary owned by [Batter](https://github.com/bpcakes/batter). PostgreSQL
+applications add a supervised database health monitor and per-test template
+databases; `--metrics otlp` adds OTLP metrics export and `--jobs runledger` a
+supervised Runledger job worker. `go-react` renders a chi/Huma Go
 API, optional pgxpool, sqlc, and Goose PostgreSQL support, and a Huma OpenAPI to
 Hey API TypeScript client. The Rust-only presets give a virtual Rust 2024
 workspace with one crate and a strict Clippy gate. Every preset also renders

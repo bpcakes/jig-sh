@@ -198,6 +198,8 @@ fn rust_only_init_process_reports_are_exact_and_generated_jig_checks_pass() {
                 "repo_name": package,
                 "repo_name_sanitized_from": requested,
                 "db": "none",
+                "metrics": "none",
+                "jobs": "none",
                 "frontends": [],
                 "frontend_notices": [],
                 "files_created": [

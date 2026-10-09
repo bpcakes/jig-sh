@@ -53,6 +53,8 @@ mod tests {
             FrontendBackendContext {
                 preset: ScaffoldPreset::GoReact,
                 root: "services/api",
+                metrics: crate::ScaffoldMetrics::None,
+                jobs: crate::ScaffoldJobs::None,
                 database: FrontendDatabaseContext {
                     db: ScaffoldDb::Postgres,
                     migration_dir: "services/api/internal/database/migrations",

@@ -34,6 +34,8 @@ pub(in crate::scaffold) fn render_frontend_workspace_files_for_backend(
     let FrontendBackendContext {
         preset,
         root: backend_root,
+        metrics,
+        jobs,
         database,
     } = backend;
     let FrontendDatabaseContext {
@@ -65,6 +67,8 @@ pub(in crate::scaffold) fn render_frontend_workspace_files_for_backend(
             ScaffoldDb::None => "none",
             ScaffoldDb::Postgres => "postgres",
         },
+        "metrics": metrics.as_str(),
+        "jobs": jobs.as_str(),
         "migration_dir": migration_dir,
         "sqlx_metadata_dir": sqlx_metadata_dir,
         "default_branch_yaml": default_branch_yaml,
