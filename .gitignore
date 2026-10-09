@@ -31,10 +31,6 @@ site/
 # Rust
 target/
 
-# Default local SQLite database and transient sidecars
-/jig_sh.db
-/jig_sh.db-*
-
 
 
 # JavaScript and TypeScript
@@ -59,6 +55,7 @@ build/
 .agent/state/runs.jsonl
 .agent/.cache/*
 !.agent/.cache/.gitignore
+.agent/runtime/
 .agent/tmp/
 
 # Local logs and scratch files

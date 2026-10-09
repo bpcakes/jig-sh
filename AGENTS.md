@@ -11,7 +11,9 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use `scripts/jig` for the typed repo contract; pass `--json` for agent automation.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing, except operator-owned vault setup (see Vault).
 - Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
-- Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs or receipts.
+
+- Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs.
+
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 - Keep `.agent/state/runs.jsonl` as local execution history; do not stage or commit it.
@@ -42,7 +44,9 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 - Treat `.` as Rust crate roots.
 - Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
+
 - Keep transport logic thin and business logic in the owning crate.
+
 
 
 
@@ -56,7 +60,9 @@ No web apps are configured in `.jig.toml`.
 
 - `scripts/jig bootstrap`
 - `scripts/jig doctor`
+
 - `scripts/jig dev`
+
 - `scripts/jig check test`
 - `scripts/jig check fmt`
 
@@ -64,7 +70,9 @@ No web apps are configured in `.jig.toml`.
 - `scripts/jig check clippy`
 
 - `scripts/jig info targets`
+
 - `scripts/jig file-budget audit`
+
 
 
 
@@ -80,13 +88,16 @@ No web apps are configured in `.jig.toml`.
 
 ## Backend Guide Conventions
 
-When a backend package or crate has an `AGENTS.md`, use these sections:
+When a backend package or crate has an `AGENTS.md`, these sections are optional suggestions:
 
 - `## Purpose`
 - `## Key entrypoints`
 - `## Edit here for X`
 - `## Invariants`
 - `## Common commands`
+
+Use the structure that fits the area. Preserve ownership, entrypoints, invariants, and useful commands. Link to repository files when a reference must be checked. Run `scripts/jig check agent-guides` to validate local links and explicitly declared component guidance.
+
 <!-- END JIG MANAGED BLOCK -->
 
 ## Open-Source Fixture Hygiene
@@ -94,7 +105,7 @@ When a backend package or crate has an `AGENTS.md`, use these sections:
 - Never put names, paths, identifiers, or operational details from downstream, customer, or private projects in this repository.
 - Use unmistakably generic fixtures such as `ExampleProject`, `ExampleVault`, and `vault-consumer-fixture` in source, tests, documentation, plans, and generated evidence.
 - Check fixture and test names before running state-writing commands because repository paths can be captured in append-only state.
-- If an accidentally captured private identifier requires historical state redaction, treat the edit as an explicit privacy migration: preserve record IDs and every unaffected field, then append a durable decision naming the affected record IDs and the reason for redaction without repeating the removed text.
+- If an accidentally captured private identifier requires historical state redaction, treat the edit as an explicit privacy migration: preserve record IDs and every unaffected field, then record the affected record IDs and the reason for redaction in the commit message without repeating the removed text.
 
 ## Dogfooding This Harness
 
@@ -123,7 +134,7 @@ The managed Vault rules protect the operator's vault. Vault tests in this source
 
 ## Beads Workflow Integration
 
-Use the [Beads workflow reference](docs/beads-workflow.md) when selecting tracked work or updating an existing task. A direct request does not require creating an issue or a Jig work plan.
+Use the [Beads workflow reference](docs/beads-workflow.md) when selecting tracked work or updating an existing task. A direct request does not require creating an issue.
 
 - Use `bv --robot-triage` for selection; never run bare `bv` (it starts an interactive TUI).
 - Verify candidates with `br show <id> --json` or `br ready --json` before claiming.

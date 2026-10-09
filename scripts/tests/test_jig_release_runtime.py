@@ -24,9 +24,9 @@ class ReleaseRuntimeTests(unittest.TestCase):
         cls.binaries = Path(temporary.name)
         source = cls.binaries / "example.c"
         source.write_text(NATIVE_FIXTURE)
-        for name, version, contract in [("0.5.0", "0.5.0", "8"),
-                                        ("0.5.1", "0.5.1", "8"),
-                                        ("development", "0.5.1-dev.3+gabcdef.dirty", "8"),
+        for name, version, contract in [("0.5.0", "0.5.0", "9"),
+                                        ("0.5.1", "0.5.1", "9"),
+                                        ("development", "0.5.1-dev.3+gabcdef.dirty", "9"),
                                         ("incompatible", "0.5.0", "7")]:
             subprocess.run(["cc", str(source), "-o", str(cls.binaries / name),
                             f'-DVERSION="{version}"', f'-DCONTRACT="{contract}"',
@@ -44,7 +44,7 @@ class ReleaseRuntimeTests(unittest.TestCase):
         self.config = self.root / ".jig.toml"
         self.config.write_text('_src_path = "https://example.invalid/jig.git"\n'
                                '_commit = "0123456789abcdef"\n')
-        (self.root / ".agent/jig-contract.json").write_text('{"contract_version":8}\n')
+        (self.root / ".agent/jig-contract.json").write_text('{"contract_version":9}\n')
         self.pin = self.root / ".jig/runtime-version"
         self.pin.write_text("0.5.0\n")
         self.tools = self.root / "tools"
@@ -214,7 +214,7 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         (self.root / ".git").write_text("gitdir: /example/worktree\n")
         result = self.installer()
         self.assert_ok(result)
-        self.assertIn("/.agent/.cache/jig/release-0.5.0-contract-8/", result.stdout)
+        self.assertIn("/.agent/.cache/jig/release-0.5.0-contract-9/", result.stdout)
 
     def test_explicit_install_root_is_populated_even_with_a_path_binary(self):
         shutil.copy2(self.binaries / "0.5.0", self.tools / "jig")

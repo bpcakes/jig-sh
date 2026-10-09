@@ -1,0 +1,70 @@
+name: Agent Map Check
+
+on:
+  pull_request:
+    paths:
+      - "AGENTS.md"
+      - "**/AGENTS.md"
+      - "agent-map.md"
+
+      - "**"
+
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+      - ".jig/runtime-version"
+      - ".github/workflows/agent-map-check.yml"
+  push:
+    branches:
+      - "master"
+    paths:
+      - "AGENTS.md"
+      - "**/AGENTS.md"
+      - "agent-map.md"
+
+      - "**"
+
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+      - ".jig/runtime-version"
+      - ".github/workflows/agent-map-check.yml"
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-map-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-map-check:
+    name: Verify AGENTS map drift
+    runs-on: "ubuntu-latest"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache pinned Jig runtime
+        if: ${{ hashFiles('.jig/runtime-version') != '' }}
+        uses: actions/cache@v5
+        with:
+          path: |
+            .git/jig-tools/release-*-runtime/bin/jig
+            .agent/.cache/jig/release-*-runtime/bin/jig
+          key: jig-release-runtime-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.jig/runtime-version', 'scripts/install-jig.sh', 'scripts/jig') }}
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+
+      - name: Validate agent-map links and coverage
+        shell: bash
+        run: |
+          scripts/jig check agent-map

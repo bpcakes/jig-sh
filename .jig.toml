@@ -1,335 +1,244 @@
 _commit = ""
 _src_path = "embedded:jig-sh"
-_template_local_path = ""
 _template_mode = ""
-application_contracts_enabled = false
-ci_github_runner = "ubuntu-latest"
-default_branch = "master"
-frontend_apps = []
-frontend_workspace_roots = []
-harness_footprint = "full"
+_template_local_path = ""
 repo_name = "jig-sh"
-rust_crate_roots = ["."]
-schema_docs_dir = "docs/schema"
-schema_dump_enabled = false
-sqlx_enabled = false
+default_branch = "master"
+ci_github_runner = "ubuntu-latest"
 template_source_url = ""
+harness_footprint = "full"
+
+sqlx_enabled = false
+rust_crate_roots = ["."]
+
+
+schema_dump_enabled = false
+schema_docs_dir = "docs/schema"
+
+
+# Command values are project-owned. Generated Cargo defaults skip cleanly when
+# no manifests are found; with nested manifests they run each one in turn.
+# Review them against this repo's workspace layout and replace them when custom
+# orchestration is needed.
+
+
+
 web_package_manager = "bun"
+application_contracts_enabled = false
+frontend_workspace_roots = []
 
-[[agent_tooling.codex.marketplaces]]
-id = "jig-skills"
-plugins = [
-    "jig-rust@jig-skills",
-    "jig-swift@jig-skills",
-    "jig-typescript@jig-skills",
-]
-source = "bpcakes/jig-skills"
+frontend_apps = []
 
-[commands]
-api_test_locked_command = "bash scripts/ci/test-rust.sh workspace"
 
-[dev]
-http2 = true
-https = false
-https_port = 1443
-lan = false
-proxy_port = 1355
-tld = "localhost"
-workspace_discovery = false
-
-[execution]
-command_output_limit_bytes = 67108864
-command_timeout_seconds = 1800
 
 [repository]
-affected_ignore = [
-    ".env",
-    ".env.*",
-    "**/.env",
-    "**/.env.*",
-    "README.md",
-    "**/README.md",
-    "AGENTS.md",
-    "**/AGENTS.md",
-    "agent-map.md",
-    "CHANGELOG.md",
-    "CONTRIBUTING.md",
-    "CODE_OF_CONDUCT.md",
-    "SECURITY.md",
-    "docs/**",
-    "LICENSE",
-    "LICENSE.*",
-    ".github/**",
-]
+# .beads/ holds issue-tracker state only; see docs/beads-workflow.md.
+tracker = "beads"
 default_check_profile = "verify"
+affected_ignore = [".env", ".env.*", "**/.env", "**/.env.*", "README.md", "**/README.md", "AGENTS.md", "**/AGENTS.md", "agent-map.md", "CHANGELOG.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "docs/**", "LICENSE", "LICENSE.*", ".github/**"]
+
+[[repository.components]]
+id = "api"
+root = "."
+description = "Primary application backend."
+tags = ["backend"]
+propagate_affected_to_dependents = true
+adapters = ["rust"]
+
+[repository.components.provenance]
+adapters = "inferred"
+id = "inferred"
+root = "inferred"
+
+[[repository.components]]
+id = "repo"
+root = "."
+description = "Repository-wide Jig policy and compatibility actions."
+tags = ["repository"]
+adapters = ["jig"]
+
+[repository.components.provenance]
+adapters = "inherited"
+id = "inferred"
+root = "inferred"
 
 [[repository.actions]]
 description = "Run Rust Clippy with repository policy."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "**/Cargo.toml",
-    "**/Cargo.lock",
-    "**/*.rs",
-    "rust-toolchain",
-    "rust-toolchain.toml",
-    "**/rust-toolchain",
-    "**/rust-toolchain.toml",
-    ".cargo/**",
-    "**/.cargo/**",
-    "rustfmt.toml",
-    ".rustfmt.toml",
-    "**/rustfmt.toml",
-    "**/.rustfmt.toml",
-    "clippy.toml",
-    ".clippy.toml",
-    "**/clippy.toml",
-    "**/.clippy.toml",
-]
 intent = "check"
+effects = ["read_only", "process"]
+inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "**/*.rs", "rust-toolchain", "rust-toolchain.toml", "**/rust-toolchain", "**/rust-toolchain.toml", ".cargo/**", "**/.cargo/**", "rustfmt.toml", ".rustfmt.toml", "**/rustfmt.toml", "**/.rustfmt.toml", "clippy.toml", ".clippy.toml", "**/clippy.toml", "**/.clippy.toml"]
+inputs_policy = "whole_repository"
+source_state = "git"
 legacy_aliases = ["jig.clippy"]
 
-[repository.actions.provenance]
-effects = "inherited"
-inputs = "inherited"
-intent = "inherited"
-legacy_aliases = "inherited"
-runner = "overridden"
-target = "inherited"
+[repository.actions.target]
+component = "api"
+action = "clippy"
 
 [repository.actions.runner]
 kind = "argv"
 program = "cargo"
 args = ["clippy", "--workspace", "--all-targets", "--all-features", "--locked", "--", "-D", "warnings", "-D", "clippy::mod_module_files"]
 
-[repository.actions.target]
-action = "clippy"
-component = "api"
-
-[[repository.actions]]
-description = "Check Rust formatting."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "**/Cargo.toml",
-    "**/Cargo.lock",
-    "**/*.rs",
-    "rust-toolchain",
-    "rust-toolchain.toml",
-    "**/rust-toolchain",
-    "**/rust-toolchain.toml",
-    ".cargo/**",
-    "**/.cargo/**",
-    "rustfmt.toml",
-    ".rustfmt.toml",
-    "**/rustfmt.toml",
-    "**/.rustfmt.toml",
-    "clippy.toml",
-    ".clippy.toml",
-    "**/clippy.toml",
-    "**/.clippy.toml",
-]
-source_state = "worktree"
-intent = "check"
-legacy_aliases = [
-    "jig.fmt_check",
-    "jig.source_fmt_check",
-]
-
 [repository.actions.provenance]
-source_state = "declared"
 effects = "inherited"
 inputs = "inherited"
+inputs_policy = "inferred"
 intent = "inherited"
 legacy_aliases = "inherited"
 runner = "overridden"
+source_state = "inferred"
 target = "inherited"
+
+[[repository.actions]]
+description = "Check Rust formatting."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "**/*.rs", "rust-toolchain", "rust-toolchain.toml", "**/rust-toolchain", "**/rust-toolchain.toml", ".cargo/**", "**/.cargo/**", "rustfmt.toml", ".rustfmt.toml", "**/rustfmt.toml", "**/.rustfmt.toml", "clippy.toml", ".clippy.toml", "**/clippy.toml", "**/.clippy.toml"]
+inputs_policy = "whole_repository"
+source_state = "worktree"
+legacy_aliases = ["jig.fmt_check", "jig.source_fmt_check"]
+
+[repository.actions.target]
+component = "api"
+action = "fmt"
 
 [repository.actions.runner]
 kind = "argv"
 program = "scripts/check-rust-format.sh"
 args = []
 
-[repository.actions.target]
-action = "fmt"
-component = "api"
-
-[[repository.actions]]
-description = "Run Rust tests."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "**/Cargo.toml",
-    "**/Cargo.lock",
-    "**/*.rs",
-    "rust-toolchain",
-    "rust-toolchain.toml",
-    "**/rust-toolchain",
-    "**/rust-toolchain.toml",
-    ".cargo/**",
-    "**/.cargo/**",
-    "rustfmt.toml",
-    ".rustfmt.toml",
-    "**/rustfmt.toml",
-    "**/.rustfmt.toml",
-    "clippy.toml",
-    ".clippy.toml",
-    "**/clippy.toml",
-    "**/.clippy.toml",
-]
-intent = "check"
-legacy_aliases = [
-    "jig.test",
-    "jig.source_test",
-]
-
 [repository.actions.provenance]
 effects = "inherited"
 inputs = "inherited"
+inputs_policy = "inferred"
 intent = "inherited"
 legacy_aliases = "inherited"
 runner = "overridden"
+source_state = "declared"
 target = "inherited"
+
+[[repository.actions]]
+description = "Run Rust tests."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "**/*.rs", "rust-toolchain", "rust-toolchain.toml", "**/rust-toolchain", "**/rust-toolchain.toml", ".cargo/**", "**/.cargo/**", "rustfmt.toml", ".rustfmt.toml", "**/rustfmt.toml", "**/.rustfmt.toml", "clippy.toml", ".clippy.toml", "**/clippy.toml", "**/.clippy.toml"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.test", "jig.source_test"]
+
+[repository.actions.target]
+component = "api"
+action = "test"
 
 [repository.actions.runner]
 kind = "argv"
 program = "cargo"
 args = ["nextest", "run", "--workspace", "-P", "local", "--status-level", "fail", "--final-status-level", "fail"]
 
-[repository.actions.target]
-action = "test"
-component = "api"
-
-[[repository.actions]]
-description = "Run Rust tests using the locked dependency graph."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    "scripts/ci/test-rust.sh",
-    ".config/nextest.toml",
-    "Cargo.toml",
-    "Cargo.lock",
-    "**/Cargo.toml",
-    "**/Cargo.lock",
-    "**/*.rs",
-    "rust-toolchain",
-    "rust-toolchain.toml",
-    "**/rust-toolchain",
-    "**/rust-toolchain.toml",
-    ".cargo/**",
-    "**/.cargo/**",
-    "rustfmt.toml",
-    ".rustfmt.toml",
-    "**/rustfmt.toml",
-    "**/.rustfmt.toml",
-    "clippy.toml",
-    ".clippy.toml",
-    "**/clippy.toml",
-    "**/.clippy.toml",
-]
-intent = "check"
-legacy_aliases = ["jig.test_locked"]
-
 [repository.actions.provenance]
 effects = "inherited"
-inputs = "overridden"
+inputs = "inherited"
+inputs_policy = "inferred"
 intent = "inherited"
 legacy_aliases = "inherited"
 runner = "overridden"
+source_state = "inferred"
 target = "inherited"
+
+[[repository.actions]]
+description = "Run Rust tests using the locked dependency graph."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["scripts/ci/test-rust.sh", ".config/nextest.toml", "Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "**/*.rs", "rust-toolchain", "rust-toolchain.toml", "**/rust-toolchain", "**/rust-toolchain.toml", ".cargo/**", "**/.cargo/**", "rustfmt.toml", ".rustfmt.toml", "**/rustfmt.toml", "**/.rustfmt.toml", "clippy.toml", ".clippy.toml", "**/clippy.toml", "**/.clippy.toml"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.test_locked"]
+
+[repository.actions.target]
+component = "api"
+action = "test-locked"
 
 [repository.actions.runner]
 kind = "shell"
 command = "api_test_locked_command"
 
-[repository.actions.target]
-action = "test-locked"
-component = "api"
-
-[[repository.actions]]
-description = "Prepare repository dependencies and local tooling."
-effects = [
-    "worktree",
-    "process",
-    "external",
-]
-intent = "operate"
-legacy_aliases = ["jig.bootstrap"]
-
 [repository.actions.provenance]
 effects = "inherited"
-inputs = "inherited"
+inputs = "overridden"
+inputs_policy = "inferred"
 intent = "inherited"
 legacy_aliases = "inherited"
 runner = "overridden"
+source_state = "inferred"
 target = "inherited"
+
+[[repository.actions]]
+description = "Prepare repository dependencies and local tooling."
+intent = "operate"
+effects = ["worktree", "process", "external"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.bootstrap"]
+
+[repository.actions.target]
+component = "repo"
+action = "bootstrap"
 
 [repository.actions.runner]
 kind = "argv"
 program = "cargo"
 args = ["fetch"]
 
-[repository.actions.target]
-action = "bootstrap"
-component = "repo"
-
-[[repository.actions]]
-description = "Validate the checked-in Jig repository contract."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    ".jig.toml",
-    "scripts/jig",
-]
-intent = "check"
-legacy_aliases = ["jig.contract_check"]
-
 [repository.actions.provenance]
 effects = "inherited"
 inputs = "inherited"
+inputs_policy = "inferred"
 intent = "inherited"
 legacy_aliases = "inherited"
 runner = "overridden"
+source_state = "inferred"
 target = "inherited"
+
+[[repository.actions]]
+description = "Validate the checked-in Jig repository contract."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = [".jig.toml", "scripts/jig"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.contract_check"]
+
+[repository.actions.target]
+component = "repo"
+action = "contract"
 
 [repository.actions.runner]
 kind = "native"
 operation = "jig.contract_check"
 
-[repository.actions.target]
-action = "contract"
-component = "repo"
-
-[[repository.actions]]
-description = "Enforce repository-owned source file budgets."
-effects = ["read_only"]
-inputs = ["**"]
-intent = "check"
-legacy_aliases = ["jig.file_budget"]
-
 [repository.actions.provenance]
 effects = "inherited"
 inputs = "inherited"
+inputs_policy = "inferred"
 intent = "inherited"
 legacy_aliases = "inherited"
-runner = "inherited"
+runner = "overridden"
+source_state = "inferred"
 target = "inherited"
+
+[[repository.actions]]
+description = "Enforce repository-owned source file budgets."
+intent = "check"
+effects = ["read_only"]
+inputs = ["**"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.file_budget"]
+
+[repository.actions.target]
+component = "repo"
+action = "file-budget"
 
 [repository.actions.runner]
 kind = "native"
@@ -341,331 +250,223 @@ max_candidates = 10000
 max_total_bytes = 268435456
 missing_comparison = "block"
 
-[repository.actions.target]
-action = "file-budget"
-component = "repo"
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+inputs_policy = "inferred"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "inherited"
+source_state = "inferred"
+target = "inherited"
 
 [[repository.actions]]
 description = "Build the current Jig runtime and validate its repository contract through the launcher."
-effects = ["read_only", "process"]
-inputs = [
-    "crates/**",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    ".jig.toml",
-    ".jig/**",
-    "templates/**",
-    "scripts/**",
-]
-source_state = "worktree"
 intent = "check"
+effects = ["read_only", "process"]
+inputs = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", ".jig.toml", ".jig/**", "templates/**", "scripts/**"]
+inputs_policy = "whole_repository"
+source_state = "worktree"
 
-[repository.actions.provenance]
-effects = "declared"
-inputs = "declared"
-source_state = "declared"
-intent = "declared"
-runner = "declared"
-target = "declared"
+[repository.actions.target]
+component = "repo"
+action = "source-runtime-check"
 
 [repository.actions.runner]
 kind = "argv"
 program = "scripts/jig-dev"
 args = ["check", "contract"]
 
-[repository.actions.target]
-action = "source-runtime-check"
-component = "repo"
-
-[[repository.actions]]
-description = "Run the source repository's fast core Rust test partition."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    "crates/**",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    "nextest.toml",
-    ".config/nextest.toml",
-    ".jig.toml",
-    "templates/**",
-    "scripts/**",
-    "examples/**",
-    "tests/**",
-]
-intent = "check"
-legacy_aliases = ["jig.source_core_test"]
-
 [repository.actions.provenance]
 effects = "declared"
 inputs = "declared"
+inputs_policy = "inferred"
 intent = "declared"
-legacy_aliases = "declared"
 runner = "declared"
+source_state = "declared"
 target = "declared"
+
+[[repository.actions]]
+description = "Run the source repository's fast core Rust test partition."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", ".jig.toml", "templates/**", "scripts/**", "examples/**", "tests/**"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.source_core_test"]
+
+[repository.actions.target]
+component = "repo"
+action = "source-core-test"
 
 [repository.actions.runner]
 kind = "argv"
 program = "scripts/test-rust-partition.sh"
 args = ["core"]
 
-[repository.actions.target]
-action = "source-core-test"
-component = "repo"
-
-[[repository.actions]]
-description = "Run the source repository's generated-frontend Rust test partition."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    "crates/jig-bootstrap/**",
-    "crates/jig-git/**",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    "nextest.toml",
-    ".config/nextest.toml",
-    ".jig.toml",
-    "templates/**",
-    "scripts/test-rust-partition.sh",
-    "tests/fixtures/**",
-]
-intent = "check"
-legacy_aliases = ["jig.source_frontend_test"]
-
 [repository.actions.provenance]
 effects = "declared"
 inputs = "declared"
+inputs_policy = "inferred"
 intent = "declared"
 legacy_aliases = "declared"
 runner = "declared"
+source_state = "inferred"
 target = "declared"
+
+[[repository.actions]]
+description = "Run the source repository's generated-frontend Rust test partition."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["crates/jig-bootstrap/**", "crates/jig-git/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", ".jig.toml", "templates/**", "scripts/test-rust-partition.sh", "tests/fixtures/**"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.source_frontend_test"]
+
+[repository.actions.target]
+component = "repo"
+action = "source-frontend-test"
 
 [repository.actions.runner]
 kind = "argv"
 program = "scripts/test-rust-partition.sh"
 args = ["frontend"]
 
-[repository.actions.target]
-action = "source-frontend-test"
-component = "repo"
-
-[[repository.actions]]
-description = "Run the source repository's process and signal Rust test partition."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    "crates/jig-owned-process/**",
-    "crates/jig-dev-proxy/**",
-    "crates/jig/src/main.rs",
-    "crates/jig/src/cli.rs",
-    "crates/jig/src/runtime.rs",
-    "crates/jig/src/signal_supervision.rs",
-    "crates/jig-agents/**",
-    "crates/jig/src/agent_launch.rs",
-    "crates/jig/src/exit.rs",
-    "crates/jig/src/cli/agent_run.rs",
-    "crates/jig/src/cli/agent_run/**",
-    "crates/jig/src/cli/home_picker.rs",
-    "crates/jig/src/cli/codex/**",
-    "crates/jig-codex-tui/**",
-    "crates/jig/src/cli/output/command_display.rs",
-    "crates/jig/src/cli/claude*.rs",
-    "crates/jig/src/cli/claude/**",
-    "crates/jig/src/dev_proxy.rs",
-    "crates/jig/src/dev_proxy/**",
-    "crates/jig/src/cli/codex*.rs",
-    "crates/jig/src/cli/dev*.rs",
-    "crates/jig/src/cli/proxy.rs",
-    "crates/jig/src/cli/proxy/**",
-    "crates/jig/src/cli/run.rs",
-    "crates/jig/src/cli/run/**",
-    "crates/jig/src/cli/runtime_dispatch.rs",
-    "crates/jig/src/signal_supervision/**",
-    "crates/jig/tests/claude_launcher.rs",
-    "crates/jig/tests/codex_launcher.rs",
-    "crates/jig/tests/dev_launcher_loss.rs",
-    "crates/jig/tests/dev_lifecycle.rs",
-    "crates/jig/tests/dev_sigint.rs",
-    "crates/jig/tests/dev_sigint_parts/**",
-    "crates/jig/Cargo.toml",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    "nextest.toml",
-    ".config/nextest.toml",
-    ".jig.toml",
-    "scripts/test-rust-partition.sh",
-]
-intent = "check"
-legacy_aliases = ["jig.source_process_test"]
-
 [repository.actions.provenance]
 effects = "declared"
 inputs = "declared"
+inputs_policy = "inferred"
 intent = "declared"
 legacy_aliases = "declared"
 runner = "declared"
+source_state = "inferred"
 target = "declared"
+
+[[repository.actions]]
+description = "Run the source repository's process and signal Rust test partition."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["crates/jig-owned-process/**", "crates/jig-dev-proxy/**", "crates/jig/src/main.rs", "crates/jig/src/cli.rs", "crates/jig/src/runtime.rs", "crates/jig/src/signal_supervision.rs", "crates/jig-agents/**", "crates/jig/src/agent_launch.rs", "crates/jig/src/exit.rs", "crates/jig/src/cli/agent_run.rs", "crates/jig/src/cli/agent_run/**", "crates/jig/src/cli/home_picker.rs", "crates/jig/src/cli/codex/**", "crates/jig-codex-tui/**", "crates/jig/src/cli/output/command_display.rs", "crates/jig/src/cli/claude*.rs", "crates/jig/src/cli/claude/**", "crates/jig/src/dev_proxy.rs", "crates/jig/src/dev_proxy/**", "crates/jig/src/cli/codex*.rs", "crates/jig/src/cli/dev*.rs", "crates/jig/src/cli/proxy.rs", "crates/jig/src/cli/proxy/**", "crates/jig/src/cli/run.rs", "crates/jig/src/cli/run/**", "crates/jig/src/cli/runtime_dispatch.rs", "crates/jig/src/signal_supervision/**", "crates/jig/tests/claude_launcher.rs", "crates/jig/tests/codex_launcher.rs", "crates/jig/tests/dev_launcher_loss.rs", "crates/jig/tests/dev_lifecycle.rs", "crates/jig/tests/dev_sigint.rs", "crates/jig/tests/dev_sigint_parts/**", "crates/jig/Cargo.toml", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", ".jig.toml", "scripts/test-rust-partition.sh"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.source_process_test"]
+
+[repository.actions.target]
+component = "repo"
+action = "source-process-test"
 
 [repository.actions.runner]
 kind = "argv"
 program = "scripts/test-rust-partition.sh"
 args = ["process"]
 
-[repository.actions.target]
-action = "source-process-test"
-component = "repo"
-
-[[repository.actions]]
-description = "Run the source repository's vault Rust test partition."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    "crates/jig-vault/**",
-    "crates/jig-vault-tui/**",
-    "crates/jig-tui/**",
-    "crates/jig/src/cli.rs",
-    "crates/jig/src/cli/run.rs",
-    "crates/jig/src/cli/bootstrap_run*.rs",
-    "crates/jig/src/**/vault*.rs",
-    "crates/jig/src/**/vault/**",
-    "crates/jig-context/src/vault_config.rs",
-    "crates/jig/src/command/vault.rs",
-    "crates/jig/src/exit.rs",
-    "crates/jig/src/doctor.rs",
-    "crates/jig/src/doctor/**",
-    "crates/jig/src/doctor_parts/**",
-    "crates/jig/src/runtime.rs",
-    "crates/jig-git/**",
-    "crates/jig/src/signal_supervision.rs",
-    "crates/jig/src/signal_supervision/**",
-    "crates/jig/tests/vault_*.rs",
-    "crates/jig/tests/cli_json.rs",
-    "crates/jig/tests/cli_json/**",
-    "crates/jig/tests/cli_json_parts/**",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    "nextest.toml",
-    ".config/nextest.toml",
-    ".jig.toml",
-    "templates/**",
-    "scripts/test-rust-partition.sh",
-]
-intent = "check"
-legacy_aliases = ["jig.source_vault_test"]
-
 [repository.actions.provenance]
 effects = "declared"
 inputs = "declared"
+inputs_policy = "inferred"
 intent = "declared"
 legacy_aliases = "declared"
 runner = "declared"
+source_state = "inferred"
 target = "declared"
+
+[[repository.actions]]
+description = "Run the source repository's vault Rust test partition."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["crates/jig-vault/**", "crates/jig-vault-tui/**", "crates/jig-tui/**", "crates/jig/src/cli.rs", "crates/jig/src/cli/run.rs", "crates/jig/src/cli/bootstrap_run*.rs", "crates/jig/src/**/vault*.rs", "crates/jig/src/**/vault/**", "crates/jig-context/src/vault_config.rs", "crates/jig/src/command/vault.rs", "crates/jig/src/exit.rs", "crates/jig/src/doctor.rs", "crates/jig/src/doctor/**", "crates/jig/src/doctor_parts/**", "crates/jig/src/runtime.rs", "crates/jig-git/**", "crates/jig/src/signal_supervision.rs", "crates/jig/src/signal_supervision/**", "crates/jig/tests/vault_*.rs", "crates/jig/tests/cli_json.rs", "crates/jig/tests/cli_json/**", "crates/jig/tests/cli_json_parts/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", ".jig.toml", "templates/**", "scripts/test-rust-partition.sh"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.source_vault_test"]
+
+[repository.actions.target]
+component = "repo"
+action = "source-vault-test"
 
 [repository.actions.runner]
 kind = "argv"
 program = "scripts/test-rust-partition.sh"
 args = ["vault"]
 
-[repository.actions.target]
-action = "source-vault-test"
-component = "repo"
-
-[[repository.actions]]
-description = "Run only the Rust tests that changes since the merge base with origin/master can affect."
-effects = ["read_only", "process"]
-inputs = [
-    "crates/**",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    "nextest.toml",
-    ".config/nextest.toml",
-    ".jig.toml",
-    "templates/**",
-    "scripts/**",
-    "examples/**",
-    "tests/**",
-]
-source_state = "worktree"
-intent = "check"
-
 [repository.actions.provenance]
 effects = "declared"
 inputs = "declared"
-source_state = "declared"
+inputs_policy = "inferred"
 intent = "declared"
+legacy_aliases = "declared"
 runner = "declared"
+source_state = "inferred"
 target = "declared"
+
+[[repository.actions]]
+description = "Run only the Rust tests that changes since the merge base with origin/master can affect."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", ".jig.toml", "templates/**", "scripts/**", "examples/**", "tests/**"]
+inputs_policy = "whole_repository"
+source_state = "worktree"
+
+[repository.actions.target]
+component = "repo"
+action = "source-affected-test"
 
 [repository.actions.runner]
 kind = "argv"
 program = "scripts/test-rust-affected.py"
 args = []
 
-[repository.actions.target]
-action = "source-affected-test"
-component = "repo"
+[repository.actions.provenance]
+effects = "declared"
+inputs = "declared"
+inputs_policy = "inferred"
+intent = "declared"
+runner = "declared"
+source_state = "declared"
+target = "declared"
 
-[[repository.components]]
-adapters = ["rust"]
-description = "Primary application backend."
-id = "api"
-propagate_affected_to_dependents = true
-root = "."
-tags = ["backend"]
-
-[repository.components.provenance]
-adapters = "inferred"
-id = "inferred"
-root = "inferred"
-
-[[repository.components]]
-adapters = ["jig"]
-description = "Repository-wide Jig policy and compatibility actions."
-id = "repo"
-root = "."
-tags = ["repository"]
-
-[repository.components.provenance]
-adapters = "inherited"
-id = "inferred"
-root = "inferred"
-
-# Run these before the workspace suite; final verification reuses their receipts.
 [[repository.profiles]]
 id = "preflight"
 description = "Local formatting, lint, and repository checks before workspace tests."
+
+[[repository.profiles.targets]]
+component = "api"
+action = "fmt"
+
+[[repository.profiles.targets]]
+component = "api"
+action = "clippy"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "contract"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "file-budget"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "source-runtime-check"
 
 [repository.profiles.provenance]
 id = "declared"
 targets = "declared"
 
+[[repository.profiles]]
+id = "verify"
+description = "Default repository verification targets."
+
+[[repository.profiles.targets]]
+component = "api"
+action = "clippy"
+
 [[repository.profiles.targets]]
 component = "api"
 action = "fmt"
 
 [[repository.profiles.targets]]
 component = "api"
-action = "clippy"
+action = "test"
 
 [[repository.profiles.targets]]
 component = "repo"
@@ -678,48 +479,46 @@ action = "file-budget"
 [[repository.profiles.targets]]
 component = "repo"
 action = "source-runtime-check"
-
-[[repository.profiles]]
-# Require independent checks together without making their receipts prerequisites
-# of tests. Reserve action depends_on for actual execution prerequisites.
-description = "Default repository verification targets."
-id = "verify"
 
 [repository.profiles.provenance]
 id = "inferred"
 targets = "overridden"
 
-[[repository.profiles.targets]]
-action = "clippy"
-component = "api"
 
-[[repository.profiles.targets]]
-action = "fmt"
-component = "api"
-
-[[repository.profiles.targets]]
-action = "test"
-component = "api"
-
-[[repository.profiles.targets]]
-action = "contract"
-component = "repo"
-
-[[repository.profiles.targets]]
-action = "file-budget"
-component = "repo"
-
-[[repository.profiles.targets]]
-action = "source-runtime-check"
-component = "repo"
 
 [vault]
-allow_global = false
 scope = "repo"
 scope_id = "01M1A5GSHJ900Q1VN82A66PM1H"
+allow_global = false
 
-[[work.gates]]
-conclusion = "success"
-id = "verify"
-kind = "evidence"
-profile = "verify"
+
+[commands]
+api_test_locked_command = "bash scripts/ci/test-rust.sh workspace"
+
+
+[dev]
+proxy_port = 1355
+https_port = 1443
+https = false
+# HTTPS listener ALPN only; cleartext proxy traffic remains HTTP/1.1.
+http2 = true
+lan = false
+# Must be localhost, local, test, internal, or a subdomain below one of them.
+tld = "localhost"
+# Set true to discover JavaScript workspace packages that expose dev scripts.
+workspace_discovery = false
+
+
+
+[execution]
+command_timeout_seconds = 1800
+command_output_limit_bytes = 67108864
+
+
+
+
+
+[[agent_tooling.codex.marketplaces]]
+id = "jig-skills"
+source = "bpcakes/jig-skills"
+plugins = ["jig-rust@jig-skills", "jig-swift@jig-skills", "jig-typescript@jig-skills"]
