@@ -641,4 +641,5 @@ fn parse_codex_timeout(value: &str) -> Result<CommandTimeout> {
     })
 }
 
-include!("worker_runner/tests.rs");
+#[cfg(test)]
+mod tests;

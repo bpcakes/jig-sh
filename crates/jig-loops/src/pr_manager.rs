@@ -718,14 +718,24 @@ include!("pr_manager/pre_push_review.rs");
 include!("pr_manager/worker_output.rs");
 include!("pr_manager/worktree_identity.rs");
 include!("pr_manager/worktree_and_push.rs");
-include!("pr_manager/push_error_tests.rs");
-include!("pr_manager/review_round4_tests.rs");
-include!("pr_manager/review_round37_tests.rs");
-include!("pr_manager/cancellation_tests.rs");
-include!("pr_manager/review_thread_budget_tests.rs");
-include!("pr_manager/review_thread_boundary_tests.rs");
-include!("pr_manager/review_thread_capability_tests.rs");
-include!("pr_manager/preparation_tests.rs");
+#[cfg(test)]
+mod cancellation_tests;
+#[cfg(all(test, unix))]
+mod preparation_tests;
+#[cfg(test)]
+mod push_error_tests;
+#[cfg(all(test, unix))]
+mod review_round37_tests;
+#[cfg(test)]
+mod review_round4_tests;
+#[cfg(all(test, unix))]
+mod review_thread_boundary_tests;
+#[cfg(test)]
+mod review_thread_budget_tests;
+#[cfg(test)]
+mod review_thread_capability_tests;
 include!("pr_manager/git.rs");
-include!("pr_manager/attempt_clear_tests.rs");
-include!("pr_manager/tests.rs");
+#[cfg(test)]
+mod attempt_clear_tests;
+#[cfg(test)]
+mod tests;

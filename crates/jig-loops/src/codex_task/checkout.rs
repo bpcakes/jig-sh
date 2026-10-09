@@ -194,4 +194,4 @@ impl PreparedCheckout {
 }
 
 #[cfg(test)]
-include!("checkout_tests.rs");
+mod tests;

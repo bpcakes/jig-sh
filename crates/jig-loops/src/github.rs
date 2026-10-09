@@ -667,4 +667,4 @@ fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
 }
 
 #[cfg(test)]
-include!("github/tests.rs");
+mod tests;
