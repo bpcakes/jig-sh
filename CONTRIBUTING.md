@@ -13,7 +13,11 @@ separate processes. Install that prerequisite using the
 [official cargo-nextest installation instructions](https://nexte.st/docs/installation/pre-built-binaries/),
 confirm it with `cargo nextest --version`, then run `scripts/jig doctor` for the
 remaining repository prerequisites. Focused `cargo test -p <package>` commands
-remain supported for crate development.
+remain supported for crate development, but run the whole `jig-bootstrap`,
+`jig-loops`, and `jig-sh` suites through nextest: many of their tests point
+`JIG_GIT_BIN` at a scripted Git through the process environment, and under
+plain `cargo test` that leaks into every other test spawning Git in the same
+process.
 
 Release `jig init` and `jig adopt` builds use the official remote template at the `vVERSION` tag for the running binary. Unreleased local builds use the templates embedded in the binary when `--template` is omitted. Repos rendered from embedded templates record `_src_path = "embedded:jig-sh"`; generated launchers reuse managed cached binaries that support the repository contract and requested profile. Reuse of a compatible binary found on `PATH` requires `JIG_INSTALL_ALLOW_PATH_BINARY=1` and prints the selected absolute path. Embedded renders require `JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1` before installing from the configured source's current default branch because an embedded render has no immutable source revision. When you need checkout-driven template metadata during development, pass `--template /path/to/jig-sh --template-mode committed`, or pass `--vcs-ref main` to use the current official branch.
 

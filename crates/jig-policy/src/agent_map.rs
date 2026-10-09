@@ -205,6 +205,18 @@ pub(super) fn list_guides(root: &Path) -> Result<Vec<String>> {
     Ok(guides.into_iter().collect())
 }
 
+/// A directory with a real `.git` entry: a gitdir with `HEAD`, or the file a
+/// worktree or submodule keeps there. A bare `.git` directory is not one.
+fn is_nested_repository(directory: &Path) -> bool {
+    match fs::symlink_metadata(directory.join(".git")) {
+        Ok(metadata) if metadata.is_dir() => {
+            fs::symlink_metadata(directory.join(".git/HEAD")).is_ok()
+        }
+        Ok(metadata) => metadata.is_file(),
+        Err(_) => false,
+    }
+}
+
 fn collect_guides(root: &Path, current: &Path, guides: &mut BTreeSet<String>) -> Result<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
@@ -216,6 +228,10 @@ fn collect_guides(root: &Path, current: &Path, guides: &mut BTreeSet<String>) ->
             continue;
         }
         if entry.file_type()?.is_dir() {
+            // A nested repository's guides belong to that repository.
+            if is_nested_repository(&path) {
+                continue;
+            }
             collect_guides(root, &path, guides)?;
         } else if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md") {
             guides.insert(relative_string(root, &path)?);
@@ -640,3 +656,6 @@ targets = [
         assert_eq!(output["guide_count"], 3);
     }
 }
+
+#[cfg(test)]
+mod list_guides_tests;

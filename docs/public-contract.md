@@ -83,7 +83,8 @@ nested `AGENTS.md` files and explicit `repository.components[].guidance` referen
 including Rust and Go. `guidance` names a literal repository-relative regular guide file;
 it need not be called `AGENTS.md`. Omitted guidance and absent optional guides do not
 require placeholders. Git ignore rules do not exclude existing guides. Guide discovery
-excludes `.git` and `target` directory components and does not traverse symlinked directories.
+excludes `.git` and `target` directory components, does not traverse symlinked directories,
+and does not descend into nested repositories, whose guides belong to them.
 Unreadable discovery paths produce `guide_unreadable` errors with the affected path,
 while discovery continues through other directories. Optional entries that disappear
 during discovery are skipped.
