@@ -224,7 +224,9 @@ impl Drop for ForegroundChildGuard {
     }
 }
 
-pub(super) fn read_helper_marker(path: &Path) -> (VerifiedProcessIdentity, u16, VerifiedProcessIdentity) {
+pub(super) fn read_helper_marker(
+    path: &Path,
+) -> (VerifiedProcessIdentity, u16, VerifiedProcessIdentity) {
     let marker = fs::read_to_string(path).expect("read helper marker");
     let mut fields = marker.split_whitespace();
     let helper = VerifiedProcessIdentity::from_marker(
@@ -254,7 +256,10 @@ pub(super) fn read_helper_marker(path: &Path) -> (VerifiedProcessIdentity, u16, 
     (helper, port, descendant)
 }
 
-pub(super) fn wait_for_verified_liveness(identity: &VerifiedProcessIdentity, timeout: Duration) -> bool {
+pub(super) fn wait_for_verified_liveness(
+    identity: &VerifiedProcessIdentity,
+    timeout: Duration,
+) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if identity.is_live() {
@@ -265,7 +270,10 @@ pub(super) fn wait_for_verified_liveness(identity: &VerifiedProcessIdentity, tim
     identity.is_live()
 }
 
-pub(super) fn wait_for_verified_exit(identity: &VerifiedProcessIdentity, timeout: Duration) -> bool {
+pub(super) fn wait_for_verified_exit(
+    identity: &VerifiedProcessIdentity,
+    timeout: Duration,
+) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if !identity.is_live() {
