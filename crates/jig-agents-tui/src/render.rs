@@ -126,8 +126,13 @@ fn draw_header(frame: &mut Frame, area: Rect, view: &View<'_>) {
         } else {
             format!("  ▲ {warnings}")
         };
+        let activity = if app.refreshed {
+            "Refreshing"
+        } else {
+            "Inspecting"
+        };
         (
-            format!("{frame} Inspecting accounts and usage  {progress}{suffix}"),
+            format!("{frame} {activity} accounts and usage  {progress}{suffix}"),
             format!("{frame} {progress}"),
             theme.warn(),
         )

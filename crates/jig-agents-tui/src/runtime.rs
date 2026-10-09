@@ -30,9 +30,11 @@ pub(crate) fn run(
     let mut terminal = TerminalSession::enter(app.title())?;
     let theme = render::Theme::detect();
     let external_cancellation: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(cancelled);
-    let mut worker = match source {
+    // Kept so a refresh can inspect again with the same source.
+    let source: Option<Arc<dyn InspectionSource>> = source.map(Arc::from);
+    let mut worker = match &source {
         Some(source) => {
-            InspectionWorker::spawn(Arc::from(source), Arc::clone(&external_cancellation))?
+            InspectionWorker::spawn(Arc::clone(source), Arc::clone(&external_cancellation))?
         }
         None => InspectionWorker::idle(),
     };
@@ -79,6 +81,18 @@ pub(crate) fn run(
                 Event::Key(key) if is_actionable_key(key) => match handle_key(&mut app, key) {
                     Action::Ignore => {}
                     Action::Redraw => dirty = true,
+                    Action::Refresh => {
+                        // `can_refresh` means the previous worker has already
+                        // finished, so replacing it joins nothing.
+                        if let Some(source) = &source {
+                            app.begin_refresh();
+                            worker = InspectionWorker::spawn(
+                                Arc::clone(source),
+                                Arc::clone(&external_cancellation),
+                            )?;
+                            dirty = true;
+                        }
+                    }
                     Action::Cancel => {
                         return finish_run(
                             &mut terminal,
@@ -164,6 +178,8 @@ fn prepare_for_input(
 pub(crate) enum Action {
     Ignore,
     Redraw,
+    /// Inspect every home again.
+    Refresh,
     Cancel,
     Select,
 }
@@ -226,6 +242,13 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Action::Cancel,
         KeyCode::Enter => Action::Select,
+        KeyCode::Char('r') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.can_refresh() {
+                Action::Refresh
+            } else {
+                Action::Ignore
+            }
+        }
         KeyCode::Tab | KeyCode::BackTab => {
             app.toggle_focus();
             Action::Redraw

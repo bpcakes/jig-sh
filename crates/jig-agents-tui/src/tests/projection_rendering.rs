@@ -54,7 +54,11 @@ fn rendering_marks_projection_as_an_aging_usage_snapshot() {
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Usage sample"), "{rendered}");
     assert!(rendered.contains("1h ago"), "{rendered}");
-    assert!(rendered.contains("reopen to refresh"), "{rendered}");
+    // Another home is still inspecting, so refresh waits for that round.
+    assert!(
+        rendered.contains("r refreshes once inspection finishes"),
+        "{rendered}"
+    );
 }
 
 #[test]

@@ -24,18 +24,21 @@ const fn hint(key: &'static str, action: &'static str, rank: u8) -> Hint {
     Hint { key, action, rank }
 }
 
-const HOMES: [Hint; 5] = [
+const REFRESH: &str = "r";
+const HOMES: [Hint; 6] = [
     hint("↑↓", "move", 2),
     hint("/", "search", 3),
-    hint("Tab", "details", 4),
+    hint("Tab", "details", 5),
+    hint(REFRESH, "refresh", 4),
     hint("Enter", "launch", 0),
     hint("Esc/q", "cancel", 1),
 ];
-const DETAILS: [Hint; 6] = [
+const DETAILS: [Hint; 7] = [
     hint("↑↓", "scroll", 2),
-    hint("PgUp/PgDn", "jump", 5),
+    hint("PgUp/PgDn", "jump", 6),
     hint("Tab", "homes", 3),
-    hint("/", "search", 4),
+    hint("/", "search", 5),
+    hint(REFRESH, "refresh", 4),
     hint("Enter", "launch", 0),
     hint("Esc/q", "cancel", 1),
 ];
@@ -59,12 +62,20 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, view: &View<'_>) {
             "Please wait while background inspection is stopped safely.",
             Style::default().fg(theme.muted()),
         )
-    } else if app.searching {
-        hint_line(theme, &SEARCH, area.width)
-    } else if app.focus == Focus::Details {
-        hint_line(theme, &DETAILS, area.width)
     } else {
-        hint_line(theme, &HOMES, area.width)
+        let hints = if app.searching {
+            &SEARCH[..]
+        } else if app.focus == Focus::Details {
+            &DETAILS[..]
+        } else {
+            &HOMES[..]
+        };
+        // Refresh is offered only once the current inspection has finished.
+        let available = hints
+            .iter()
+            .filter(|hint| hint.key != REFRESH || app.can_refresh())
+            .collect::<Vec<_>>();
+        hint_line(theme, &available, area.width)
     };
     let mut lines = vec![controls];
     if app.searching || !app.filter.is_empty() {
@@ -92,9 +103,9 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, view: &View<'_>) {
 }
 
 /// As many key chips as fit, kept in their reading order.
-fn hint_line(theme: Theme, hints: &[Hint], width: u16) -> Line<'static> {
+fn hint_line(theme: Theme, hints: &[&Hint], width: u16) -> Line<'static> {
     // ` key ` chip, action, then a two-cell gap before the next chip.
-    let hint_width = |hint: &Hint| 1 + hint.key.width() + 1 + 1 + hint.action.width() + 2;
+    let hint_width = |hint: &&Hint| 1 + hint.key.width() + 1 + 1 + hint.action.width() + 2;
     let fits = |rank: u8| {
         let used = hints
             .iter()

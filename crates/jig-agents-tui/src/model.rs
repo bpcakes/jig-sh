@@ -39,6 +39,10 @@ pub(crate) enum ExitState {
 #[derive(Clone, Debug)]
 pub(crate) struct HomeRow {
     pub(crate) configuration_details: Option<Vec<(String, String)>>,
+    /// A refresh is under way and the row still shows its previous sample.
+    pub(crate) refreshing: bool,
+    /// The row has reported in the current inspection round.
+    reported: bool,
     home: Home,
     display_name: String,
     display_path: String,
@@ -54,6 +58,8 @@ impl HomeRow {
         let search_terms = Self::prepare_search_terms(&display_name, &display_path, &inspection);
         Self {
             configuration_details: None,
+            refreshing: false,
+            reported: false,
             home,
             display_name,
             display_path,

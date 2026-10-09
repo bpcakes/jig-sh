@@ -4,6 +4,10 @@
 
 ### Added
 
+- Press `r` in the `claude launch` and `codex launch` home pickers to inspect
+  every home again without reopening the picker. Each home keeps its previous
+  sample, marked with a spinner, until the new one arrives; refresh is
+  offered once the current inspection has finished.
 - Add vault format 3. `vault init`, and vault setup in `jig init` and
   `jig adopt --write`, now create format 3 vaults; existing vaults are never
   migrated implicitly. `vault migrate --to 3` upgrades a format 1 or 2 vault
