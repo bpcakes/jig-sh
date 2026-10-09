@@ -659,6 +659,7 @@
       "crates/jig/src/signal_supervision/**",
       "crates/jig/tests/claude_launcher.rs",
       "crates/jig/tests/codex_launcher.rs",
+      "crates/jig/tests/codex_launcher/**",
       "crates/jig/tests/dev_launcher_loss.rs",
       "crates/jig/tests/dev_lifecycle.rs",
       "crates/jig/tests/dev_sigint.rs",

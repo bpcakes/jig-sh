@@ -4,6 +4,10 @@
 
 ### Added
 
+- Use the mouse in the `claude launch` and `codex launch` home pickers: click
+  a home to select it, double-click to launch it, and scroll the homes or the
+  details with the wheel. Mouse capture is restored with the terminal on
+  every exit.
 - Press `r` in the `claude launch` and `codex launch` home pickers to inspect
   every home again without reopening the picker. Each home keeps its previous
   sample, marked with a spinner, until the new one arrives; refresh is

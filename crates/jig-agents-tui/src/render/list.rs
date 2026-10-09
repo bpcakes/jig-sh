@@ -13,7 +13,7 @@ use super::{
     meter::{Bar, Look, meter, used_label},
     pad, panel, stale_projection_style, stale_snapshot_label, truncate,
 };
-use crate::model::{Focus, Inspection, WindowRole};
+use crate::model::{Focus, Inspection, ListRows, WindowRole};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Selection mark, best badge, current badge, and a space.
@@ -165,6 +165,7 @@ pub(super) fn draw_list(frame: &mut Frame, area: Rect, view: &View<'_>) {
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    app.set_hit_areas(|areas| areas.list = Some(area));
     if visible.is_empty() {
         frame.render_widget(
             Paragraph::new("No homes match the current search.").wrap(Wrap { trim: true }),
@@ -204,6 +205,18 @@ pub(super) fn draw_list(frame: &mut Frame, area: Rect, view: &View<'_>) {
         &mut state,
     );
     app.set_list_offset(state.offset());
+    let row_height = if app.static_configuration || style != ListStyle::Full {
+        2
+    } else {
+        1
+    };
+    app.set_hit_areas(|areas| {
+        areas.rows = Some(ListRows {
+            area: list_area,
+            row_height,
+            offset: state.offset(),
+        });
+    });
 }
 
 /// One line per home: name, account, both windows, and the overall outcome.

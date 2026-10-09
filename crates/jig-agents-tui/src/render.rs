@@ -7,7 +7,7 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::model::{App, ExitState, Projection, unix_timestamp_now};
+use crate::model::{App, ExitState, HitAreas, Projection, unix_timestamp_now};
 use layout::{MIN_HEIGHT, MIN_WIDTH};
 use list::draw_list;
 pub(crate) use theme::Theme;
@@ -46,6 +46,8 @@ pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
 
 fn draw_with(frame: &mut Frame, app: &App, theme: Theme, now: u64) {
     let area = frame.area();
+    // Each drawn pane records where it is; one that is not drawn cannot be hit.
+    app.set_hit_areas(|areas| *areas = HitAreas::default());
     let view = View {
         app,
         theme,

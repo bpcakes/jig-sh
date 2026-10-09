@@ -1,9 +1,29 @@
-use std::{cell::Cell, collections::HashSet};
+use std::{cell::Cell, collections::HashSet, time::Instant};
 
 use jig_tui::{ListViewportState, PreparedFuzzyText, sanitize_text};
+use ratatui::layout::Rect;
 
 use super::{Details, ExitState, Focus, HomeRow, Inspection, unix_timestamp_now};
 use crate::{Home, HomeUpdate};
+
+/// Where the last frame drew the list rows and the details, so a mouse event
+/// can be mapped to what was on screen.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct HitAreas {
+    /// The whole list panel, for the wheel.
+    pub(crate) list: Option<Rect>,
+    /// The rows themselves, below the column header.
+    pub(crate) rows: Option<ListRows>,
+    pub(crate) details: Option<Rect>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ListRows {
+    pub(crate) area: Rect,
+    pub(crate) row_height: u16,
+    /// The first visible home's position among the visible homes.
+    pub(crate) offset: usize,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct App {
@@ -27,6 +47,9 @@ pub(crate) struct App {
     pub(crate) discovery_warnings: Vec<String>,
     pub(crate) tick: usize,
     pub(crate) exit_state: Option<ExitState>,
+    hit_areas: Cell<HitAreas>,
+    /// The home last clicked and when, to recognize a double click.
+    pub(crate) last_click: Option<(usize, Instant)>,
 }
 
 impl App {
@@ -58,6 +81,8 @@ impl App {
                 .collect(),
             tick: 0,
             exit_state: None,
+            hit_areas: Cell::new(HitAreas::default()),
+            last_click: None,
         }
     }
 
@@ -190,6 +215,24 @@ impl App {
             self.detail_scroll = 0;
         }
         self.selected = selected;
+    }
+
+    /// Selects a visible home directly, as a click does.
+    pub(crate) fn select(&mut self, index: usize) {
+        if self.selected != Some(index) {
+            self.detail_scroll = 0;
+        }
+        self.selected = Some(index);
+    }
+
+    pub(crate) fn hit_areas(&self) -> HitAreas {
+        self.hit_areas.get()
+    }
+
+    pub(crate) fn set_hit_areas(&self, update: impl FnOnce(&mut HitAreas)) {
+        let mut areas = self.hit_areas.get();
+        update(&mut areas);
+        self.hit_areas.set(areas);
     }
 
     pub(crate) fn move_to_edge(&mut self, end: bool) {

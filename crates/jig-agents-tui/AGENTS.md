@@ -11,12 +11,12 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 - `src/render.rs`: frame entrypoint, header, and shared pane and status styles. `src/render/layout.rs` owns every breakpoint and decides which panes are visible and which list style fits; `src/render/list.rs` composes the list rows, `src/render/details.rs` builds the selected-home pane, `src/render/wrap.rs` wraps its lines, `src/render/meter.rs` draws usage meters, `src/render/theme.rs` owns the palette and its color-depth fallbacks, and `src/render/footer.rs` fits key hints to the width.
 - `src/model/gauge.rs`: per-window meter data (used, elapsed, projected) derived from the same sample as the projection.
 - `examples/picker_preview.rs`: the real picker with example homes and simulated inspection, for presentation work (`cargo run -p jig-agents-tui --example picker_preview`).
-- `src/runtime.rs`: event loop and background inspection ownership.
+- `src/runtime.rs`: event loop and background inspection ownership; `src/runtime/mouse.rs` maps clicks and the wheel to actions using the areas the last frame recorded (`App::hit_areas`).
 - `src/usage.rs`: normalized quota validation, remaining calculation, and duration labels shared with the matching CLI release.
 
 ## Edit here for X
 
-- Picker interaction or keyboard behavior: `src/model/app.rs` and `src/runtime.rs`.
+- Picker interaction or keyboard behavior: `src/model/app.rs` and `src/runtime.rs`; mouse behavior in `src/runtime/mouse.rs`.
 - List rows, badges, and columns: `src/render/list.rs`, including the static configuration list.
 - Meter glyphs or the palette: `src/render/meter.rs` and `src/render/theme.rs`.
 - Detail pane content, order, or wrapping: `src/render/details.rs`.
