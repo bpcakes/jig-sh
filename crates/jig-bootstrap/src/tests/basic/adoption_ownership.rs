@@ -1,8 +1,11 @@
 use super::*;
 
-#[path = "adoption_ownership_assertions.rs"]
-mod adoption_ownership_assertions;
-use adoption_ownership_assertions::*;
+mod assertions;
+mod legacy_paths;
+mod manifest;
+mod tracker;
+mod web_paths;
+use assertions::*;
 
 #[test]
 fn adopt_defaults_to_tooling_only_when_sqlx_answers_are_omitted() {
@@ -281,310 +284,167 @@ fn first_time_minimal_adoption_preserves_project_owned_omitted_paths() {
 }
 
 #[test]
-fn missing_manifest_blocks_update_and_explicit_adopt_establishes_ownership() {
+fn minimal_adoption_staging_still_rejects_invalid_commands_and_tools() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
+    let config_template = template.path().join("templates/project/.jig.toml.jinja");
+    let config = fs::read_to_string(&config_template).unwrap();
+    let config = config.replace(
+        "<<[ repository_commands_toml ]>>",
+        "<<[ repository_commands_toml | replace(bootstrap_command, \"  \") ]>>",
+    );
+    fs::write(&config_template, format!("{config}\n")).unwrap();
+    let contract_template = template
+        .path()
+        .join("templates/project/.agent/jig-contract.json.jinja");
+    let contract = fs::read_to_string(&contract_template).unwrap().replace(
+        "\"tools\": <<[ repository.tools | tojson(indent=2) ]>>",
+        "\"tools\": [{\"name\":\"jig.unsupported\",\"kind\":\"native\",\"description\":\"unsupported test tool\"}]",
+    );
+    fs::write(&contract_template, contract).unwrap();
     let repo = temp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
-    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-    add_project_runtime_tables(&repo);
-    let config_path = repo.join(".jig.toml");
-    let mut config =
-        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
-    config["web_package_manager"] = toml::Value::String("npm".into());
-    config["dev"].as_table_mut().unwrap().insert(
-        "apps".into(),
-        toml::Value::Array(vec![toml::Value::Table(toml::Table::from_iter([
-            ("name".into(), toml::Value::String("api".into())),
-            ("kind".into(), toml::Value::String("env-port".into())),
-            (
-                "command".into(),
-                toml::Value::String("cargo run -p api".into()),
-            ),
-        ]))]),
-    );
-    config["agent_tooling"]["codex"]["marketplaces"][0]["source"] =
-        toml::Value::String("example/custom-skills".into());
-    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
-    fs::remove_file(repo.join(managed_paths::MANIFEST_PATH)).unwrap();
-    let project_owned = ["scripts/check-agent-guides.sh", "scripts/add-migration.sh"];
-    write_project_sentinels(&repo, &project_owned);
 
-    let error = run_update(update_opts(&repo, template.path(), false))
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains(managed_paths::MANIFEST_PATH), "{error}");
-    assert!(error.contains("jig adopt . --write"), "{error}");
+    let error = run_adopt(footprint_adopt_opts(&repo, template.path(), true, false)).unwrap_err();
+    let error = format!("{error:#}");
 
-    let output = run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-
-    assert!(repo.join(managed_paths::MANIFEST_PATH).is_file());
-    assert_project_sentinels(&repo, &project_owned);
     assert!(
-        output["adoption_profile"]["retired_managed_files"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+        error.contains("Command key repo_bootstrap_command is empty"),
+        "{error}"
     );
     assert!(
-        managed_manifest_paths(&repo)
-            .iter()
-            .all(|path| { !project_owned.contains(&path.as_str()) })
+        error.contains("Unsupported native tool: jig.unsupported"),
+        "{error}"
     );
-    let established =
-        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
-    assert_eq!(established["web_package_manager"].as_str(), Some("npm"));
-    assert_eq!(established["dev"]["apps"][0]["name"].as_str(), Some("api"));
-    assert_eq!(
-        established["agent_tooling"]["codex"]["marketplaces"][0]["source"].as_str(),
-        Some("example/custom-skills")
-    );
-    assert_project_runtime_tables(&established);
-    run_update(update_opts(&repo, template.path(), false)).unwrap();
+    assert!(!repo.join(".jig.toml").exists());
 }
 
 #[test]
-fn missing_manifest_blocks_full_to_minimal_until_full_ownership_is_established() {
+fn forced_minimal_adoption_with_invalid_prior_config_preserves_omitted_paths() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
     let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-    fs::remove_file(repo.join(managed_paths::MANIFEST_PATH)).unwrap();
+    let mcp_contents = b"{\"projectOwned\":true}\n";
+    let workflow_contents = b"name: project policy\n";
+    fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+    fs::write(
+        repo.join(".jig.toml"),
+        "harness_footprint = \"not-a-footprint\"\n",
+    )
+    .unwrap();
+    fs::write(repo.join(".mcp.json"), mcp_contents).unwrap();
+    fs::write(
+        repo.join(".github/workflows/repo-policy.yml"),
+        workflow_contents,
+    )
+    .unwrap();
+    let legacy_paths = [
+        "scripts/check-agent-guides.sh",
+        "scripts/add-migration.sh",
+        "scripts/check-schema-dump.sh",
+        "scripts/enforce-coverage.js",
+    ];
+    write_project_sentinels(&repo, &legacy_paths);
 
-    let error = run_adopt(footprint_adopt_opts(&repo, template.path(), true, true))
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("without --minimal"), "{error}");
-    assert!(repo.join("scripts/jig").is_file());
+    run_adopt(footprint_adopt_opts(&repo, template.path(), true, true)).unwrap();
+
+    assert_eq!(fs::read(repo.join(".mcp.json")).unwrap(), mcp_contents);
+    assert_eq!(
+        fs::read(repo.join(".github/workflows/repo-policy.yml")).unwrap(),
+        workflow_contents
+    );
+    assert_project_sentinels(&repo, &legacy_paths);
     assert!(
         fs::read_to_string(repo.join(".jig.toml"))
             .unwrap()
-            .contains("harness_footprint = \"full\"")
+            .contains("harness_footprint = \"minimal\"")
     );
-
-    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-    run_adopt(footprint_adopt_opts(&repo, template.path(), true, true)).unwrap();
-    assert!(!repo.join("scripts/jig").exists());
 }
 
 #[test]
-fn invalid_manifest_blocks_forced_adoption_without_changes() {
+fn missing_rendered_config_fails_before_optional_authority_reconciliation() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+
+    for refresh in ["update", "readopt"] {
+        let template = materialize_template_worktree();
+        let repo = temp.path().join(refresh);
+        fs::create_dir_all(&repo).unwrap();
+        run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+        add_project_runtime_tables(&repo);
+        let config_path = repo.join(".jig.toml");
+        let config_before = fs::read(&config_path).unwrap();
+        fs::remove_file(template.path().join("templates/project/.jig.toml.jinja")).unwrap();
+
+        let error = if refresh == "update" {
+            run_update(update_opts(&repo, template.path(), false)).unwrap_err()
+        } else {
+            run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap_err()
+        };
+        let error = format!("{error:#}");
+
+        assert!(
+            error.contains("Staging render did not produce .jig.toml"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&config_path).unwrap(), config_before);
+    }
+}
+
+#[test]
+fn minimal_adoption_expands_to_full_without_force() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
     let repo = temp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
-    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-    let sentinel = fs::read(repo.join("scripts/jig")).unwrap();
-    fs::write(
-        repo.join(managed_paths::MANIFEST_PATH),
-        r#"{"version":1,"paths":["../outside",".agent/jig-managed-paths.json"]}"#,
-    )
-    .unwrap();
 
-    let error = run_adopt(footprint_adopt_opts(&repo, template.path(), true, true))
-        .unwrap_err()
-        .to_string();
+    run_adopt(footprint_adopt_opts(&repo, template.path(), true, false)).unwrap();
+    add_project_runtime_tables(&repo);
+    let output = run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
 
-    assert!(
-        error.contains("Invalid Jig managed-path manifest"),
-        "{error}"
-    );
-    assert_eq!(fs::read(repo.join("scripts/jig")).unwrap(), sentinel);
-}
-
-#[test]
-fn tampered_manifest_cannot_make_update_or_adopt_remove_project_directory() {
-    let _guard = lock_env();
-    let template = materialize_template_worktree();
-
-    for mode in [
-        "update",
-        "update-force",
-        "adopt-preview",
-        "adopt-write",
-        "adopt-force",
-    ] {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir_all(&repo).unwrap();
-        run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-
-        fs::create_dir(repo.join("project-directory")).unwrap();
-        fs::write(
-            repo.join("project-directory/project-sentinel"),
-            "project metadata\n",
-        )
-        .unwrap();
-        fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
-        let existing_backup = repo.join(".agent/.cache/adopt/backups/existing");
-        fs::create_dir_all(&existing_backup).unwrap();
-        fs::write(existing_backup.join("project-sentinel"), "backup\n").unwrap();
-        add_managed_manifest_path(&repo, "project-directory");
-
-        let manifest_before = fs::read(repo.join(managed_paths::MANIFEST_PATH)).unwrap();
-        let canonical_receipt_before = fs::read(repo.join(ADOPT_RECEIPT_PATH)).unwrap();
-        let legacy_receipt_before = fs::read(repo.join(LEGACY_ADOPT_RECEIPT_PATH)).unwrap();
-        let repo_before = regular_file_tree_snapshot(&repo);
-
-        let error = match mode {
-            "update" => run_update(update_opts(&repo, template.path(), false)).unwrap_err(),
-            "update-force" => run_update(update_opts(&repo, template.path(), true)).unwrap_err(),
-            "adopt-preview" => {
-                let mut opts = footprint_adopt_opts(&repo, template.path(), false, false);
-                opts.write = false;
-                run_adopt(opts).unwrap_err()
-            }
-            "adopt-write" => {
-                run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap_err()
-            }
-            "adopt-force" => {
-                run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap_err()
-            }
-            _ => unreachable!(),
-        }
-        .to_string();
-
-        assert!(error.contains("destination leaf"), "{mode}: {error}");
-        assert!(error.contains("project-directory"), "{mode}: {error}");
-        assert!(error.contains("is a directory"), "{mode}: {error}");
-        assert!(
-            !error.contains("Re-run with --force") && !error.contains("re-run with --force"),
-            "{mode}: structural errors must not suggest force: {error}"
-        );
-        assert_eq!(regular_file_tree_snapshot(&repo), repo_before, "{mode}");
-        assert_eq!(
-            fs::read(repo.join(managed_paths::MANIFEST_PATH)).unwrap(),
-            manifest_before,
-            "{mode}: manifest changed"
-        );
-        assert_eq!(
-            fs::read_to_string(repo.join("project-directory/project-sentinel")).unwrap(),
-            "project metadata\n",
-            "{mode}: project directory changed"
-        );
-        assert_eq!(
-            fs::read(repo.join(ADOPT_RECEIPT_PATH)).unwrap(),
-            canonical_receipt_before,
-            "{mode}: canonical receipt changed"
-        );
-        assert_eq!(
-            fs::read(repo.join(LEGACY_ADOPT_RECEIPT_PATH)).unwrap(),
-            legacy_receipt_before,
-            "{mode}: legacy receipt changed"
-        );
-        assert_eq!(
-            fs::read_to_string(existing_backup.join("project-sentinel")).unwrap(),
-            "backup\n",
-            "{mode}: existing backup changed"
-        );
-        assert_eq!(
-            fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
-            "project notes\n",
-            "{mode}: an earlier managed path changed"
-        );
-    }
-}
-
-#[test]
-fn tampered_manifest_cannot_manage_linked_worktree_git_file() {
-    let _guard = lock_env();
-    let template = materialize_template_worktree();
-
-    for alias in [".git", ".g\u{200c}it/config"] {
-        for mode in [
-            "update",
-            "update-force",
-            "adopt-preview",
-            "adopt-write",
-            "adopt-force",
-        ] {
-            let temp = tempdir().unwrap();
-            let main = temp.path().join("main");
-            fs::create_dir_all(&main).unwrap();
-            init_git_repo_for_test(&main);
-            git(&main, ["commit", "--allow-empty", "-m", "fixture"]).unwrap();
-            let repo = temp.path().join("repo");
-            git(
-                &main,
-                [
-                    "worktree",
-                    "add",
-                    "--quiet",
-                    "-b",
-                    "fixture-worktree",
-                    repo.to_str().unwrap(),
-                ],
-            )
+    assert_eq!(output["harness_footprint"], "full");
+    assert!(repo.join("scripts/jig").is_file());
+    assert!(!repo.join(".mcp.json").exists());
+    assert!(repo.join(".github/workflows/rust-tests.yml").is_file());
+    assert!(repo.join("AGENTS.md").is_file());
+    let config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
             .unwrap();
-            run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+    assert_eq!(config["harness_footprint"].as_str(), Some("full"));
+    assert_project_runtime_tables(&config);
+    jig_context::RepoContext::load_from(&repo).unwrap();
+}
 
-            assert!(repo.join(".git").is_file());
-            let git_metadata_before = fs::read_to_string(repo.join(".git")).unwrap();
-            fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
-            let existing_backup = repo.join(".agent/.cache/adopt/backups/existing");
-            fs::create_dir_all(&existing_backup).unwrap();
-            fs::write(existing_backup.join("project-sentinel"), "backup\n").unwrap();
-            add_managed_manifest_path(&repo, alias);
+#[test]
+fn update_preserves_project_runtime_tables_for_minimal_and_full_harnesses() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
 
-            let repo_before = regular_file_tree_snapshot(&repo);
+    for minimal in [true, false] {
+        for force in [false, true] {
+            let repo = temp.path().join(format!(
+                "{}-{force}",
+                if minimal { "minimal" } else { "full" }
+            ));
+            fs::create_dir_all(&repo).unwrap();
+            run_adopt(footprint_adopt_opts(&repo, template.path(), minimal, false)).unwrap();
+            add_project_runtime_tables(&repo);
 
-            let error = match mode {
-                "update" => run_update(update_opts(&repo, template.path(), false)).unwrap_err(),
-                "update-force" => {
-                    run_update(update_opts(&repo, template.path(), true)).unwrap_err()
-                }
-                "adopt-preview" => {
-                    let mut opts = footprint_adopt_opts(&repo, template.path(), false, false);
-                    opts.write = false;
-                    run_adopt(opts).unwrap_err()
-                }
-                "adopt-write" => {
-                    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false))
-                        .unwrap_err()
-                }
-                "adopt-force" => {
-                    run_adopt(footprint_adopt_opts(&repo, template.path(), false, true))
-                        .unwrap_err()
-                }
-                _ => unreachable!(),
-            }
-            .to_string();
+            run_update(update_opts(&repo, template.path(), force)).unwrap();
 
-            assert!(
-                error.contains("reserved Git metadata component"),
-                "{alias}/{mode}: {error}"
-            );
-            assert!(error.contains(".git"), "{alias}/{mode}: {error}");
-            assert!(
-                !error.to_ascii_lowercase().contains("--force"),
-                "{alias}/{mode}: reserved-path errors must not suggest force: {error}"
-            );
+            let config =
+                toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
+                    .unwrap();
+            assert_project_runtime_tables(&config);
             assert_eq!(
-                regular_file_tree_snapshot(&repo),
-                repo_before,
-                "{alias}/{mode}"
+                config["harness_footprint"].as_str(),
+                Some(if minimal { "minimal" } else { "full" })
             );
-            assert_eq!(
-                fs::read_to_string(repo.join(".git")).unwrap(),
-                git_metadata_before,
-                "{alias}/{mode}: linked-worktree metadata changed"
-            );
-            assert_eq!(
-                fs::read_to_string(existing_backup.join("project-sentinel")).unwrap(),
-                "backup\n",
-                "{alias}/{mode}: existing backup changed"
-            );
-            assert_eq!(
-                fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
-                "project notes\n",
-                "{alias}/{mode}: an earlier managed path changed"
-            );
+            jig_context::RepoContext::load_from(&repo).unwrap();
         }
     }
 }
-
-include!("adoption_ownership_parts/part_02.rs");
