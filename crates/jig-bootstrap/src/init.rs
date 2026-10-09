@@ -13,15 +13,14 @@ use super::template_source::PreparedTemplateSource;
 use super::{
     ANSWERS_FILE, AnswerOpts, InitOpts, InitReport, InitialCommand,
     ensure_init_destination_noreplace_supported, initial_next_steps, initial_notes,
-    initial_render_report, managed_paths, path, scaffold, template_progress_label,
-    validate_init_destination,
+    initial_render_report, path, template_progress_label, validate_init_destination,
 };
 
 struct PreparedInit {
     destination: PathBuf,
     answers: AnswerOpts,
     answer_input: AnswerInput,
-    scaffold_plan: Option<scaffold::InitScaffoldPlan>,
+    scaffold_plan: Option<super::scaffold::InitScaffoldPlan>,
     template: PreparedTemplateSource,
     force: bool,
     use_defaults: bool,
@@ -88,11 +87,9 @@ fn prepare_init(
     opts.scaffold.apply_init_answer_defaults(&mut opts.answers);
     let answer_input = progress.log_blocked_on_err(prepared_answers.into_input())?;
     let mut answers = opts.answers;
-    let mut scaffold_plan = progress.log_blocked_on_err(scaffold::InitScaffoldPlan::from_opts(
-        &opts.scaffold,
-        &answers,
-        &destination,
-    ))?;
+    let mut scaffold_plan = progress.log_blocked_on_err(
+        super::scaffold::InitScaffoldPlan::from_opts(&opts.scaffold, &answers, &destination),
+    )?;
     if let Some(plan) = &mut scaffold_plan {
         plan.apply_answer_defaults(&mut answers);
     }
@@ -160,7 +157,7 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
             progress.log_blocked_on_err(plan.preflight(&work_destination, force))?;
             progress.log_blocked_on_err(path::validate_repository_regular_file_leaf(
                 &work_destination,
-                Path::new(managed_paths::AGENT_MAP_PATH),
+                Path::new(super::managed_paths::AGENT_MAP_PATH),
             ))?;
         }
 
@@ -181,14 +178,14 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
             allow_contract_overwrite: false,
             reserved_output_paths: scaffold_plan
                 .as_ref()
-                .map(scaffold::InitScaffoldPlan::output_paths)
+                .map(super::scaffold::InitScaffoldPlan::output_paths)
                 .unwrap_or_default(),
             scaffolded_frontend_contracts: scaffold_plan
                 .as_ref()
-                .is_some_and(scaffold::InitScaffoldPlan::scaffolds_frontend_contracts),
+                .is_some_and(super::scaffold::InitScaffoldPlan::scaffolds_frontend_contracts),
             scaffolded_go_postgres_integration: scaffold_plan
                 .as_ref()
-                .is_some_and(scaffold::InitScaffoldPlan::scaffolds_go_postgres_integration),
+                .is_some_and(super::scaffold::InitScaffoldPlan::scaffolds_go_postgres_integration),
             init_transaction: Some(&mut transaction),
             use_update_transaction: false,
             progress,
@@ -207,7 +204,7 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
                 Some(&mut transaction),
             ))?;
             progress.step("refresh agent map", "include scaffold crate guides");
-            let agent_map_path = Path::new(managed_paths::AGENT_MAP_PATH);
+            let agent_map_path = Path::new(super::managed_paths::AGENT_MAP_PATH);
             let agent_map = progress.log_blocked_on_err(jig_policy::render_agent_map(
                 &work_destination,
                 agent_map_path,
@@ -275,7 +272,7 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
                 &copy_result,
                 scaffold_plan
                     .as_ref()
-                    .is_some_and(scaffold::InitScaffoldPlan::database_enabled),
+                    .is_some_and(super::scaffold::InitScaffoldPlan::database_enabled),
             ),
             notes: initial_notes(
                 copy_result.notes,
@@ -298,4 +295,13 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
         }
         Err(primary) => Err(transaction.finish_failed_init(primary)),
     }
+}
+
+pub fn prepare_init_answers_for_interaction(answers: &AnswerOpts) -> Result<PreparedInitAnswers> {
+    let invocation_cwd = bootstrap_invocation_cwd()?;
+    PreparedInitAnswers::from_opts_at(answers, &invocation_cwd)
+}
+
+pub fn should_default_init_sqlx_disabled(answers: &AnswerOpts) -> bool {
+    super::answers::should_default_init_sqlx_disabled(answers)
 }

@@ -4,34 +4,28 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(test)]
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, ValueEnum};
 use jig_context::RepoContext;
-use jig_context::frontend_metadata::resolve_frontend_metadata;
 #[cfg(test)]
 use jig_context::{RuntimeCacheProfile, runtime_cache_base, runtime_profile_cache_name};
 use jig_execution::progress::CliProgress;
 use jig_repository::path::{
     self, absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use tempfile::{Builder as TempFileBuilder, TempDir};
-use time::OffsetDateTime;
 use toml::Table;
 #[cfg(test)]
 use toml::Value as TomlValue;
-use ulid::Ulid;
 
 #[cfg(test)]
 use crate::runtime_cache_lock::{RuntimeCacheLockPolicy, RuntimeCacheLocks};
-use answers::{AnswerInput, RenderAnswers};
+use answers::RenderAnswers;
 #[cfg(test)]
 use file_copy::create_symlink;
 #[cfg(test)]
@@ -47,7 +41,6 @@ use init_transaction::{
 };
 #[cfg(test)]
 use initial_copy::seed_answers_toml;
-use initial_copy::{BootstrapCopyRequest, render_and_copy_bootstrap_template};
 pub use initial_template::record_build_template_pin_policy;
 #[cfg(test)]
 use initial_template::{
@@ -55,7 +48,6 @@ use initial_template::{
     default_template_failure_context, is_official_template_source, official_template_ref,
     official_template_ref_for_version, resolve_initial_template_request_with_policy,
 };
-use initial_template::{prepare_initial_template_source, resolve_initial_template_request};
 #[cfg(test)]
 use preview_seed::seed_preview_workspace;
 use renderer::{RenderStageRequest, stage_render, stage_selected_render};
@@ -69,6 +61,41 @@ use template_source::{
     read_stored_template_state,
 };
 
+#[cfg(test)]
+use adopt::{ADOPT_RECEIPT_PATH, ADOPT_RECEIPT_PATHS, LEGACY_ADOPT_RECEIPT_PATH};
+#[cfg(test)]
+use apps::parse_frontend_app;
+#[cfg(test)]
+use initial_template::resolve_initial_template_request;
+#[cfg(test)]
+use serde_json::{Value, json};
+mod adopt;
+mod apps;
+mod destination;
+mod initial_report;
+mod scaffold_opts;
+
+pub use adopt::run_adopt;
+pub use apps::{DevApp, FrontendApp};
+pub use destination::preflight_init_destination;
+use destination::{
+    ensure_init_destination_noreplace_supported, reject_newer_declared_contract,
+    validate_init_destination, validate_update_destination,
+};
+pub use init::{prepare_init_answers_for_interaction, should_default_init_sqlx_disabled};
+#[cfg(test)]
+use initial_report::initial_command_report;
+pub use initial_report::{BootstrapVaultReport, InitReport};
+use initial_report::{
+    InitialCommand, initial_next_steps, initial_notes, initial_render_report,
+    template_progress_label,
+};
+pub use opts::{AdoptOpts, InitOpts, TemplateMode, UpdateOpts};
+use scaffold_opts::ScaffoldFrontendKind;
+pub use scaffold_opts::{
+    ScaffoldDb, ScaffoldFrontend, ScaffoldJobs, ScaffoldMetrics, ScaffoldOpts, ScaffoldPreset,
+    parse_scaffold_frontend,
+};
 mod adopt_infer;
 pub use adopt_infer::ComponentSelectionOpts;
 mod adoption_file_budget;
@@ -105,9 +132,7 @@ mod update;
 mod update_transaction;
 
 pub use launcher_repair_cache::LAUNCHER_REPAIR_SEED_STAMP_HEADER;
-use launcher_repair_cache::{
-    FullRefreshRuntimePolicy, finish_full_refresh, seed_launcher_repair_runtime,
-};
+use launcher_repair_cache::seed_launcher_repair_runtime;
 #[cfg(test)]
 use launcher_repair_cache::{
     LAUNCHER_REPAIR_ENVIRONMENT_KEYS, LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE,
@@ -142,9 +167,7 @@ use update::{
 const ANSWERS_FILE: &str = ".jig.toml";
 pub const MANAGED_PATHS_MANIFEST_PATH: &str = managed_paths::MANIFEST_PATH;
 const LAUNCHER_ONLY_MANAGED_PATHS: [&str; 2] = ["scripts/install-jig.sh", "scripts/jig"];
-const ADOPT_RECEIPT_PATH: &str = ".agent/.cache/adopt/adopt-last.json";
-const LEGACY_ADOPT_RECEIPT_PATH: &str = ".agent/state/adopt-last.json";
-const ADOPT_RECEIPT_PATHS: [&str; 2] = [ADOPT_RECEIPT_PATH, LEGACY_ADOPT_RECEIPT_PATH];
+
 const BUILD_TEMPLATE_PIN_RELEASED: &str = "released";
 const BUILD_TEMPLATE_PIN_UNRELEASED: &str = "unreleased";
 const OFFICIAL_TEMPLATE_SOURCE: &str = "https://github.com/bpcakes/jig-sh.git";
@@ -159,8 +182,45 @@ const GENERATED_NODE_TYPES_VERSION: &str = "24.13.3";
 pub const APPLICATION_BACKEND_DEV_APP_NAME: &str = "api";
 pub const RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME: &str = "admin-api";
 
-include!("bootstrap_parts/part_01.rs");
-include!("bootstrap_parts/part_02.rs");
+fn generated_package_manager_spec(package_manager: &str) -> &'static str {
+    match package_manager {
+        "bun" => "bun@1.3.14",
+        "npm" => "npm@12.0.2",
+        "pnpm" => "pnpm@11.22.0",
+        "yarn" => "yarn@4.18.0",
+        _ => unreachable!("web package manager was already validated"),
+    }
+}
+
+fn generated_package_manager_version(package_manager: &str) -> &'static str {
+    generated_package_manager_spec(package_manager)
+        .split_once('@')
+        .expect("generated package manager specs contain @")
+        .1
+}
+
+#[cfg(test)]
+fn read_optional_answer_string(answers_path: &Path, key: &str) -> Result<Option<String>> {
+    let answers = read_answers_toml(answers_path)?;
+    Ok(answers
+        .get(key)
+        .and_then(TomlValue::as_str)
+        .map(str::to_string)
+        .filter(|value| !value.is_empty()))
+}
+
+fn read_answers_toml(path: &Path) -> Result<Table> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    toml::from_str(&text).with_context(|| format!("Failed to parse {}", path.display()))
+}
+
+#[cfg(test)]
+fn write_answers_toml(path: &Path, mapping: &Table) -> Result<()> {
+    let toml = toml::to_string(mapping)
+        .with_context(|| format!("Failed to serialize {}", path.display()))?;
+    fs::write(path, toml).with_context(|| format!("Failed to write {}", path.display()))
+}
 
 #[cfg(test)]
 mod tests;

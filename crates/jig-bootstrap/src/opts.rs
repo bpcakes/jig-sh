@@ -1,9 +1,12 @@
 use std::path::PathBuf;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 use jig_context::{ExecutionConfig, RustMigrationLayout};
+use serde::{Deserialize, Serialize};
 
-use super::{DevApp, FrontendApp, parse_frontend_app};
+use super::adopt_infer::ComponentSelectionOpts;
+use super::apps::{DevApp, FrontendApp, parse_frontend_app};
+use super::scaffold_opts::ScaffoldOpts;
 
 #[derive(Clone, Debug, Default)]
 pub struct DevSettingsAnswers {
@@ -221,4 +224,224 @@ pub struct AnswerOpts {
     pub dev_settings: Option<DevSettingsAnswers>,
     #[arg(skip)]
     pub execution: Option<ExecutionConfig>,
+}
+
+#[derive(Args, Clone, Debug)]
+#[command(after_help = "\
+For existing repositories, use:
+  jig adopt .
+
+Templates:
+  Omit --template for the default jig-sh harness template.
+  Release builds pin that template to this jig version's release tag.
+  Unreleased local builds use templates embedded in the jig binary unless --vcs-ref is supplied.
+
+Scaffold ownership:
+  Presets create starter project code once. After creation, that project code is project-owned.
+  `jig update` keeps the Jig harness current; it does not rewrite scaffolded app code.
+
+Interaction modes:
+  Interactive terminals prompt only for unresolved project-shape choices.
+  --defaults uses rust-react, database none, and frontend web when those choices are omitted.
+  --no-input and non-terminal execution require the project shape to be fully specified.
+
+Examples:
+  jig init /path/to/new-repo
+  jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
+  jig init /path/to/new-repo --preset harness-only --no-input --no-vault
+  jig init /path/to/new-repo --preset rust-library --no-input --no-vault
+  jig init /path/to/new-repo --preset rust-cli --no-input --no-vault
+  jig init /path/to/new-repo --preset rust-react
+  jig init /path/to/new-repo --preset rust-react --db postgres --frontends web,landing,admin
+  jig init /path/to/new-repo --preset go-react --db postgres --frontends web --go-module github.com/acme/new-repo
+  jig presets
+  jig init /path/to/new-repo --preset harness-only --template /path/to/jig-sh --template-mode committed --repo-name new-repo --sqlx-enabled false --no-input --no-vault")]
+pub struct InitOpts {
+    #[arg(help = "Destination directory for the new repository")]
+    pub path: PathBuf,
+    #[command(flatten)]
+    pub scaffold: ScaffoldOpts,
+    #[arg(
+        long,
+        help_heading = "Advanced Template Source",
+        value_name = "PATH_OR_GIT_URL",
+        help = "Template source to render; defaults to the official jig-sh template",
+        long_help = "Template source to render. Release builds default to the official jig-sh template at https://github.com/bpcakes/jig-sh.git pinned to the release tag for this jig version; passing that canonical HTTPS URL explicitly, with or without .git, has the same pinned behavior unless --vcs-ref is also provided. Unreleased or dirty local builds use templates embedded in the jig binary for omitted --template, avoiding a stale release-tag lookup during local development. For checkout-driven template development, pass the path to your jig-sh checkout, for example /Users/you/src/jig-sh. For remote forks, SSH URLs, or private harnesses, pass a git URL. The source must contain templates/project."
+    )]
+    pub template: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help_heading = "Advanced Template Source",
+        help = "How to read a local git template checkout",
+        long_help = "How to read a local git template checkout. The default for local git paths is committed, which renders from clean HEAD and refuses dirty template changes."
+    )]
+    pub template_mode: Option<TemplateMode>,
+    #[arg(
+        long,
+        help_heading = "Advanced Template Source",
+        help = "Git revision to render from the template source"
+    )]
+    pub vcs_ref: Option<String>,
+    #[arg(
+        long,
+        help_heading = "Safety",
+        help = "Allow init to write into a non-empty destination and overwrite existing scaffold files",
+        long_help = "Allow init to write into a non-empty destination and overwrite existing scaffold files. Template-to-scaffold path collisions are still rejected because they indicate a preset/template ownership bug."
+    )]
+    pub force: bool,
+    #[arg(
+        long,
+        help_heading = "Automation",
+        help = "Skip the init wizard; omitted project shape defaults to rust-react, database none, and frontend web",
+        long_help = "Skip the init wizard and resolve omitted project-shape choices to --preset rust-react, --db none, and --frontend web. Explicit scaffold flags are preserved, and effective frontend_apps from --answers-file prevent the default web scaffold from being added."
+    )]
+    pub defaults: bool,
+    #[arg(
+        long,
+        help_heading = "Automation",
+        help = "Skip the init wizard and require an explicit, complete project shape instead of prompting",
+        long_help = "Skip the init wizard and require --preset. The rust-react and go-react application presets require an explicit --db choice plus --frontend/--frontends or effective frontend_apps from --answers-file; go-react also requires --go-module. The harness-only, rust-library, and rust-cli presets need no database or frontend choice and reject those scaffold flags. Non-terminal execution without --defaults follows this strict behavior."
+    )]
+    pub no_input: bool,
+    #[arg(
+        long,
+        help_heading = "Vault",
+        help = "Skip initial passphrase setup; generated repo metadata still declares a vault scope"
+    )]
+    pub no_vault: bool,
+    #[command(flatten)]
+    pub answers: AnswerOpts,
+}
+
+#[derive(Args, Clone, Debug)]
+#[command(after_help = "\
+Templates:
+  Release builds default to the official jig-sh harness template:
+  https://github.com/bpcakes/jig-sh.git
+
+  Release builds pin omitted --template to this jig version's release tag.
+  Unreleased or dirty local builds use templates embedded in the jig binary unless --vcs-ref is supplied.
+
+Adoption scans the existing repository before resolving answers. If SQLx is detected,
+omitted SQLx answers resolve to migration defaults; if it is not detected, omitted SQLx
+answers resolve to a tooling-only profile. Pass --sqlx-enabled true and --rust-migration-dir
+<dir> to override.
+
+Examples:
+  jig adopt .
+  jig adopt . --write
+  jig adopt . --minimal --write
+  jig adopt . --write --template /path/to/jig-sh --template-mode committed")]
+pub struct AdoptOpts {
+    #[command(flatten)]
+    pub components: ComponentSelectionOpts,
+    #[arg(default_value = ".", help = "Existing repository directory to adopt")]
+    pub path: PathBuf,
+    #[arg(
+        long,
+        value_name = "PATH_OR_GIT_URL",
+        help = "Template source to render; defaults to the official jig-sh template",
+        long_help = "Template source to render. Release builds default to the official jig-sh template at https://github.com/bpcakes/jig-sh.git pinned to the release tag for this jig version; passing that canonical HTTPS URL explicitly, with or without .git, has the same pinned behavior unless --vcs-ref is also provided. Unreleased or dirty local builds use templates embedded in the jig binary for omitted --template, avoiding a stale release-tag lookup during local development. For checkout-driven template development, pass the path to your jig-sh checkout, for example /Users/you/src/jig-sh. For remote forks, SSH URLs, or private harnesses, pass a git URL. The source must contain templates/project."
+    )]
+    pub template: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help = "How to read a local git template checkout",
+        long_help = "How to read a local git template checkout. The default for local git paths is committed, which renders from clean HEAD and refuses dirty template changes."
+    )]
+    pub template_mode: Option<TemplateMode>,
+    #[arg(long, help = "Git revision to render from the template source")]
+    pub vcs_ref: Option<String>,
+    #[arg(long, help = "Overwrite conflicting template-managed paths")]
+    pub force: bool,
+    #[arg(long, help = "Write rendered managed files; omit to preview only")]
+    pub write: bool,
+    #[arg(
+        long,
+        help = "Render only .jig.toml and .agent/ scaffolding (no scripts, workflows, or agent context files)",
+        long_help = "Render a loop-ready minimal footprint: .jig.toml, .agent/jig-contract.json, and .agent/ scaffolding, plus block-managed .gitignore/.gitattributes. Omits scripts/, .github/workflows/, AGENTS.md, agent-map.md. Stores harness_footprint = \"minimal\" so jig update keeps the same footprint until you re-adopt without --minimal."
+    )]
+    pub minimal: bool,
+    #[arg(
+        long,
+        help = "Use default answers for omitted configuration prompts and adopt write confirmation; vault setup captures credentials before rendering"
+    )]
+    pub defaults: bool,
+    #[arg(
+        long,
+        help = "Fail instead of prompting for missing answers and skip adopt write confirmation; vault setup requires --no-vault or an operator-provided JIG_VAULT_PASSPHRASE"
+    )]
+    pub no_input: bool,
+    #[arg(
+        long,
+        help = "Skip initial passphrase setup when --write is supplied; generated repo metadata still declares a vault scope"
+    )]
+    pub no_vault: bool,
+    #[command(flatten)]
+    pub answers: AnswerOpts,
+}
+
+#[derive(Args, Clone, Debug)]
+#[command(after_help = "\
+Update modes:
+  jig update advances to the resolved template source.
+  jig update --recopy re-renders from the stored .jig.toml commit.
+  jig update --launcher-only repairs only scripts/jig and scripts/install-jig.sh.
+  Add --force only when changed template-managed files should be replaced.
+
+Examples:
+  jig update
+  jig update --recopy
+  jig update /path/to/repo --launcher-only --force
+  jig update --template /path/to/jig-sh --template-mode committed --force")]
+pub struct UpdateOpts {
+    #[arg(default_value = ".", help = "Adopted repository directory to update")]
+    pub path: PathBuf,
+    #[arg(long, help = "Template source to render from for this update")]
+    pub template: Option<String>,
+    #[arg(long, value_enum, help = "How to read a local git template checkout")]
+    pub template_mode: Option<TemplateMode>,
+    #[arg(
+        long,
+        help = "Re-render from the stored .jig.toml commit instead of advancing"
+    )]
+    pub recopy: bool,
+    #[arg(
+        long,
+        requires = "force",
+        conflicts_with_all = [
+            "template",
+            "template_mode",
+            "recopy",
+            "vcs_ref",
+            "defaults",
+            "no_input"
+        ],
+        help = "Repair only the managed launcher and installer from this binary's embedded templates"
+    )]
+    pub launcher_only: bool,
+    #[arg(long, help = "Overwrite changed template-managed files")]
+    pub force: bool,
+    #[arg(long, help = "Git revision to render from the template source")]
+    pub vcs_ref: Option<String>,
+    #[arg(long, help = "Use default answers for omitted configuration prompts")]
+    pub defaults: bool,
+    #[arg(long, help = "Fail instead of prompting for missing answers")]
+    pub no_input: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum TemplateMode {
+    Committed,
+}
+
+impl TemplateMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Committed => "committed",
+        }
+    }
 }
