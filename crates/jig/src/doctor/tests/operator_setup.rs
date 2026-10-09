@@ -1,4 +1,16 @@
+use super::support::check_by_id;
 use super::*;
+use std::fs;
+
+use jig_context::RepoContext;
+use serde_json::json;
+use tempfile::tempdir;
+
+use super::support::write_doctor_fixture;
+use crate::cli::format_doctor_summary_for_test as format_summary;
+use crate::doctor::check::{DoctorCheck, check};
+use crate::doctor::vault::{VAULT_INIT_OPERATOR_FIX, vault_check};
+use crate::test_env::{CurrentDirGuard, EnvVarGuard, lock_env};
 
 fn operator_vault_check() -> DoctorCheck {
     check("vault", "Vault", false, false, "not initialized", "")

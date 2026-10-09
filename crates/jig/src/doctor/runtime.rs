@@ -1,4 +1,9 @@
-use std::{ffi::OsStr, fs, path::Path, time::SystemTime};
+use std::{
+    ffi::OsStr,
+    fs,
+    path::Path,
+    time::{Duration, SystemTime},
+};
 
 use jig_context::{
     INSTALLER_CACHE_LAYOUT_MARKER, LAUNCHER_REPAIR_STAGING_PREFIX, RuntimeCacheProfile,
@@ -6,7 +11,9 @@ use jig_context::{
 };
 use serde_json::json;
 
-use super::{DoctorCheck, LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE, check};
+use super::check::{DoctorCheck, check};
+
+pub(super) const LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeDiagnosis<'a> {

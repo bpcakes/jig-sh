@@ -1,4 +1,12 @@
-use super::*;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use anyhow::{Result, anyhow};
+use jig_owned_process::run_owned_process_tree_with_output;
+use serde_json::json;
+
+use super::check::{DoctorCheck, check};
 
 const JOURNAL: &str = ".agent/state/runs.jsonl";
 
