@@ -21,11 +21,16 @@ fn scaffold_rendered_rust_is_formatted_across_names_databases_and_migration_path
         assert_eq!(name.len(), expected_len, "{label}");
     }
 
-    // Each database shape renders without and with every service option it supports.
+    // Cover base shapes, each service option alone, and the combined services.
     let shapes = [
         (ScaffoldDb::None, ScaffoldMetrics::None, ScaffoldJobs::None),
         (ScaffoldDb::None, ScaffoldMetrics::Otlp, ScaffoldJobs::None),
         (ScaffoldDb::Postgres, ScaffoldMetrics::None, ScaffoldJobs::None),
+        (
+            ScaffoldDb::Postgres,
+            ScaffoldMetrics::None,
+            ScaffoldJobs::Runledger,
+        ),
         (
             ScaffoldDb::Postgres,
             ScaffoldMetrics::Otlp,

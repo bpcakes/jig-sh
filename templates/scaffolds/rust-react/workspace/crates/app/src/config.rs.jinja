@@ -42,6 +42,16 @@ impl AppConfig {
         source: &SettingsSource,
         version: impl Into<String>,
     ) -> Result<Self, SettingsError> {
+        // Native causes may retain secret bytes. Return only static diagnostics
+        // so callers can safely include this error in an anyhow logging chain.
+        Self::parse_source(source, version)
+            .map_err(|error| SettingsError::new(error.field(), error.reason()))
+    }
+
+    fn parse_source(
+        source: &SettingsSource,
+        version: impl Into<String>,
+    ) -> Result<Self, SettingsError> {
         let bind_addr = resolve_bind_addr(
             present(source.text("HOST")?),
             present(source.text("PORT")?),
@@ -219,6 +229,26 @@ mod tests {
             config.database_url().map(SecretString::expose_secret),
             Some("postgres://user:private-marker@localhost/example")
         );
+    }
+
+    #[cfg(all(feature = "db", unix))]
+    #[test]
+    fn database_url_errors_stay_redacted_through_application_diagnostics() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let mut value = b"postgres://user:private-marker@localhost/example".to_vec();
+        value.push(0xff);
+        let source = SettingsSource::from_pairs([(
+            OsString::from("DATABASE_URL"),
+            OsString::from_vec(value),
+        )])
+        .expect("test settings are unique");
+        let error =
+            AppConfig::from_source(&source).expect_err("non-Unicode database URLs are rejected");
+        let error = anyhow::Error::new(error).context("Failed to load application config");
+        let diagnostic = format!("{error:?}");
+        assert!(diagnostic.contains("DATABASE_URL: non-Unicode value"));
+        assert!(!diagnostic.contains("private-marker"));
     }
 [% endif %]
 }

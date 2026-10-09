@@ -71,3 +71,4 @@ include!("scaffold_generation_parts/rust_library.rs");
 include!("scaffold_generation_parts/rust_cli.rs");
 include!("scaffold_generation_parts/clippy_defaults.rs");
 include!("scaffold_generation_parts/service_options.rs");
+include!("scaffold_generation_parts/postgres_readme.rs");

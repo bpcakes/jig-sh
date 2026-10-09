@@ -399,4 +399,20 @@ init_repo "$services_repo" \
   --jobs runledger
 prepare_and_check "$services_repo" "$rust_react_toolchain" online
 
-echo "Generated Rust Clippy validation passed."
+# Jobs must also compile when metrics-only dependencies and diagnostics are absent.
+jobs_repo="$fixture_root/ExampleProject-jobs"
+init_repo "$jobs_repo" \
+  --preset rust-react \
+  --repo-name ExampleProject \
+  --db postgres \
+  --frontends web,admin \
+  --metrics none \
+  --jobs runledger
+prepare_and_check "$jobs_repo" "$rust_react_toolchain" online
+(
+  cd "$jobs_repo"
+  with_toolchain "$rust_react_toolchain" \
+    cargo test --locked -p exampleproject --all-features
+)
+
+echo "Generated Rust Clippy and configuration test validation passed."

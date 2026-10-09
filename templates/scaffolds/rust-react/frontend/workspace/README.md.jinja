@@ -160,7 +160,13 @@ Run the database integration tests against a fresh PostgreSQL 18 container:
 <<[ web_run_command ]>> test:postgres
 ```
 
-The command binds PostgreSQL to a random loopback port and removes the container on exit. Batter's fixture harness migrates one template database per migration fingerprint and gives each test its own clone, which it drops after the test even when the test fails. Set `POSTGRES_TEST_ADMIN_URL` to use an existing PostgreSQL 18 server whose role can create and drop databases instead. The tests never fall back to `DATABASE_URL`.
+The command binds PostgreSQL to a random loopback port and removes the container on exit.
+[% if backend_language == "go" %]
+It requires Docker and sets `TEST_DATABASE_URL` for the Go integration test, which checks database creation, application migrations, and generated queries against the disposable server.
+[% else %]
+Batter's fixture harness migrates one template database per migration fingerprint and gives each test its own clone, which it drops after the test even when the test fails. Set `POSTGRES_TEST_ADMIN_URL` to use an existing PostgreSQL 18 server whose role can create and drop databases instead.
+[% endif %]
+The tests never fall back to `DATABASE_URL`.
 
 [% endif %]
 [% if admin_api_enabled %]
