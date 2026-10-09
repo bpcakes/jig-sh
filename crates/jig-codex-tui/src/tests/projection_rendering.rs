@@ -228,7 +228,7 @@ fn usage_errors_are_not_mislabeled_as_stale_snapshots() {
 #[test]
 fn over_pace_recommendation_is_labeled_as_the_least_projected_overrun() {
     const NOW: u64 = 2_000_000_000;
-    let backend = TestBackend::new(120, 30);
+    let backend = TestBackend::new(168, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = app(homes());
     app.apply_update_at(projected_update(0, 60.0, 10_080, 0.5, NOW), NOW);

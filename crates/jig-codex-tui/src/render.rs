@@ -1,14 +1,16 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 
 use crate::model::{App, ExitState, Focus, Inspection, Projection, unix_timestamp_now};
+use layout::{ListStyle, MIN_HEIGHT, MIN_WIDTH, STACKED_ROW_HEIGHT};
 
 mod configuration;
+mod layout;
 
 #[cfg(test)]
 mod tests;
@@ -18,13 +20,6 @@ const MUTED: Color = Color::DarkGray;
 const GOOD: Color = Color::Green;
 const WARN: Color = Color::Yellow;
 const BAD: Color = Color::Red;
-const MIN_WIDTH: u16 = 46;
-const MIN_HEIGHT: u16 = 12;
-const STACKED_LIST_PERCENT: u32 = 58;
-const STACKED_ROW_HEIGHT: u16 = 2;
-const TABLE_CHROME_HEIGHT: u16 = 3;
-const MIN_STACKED_LIST_HEIGHT: u16 = TABLE_CHROME_HEIGHT + STACKED_ROW_HEIGHT;
-const MIN_STACKED_DETAILS_HEIGHT: u16 = 2;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     draw_at(frame, app, unix_timestamp_now());
@@ -46,37 +41,16 @@ pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
         return;
     }
 
-    let outer = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Min(6),
-            Constraint::Length(if app.searching || !app.filter.is_empty() {
-                3
-            } else {
-                2
-            }),
-        ])
-        .split(area);
+    let layout = layout::picker_layout(area, app);
     let best = app.best_projection_index_at(now);
-    draw_header(frame, outer[0], app);
-    if area.width >= 96 {
-        let content = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
-            .split(outer[1]);
-        draw_list(frame, content[0], app, now, best);
-        draw_details(frame, content[1], app, now, best);
-    } else {
-        let list_height = stacked_list_height(outer[1].height);
-        let content = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(list_height), Constraint::Min(0)])
-            .split(outer[1]);
-        draw_list(frame, content[0], app, now, best);
-        draw_details(frame, content[1], app, now, best);
+    draw_header(frame, layout.header, app);
+    if let Some(list) = layout.list {
+        draw_list(frame, list, app, now, best);
     }
-    draw_footer(frame, outer[2], app);
+    if let Some(details) = layout.details {
+        draw_details(frame, details, app, now, best);
+    }
+    draw_footer(frame, layout.footer, app);
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -184,13 +158,16 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
         configuration::draw_list(frame, area, app, &visible);
         return;
     }
-    if area.width < 60 {
-        draw_compact_list(frame, area, app, &visible, now, best);
-        return;
-    }
-    if area.width < 104 {
-        draw_projection_list(frame, area, app, &visible, now, best);
-        return;
+    match ListStyle::for_width(area.width) {
+        ListStyle::Compact => {
+            draw_compact_list(frame, area, app, &visible, now, best);
+            return;
+        }
+        ListStyle::TwoLine => {
+            draw_projection_list(frame, area, app, &visible, now, best);
+            return;
+        }
+        ListStyle::Full => {}
     }
     let rows = visible
         .iter()
@@ -521,14 +498,6 @@ fn detail_title(app: &App) -> &'static str {
     } else {
         "Selected home"
     }
-}
-
-fn stacked_list_height(content_height: u16) -> u16 {
-    let proportional = (u32::from(content_height) * STACKED_LIST_PERCENT + 50) / 100;
-    let proportional = u16::try_from(proportional).unwrap_or(u16::MAX);
-    proportional
-        .max(MIN_STACKED_LIST_HEIGHT)
-        .min(content_height.saturating_sub(MIN_STACKED_DETAILS_HEIGHT))
 }
 
 fn panel(title: &str) -> Block<'_> {

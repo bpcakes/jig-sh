@@ -58,6 +58,13 @@
 
 ### Changed
 
+- The `claude launch` and `codex launch` home pickers choose their layout from
+  one set of breakpoints. The list and details sit side by side from 104
+  columns, with the details at a readable 44–64 columns and the rest going to
+  the list, so widening the terminal never squeezes the list into a poorer
+  style. Narrower terminals stack the list above the details, sized to its
+  rows instead of a fixed 58%, and terminals too short for both show one pane
+  at a time, with Tab switching between them.
 - Rename `info freshness` to `info inputs`; `freshness` remains a hidden alias.
   The report's `command` field is now `info inputs`. The command previews
   action input declarations, and Jig has recorded no target freshness since
