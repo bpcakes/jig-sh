@@ -5,7 +5,7 @@ use ratatui::{Terminal, backend::TestBackend};
 
 use crate::{
     ConfigurationHome, Home,
-    model::{App, ExitState},
+    model::{App, ExitState, Inspection, WindowRole},
     render,
     runtime::{Action, handle_key},
 };
@@ -81,12 +81,12 @@ fn configuration_view_reuses_layout_and_controls_without_account_inspection() {
         let screen = terminal.backend().to_string();
         for expected in [
             "Claude Home Picker",
-            "Home / Path",
-            "Selected home",
+            "home / path",
+            "╭ claude ",
             "CLAUDE_CONFIG_DIR",
             "Example discovery warning",
-            "/ search",
-            "Enter launch",
+            "/  search",
+            "Enter  launch",
         ] {
             assert!(screen.contains(expected), "missing {expected}: {screen}");
         }
@@ -176,7 +176,13 @@ fn inspected_configurations_show_subscription_limits_and_preserve_mode_identity(
     }) }, now);
     assert_eq!(app.selected, Some(0));
     assert_eq!(app.rows[1].account(), "loading…");
-    assert_eq!(app.rows[0].usage(), "5h 75% · weekly 60% left");
+    assert_eq!(
+        app.rows[0].primary_usage().unwrap().1,
+        [
+            (WindowRole::FiveHour, Some(25.0)),
+            (WindowRole::Weekly, Some(40.0))
+        ]
+    );
     for width in [80, 120, 200] {
         let mut terminal = Terminal::new(TestBackend::new(width, 50)).unwrap();
         terminal
@@ -186,8 +192,8 @@ fn inspected_configurations_show_subscription_limits_and_preserve_mode_identity(
         for expected in [
             "Claude Home Picker",
             "CLAUDE_CONFIG_DIR",
-            "75%",
-            "60%",
+            "25%",
+            "40%",
             "max",
             "Inspecting",
         ] {
@@ -200,7 +206,10 @@ fn inspected_configurations_show_subscription_limits_and_preserve_mode_identity(
     }) }, now);
     app.move_selection(1);
     assert_eq!(app.selected, Some(1));
-    assert!(app.rows[1].usage().contains("Keychain access denied"));
+    assert!(matches!(
+        app.rows[1].inspection(),
+        Inspection::Ready(details) if details.inspection_error.as_deref() == Some("Keychain access denied")
+    ));
     assert_eq!(
         handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         Action::Select
@@ -221,8 +230,12 @@ fn provider_metadata_drives_primary_quota_and_recommendations_without_known_name
         }]
     };
     for (primary, expected_usage, recommended) in [
-        (Some("example-subscription"), "5h 90% left", true),
-        (None, "Other 5h 0% left", false),
+        (
+            Some("example-subscription"),
+            ("example-subscription", WindowRole::FiveHour, 10.0),
+            true,
+        ),
+        (None, ("Other", WindowRole::Window, 100.0), false),
     ] {
         let mut app = App::provider(
             "Example Agent Picker",
@@ -237,7 +250,11 @@ fn provider_metadata_drives_primary_quota_and_recommendations_without_known_name
                 {"id":"example-subscription","primary":{"used_percent":10,"duration_minutes":300,"resets_at":now+9000}}
             ]
         }) }, now);
-        assert_eq!(app.rows[0].usage(), expected_usage);
+        let (bucket, role, used) = expected_usage;
+        assert_eq!(
+            app.rows[0].primary_usage(),
+            Some((bucket.to_owned(), vec![(role, Some(used))]))
+        );
         assert_eq!(
             app.rows[0]
                 .usage_snapshot_assessment_at(now)

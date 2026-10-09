@@ -63,6 +63,14 @@
 
 ### Changed
 
+- Redesign the `claude launch` and `codex launch` home pickers. Each usage
+  window now has a meter: the fill is the quota used, a fainter continuation
+  shows where the sampled pace ends up at reset, and a tick marks how far
+  into the window the sample was taken. Rows carry `◆` for the best pace and
+  `●` for the current home, panels are rounded and titled in their borders,
+  and key hints are keycap chips. Truecolor terminals get green-to-red
+  gradients, 256-color and 16-color terminals the nearest colors, and
+  `NO_COLOR` keeps the glyphs and text without color.
 - The `claude launch` and `codex launch` home pickers choose their layout from
   one set of breakpoints. The list sits above the details, sized to its rows
   instead of a fixed 58%, whenever that leaves the details room to show a

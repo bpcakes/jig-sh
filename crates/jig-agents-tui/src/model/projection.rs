@@ -240,6 +240,43 @@ impl Projection {
         }
     }
 
+    /// A list-width outcome led by the window it concerns, e.g. `wk ~46% left`.
+    pub(crate) fn short_label(self, role_label: impl Fn(WindowRole) -> String) -> String {
+        let (role, outcome, partial) = match self {
+            Self::Collecting {
+                role,
+                remaining_percent,
+            } => (
+                role,
+                format!("{} left · collecting", format_percent(remaining_percent)),
+                false,
+            ),
+            Self::Remaining {
+                role,
+                percent,
+                partial,
+            } => (role, format!("~{} left", format_percent(percent)), partial),
+            Self::ExhaustsEarly {
+                role,
+                seconds,
+                partial,
+                ..
+            } => (
+                role,
+                format!("out {} early", format_early(seconds)),
+                partial,
+            ),
+            Self::Exhausted { role, partial } => (role, "exhausted".to_owned(), partial),
+            projection => return projection.label(),
+        };
+        let label = format!("{} {outcome}", role_label(role));
+        if partial {
+            format!("{label} · partial")
+        } else {
+            label
+        }
+    }
+
     pub(crate) fn outcome_label(self) -> String {
         match self {
             Self::Loading => "loading…".into(),

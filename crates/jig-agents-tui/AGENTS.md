@@ -8,14 +8,17 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 
 - `src/lib.rs`: `select_provider_with_cancellation` is the only entrypoint; callers supply the title, an explicit primary subscription bucket, and an optional inspection source. This is a same-release boundary supplied by `jig-sh`; configuration selection returns the original entry index so modes sharing a path remain distinct.
 - `src/model.rs`: home rows and additive inspection decoding; `src/model/app.rs` owns filtering and selection, and `src/model/configuration.rs` prepares static or inspected configuration entries.
-- `src/render.rs`: frame entrypoint, header, and shared pane and status styles. `src/render/layout.rs` owns every breakpoint and decides which panes are visible and which list style fits; `src/render/list.rs` sizes and draws the list tables, `src/render/details.rs` builds and wraps the selected-home pane, and `src/render/footer.rs` fits key hints to the width.
+- `src/render.rs`: frame entrypoint, header, and shared pane and status styles. `src/render/layout.rs` owns every breakpoint and decides which panes are visible and which list style fits; `src/render/list.rs` composes the list rows, `src/render/details.rs` builds the selected-home pane, `src/render/wrap.rs` wraps its lines, `src/render/meter.rs` draws usage meters, `src/render/theme.rs` owns the palette and its color-depth fallbacks, and `src/render/footer.rs` fits key hints to the width.
+- `src/model/gauge.rs`: per-window meter data (used, elapsed, projected) derived from the same sample as the projection.
+- `examples/picker_preview.rs`: the real picker with example homes and simulated inspection, for presentation work (`cargo run -p jig-agents-tui --example picker_preview`).
 - `src/runtime.rs`: event loop and background inspection ownership.
 - `src/usage.rs`: normalized quota validation, remaining calculation, and duration labels shared with the matching CLI release.
 
 ## Edit here for X
 
 - Picker interaction or keyboard behavior: `src/model/app.rs` and `src/runtime.rs`.
-- List columns and markers: `src/render/list.rs`; the configuration list is in `src/render/configuration.rs`.
+- List rows, badges, and columns: `src/render/list.rs`, including the static configuration list.
+- Meter glyphs or the palette: `src/render/meter.rs` and `src/render/theme.rs`.
 - Detail pane content, order, or wrapping: `src/render/details.rs`.
 - Footer key hints and search prompt: `src/render/footer.rs`.
 - Header, loading, or small-terminal presentation: `src/render.rs`.
@@ -29,6 +32,7 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 - Inspection is cooperative: cancel and join the worker before restoring the terminal.
 - Do not read authentication files or the Keychain; account and usage details arrive only through `InspectionSource`.
 - Missing or additive JSON fields render as unknown instead of panicking.
+- Color only reinforces text: every status, stale sample, and outcome is also written out, and `NO_COLOR` keeps the picker usable. Use glyphs the common Nerd Fonts include (check before adding one; `★`, `✗`, and `⚠` are missing from Fira Code).
 - Panes stack whenever the details keep a comfortable height below the list; side by side is only for terminals too short for that, and keeps the details within their readable width range. The arrangement depends on the terminal size and the number of homes, never on the selection or the search.
 
 ## Common commands

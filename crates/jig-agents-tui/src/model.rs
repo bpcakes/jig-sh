@@ -10,11 +10,13 @@ use crate::Home;
 
 mod app;
 mod configuration;
+mod gauge;
 mod projection;
 
 pub(crate) use crate::usage::WindowRole;
 use crate::usage::{self, remaining_percent};
 pub(crate) use app::App;
+pub(crate) use gauge::{Gauge, WindowView};
 pub(crate) use projection::{Projection, UsageSnapshotAssessment};
 use projection::{UsageSnapshotFreshness, WindowProjection};
 
@@ -109,15 +111,13 @@ impl HomeRow {
         match &self.inspection {
             Inspection::Loading => "loading…".into(),
             Inspection::Unavailable => "unavailable".into(),
+            Inspection::Ready(details) if details.status == "not logged in" => {
+                "not signed in".into()
+            }
+            Inspection::Ready(details) if details.account_label() == UNKNOWN => {
+                "account unknown".into()
+            }
             Inspection::Ready(details) => details.account_label().to_owned(),
-        }
-    }
-
-    pub(crate) fn usage(&self) -> String {
-        match &self.inspection {
-            Inspection::Loading => "loading…".into(),
-            Inspection::Unavailable => "unavailable".into(),
-            Inspection::Ready(details) => details.usage_summary(),
         }
     }
 
@@ -208,23 +208,6 @@ impl Details {
         } else {
             &self.account_type
         }
-    }
-
-    pub(crate) fn usage_summary(&self) -> String {
-        if let Some(error) = &self.inspection_error {
-            return format!("error: {error}");
-        }
-        if let Some(error) = &self.usage_error {
-            return format!("error: {error}");
-        }
-        let Some(bucket) = self.primary_bucket() else {
-            return if self.status == "not logged in" {
-                "not signed in".into()
-            } else {
-                "unavailable".into()
-            };
-        };
-        bucket.summary()
     }
 
     fn projection(&self) -> Projection {
@@ -384,41 +367,6 @@ impl RateLimitBucket {
         }
     }
 
-    /// Remaining quota per window, e.g. `5h 58% · weekly 82% left`.
-    pub(crate) fn summary(&self) -> String {
-        match self.windows.as_slice() {
-            [] => "unavailable".into(),
-            windows if self.subscription => remaining_summary(
-                windows
-                    .iter()
-                    .take(2)
-                    .map(|window| {
-                        let role = window
-                            .subscription_role()
-                            .map(|role| role.to_string())
-                            .unwrap_or_else(|| format_duration(window.duration_minutes));
-                        (role, window)
-                    })
-                    .collect(),
-            ),
-            windows => self.generic_summary(windows),
-        }
-    }
-
-    fn generic_summary(&self, windows: &[RateLimitWindow]) -> String {
-        let summary = remaining_summary(
-            windows
-                .iter()
-                .map(|window| (format_duration(window.duration_minutes), window))
-                .collect(),
-        );
-        if self.label() == UNKNOWN {
-            summary
-        } else {
-            format!("{} {summary}", self.label())
-        }
-    }
-
     fn projection_at(&self, now: u64) -> Projection {
         if self.windows.is_empty() {
             return Projection::Unavailable;
@@ -541,17 +489,6 @@ impl RateLimitWindow {
         })
     }
 
-    pub(crate) fn remaining(&self) -> String {
-        self.remaining_percent()
-            .map(|remaining| format!("{remaining} left"))
-            .unwrap_or_else(|| "remaining unavailable".into())
-    }
-
-    fn remaining_percent(&self) -> Option<String> {
-        self.valid_used_percent()
-            .map(|used| format_percent(remaining_percent(used)))
-    }
-
     /// Used and remaining quota, for a line whose label already names the window.
     pub(crate) fn usage_amounts(&self) -> String {
         self.valid_used_percent().map_or_else(
@@ -587,6 +524,21 @@ impl RateLimitWindow {
         format!("resets in {}", format_countdown(remaining))
     }
 
+    /// The window's length in seconds and the fraction of it elapsed at `now`,
+    /// when its duration and reset place `now` inside the window.
+    fn timing_at(&self, now: u64) -> Option<(u64, f64)> {
+        let duration = self
+            .duration_minutes
+            .filter(|duration| *duration > 0)
+            .and_then(|duration| duration.checked_mul(60))?;
+        let reset = self.resets_at.and_then(|reset| u64::try_from(reset).ok())?;
+        let start = reset.checked_sub(duration)?;
+        let elapsed = now
+            .checked_sub(start)
+            .filter(|elapsed| *elapsed < duration)?;
+        Some((duration, elapsed as f64 / duration as f64))
+    }
+
     fn projection_at(&self, now: u64) -> WindowProjection {
         let Some(used) = self.valid_used_percent() else {
             return WindowProjection::Unavailable;
@@ -594,23 +546,9 @@ impl RateLimitWindow {
         if used >= 100.0 {
             return WindowProjection::Exhausted;
         }
-        let Some(duration) = self
-            .duration_minutes
-            .filter(|duration| *duration > 0)
-            .and_then(|duration| duration.checked_mul(60))
-        else {
+        let Some((duration, elapsed_fraction)) = self.timing_at(now) else {
             return WindowProjection::Unavailable;
         };
-        let Some(reset) = self.resets_at.and_then(|reset| u64::try_from(reset).ok()) else {
-            return WindowProjection::Unavailable;
-        };
-        let Some(start) = reset.checked_sub(duration) else {
-            return WindowProjection::Unavailable;
-        };
-        let Some(elapsed) = now.checked_sub(start).filter(|elapsed| *elapsed < duration) else {
-            return WindowProjection::Unavailable;
-        };
-        let elapsed_fraction = elapsed as f64 / duration as f64;
         // Zero measured usage is immediately actionable: regardless of how
         // young the window is, it has the full quota headroom the picker is
         // ranking for. Nonzero burn rates still wait for the warmup threshold.
@@ -675,29 +613,6 @@ fn optional_text(value: &Value, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-}
-
-/// Joins labeled windows into one remaining-quota summary that says `left` once.
-fn remaining_summary(windows: Vec<(String, &RateLimitWindow)>) -> String {
-    if let [(label, window)] = windows.as_slice() {
-        return format!("{label} {}", window.remaining());
-    }
-    let summary = windows
-        .iter()
-        .map(|(label, window)| {
-            let remaining = window.remaining_percent();
-            format!("{label} {}", remaining.as_deref().unwrap_or("?"))
-        })
-        .collect::<Vec<_>>()
-        .join(" · ");
-    if windows
-        .iter()
-        .any(|(_, window)| window.remaining_percent().is_some())
-    {
-        format!("{summary} left")
-    } else {
-        format!("{summary} remaining unavailable")
-    }
 }
 
 fn format_duration(minutes: Option<u64>) -> String {
