@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{credentials, http, inspected, normalize};
+use super::{account, credentials, http, inspected, normalize};
 
 #[test]
 fn subscription_windows_are_normalized_without_forwarding_unrelated_fields() {
@@ -57,8 +57,9 @@ fn credentials_are_read_without_exposing_tokens_and_expiry_is_checked_in_millise
     let credential = credentials::parse(br#"{"claudeAiOauth":{"accessToken":"example-secret-token","refreshToken":"example-refresh-token","expiresAt":2000,"subscriptionType":"max","scopes":["user:profile"]}}"#).unwrap();
     assert!(credential.usage_error(1999).is_none());
     assert!(credential.usage_error(2000).unwrap().contains("expired"));
-    let report = inspected(&credential, Err("Usage unavailable".into()));
+    let report = inspected(&credential, None, Err("Usage unavailable".into()));
     assert_eq!(report["account"]["plan_type"], "max");
+    assert!(report["account"]["email"].is_null());
     assert_eq!(report["usage_error"], "Usage unavailable");
     assert!(!report.to_string().contains("secret-token"));
     assert!(!report.to_string().contains("refresh-token"));
@@ -239,4 +240,55 @@ fn keychain_names_keep_native_and_explicit_default_modes_separate() {
     let composed = super::keychain::service(&home).unwrap();
     home.path = "/tmp/ExampleHome/cafe\u{301}".into();
     assert_eq!(super::keychain::service(&home).unwrap(), composed);
+}
+
+#[test]
+fn account_email_comes_from_the_recorded_oauth_account_only() {
+    assert_eq!(
+        account::parse_email(
+            br#"{"projects":{"/tmp/ExampleProject":{}},"oauthAccount":{"emailAddress":"person@example.com","organizationName":"ExampleOrg"}}"#
+        )
+        .as_deref(),
+        Some("person@example.com")
+    );
+    for config in [
+        br#"{}"#.as_slice(),
+        br#"{"oauthAccount":null}"#,
+        br#"{"oauthAccount":{"emailAddress":"  "}}"#,
+        br#"{"oauthAccount":{"emailAddress":42}}"#,
+        br#"{"emailAddress":"person@example.com"}"#,
+        b"not json",
+    ] {
+        assert_eq!(account::parse_email(config), None);
+    }
+
+    let credential = credentials::parse(
+        br#"{"claudeAiOauth":{"accessToken":"example-token","subscriptionType":"max"}}"#,
+    )
+    .unwrap();
+    let report = inspected(
+        &credential,
+        Some("person@example.com".into()),
+        Ok(Vec::new()),
+    );
+    assert_eq!(report["account"]["email"], "person@example.com");
+}
+
+#[test]
+fn account_config_reads_only_bounded_regular_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join(".claude.json");
+    std::fs::write(
+        &config,
+        br#"{"oauthAccount":{"emailAddress":"person@example.com"}}"#,
+    )
+    .unwrap();
+    assert!(account::read_bounded(&config).is_some());
+    assert!(account::read_bounded(directory.path()).is_none());
+    assert!(account::read_bounded(&directory.path().join("missing.json")).is_none());
+    std::fs::File::create(&config)
+        .unwrap()
+        .set_len(8 * 1024 * 1024 + 1)
+        .unwrap();
+    assert!(account::read_bounded(&config).is_none());
 }

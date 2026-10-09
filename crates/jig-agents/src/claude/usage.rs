@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 
 use super::{Home, Homes};
 
+mod account;
 mod credentials;
 mod http;
 #[cfg(target_os = "macos")]
@@ -54,7 +55,7 @@ impl Inspection {
                             ))
                             .and_then(|value| normalize::limits(&value))
                     };
-                    inspected(&credential, usage)
+                    inspected(&credential, account::email(home), usage)
                 }
                 Err(error) => {
                     json!({"account":null,"status":"unknown","rate_limits":[],"inspection_error":error,"usage_error":null})
@@ -69,13 +70,17 @@ impl Inspection {
     }
 }
 
-fn inspected(credential: &credentials::Credential, usage: Result<Vec<Value>, String>) -> Value {
+fn inspected(
+    credential: &credentials::Credential,
+    email: Option<String>,
+    usage: Result<Vec<Value>, String>,
+) -> Value {
     let (limits, error) = match usage {
         Ok(limits) => (limits, None),
         Err(error) => (Vec::new(), Some(error)),
     };
     json!({
-        "account":{"type":"Claude", "email":null, "plan_type":credential.subscription_type},
+        "account":{"type":"Claude", "email":email, "plan_type":credential.subscription_type},
         "status":"authenticated", "rate_limits":limits,
         "usage_included":true, "inspection_error":null, "usage_error":error,
     })
