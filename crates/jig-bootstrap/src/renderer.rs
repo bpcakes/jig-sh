@@ -720,8 +720,8 @@ fn jig_block_bounds(
 mod render_context;
 use render_context::render_context;
 
-mod tail;
-use tail::*;
+mod files;
+use files::*;
 
 #[cfg(test)]
 #[path = "renderer_tests.rs"]

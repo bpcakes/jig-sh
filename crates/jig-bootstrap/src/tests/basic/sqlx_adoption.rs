@@ -391,3 +391,228 @@ fn accepted_rust_root_requires_a_path_for_unowned_migrations() {
     );
     assert!(generates_sqlx_check(&output), "{output}");
 }
+
+#[test]
+fn run_init_rejects_schema_dumps_when_sqlx_is_disabled() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("repo");
+
+    let error = run_init(InitOpts {
+        path: destination,
+        scaffold: ScaffoldOpts::default(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(false),
+            schema_dump_enabled: Some(true),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("schema_dump_enabled cannot be true"));
+    assert!(error.contains("sqlx_enabled is false"));
+}
+
+#[test]
+fn adopt_with_real_template_keeps_sqlx_files_when_enabled() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let template = materialize_template_git_worktree();
+    fs::create_dir_all(repo.join("crates/api")).unwrap();
+    fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
+
+    run_adopt(AdoptOpts {
+        components: Default::default(),
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: Some(TemplateMode::Committed),
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(true),
+            rust_migration_dir: Some("migrations".into()),
+            rust_sqlx_metadata_dir: Some(".sqlx".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let agent_map = fs::read_to_string(repo.join("agent-map.md")).unwrap();
+    assert!(agent_map.contains("[crates/api](./crates/api/AGENTS.md)"));
+    assert!(!repo.join("scripts/add-migration.sh").exists());
+    assert!(
+        !repo
+            .join("scripts/check-migration-immutability.sh")
+            .exists()
+    );
+    assert!(
+        !repo
+            .join("scripts/check-sqlx-unchecked-non-test.sh")
+            .exists()
+    );
+    assert!(
+        !repo
+            .join("scripts/generate-sqlx-unchecked-queries-todo.sh")
+            .exists()
+    );
+    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert!(answers.contains("sqlx_enabled = true"));
+    assert!(answers.contains("rust_migration_layout = \"flat_migrations\""));
+    assert!(!answers.contains("migration_add_command"));
+    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
+    assert!(contract.contains(r#""name": "jig.migration_add""#));
+    assert!(contract.contains(r#""kind": "native""#));
+}
+
+#[test]
+fn adopt_with_versioned_artifacts_omits_migration_add_capability_and_guidance() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let template = materialize_template_git_worktree();
+    fs::create_dir_all(repo.join("crates/api")).unwrap();
+    fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
+
+    run_adopt(AdoptOpts {
+        components: Default::default(),
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: Some(TemplateMode::Committed),
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(true),
+            rust_migration_dir: Some("schema".into()),
+            rust_migration_layout: Some(jig_context::RustMigrationLayout::VersionedArtifacts),
+            rust_sqlx_metadata_dir: Some(".sqlx".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert!(answers.contains("rust_migration_layout = \"versioned_artifacts\""));
+    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
+    assert!(contract.contains(r#""name": "jig.sqlx_check""#));
+    assert!(!contract.contains(r#""name": "jig.migration_add""#));
+    let guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert!(guide.contains("complete versioned schema artifacts"));
+    assert!(guide.contains("do not use `scripts/jig migration add`"));
+    assert!(!guide.contains("- `scripts/jig migration add NAME`"));
+}
+
+#[test]
+fn adopt_with_sqlx_and_schema_dumps_disabled_hides_schema_dump_target() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let template = materialize_template_git_worktree();
+    fs::create_dir_all(repo.join("crates/api")).unwrap();
+    fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
+
+    run_adopt(AdoptOpts {
+        components: Default::default(),
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: Some(TemplateMode::Committed),
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(true),
+            schema_dump_enabled: Some(false),
+            rust_migration_dir: Some("migrations".into()),
+            rust_sqlx_metadata_dir: Some(".sqlx".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    assert!(!repo.join("Makefile").exists());
+
+    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
+    assert!(!contract.contains("\"schema-dump\""));
+    assert!(!contract.contains("jig.schema_dump"));
+    assert!(!contract.contains("\"schema_check_command\""));
+    assert!(!contract.contains("jig.schema_check"));
+
+    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert!(!answers.contains("schema_dump_command"));
+    assert!(!answers.contains("schema_check_command"));
+    assert!(!answers.contains("tool = \"jig.schema_check\""));
+}
+
+#[test]
+fn schema_dump_is_an_explicit_utility_and_only_schema_check_is_a_work_gate() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let template = materialize_template_worktree();
+
+    run_init(InitOpts {
+        path: repo.clone(),
+        scaffold: ScaffoldOpts::default(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            sqlx_enabled: Some(true),
+            rust_migration_dir: Some("migrations".into()),
+            rust_sqlx_metadata_dir: Some(".sqlx".into()),
+            schema_dump_enabled: Some(true),
+            schema_dump_command: Some(
+                "cargo run --locked --package schema-tool --bin dump-schema".into(),
+            ),
+            schema_docs_dir: Some("artifacts/schema".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let config = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert!(config.contains("action = \"schema\""), "{config}");
+    assert!(config.contains("action = \"schema-dump\""), "{config}");
+    assert!(
+        config.contains("schema_docs_dir = \"artifacts/schema\""),
+        "{config}"
+    );
+    assert!(config.contains("\"artifacts/schema/**\""), "{config}");
+    assert!(!config.contains("\"docs/schema/**\""), "{config}");
+    assert!(config.contains("\"**/*.rs\""), "{config}");
+    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
+    assert!(contract.contains("jig.schema_check"));
+    assert!(contract.contains("jig.schema_dump"));
+}

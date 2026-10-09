@@ -16,6 +16,7 @@ mod init_safety;
 mod node_versions;
 mod path_and_git;
 mod rendering;
+mod root_agents;
 mod scaffold_generation;
 mod scaffold_runtime;
 mod sqlx_adoption;

@@ -1,8 +1,12 @@
 use super::*;
 
-use self::parse::{RawDiffEntry, parse_index_stage_z, parse_raw_diff_z};
-
+mod limits;
 pub(super) mod parse;
+
+#[cfg(test)]
+pub(super) use self::limits::with_scope_rename_limit;
+use self::limits::{scope_git_output, scope_rename_limit};
+use self::parse::{RawDiffEntry, parse_index_stage_z, parse_raw_diff_z};
 
 const MAX_SCOPE_RENAME_CANDIDATES_V1: usize = 1_000;
 const MAX_SCOPE_GIT_DIAGNOSTIC_CHARS_V1: usize = 512;
@@ -781,5 +785,3 @@ fn scope_issue(
         message: message.into(),
     }
 }
-
-include!("change_scope/tail.rs");

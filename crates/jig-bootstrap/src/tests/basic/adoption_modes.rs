@@ -1,156 +1,8 @@
 use super::*;
 
-#[test]
-fn full_readoption_from_contract_eight_moves_tracker_ownership_and_reports_dropped_work() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-    configure_frontend_fixture(&repo);
-
-    let mut initial = footprint_adopt_opts(&repo, template.path(), false, false);
-    initial.answers.sqlx_enabled = Some(true);
-    initial.answers.schema_dump_enabled = Some(true);
-    initial.answers.rust_migration_dir = Some("migrations".into());
-    initial.answers.web_package_manager = Some("npm".into());
-    initial.answers.frontend_apps = vec![frontend_app()];
-    run_adopt(initial).unwrap();
-    downgrade_to_contract_eight(&repo);
-
-    let config_path = repo.join(".jig.toml");
-    let mut config =
-        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
-    let work = config["work"].as_table_mut().unwrap();
-    work.insert(
-        "receipt_metadata".into(),
-        toml::Value::Array(vec![toml::Value::from("beads")]),
-    );
-    work.insert(
-        "checks".into(),
-        toml::Value::Array(
-            [
-                "jig.sqlx_check",
-                "jig.schema_check",
-                "jig.typescript_lint",
-                "jig.fmt_check",
-            ]
-            .into_iter()
-            .map(|tool| toml::Value::String(tool.into()))
-            .collect(),
-        ),
-    );
-    let gates = work["gates"].as_array_mut().unwrap();
-    for gate in gates.iter_mut() {
-        let gate = gate.as_table_mut().unwrap();
-        if gate["id"].as_str().unwrap() == "verify" {
-            gate.remove("profile");
-            gate.insert("target".into(), toml::Value::String("api:test".into()));
-            gate.insert("required".into(), toml::Value::Boolean(false));
-        }
-    }
-    gates.push(toml::Value::Table(toml::Table::from_iter([
-        ("id".into(), toml::Value::String("project-fmt".into())),
-        ("kind".into(), toml::Value::String("check".into())),
-        ("tool".into(), toml::Value::String("jig.fmt_check".into())),
-        ("required".into(), toml::Value::Boolean(false)),
-    ])));
-    gates.push(toml::Value::Table(toml::Table::from_iter([
-        ("id".into(), toml::Value::String("project-review".into())),
-        ("kind".into(), toml::Value::String("codex_review".into())),
-        ("skill".into(), toml::Value::String("cc:review".into())),
-        ("fail_on".into(), toml::Value::String("warning".into())),
-        ("scope".into(), toml::Value::String("uncommitted".into())),
-        ("model".into(), toml::Value::String("gpt-5".into())),
-    ])));
-    gates.push(toml::Value::Table(toml::Table::from_iter([
-        ("id".into(), toml::Value::String("project-evidence".into())),
-        ("kind".into(), toml::Value::String("evidence".into())),
-        ("profile".into(), toml::Value::String("verify".into())),
-        ("required".into(), toml::Value::Boolean(false)),
-    ])));
-    work.insert(
-        "refinements".into(),
-        toml::Value::Array(vec![toml::Value::Table(toml::Table::from_iter([
-            (
-                "id".into(),
-                toml::Value::String("project-refinement".into()),
-            ),
-            (
-                "skill".into(),
-                toml::Value::String("jig-rust:rust-simplify".into()),
-            ),
-            ("mode".into(), toml::Value::String("write".into())),
-            ("model".into(), toml::Value::String("gpt-5".into())),
-        ]))]),
-    );
-    // Explicitly remove frontend ownership from the authored model. Deleting
-    // manifests alone must no longer cause readoption to discard components.
-    config["frontend_apps"] = toml::Value::Array(Vec::new());
-    let components = config["repository"]["components"].as_array_mut().unwrap();
-    let frontend_ids = components
-        .iter()
-        .filter(|component| {
-            component["adapters"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|adapter| adapter.as_str() == Some("typescript"))
-        })
-        .map(|component| component["id"].as_str().unwrap().to_owned())
-        .collect::<BTreeSet<_>>();
-    components.retain(|component| !frontend_ids.contains(component["id"].as_str().unwrap()));
-    config["repository"]["actions"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|action| {
-            !frontend_ids.contains(action["target"]["component"].as_str().unwrap())
-                && !action["target"]["action"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("typescript-")
-        });
-    for profile in config["repository"]["profiles"].as_array_mut().unwrap() {
-        profile["targets"].as_array_mut().unwrap().retain(|target| {
-            !frontend_ids.contains(target["component"].as_str().unwrap())
-                && !target["action"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("typescript-")
-        });
-    }
-    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
-    jig_context::RepoContext::load_from(&repo).unwrap();
-    fs::remove_file(repo.join("apps/web/package.json")).unwrap();
-    fs::remove_file(repo.join("package.json")).unwrap();
-    fs::remove_file(repo.join("package-lock.json")).unwrap();
-
-    let output = run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap();
-
-    let config =
-        toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
-            .unwrap();
-    assert_tracker_ownership(&config);
-    assert_contains_note(
-        &output["notes"],
-        &["`[work] receipt_metadata = [\"beads\"]` moves to `[repository] tracker = \"beads\"`"],
-    );
-    assert_contains_note(
-        &output["notes"],
-        &[
-            "Retired [work] settings are dropped from .jig.toml: ",
-            "`checks`",
-            "gates `verify`, `project-fmt`, `project-review`, `project-evidence`",
-            "`refinements`",
-        ],
-    );
-    let ctx = jig_context::RepoContext::load_from_root(repo).unwrap();
-    assert_eq!(
-        ctx.contract_version(),
-        jig_context::CURRENT_CONTRACT_VERSION
-    );
-    assert_eq!(jig_policy::contract_check(&ctx).exit_status, 0);
-}
+mod git_blocks;
+mod preview;
+mod vault_policy;
 
 #[test]
 fn minimal_to_full_uses_existing_answers_and_preserves_runtime_tables() {
@@ -492,6 +344,128 @@ fn update_retires_formerly_managed_exec_plan_paths() {
     );
 }
 
-include!("adoption_modes_parts/part_02.rs");
+#[test]
+fn forced_full_to_minimal_adoption_retires_full_harness_paths() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
 
-mod vault_policy;
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+    add_project_runtime_tables(&repo);
+    let full_manifest = managed_manifest_paths(&repo)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    assert!(!repo.join(".mcp.json").exists());
+    assert!(repo.join("scripts/jig").is_file());
+    assert!(repo.join(".github/workflows/rust-tests.yml").is_file());
+
+    let output = run_adopt(footprint_adopt_opts(&repo, template.path(), true, true)).unwrap();
+    let minimal_manifest = managed_manifest_paths(&repo)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let expected_retirements = full_manifest
+        .difference(&minimal_manifest)
+        .cloned()
+        .collect::<Vec<_>>();
+    let reported_retirements = output["adoption_profile"]["retired_managed_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| path.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(reported_retirements, expected_retirements);
+    assert_eq!(
+        reported_retirements,
+        output["render_report"]["retired_managed_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|path| path.as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    );
+
+    assert_eq!(output["harness_footprint"], "minimal");
+    assert!(!repo.join(".mcp.json").exists());
+    assert!(!repo.join("scripts/jig").exists());
+    assert!(!repo.join(".github/workflows/rust-tests.yml").exists());
+    let root_guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert_eq!(root_guide, "# Repository Guidelines\n");
+    assert!(
+        output["render_report"]["files_removed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path == "scripts/jig")
+    );
+    let config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
+            .unwrap();
+    assert_project_runtime_tables(&config);
+    jig_context::RepoContext::load_from(&repo).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn minimal_adoption_rejects_managed_symlink_ancestors_in_preview_write_and_force_modes() {
+    let _guard = lock_env();
+    let template = materialize_template_worktree();
+
+    for ancestor in [".agent", ".github", "scripts"] {
+        for (label, write, force) in [
+            ("preview", false, false),
+            ("write", true, false),
+            ("force", true, true),
+        ] {
+            let temp = tempdir().unwrap();
+            let repo = temp.path().join("repo");
+            fs::create_dir_all(&repo).unwrap();
+            run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+            let config_before = fs::read(repo.join(".jig.toml")).unwrap();
+            let outside = temp.path().join(format!(
+                "outside-{}-{label}",
+                ancestor.trim_start_matches('.')
+            ));
+            fs::rename(repo.join(ancestor), &outside).unwrap();
+            fs::write(outside.join("project-sentinel"), "outside\n").unwrap();
+            let protected_relative = match ancestor {
+                ".agent" => managed_paths::MANIFEST_PATH
+                    .strip_prefix(".agent/")
+                    .unwrap(),
+                ".github" => "workflows/rust-tests.yml",
+                "scripts" => "jig",
+                _ => unreachable!(),
+            };
+            let protected_before = fs::read(outside.join(protected_relative)).unwrap();
+            let outside_before = regular_file_tree_snapshot(&outside);
+            create_symlink(&outside, &repo.join(ancestor)).unwrap();
+            let mut opts = footprint_adopt_opts(&repo, template.path(), true, force);
+            opts.write = write;
+
+            let error = run_adopt(opts).unwrap_err().to_string();
+
+            assert!(
+                error.contains("is a symlink"),
+                "{ancestor}/{label}: {error}"
+            );
+            assert_eq!(fs::read(repo.join(".jig.toml")).unwrap(), config_before);
+            assert_eq!(
+                fs::read(outside.join(protected_relative)).unwrap(),
+                protected_before,
+                "{ancestor}/{label} changed an outside managed path"
+            );
+            assert_eq!(
+                fs::read_to_string(outside.join("project-sentinel")).unwrap(),
+                "outside\n"
+            );
+            assert_eq!(regular_file_tree_snapshot(&outside), outside_before);
+            assert!(
+                fs::symlink_metadata(repo.join(ancestor))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        }
+    }
+}

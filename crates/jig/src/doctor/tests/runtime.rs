@@ -1,4 +1,18 @@
 use super::*;
+use std::fs;
+use std::time::Duration;
+
+use jig_context::{
+    FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
+};
+use tempfile::tempdir;
+
+use crate::doctor::runtime::launcher_repair_staging_check_at;
+use crate::doctor::runtime::{
+    LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE, contract_migration_check, launcher_repair_cache_check,
+    launcher_repair_seed_stamp_is_present, launcher_repair_staging_check,
+    legacy_version_cache_check, runtime_check,
+};
 use std::time::SystemTime;
 
 use jig_context::INSTALLER_CACHE_LAYOUT_MARKER;

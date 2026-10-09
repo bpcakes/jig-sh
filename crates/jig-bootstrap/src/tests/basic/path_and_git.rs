@@ -130,37 +130,6 @@ fn init_and_adopt_resolve_relative_bootstrap_paths_from_invocation_cwd() {
 }
 
 #[test]
-fn run_init_rejects_schema_dumps_when_sqlx_is_disabled() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let destination = temp.path().join("repo");
-
-    let error = run_init(InitOpts {
-        path: destination,
-        scaffold: ScaffoldOpts::default(),
-        template: Some(template.path().display().to_string()),
-        template_mode: None,
-        vcs_ref: None,
-        force: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(false),
-            schema_dump_enabled: Some(true),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("schema_dump_enabled cannot be true"));
-    assert!(error.contains("sqlx_enabled is false"));
-}
-
-#[test]
 fn run_init_renders_empty_agent_tooling_lists_as_toml_arrays() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -456,22 +425,26 @@ fn adopt_with_real_template_runs_destination_tasks() {
 }
 
 #[test]
-fn adopt_appends_jig_block_to_existing_root_agents() {
+fn adopt_keeps_project_owned_build_and_lint_configuration() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     let template = materialize_template_git_worktree();
     write_test_crate_guide(&repo);
-    fs::write(
-        repo.join("AGENTS.md"),
-        "# Existing Agent Guide\n\nKeep this repo-specific guidance.\n",
-    )
-    .unwrap();
-    fs::write(
-        repo.join(".gitignore"),
-        "# Project ignores\nproject-owned-cache/\n",
-    )
-    .unwrap();
+    let project_owned_files = [
+        (
+            "Cargo.toml",
+            "[workspace]\nresolver = \"3\"\nmembers = []\n",
+        ),
+        (
+            "clippy.toml",
+            "# Project-owned Clippy policy\ncognitive-complexity-threshold = 40\n",
+        ),
+        ("Makefile", "project-owned:\n\t@true\n"),
+    ];
+    for (relative, contents) in project_owned_files {
+        fs::write(repo.join(relative), contents).unwrap();
+    }
 
     run_adopt(AdoptOpts {
         components: Default::default(),
@@ -493,293 +466,17 @@ fn adopt_appends_jig_block_to_existing_root_agents() {
     })
     .unwrap();
 
-    let root_guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
-    assert!(root_guide.starts_with("# Existing Agent Guide"));
-    assert!(root_guide.contains("Keep this repo-specific guidance."));
-    assert!(root_guide.contains("<!-- BEGIN JIG MANAGED BLOCK -->"));
-    assert!(root_guide.contains("Use `scripts/jig` for the typed repo contract"));
-    assert_eq!(
-        root_guide
-            .matches("<!-- BEGIN JIG MANAGED BLOCK -->")
-            .count(),
-        1
-    );
-
-    let gitignore = fs::read_to_string(repo.join(".gitignore")).unwrap();
-    assert!(gitignore.starts_with("# Project ignores"));
-    assert!(gitignore.contains("project-owned-cache/"));
-    assert!(gitignore.contains("# BEGIN JIG MANAGED BLOCK"));
-    assert!(gitignore.contains("node_modules/"));
-    assert_eq!(gitignore.matches("# BEGIN JIG MANAGED BLOCK").count(), 1);
-}
-
-#[cfg(unix)]
-#[test]
-fn adopt_refuses_to_replace_symlinked_root_agents_without_force() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    write_test_crate_guide(&repo);
-    fs::write(
-        repo.join("AGENTS.shared.md"),
-        "# Existing Agent Guide\n\nKeep this repo-specific guidance.\n",
-    )
-    .unwrap();
-    create_symlink(Path::new("AGENTS.shared.md"), &repo.join("AGENTS.md")).unwrap();
-
-    let error = run_adopt(AdoptOpts {
-        components: Default::default(),
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(false),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Adopt would overwrite template-managed paths"));
-    assert!(error.contains("AGENTS.md"));
-    assert!(
-        fs::symlink_metadata(repo.join("AGENTS.md"))
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    assert_eq!(
-        fs::read_to_string(repo.join("AGENTS.shared.md")).unwrap(),
-        "# Existing Agent Guide\n\nKeep this repo-specific guidance.\n"
-    );
-
-    run_adopt(AdoptOpts {
-        components: Default::default(),
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: true,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(false),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    let root_guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
-    assert!(
-        !fs::symlink_metadata(repo.join("AGENTS.md"))
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    assert!(root_guide.contains("Keep this repo-specific guidance."));
-    assert!(root_guide.contains("<!-- BEGIN JIG MANAGED BLOCK -->"));
-    assert_eq!(
-        fs::read_to_string(repo.join("AGENTS.shared.md")).unwrap(),
-        "# Existing Agent Guide\n\nKeep this repo-specific guidance.\n"
-    );
-}
-
-#[test]
-fn adopt_rejects_malformed_existing_root_agents_jig_block() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    write_test_crate_guide(&repo);
-    fs::write(
-        repo.join("AGENTS.md"),
-        "# Existing Agent Guide\n\n<!-- BEGIN JIG MANAGED BLOCK -->\nmissing end\n",
-    )
-    .unwrap();
-
-    let error = run_adopt(AdoptOpts {
-        components: Default::default(),
-        path: repo,
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(false),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Malformed Jig managed block"));
-}
-
-#[test]
-fn adopt_with_real_template_keeps_sqlx_files_when_enabled() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    fs::create_dir_all(repo.join("crates/api")).unwrap();
-    fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
-
-    run_adopt(AdoptOpts {
-        components: Default::default(),
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(true),
-            rust_migration_dir: Some("migrations".into()),
-            rust_sqlx_metadata_dir: Some(".sqlx".into()),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    let agent_map = fs::read_to_string(repo.join("agent-map.md")).unwrap();
-    assert!(agent_map.contains("[crates/api](./crates/api/AGENTS.md)"));
-    assert!(!repo.join("scripts/add-migration.sh").exists());
-    assert!(
-        !repo
-            .join("scripts/check-migration-immutability.sh")
-            .exists()
-    );
-    assert!(
-        !repo
-            .join("scripts/check-sqlx-unchecked-non-test.sh")
-            .exists()
-    );
-    assert!(
-        !repo
-            .join("scripts/generate-sqlx-unchecked-queries-todo.sh")
-            .exists()
-    );
+    for (relative, contents) in project_owned_files {
+        assert_eq!(fs::read_to_string(repo.join(relative)).unwrap(), contents);
+    }
     let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("sqlx_enabled = true"));
-    assert!(answers.contains("rust_migration_layout = \"flat_migrations\""));
-    assert!(!answers.contains("migration_add_command"));
+    assert!(!answers.contains("makefile_enabled"));
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains(r#""name": "jig.migration_add""#));
-    assert!(contract.contains(r#""kind": "native""#));
+    assert!(contract.contains(&format!(
+        r#""contract_version": {}"#,
+        jig_context::CURRENT_CONTRACT_VERSION
+    )));
+    assert!(!contract.contains("jig_version"));
+    assert!(contract.contains(r#""kind": "command""#));
+    assert!(!contract.contains("jig.run_target"));
 }
-
-#[test]
-fn adopt_with_versioned_artifacts_omits_migration_add_capability_and_guidance() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    fs::create_dir_all(repo.join("crates/api")).unwrap();
-    fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
-
-    run_adopt(AdoptOpts {
-        components: Default::default(),
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(true),
-            rust_migration_dir: Some("schema".into()),
-            rust_migration_layout: Some(jig_context::RustMigrationLayout::VersionedArtifacts),
-            rust_sqlx_metadata_dir: Some(".sqlx".into()),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("rust_migration_layout = \"versioned_artifacts\""));
-    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains(r#""name": "jig.sqlx_check""#));
-    assert!(!contract.contains(r#""name": "jig.migration_add""#));
-    let guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
-    assert!(guide.contains("complete versioned schema artifacts"));
-    assert!(guide.contains("do not use `scripts/jig migration add`"));
-    assert!(!guide.contains("- `scripts/jig migration add NAME`"));
-}
-
-#[test]
-fn adopt_with_sqlx_and_schema_dumps_disabled_hides_schema_dump_target() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    fs::create_dir_all(repo.join("crates/api")).unwrap();
-    fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
-
-    run_adopt(AdoptOpts {
-        components: Default::default(),
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(true),
-            schema_dump_enabled: Some(false),
-            rust_migration_dir: Some("migrations".into()),
-            rust_sqlx_metadata_dir: Some(".sqlx".into()),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    assert!(!repo.join("Makefile").exists());
-
-    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(!contract.contains("\"schema-dump\""));
-    assert!(!contract.contains("jig.schema_dump"));
-    assert!(!contract.contains("\"schema_check_command\""));
-    assert!(!contract.contains("jig.schema_check"));
-
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(!answers.contains("schema_dump_command"));
-    assert!(!answers.contains("schema_check_command"));
-    assert!(!answers.contains("tool = \"jig.schema_check\""));
-}
-
-include!("path_and_git_parts/part_01.rs");
-include!("path_and_git_parts/project_owned.rs");

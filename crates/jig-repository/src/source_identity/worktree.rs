@@ -322,3 +322,82 @@ pub(super) fn system_time_key(time: Option<SystemTime>) -> u128 {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default()
 }
+
+pub(super) fn hash_field(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value);
+}
+
+pub(super) fn canonical_binary_diff_args(
+    order_file: &Path,
+    cached: bool,
+    baseline_oid: Option<&str>,
+) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("-c"),
+        OsString::from("core.fileMode=true"),
+        OsString::from("-c"),
+        OsString::from("diff.ignoreSubmodules=none"),
+        OsString::from("-c"),
+        OsString::from("diff.algorithm=myers"),
+        OsString::from("-c"),
+        OsString::from("diff.indentHeuristic=false"),
+        OsString::from("-c"),
+        OsString::from("diff.renames=false"),
+        OsString::from("-c"),
+        OsString::from("diff.context=3"),
+        OsString::from("-c"),
+        OsString::from("diff.interHunkContext=0"),
+        OsString::from("-c"),
+        OsString::from("diff.relative=false"),
+        OsString::from("diff"),
+    ];
+    if cached {
+        args.push(OsString::from("--cached"));
+    }
+    args.extend(
+        [
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--no-indent-heuristic",
+            "--diff-algorithm=myers",
+            "--unified=3",
+            "--inter-hunk-context=0",
+            "--no-relative",
+            "--ignore-submodules=none",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ]
+        .into_iter()
+        .map(OsString::from),
+    );
+    let mut order_arg = OsString::from("-O");
+    order_arg.push(order_file.as_os_str());
+    args.push(order_arg);
+    if let Some(baseline_oid) = baseline_oid {
+        args.push(OsString::from(baseline_oid));
+    }
+    args.push(OsString::from("--"));
+    args
+}
+
+#[cfg(test)]
+pub fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
+    repo_worktree_fingerprint_inner(root, GitCollection::Blocking)
+}
+
+#[cfg(test)]
+pub fn repo_worktree_fingerprint_with_cancellation(
+    root: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    repo_worktree_fingerprint_inner(root, GitCollection::Cancellable(cancelled))
+}
+
+pub fn is_git_collection_cancellation(error: &anyhow::Error) -> bool {
+    error.is::<GitCollectionCancelled>()
+}

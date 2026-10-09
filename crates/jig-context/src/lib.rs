@@ -7,9 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use jig_contract::{
-    ActionSpec, ComponentSpec, FeatureContext, ManifestTool, ProfileId, ProfileSpec,
-};
+use jig_contract::{ActionSpec, ComponentSpec, ManifestTool, ProfileId, ProfileSpec};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -693,7 +691,7 @@ impl RepoContext {
 mod execution_authority;
 use execution_authority::contract_source_digest;
 
-include!("tail.rs");
+mod feature_context;
 
 mod validation;
 use validation::*;

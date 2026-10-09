@@ -34,6 +34,7 @@ mod change_scope;
 mod comparison;
 mod content;
 mod exact_path;
+mod gitlinks;
 mod metadata;
 mod process;
 mod scope;
@@ -43,6 +44,7 @@ pub use change_scope::*;
 pub use comparison::*;
 pub use content::*;
 pub use exact_path::*;
+use gitlinks::*;
 use process::*;
 use scope::*;
 use worktree::*;
@@ -366,10 +368,9 @@ fn repository_source_snapshot_inner(
     })
 }
 
-mod tail;
-pub use tail::is_git_collection_cancellation;
+pub use worktree::is_git_collection_cancellation;
 #[cfg(test)]
-pub use tail::{repo_worktree_fingerprint, repo_worktree_fingerprint_with_cancellation};
+pub use worktree::{repo_worktree_fingerprint, repo_worktree_fingerprint_with_cancellation};
 
 #[derive(Clone, Copy)]
 enum GitCollection<'a> {

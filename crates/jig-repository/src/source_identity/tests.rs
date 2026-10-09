@@ -4,30 +4,12 @@ use std::ffi::OsStr;
 use std::time::{Duration, UNIX_EPOCH};
 use tempfile::tempdir;
 
-const REDIRECT_HELPER_ENV: &str = "JIG_TEST_GIT_SOURCE_REDIRECT_HELPER";
-const REDIRECT_HELPER_ROOT_ENV: &str = "JIG_TEST_GIT_SOURCE_REDIRECT_ROOT";
-const REDIRECT_HELPER_WHOLE_ENV: &str = "JIG_TEST_GIT_SOURCE_REDIRECT_WHOLE";
-const REDIRECT_HELPER_TEST: &str = "source_identity::tests::repository_redirect_environment_helper";
-// Apple rejects invalid-byte path components with EILSEQ before these
-// filesystem-backed fixtures can exercise Jig's path handling.
-#[cfg(all(unix, not(target_vendor = "apple")))]
-const NON_UTF8_TMPDIR_HELPER_ENV: &str = "JIG_TEST_NON_UTF8_TMPDIR_HELPER";
-#[cfg(all(unix, not(target_vendor = "apple")))]
-const NON_UTF8_TMPDIR_HELPER_ROOT_ENV: &str = "JIG_TEST_NON_UTF8_TMPDIR_ROOT";
-#[cfg(all(unix, not(target_vendor = "apple")))]
-const NON_UTF8_TMPDIR_HELPER_TEST: &str = "source_identity::tests::canonical_diff_order_file_preserves_non_utf8_temporary_directory_helper";
-
-include!("tests_parts/part_01.rs");
-include!("tests_parts/part_02.rs");
-include!("tests_parts/part_03.rs");
-include!("tests_parts/part_04.rs");
-
-#[path = "tests_parts/comparison_scope.rs"]
 mod comparison_scope;
-#[path = "tests_parts/comparison_scope_regressions.rs"]
 mod comparison_scope_regressions;
-
-#[path = "tests_parts/tracker_state.rs"]
+mod fail_closed;
+mod fingerprint_changes;
+mod git_isolation;
+mod non_utf8_paths;
 mod tracker_state;
 
 #[test]
@@ -82,4 +64,19 @@ fn repository_source_identity_changes_with_committed_source() {
         .worktree_fingerprint;
 
     assert_ne!(first, second);
+}
+
+fn run_git(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {} failed\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }

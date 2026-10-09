@@ -1,4 +1,12 @@
-use super::*;
+use std::fs;
+
+use jig_context::RepoContext;
+use serde_json::{Value, json};
+use tempfile::tempdir;
+
+use super::support::write_doctor_fixture;
+use crate::doctor::environment::DoctorEnvironment;
+use crate::doctor::required_tools::required_tools_check_with_environment;
 
 #[test]
 fn required_tools_checks_argv_programs_with_declared_cwd_and_path() {

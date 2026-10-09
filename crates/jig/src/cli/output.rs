@@ -454,5 +454,4 @@ pub(super) fn value_u64(value: &serde_json::Value, key: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
-#[path = "output_tests.rs"]
 mod tests;
