@@ -205,7 +205,7 @@
     }
   },
   {
-    "description": "Check Rust formatting.",
+    "description": "Check Rust formatting and that every source is a module cargo fmt reaches.",
     "effects": [
       "read_only",
       "process"

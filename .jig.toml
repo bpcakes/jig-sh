@@ -91,7 +91,7 @@ source_state = "inferred"
 target = "inherited"
 
 [[repository.actions]]
-description = "Check Rust formatting."
+description = "Check Rust formatting and that every source is a module cargo fmt reaches."
 intent = "check"
 effects = ["read_only", "process"]
 inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "**/*.rs", "rust-toolchain", "rust-toolchain.toml", "**/rust-toolchain", "**/rust-toolchain.toml", ".cargo/**", "**/.cargo/**", "rustfmt.toml", ".rustfmt.toml", "**/rustfmt.toml", "**/.rustfmt.toml", "clippy.toml", ".clippy.toml", "**/clippy.toml", "**/.clippy.toml"]
