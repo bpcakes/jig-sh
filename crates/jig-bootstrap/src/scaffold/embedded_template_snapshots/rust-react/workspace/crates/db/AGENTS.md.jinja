@@ -34,4 +34,8 @@ Owns persistence for `<<[ repo_name ]>>`, including database pools, migrations, 
 
 - `cargo test -p <<[ package_name ]>>-db`
 - `bash scripts/test-postgres.sh`
+[% if jobs_enabled %]
+- `cargo run -p <<[ package_name ]>>-api -- --bootstrap-database` applies Runledger and application migrations together. Do not use plain `sqlx migrate run`: it rejects Runledger versions in the shared migration table.
+[% else %]
 - `sqlx migrate run`
+[% endif %]

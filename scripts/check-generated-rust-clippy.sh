@@ -387,6 +387,17 @@ assert_mod_module_files_rejected \
   online \
   workspace
 
+# Metrics must compile without database or jobs dependencies.
+metrics_repo="$fixture_root/ExampleProject-metrics"
+init_repo "$metrics_repo" \
+  --preset rust-react \
+  --repo-name ExampleProject \
+  --db none \
+  --frontends web,admin \
+  --metrics otlp \
+  --jobs none
+prepare_and_check "$metrics_repo" "$rust_react_toolchain" online
+
 # The optional Batter services render additional crates and modules: metrics
 # export in the runtime and a Runledger jobs crate wired into PostgreSQL.
 services_repo="$fixture_root/ExampleProject-services"
