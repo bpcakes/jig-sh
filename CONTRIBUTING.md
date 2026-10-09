@@ -31,6 +31,21 @@ JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launch
 
 During a release, the remote `vVERSION` tag is pushed after the crates publish step succeeds. If you install a freshly published binary before the tag is visible on GitHub, use `--vcs-ref main` or a local `--template` path for the first render, then retry the default release template after the tag is pushed.
 
+## Repository layout
+
+- `crates/jig/`: the publishable `jig-sh` CLI, bootstrapper entrypoint, and repository runtime
+- `crates/jig-bootstrap/`: `init`, `adopt`, and `update` rendering, adoption inference, and transactional writes
+- `crates/jig-contract/`, `crates/jig-context/`, `crates/jig-commands/`, `crates/jig-features/`, `crates/jig-core/`: contract types, repository configuration and manifest validation, the command registry, and feature metadata
+- `crates/jig-repository/`, `crates/jig-execution/`, `crates/jig-owned-process/`, `crates/jig-state/`, `crates/jig-git/`: action catalog and run planning, supervised execution, child-process ownership, append-only state, and Git reads
+- `crates/jig-{rust,go,typescript,sqlx}/`: stack adapters
+- `crates/jig-file-budget/`, `crates/jig-policy/`: file-budget policy, repository policy checks, agent guides, and the agent map
+- `crates/jig-loops/`, `crates/jig-agents/`: scheduled and manual agent loops; Claude and Codex home discovery and launch
+- `crates/jig-dev-proxy/`: local HTTP/HTTPS proxy and process supervision
+- `crates/jig-tui/`, `crates/jig-ui/`, `crates/jig-dashboard/`, `crates/jig-codex-tui/`, `crates/jig-vault/`, `crates/jig-vault-tui/`: TUI foundations, the unified dashboard and its data contracts, the Codex home picker, and the vault
+- `templates/project/`: files rendered into downstream repositories
+- `examples/`: sample `.jig.toml` answer files
+- `scripts/validate-fixtures.sh`: rendered-repository validation; see [local validation](docs/local-validation.md)
+
 ## Release
 
 Use the GitHub Actions `Release` workflow for the lowest-touch release path. The default branch carries the next patch as a `MAJOR.MINOR.PATCH-dev` workspace version. Leave `version` blank to release that patch version, choose a larger bump, or set the release version explicitly. The workflow prepares the release commit, updates `CHANGELOG.md`, creates a local tag, publishes the workspace crates in dependency order to crates.io through trusted publishing, pushes the tag to origin after every crate publishes, creates the GitHub Release, then advances the default branch to the following patch `-dev` version.
