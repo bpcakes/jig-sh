@@ -59,12 +59,16 @@ fn rendered_contents<'a>(rendered: &'a [scaffold::ScaffoldFile], path: &str) -> 
 include!("scaffold_generation_parts/part_01.rs");
 include!("scaffold_generation_parts/part_02_assertions.rs");
 include!("scaffold_generation_parts/part_02_backend_assertions.rs");
+include!("scaffold_generation_parts/part_02_http_assertions.rs");
 include!("scaffold_generation_parts/part_02.rs");
 include!("scaffold_generation_parts/part_03.rs");
 include!("scaffold_generation_parts/part_04.rs");
+include!("scaffold_generation_parts/rendered_formatting.rs");
 include!("scaffold_generation_parts/part_05.rs");
 include!("scaffold_generation_parts/rust_only_acceptance.rs");
 include!("scaffold_generation_parts/rust_only_compatibility.rs");
 include!("scaffold_generation_parts/rust_library.rs");
 include!("scaffold_generation_parts/rust_cli.rs");
 include!("scaffold_generation_parts/clippy_defaults.rs");
+include!("scaffold_generation_parts/service_options.rs");
+include!("scaffold_generation_parts/postgres_readme.rs");

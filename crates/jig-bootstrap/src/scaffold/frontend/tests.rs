@@ -134,6 +134,8 @@ fn vite_direct_fallback_uses_the_rendered_dev_proxy_authority() {
             FrontendBackendContext {
                 preset: ScaffoldPreset::RustReact,
                 root: ".",
+                metrics: crate::ScaffoldMetrics::None,
+                jobs: crate::ScaffoldJobs::None,
                 database: FrontendDatabaseContext {
                     db: ScaffoldDb::None,
                     migration_dir: "migrations",
@@ -191,6 +193,8 @@ fn frontend_workspace_declared_paths_match_rendered_outputs_for_all_shapes() {
                     FrontendBackendContext {
                         preset,
                         root: ".",
+                        metrics: crate::ScaffoldMetrics::None,
+                        jobs: crate::ScaffoldJobs::None,
                         database: FrontendDatabaseContext {
                             db,
                             migration_dir: "migrations",

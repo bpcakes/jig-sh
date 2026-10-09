@@ -8,6 +8,8 @@ fn scaffold_generated_rust_workspace_has_valid_cargo_metadata() {
             db: Some(ScaffoldDb::Postgres),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),

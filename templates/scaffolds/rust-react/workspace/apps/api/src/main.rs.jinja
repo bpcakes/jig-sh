@@ -48,7 +48,11 @@ async fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 [% endif %]
-    runtime::serve(config, app_http_crate::router_with_lifecycle).await
+[% if jobs_enabled %]
+    runtime::serve_with_jobs(config, app_http_crate::assemble).await
+[% else %]
+    runtime::serve(config, app_http_crate::assemble).await
+[% endif %]
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,6 +93,9 @@ fn init_tracing() {
         "<<[ module_name ]>>=info,",
         "<<[ module_name ]>>_api=info,",
         "batter=info,batter_axum=info",
+[% if jobs_enabled %]
+        ",runledger=info",
+[% endif %]
     );
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -126,7 +133,7 @@ mod tests {
             let config = app_crate::AppConfig::from_env().expect("test bind address is valid");
             let result = tokio::time::timeout(
                 Duration::from_secs(2),
-                runtime::serve(config, app_http_crate::router_with_lifecycle),
+                runtime::serve(config, app_http_crate::assemble),
             )
             .await
             .expect("serve should fail the occupied bind instead of hanging");

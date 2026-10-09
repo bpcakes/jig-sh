@@ -68,6 +68,8 @@ fn rollback_test_init_opts(path: PathBuf, force: bool) -> InitOpts {
             db: Some(ScaffoldDb::None),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         template: None,
         template_mode: None,

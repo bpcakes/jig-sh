@@ -1,13 +1,14 @@
+pub mod probes;
 pub mod requests;
 
 use axum::{
-    Extension, Json,
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use batter::axum::CorrelationId;
+use batter::axum::{AdmittedRequest, CorrelationId, RouteInventory, RouteInventoryError};
 use serde::Serialize;
-use utoipa::ToSchema;
+use utoipa::{ToSchema, openapi::OpenApi};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, ToSchema)]
 pub struct ApiErrorResponse {
@@ -110,8 +111,16 @@ impl IntoResponse for ApiError {
     }
 }
 
-pub async fn not_found(Extension(correlation_id): Extension<CorrelationId>) -> ApiError {
-    ApiError::not_found(Some(&correlation_id))
+/// Default-group fallback. It runs inside admission, so unmatched paths receive
+/// the API envelope with the request's server-generated correlation ID.
+pub async fn not_found(admitted: AdmittedRequest) -> ApiError {
+    ApiError::not_found(Some(admitted.correlation_id()))
+}
+
+/// Declare exactly the routes an OpenAPI router documents. The HTTP boundary
+/// serves only declared routes, so documentation and serving cannot drift.
+pub fn route_inventory(document: &OpenApi) -> Result<RouteInventory, RouteInventoryError> {
+    RouteInventory::new(document.paths.paths.keys().cloned())
 }
 
 fn request_id(correlation_id: Option<&CorrelationId>) -> String {

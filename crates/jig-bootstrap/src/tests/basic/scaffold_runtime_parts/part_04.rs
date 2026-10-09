@@ -12,6 +12,8 @@ fn scaffold_test_support_uses_absolute_paths_for_local_module_name_collisions() 
                 db: Some(ScaffoldDb::Postgres),
                 frontends: Vec::new(),
                 frontend_list: Vec::new(),
+                metrics: None,
+                jobs: None,
             },
             &AnswerOpts {
                 repo_name: Some(repo_name.into()),
@@ -29,9 +31,18 @@ fn scaffold_test_support_uses_absolute_paths_for_local_module_name_collisions() 
             .join(format!("{repo_name}-test-support"));
         let lib = fs::read_to_string(test_support.join("src/lib.rs")).unwrap();
         assert!(
-            lib.contains(&format!("use ::{module_name} as app_crate;"))
-                && lib.contains("app_crate::AppState::new()"),
-            "application crate path was ambiguous for {repo_name}:\n{lib}"
+            lib.contains("pub use self::app::TestApp;")
+                && lib.contains("pub use self::responses::TestResponse;")
+                && !lib.contains(&format!("use {module_name}")),
+            "test-support modules must not shadow the application crate for {repo_name}:\n{lib}"
+        );
+        let postgres = fs::read_to_string(test_support.join("tests/postgres.rs")).unwrap();
+        assert!(
+            postgres.contains(&format!("use ::{module_name} as app_crate;"))
+                && postgres.contains(&format!(
+                    "use ::{module_name}_test_support::db::with_migrated_database;"
+                )),
+            "integration test crate paths were ambiguous for {repo_name}:\n{postgres}"
         );
         let app = fs::read_to_string(test_support.join("src/app.rs")).unwrap();
         assert!(

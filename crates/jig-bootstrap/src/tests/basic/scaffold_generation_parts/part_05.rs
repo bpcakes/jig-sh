@@ -48,6 +48,8 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
                 custom_default_name: false,
             }],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -143,6 +145,8 @@ fn go_react_rejects_missing_module_and_admin() {
             custom_default_name: false,
         }],
         frontend_list: Vec::new(),
+        metrics: None,
+        jobs: None,
     }
     .validate_init_invariants(&AnswerOpts {
         go_module: Some("example.com/demo".into()),

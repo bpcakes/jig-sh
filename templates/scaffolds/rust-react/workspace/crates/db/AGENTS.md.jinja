@@ -2,27 +2,40 @@
 
 ## Purpose
 
-Owns persistence for `<<[ repo_name ]>>`, including database pools, migrations, repositories, and persistence DTOs.
+Owns persistence for `<<[ repo_name ]>>`, including database pools, migrations, health probing, repositories, and persistence DTOs.
 
 ## Key entrypoints
 
-- `src/lib.rs`: database connection, migration helper, and shared DB handle.
+- `src/lib.rs`: `Db::connect_in`, `Db::migrate`, `Db::register_health`, and the shared DB handle.
 - `../../migrations`: SQLx migrations generated for this application.
 
 ## Edit here for X
 
-- Add SQLx queries, transaction helpers, repository functions, and persistence mappers here.
+- Add SQLx queries, transaction helpers, repository functions, and persistence mappers here. Prefer `batter::sqlx::run_atomic` for transactions whose output must wait for an acknowledged commit, and `PgLease` for bounded single-connection work.
 - Keep HTTP DTOs in `crates/<<[ package_name ]>>-http` and business decisions in `crates/<<[ package_name ]>>`.
-- Keep PostgreSQL native pool options and URL parsing here; `connect_in` uses `batter::sqlx::pool_in` with a runtime-provided cleanup slot and performs the connectivity probe under the runtime-provided operation context.
+- Keep PostgreSQL native pool options and URL parsing here; `connect_in` publishes pool closure into a runtime-provided cleanup slot before the connectivity probe.
+[% if jobs_enabled %]
+- The pool is a Runledger `RunledgerDatabase` with an explicit session profile (login role, one authoritative `public` schema, server timeouts disabled because Batter operation deadlines bound SQL). Change roles or schema in `Db::lazy`.
+[% endif %]
 
 ## Invariants
 
-- Run migrations through the DB boundary before serving readiness.
-- Reserve and register PostgreSQL pool cleanup before awaiting connectivity; local closure does not imply remote rollback or continuous connectivity.
+- Run migrations through `Db::migrate` before serving readiness. Migrations run on one leased connection that is retired on failure or cancellation; cancellation does not roll back committed migrations.
+[% if jobs_enabled %]
+- Runledger's history is applied first and shares `_sqlx_migrations`; the application migrator recognizes both bundled histories while retaining SQLx's missing-version and checksum checks. Schema compatibility is verified afterward.
+[% endif %]
+- Reserve and register PostgreSQL pool cleanup before awaiting connectivity; local closure does not imply remote rollback.
+- The health monitor probes the pool on its own schedule. Readiness reads its last observation without I/O; keep probes cheap and bounded.
+- PostgreSQL 18 is the minimum server for Batter's SQLx adapter.
 - Do not expose raw request data structures from this crate.
 - Keep database access feature-gated from the app crate through the `db` feature.
 
 ## Common commands
 
 - `cargo test -p <<[ package_name ]>>-db`
+- `bash scripts/test-postgres.sh`
+[% if jobs_enabled %]
+- `cargo run -p <<[ package_name ]>>-api -- --bootstrap-database` applies Runledger and application migrations together. Do not use plain `sqlx migrate run`: it rejects Runledger versions in the shared migration table.
+[% else %]
 - `sqlx migrate run`
+[% endif %]

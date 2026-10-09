@@ -15,10 +15,18 @@ workspace = true
 [% if db_enabled %]
 <<[ package_name ]>>-db = { path = "../<<[ package_name ]>>-db" }
 anyhow.workspace = true
+batter = { workspace = true, features = ["sqlx-test-support"] }
+postgres-test-harness.workspace = true
 sqlx.workspace = true
+[% else %]
+batter.workspace = true
 [% endif %]
 axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-tower = { workspace = true, features = ["util"] }
+[% if jobs_enabled %]
+
+[dev-dependencies]
+<<[ package_name ]>>-jobs = { path = "../<<[ package_name ]>>-jobs" }
+[% endif %]

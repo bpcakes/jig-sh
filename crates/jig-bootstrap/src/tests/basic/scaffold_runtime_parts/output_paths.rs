@@ -13,6 +13,8 @@ fn scaffold_output_paths_include_template_collision_candidates() {
                 parse_scaffold_frontend("landing").unwrap(),
                 parse_scaffold_frontend("admin").unwrap(),
             ],
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -81,6 +83,8 @@ fn scaffold_rejects_unsupported_package_manager_before_scripts_render() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),

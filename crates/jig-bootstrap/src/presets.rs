@@ -43,6 +43,7 @@ struct ScaffoldChoiceCapability {
 
 impl ScaffoldChoiceCapability {
     const UNSUPPORTED: Self = Self::new(false, false);
+    const OPTIONAL: Self = Self::new(true, false);
     const REQUIRED: Self = Self::new(true, true);
 
     const fn new(supported: bool, required: bool) -> Self {
@@ -71,6 +72,8 @@ struct ScaffoldPresetCapabilities {
     database: ScaffoldChoiceCapability,
     frontends: ScaffoldChoiceCapability,
     go_module: ScaffoldChoiceCapability,
+    metrics: ScaffoldChoiceCapability,
+    jobs: ScaffoldChoiceCapability,
 }
 
 impl ScaffoldFrontendShorthand {
@@ -104,24 +107,32 @@ impl ScaffoldPreset {
                 database: ScaffoldChoiceCapability::REQUIRED,
                 frontends: ScaffoldChoiceCapability::REQUIRED,
                 go_module: ScaffoldChoiceCapability::UNSUPPORTED,
+                metrics: ScaffoldChoiceCapability::OPTIONAL,
+                jobs: ScaffoldChoiceCapability::OPTIONAL,
             },
             Self::GoReact => ScaffoldPresetCapabilities {
                 has_project_scaffold: true,
                 database: ScaffoldChoiceCapability::REQUIRED,
                 frontends: ScaffoldChoiceCapability::REQUIRED,
                 go_module: ScaffoldChoiceCapability::REQUIRED,
+                metrics: ScaffoldChoiceCapability::UNSUPPORTED,
+                jobs: ScaffoldChoiceCapability::UNSUPPORTED,
             },
             Self::HarnessOnly => ScaffoldPresetCapabilities {
                 has_project_scaffold: false,
                 database: ScaffoldChoiceCapability::UNSUPPORTED,
                 frontends: ScaffoldChoiceCapability::UNSUPPORTED,
                 go_module: ScaffoldChoiceCapability::UNSUPPORTED,
+                metrics: ScaffoldChoiceCapability::UNSUPPORTED,
+                jobs: ScaffoldChoiceCapability::UNSUPPORTED,
             },
             Self::RustLibrary | Self::RustCli => ScaffoldPresetCapabilities {
                 has_project_scaffold: true,
                 database: ScaffoldChoiceCapability::UNSUPPORTED,
                 frontends: ScaffoldChoiceCapability::UNSUPPORTED,
                 go_module: ScaffoldChoiceCapability::UNSUPPORTED,
+                metrics: ScaffoldChoiceCapability::UNSUPPORTED,
+                jobs: ScaffoldChoiceCapability::UNSUPPORTED,
             },
         }
     }
@@ -152,6 +163,14 @@ impl ScaffoldPreset {
 
     pub const fn requires_go_module(self) -> bool {
         self.capabilities().go_module.is_required()
+    }
+
+    pub const fn supports_metrics(self) -> bool {
+        self.capabilities().metrics.is_supported()
+    }
+
+    pub const fn supports_jobs(self) -> bool {
+        self.capabilities().jobs.is_supported()
     }
 
     pub const fn requires_web_package_manager(self) -> bool {
@@ -212,11 +231,13 @@ impl ScaffoldPreset {
                 name: "rust-react",
                 summary: "Rust API workspace plus shadcn React product/admin apps and an optional Astro site. Batter owns service startup, request deadlines, and shutdown.",
                 defaults: &[
-                    "Batter and its Axum adapter use a pinned Git dependency; generated services target Unix.",
+                    "Batter is a pinned Git dependency selecting only the facade features the shape uses; generated services target Unix.",
                     "Rust crate roots default to apps and crates.",
                     "The strict Clippy gate rejects functions when Clippy's cognitive-complexity heuristic exceeds 20.",
                     "Frontends live under apps/<name> and default to apps/web when omitted.",
-                    "Database scaffolding defaults to none; pass --db postgres when wanted.",
+                    "Database scaffolding defaults to none; --db postgres adds a health-monitored SQLx pool and isolated template databases for tests.",
+                    "Metrics export defaults to none; --metrics otlp compiles Batter's bounded OTLP/HTTP exporter, enabled at runtime by METRICS_OTLP_ENDPOINT.",
+                    "Background jobs default to none; --jobs runledger with --db postgres adds a Runledger worker supervised by Batter in the API process.",
                     "Generated frontend checks default to bun unless --web-package-manager is supplied.",
                     "Frontends share a pinned root workspace and install dependencies once during bootstrap.",
                     "React frontends ship tested shadcn 4 sources and provenance without running a mutable CLI during init.",
@@ -230,6 +251,7 @@ impl ScaffoldPreset {
                     "crates/<repo>-runtime owns Batter startup, signals, and cleanup",
                     "crates/<repo>-test-support",
                     "crates/<repo>-db when --db postgres is selected",
+                    "crates/<repo>-jobs when --jobs runledger is selected",
                 ],
                 frontend_shorthands: &[
                     ScaffoldFrontendShorthand {
@@ -248,6 +270,7 @@ impl ScaffoldPreset {
                 examples: &[
                     "jig init ./my-app --preset rust-react",
                     "jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin",
+                    "jig init ./my-app --preset rust-react --db postgres --frontends web,admin --metrics otlp --jobs runledger",
                 ],
                 ownership: "Scaffolded application code is project-owned after creation; jig update keeps the Jig harness current and does not rewrite app code.",
                 non_goals: &[
@@ -381,6 +404,7 @@ mod tests {
                 (true, true),
                 (true, true),
                 (false, false),
+                true,
                 Some("Rust React"),
             ),
             (
@@ -389,6 +413,7 @@ mod tests {
                 (true, true),
                 (true, true),
                 (true, true),
+                false,
                 Some("Go React"),
             ),
             (
@@ -397,6 +422,7 @@ mod tests {
                 (false, false),
                 (false, false),
                 (false, false),
+                false,
                 None,
             ),
             (
@@ -405,6 +431,7 @@ mod tests {
                 (false, false),
                 (false, false),
                 (false, false),
+                false,
                 Some("Rust library"),
             ),
             (
@@ -413,10 +440,13 @@ mod tests {
                 (false, false),
                 (false, false),
                 (false, false),
+                false,
                 Some("Rust CLI"),
             ),
         ];
-        for (preset, project, database, frontends, go_module, label) in expected {
+        for (preset, project, database, frontends, go_module, service_options, label) in expected {
+            assert_eq!(preset.supports_metrics(), service_options, "{preset:?}");
+            assert_eq!(preset.supports_jobs(), service_options, "{preset:?}");
             assert_eq!(preset.has_project_scaffold(), project, "{preset:?}");
             assert_eq!(preset.project_scaffold_label(), label, "{preset:?}");
             assert_eq!(preset.supports_database(), database.0, "{preset:?}");

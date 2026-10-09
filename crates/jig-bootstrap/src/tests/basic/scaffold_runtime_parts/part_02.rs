@@ -7,6 +7,8 @@ fn scaffold_uses_explicit_frontend_role_without_name_inference() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -93,6 +95,8 @@ fn scaffold_rejects_unknown_frontend_role() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -123,6 +127,8 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
             db: None,
             frontends: vec![parse_scaffold_frontend("web").unwrap()],
             frontend_list: vec![parse_scaffold_frontend("web").unwrap()],
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts::default(),
         temp.path(),
@@ -137,6 +143,8 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             frontend_apps: vec![
@@ -169,6 +177,8 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             frontend_apps: vec![
@@ -202,6 +212,8 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             frontend_apps: vec![FrontendApp {
@@ -225,6 +237,8 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             frontend_apps: vec![FrontendApp {
@@ -248,6 +262,8 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             frontend_apps: vec![FrontendApp {
@@ -275,6 +291,8 @@ fn scaffold_rejects_frontend_package_name_reserved_by_root_workspace() {
             db: None,
             frontends: vec![parse_scaffold_frontend("demo_workspace").unwrap()],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -298,6 +316,8 @@ fn scaffold_rejects_mixed_scaffold_and_existing_frontend_app_inputs() {
             db: None,
             frontends: vec![parse_scaffold_frontend("web").unwrap()],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             frontend_apps: vec![FrontendApp {
@@ -327,6 +347,8 @@ fn scaffold_rejects_frontend_dirs_reserved_for_rust_roots() {
                 db: None,
                 frontends: Vec::new(),
                 frontend_list: Vec::new(),
+                metrics: None,
+                jobs: None,
             },
             &AnswerOpts {
                 repo_name: Some("demo".into()),
@@ -358,6 +380,8 @@ fn go_scaffold_places_backend_named_frontends_under_apps() {
                 db: Some(ScaffoldDb::None),
                 frontends: vec![parse_scaffold_frontend(dir).unwrap()],
                 frontend_list: Vec::new(),
+                metrics: None,
+                jobs: None,
             },
             &AnswerOpts {
                 go_module: Some("example.com/example-project".into()),
@@ -410,6 +434,8 @@ fn scaffold_db_rejects_explicit_sqlx_disabled_answer() {
             db: Some(ScaffoldDb::Postgres),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             sqlx_enabled: Some(false),
@@ -432,6 +458,8 @@ fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("123-type".into()),
@@ -458,7 +486,7 @@ fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
     let main_rs =
         fs::read_to_string(temp.path().join("apps/app-123-type-api/src/main.rs")).unwrap();
     assert!(main_rs.contains("use ::app_123_type_http as app_http_crate;"));
-    assert!(main_rs.contains("app_http_crate::router"));
+    assert!(main_rs.contains("runtime::serve(config, app_http_crate::assemble)"));
     let core_lib =
         fs::read_to_string(temp.path().join("crates/app-123-type-core/src/lib.rs")).unwrap();
     assert!(core_lib.contains("#[allow(clippy::useless_concat)]\npub const APP_NAME"));
@@ -471,6 +499,8 @@ fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("MyApp".into()),

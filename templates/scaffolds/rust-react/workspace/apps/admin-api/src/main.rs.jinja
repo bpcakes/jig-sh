@@ -33,12 +33,13 @@ async fn run() -> anyhow::Result<()> {
         anyhow::bail!("unexpected admin API argument {argument:?}");
     }
     let config = app_crate::AppConfig::from_env().context("Failed to load application config")?;
-    runtime::serve(config, |state, lifecycle, admission| {
-        admin_http_crate::router_with_lifecycle(
+    // Replace DenyAllAdminAuthorizer with the application's real authorizer.
+    runtime::serve(config, |state, admission, readiness| {
+        admin_http_crate::assemble(
             state,
             admin_http_crate::DenyAllAdminAuthorizer,
-            lifecycle,
             admission,
+            readiness,
         )
     })
     .await

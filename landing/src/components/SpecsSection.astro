@@ -20,7 +20,7 @@
       </div>
       <div class="row">
         <div class="k">Scaffold preset</div>
-        <div class="v"><code>jig init --preset rust-react --db postgres --frontends web,landing,admin</code> creates a Rust API workspace, Vite React <b>web</b>, Astro <b>landing</b>, and <b>admin-panel</b> with a separate admin API. Current source (after 0.3.0) uses <b>Batter</b> for every new Rust application's startup and shutdown, with a dedicated runtime crate and lifecycle-aware HTTP boundaries. Generated applications require Rust 1.94 on Unix and pinned Batter Git dependencies. Existing application source is not migrated by <code>jig update</code>.</div>
+        <div class="v"><code>jig init --preset rust-react --db postgres --frontends web,landing,admin</code> creates a Rust API workspace, Vite React <b>web</b>, Astro <b>landing</b>, and <b>admin-panel</b> with a separate admin API. Every new Rust application uses <b>Batter</b> for startup and shutdown, with a dedicated runtime crate, sealed lifecycle-aware HTTP boundaries, and database health in readiness; <code>--metrics otlp</code> and <code>--jobs runledger</code> add metrics export and a supervised job worker. Generated applications require Rust 1.94 on Unix and pinned Batter Git dependencies. Existing application source is not migrated by <code>jig update</code>.</div>
         <div class="s">greenfield</div>
       </div>
       <div class="row">

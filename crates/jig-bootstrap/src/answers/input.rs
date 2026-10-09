@@ -168,6 +168,12 @@ impl AnswerInput {
         if scaffold.db.is_some() {
             return reject("--db");
         }
+        if scaffold.metrics.is_some() {
+            return reject("--metrics");
+        }
+        if scaffold.jobs.is_some() {
+            return reject("--jobs");
+        }
         if raw.go_module.as_deref().is_some_and(nonempty_answer_string) {
             return reject("--go-module / go_module");
         }

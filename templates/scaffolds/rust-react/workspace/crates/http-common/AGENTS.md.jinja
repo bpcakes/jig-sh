@@ -6,20 +6,22 @@
 
 ## Key entrypoints
 
-- `src/lib.rs`: standard API error responses and typed correlation extraction.
-- `src/requests.rs`: Batter admission and request deadlines, with application error rendering.
+- `src/lib.rs`: standard API error responses, the admitted `not_found` fallback, and `route_inventory` for OpenAPI routers.
+- `src/requests.rs`: the request policy: Batter admission and the response-construction deadline, with application error rendering.
+- `src/probes.rs`: rendered liveness and readiness bodies and `mount` for `/health/live` and `/health/ready`.
 
 ## Edit here for X
 
 - Add transport-wide error fields, response conversion, or safe generic constructors here.
+- Change the request deadline in `requests.rs`; give routes a different budget with a named `RouteGroup` in the owning surface instead of layering admission manually.
 - Keep resource-specific error codes and messages in the owning public or admin HTTP crate.
 
 ## Invariants
 
 - Error messages returned to clients are safe to disclose and never contain internal error chains, credentials, SQL, or filesystem paths.
 - Every JSON API error includes a stable machine-readable code, a safe message, and Batter's server-generated typed correlation ID. Never use an inbound header as the identity witness.
-- This crate remains independent of both deployable HTTP surfaces.
-- Apply admission to application routes before merging probes. Startup and resource cleanup belong to the runtime crate.
+- Probe renderers choose bodies only; the boundary sets probe status and completion severity from the readiness decision. Renderers run synchronously and must not block.
+- This crate remains independent of both deployable HTTP surfaces. Startup and resource cleanup belong to the runtime crate.
 
 ## Common commands
 

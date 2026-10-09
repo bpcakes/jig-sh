@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest"
 
 import { AppProviders } from "@/app/providers"
 import { createAppRouter } from "@/app/router"
+import { adminApiClient } from "@/lib/api"
 
 // Renderer values are not length-bounded.
 // prettier-ignore
@@ -32,6 +33,12 @@ function renderAdmin(initialEntry = "/") {
 
   return router
 }
+
+it("marks admin API requests for the browser mutation policy", () => {
+  const headers = adminApiClient.getConfig().headers as Headers
+
+  expect(headers.get("x-admin-request")).toBe("1")
+})
 
 it("shows application identity and readiness from the API", async () => {
   vi.stubGlobal(

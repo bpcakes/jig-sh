@@ -3,12 +3,21 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::names::bounded_postgres_identifier;
+use super::names::{bounded_postgres_identifier, fixture_project_name};
 use super::templates::{
     ScaffoldTemplateFile, ensure_scaffold_template_paths, render_scaffold_template,
 };
 use super::write::{ScaffoldFile, scaffold_file};
-use super::{InitScaffoldPlan, RustScaffoldPlan, ScaffoldDb};
+use super::{InitScaffoldPlan, RustScaffoldPlan, ScaffoldDb, ScaffoldJobs, ScaffoldMetrics};
+
+/// Batter revision pinned by newly generated Rust applications. Batter is
+/// unpublished, so every generated workspace resolves this exact Git commit.
+pub(super) const BATTER_REVISION: &str = "18cdf97ac544c665e0189efd28388d1e10456232";
+
+/// The `postgres-test-harness` revision that Batter's `sqlx-test-support`
+/// feature selects at [`BATTER_REVISION`]. Generated PostgreSQL workspaces name
+/// the harness directly, so both pins must move together.
+pub(super) const POSTGRES_TEST_HARNESS_REVISION: &str = "3d525e6fc5745ce2e2437c7997de5cccdecff4ac";
 
 const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
@@ -44,6 +53,10 @@ const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "crates/{package}/src/lib.rs",
     },
     ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/app/src/config.rs.jinja",
+        output: "crates/{package}/src/config.rs",
+    },
+    ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/http/Cargo.toml.jinja",
         output: "crates/{package}-http/Cargo.toml",
     },
@@ -70,6 +83,10 @@ const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/http-common/src/lib.rs.jinja",
         output: "crates/{package}-http-common/src/lib.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/http-common/src/probes.rs.jinja",
+        output: "crates/{package}-http-common/src/probes.rs",
     },
     ScaffoldTemplateFile {
         template: "rust-react/workspace/apps/api/Cargo.toml.jinja",
@@ -120,6 +137,10 @@ const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "crates/{package}-runtime/src/lib.rs",
     },
     ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/runtime/src/tests.rs.jinja",
+        output: "crates/{package}-runtime/src/tests.rs",
+    },
+    ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/runtime/Cargo.toml.jinja",
         output: "crates/{package}-runtime/Cargo.toml",
     },
@@ -145,6 +166,14 @@ const RUST_ADMIN_API_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/admin-http/src/lib.rs.jinja",
         output: "crates/{package}-admin-http/src/lib.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/admin-http/src/authorization.rs.jinja",
+        output: "crates/{package}-admin-http/src/authorization.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/admin-http/src/tests.rs.jinja",
+        output: "crates/{package}-admin-http/src/tests.rs",
     },
     ScaffoldTemplateFile {
         template: "rust-react/workspace/apps/admin-api/Cargo.toml.jinja",
@@ -178,6 +207,10 @@ const RUST_DB_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "crates/{package}-db/src/lib.rs",
     },
     ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/db/src/tests.rs.jinja",
+        output: "crates/{package}-db/src/tests.rs",
+    },
+    ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/test-support/src/db.rs.jinja",
         output: "crates/{package}-test-support/src/db.rs",
     },
@@ -191,6 +224,26 @@ const RUST_POSTGRES_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/test-support/tests/postgres.rs.jinja",
         output: "crates/{package}-test-support/tests/postgres.rs",
+    },
+];
+
+const RUST_METRICS_TEMPLATES: &[ScaffoldTemplateFile] = &[ScaffoldTemplateFile {
+    template: "rust-react/workspace/crates/runtime/src/metrics.rs.jinja",
+    output: "crates/{package}-runtime/src/metrics.rs",
+}];
+
+const RUST_JOBS_TEMPLATES: &[ScaffoldTemplateFile] = &[
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/jobs/Cargo.toml.jinja",
+        output: "crates/{package}-jobs/Cargo.toml",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/jobs/AGENTS.md.jinja",
+        output: "crates/{package}-jobs/AGENTS.md",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/jobs/src/lib.rs.jinja",
+        output: "crates/{package}-jobs/src/lib.rs",
     },
 ];
 
@@ -211,6 +264,12 @@ impl InitScaffoldPlan {
         }
         if self.has_admin_frontend() {
             ensure_scaffold_template_paths(RUST_ADMIN_API_TEMPLATES)?;
+        }
+        if backend.metrics == ScaffoldMetrics::Otlp {
+            ensure_scaffold_template_paths(RUST_METRICS_TEMPLATES)?;
+        }
+        if backend.jobs == ScaffoldJobs::Runledger {
+            ensure_scaffold_template_paths(RUST_JOBS_TEMPLATES)?;
         }
         let context = self.rust_workspace_template_context(backend);
         let mut files = self
@@ -261,11 +320,23 @@ impl InitScaffoldPlan {
         } else {
             &[]
         };
+        let metrics_templates = if backend.metrics == ScaffoldMetrics::Otlp {
+            RUST_METRICS_TEMPLATES
+        } else {
+            &[]
+        };
+        let jobs_templates = if backend.jobs == ScaffoldJobs::Runledger {
+            RUST_JOBS_TEMPLATES
+        } else {
+            &[]
+        };
         RUST_WORKSPACE_TEMPLATES
             .iter()
             .chain(admin_templates)
             .chain(db_templates)
             .chain(postgres_templates)
+            .chain(metrics_templates)
+            .chain(jobs_templates)
     }
 
     pub(super) fn template_output_path(&self, file: &ScaffoldTemplateFile) -> String {
@@ -281,11 +352,12 @@ impl InitScaffoldPlan {
                 format!("postgres://postgres:postgres@localhost:5432/{database_name}")
             }
         };
-        let postgres_test_database_name =
-            bounded_postgres_identifier(&format!("test_db_{}", self.module_name));
-
         json!({
-            "batter_revision": "bd836a29c9d484b96ee1ce0af0af84d58d3df1ee",
+            "batter_revision": BATTER_REVISION,
+            "postgres_test_harness_revision": POSTGRES_TEST_HARNESS_REVISION,
+            "metrics_enabled": backend.metrics == ScaffoldMetrics::Otlp,
+            "jobs_enabled": backend.jobs == ScaffoldJobs::Runledger,
+            "fixture_project": fixture_project_name(&self.module_name),
             "package_name": self.package_name,
             "module_name": self.module_name,
             "repo_name": self.repo_name,
@@ -304,7 +376,6 @@ impl InitScaffoldPlan {
             },
             "migration_path": format!("{DB_CRATE_TO_REPO_ROOT}/{}", backend.migration_dir),
             "database_url_example": database_url_example,
-            "postgres_test_database_name": postgres_test_database_name,
             "admin_api_enabled": self.has_admin_frontend(),
         })
     }

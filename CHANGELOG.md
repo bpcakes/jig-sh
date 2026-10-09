@@ -48,6 +48,13 @@
   value is read from the unauthenticated public header without a passphrase
   or any write: discovery metadata, never proof of integrity, freshness, or
   rollback safety.
+- Add `jig init` service options for `rust-react`: `--metrics otlp` compiles
+  Batter's bounded OTLP/HTTP exporter for the foundation metrics catalog,
+  enabled at runtime by `METRICS_OTLP_ENDPOINT`, and `--jobs runledger`
+  (PostgreSQL only) adds a `crates/<repo>-jobs` crate whose Runledger worker
+  Batter supervises inside the public API process. Both default to `none`; the
+  interactive wizard offers them while it guides the project shape, and the
+  init report records `metrics` and `jobs`.
 
 ### Changed
 
@@ -94,9 +101,29 @@
   edit the vault rollback witness or its journals, and report rollback, fork,
   and pending-transaction errors to the operator. `jig update` refreshes the
   rule in existing repositories.
+- New `rust-react` applications pin Batter `18cdf97` and use its canonical
+  service path: sealed `HttpBoundary` assembly with OpenAPI routes admitted
+  through derived route inventories, `AdmittedRequest` handlers, rendered probes
+  that keep the documented contract, readiness conditions, checked completion
+  through `batter::service::start`, and redacted `batter::settings`
+  configuration. PostgreSQL applications add a supervised database health
+  monitor, so readiness follows connectivity and recovers without a restart,
+  migrations on a retired-on-failure lease, and per-test template databases
+  from Batter's SQLx fixture harness through `scripts/test-postgres.sh`, which
+  replaces `TEST_DATABASE_URL` with `POSTGRES_TEST_ADMIN_URL`. The admin
+  surface sends private-response headers on every response and checks
+  same-origin Fetch Metadata and an `x-admin-request` marker on mutations.
+  Generated `TestApp` construction is now async. Existing application source
+  is not migrated by `jig update`.
 
 ### Fixed
 
+- Generated Runledger applications retain SQLx's missing-migration guard for
+  application history, rejecting a deployed bundle that omits an applied
+  application migration while accepting the bundled Runledger history.
+- Reject `rust-react` repository names whose generated packages would collide
+  with Batter-owned packages that the selected shape adds, such as
+  `runledger-core` for a repository named `runledger` with `--jobs runledger`.
 - Rendered files keep the trailing newline their templates end with. Earlier
   renders dropped it, so generated launchers, workflows, and manifests were
   incomplete text files and the source checkout's launcher parity check

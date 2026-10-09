@@ -1,21 +1,207 @@
-use ::<<[ module_name ]>>_test_support::db::DatabaseTestConfig;
-use ::<<[ module_name ]>>_test_support::db::TestDatabase;
-use ::<<[ module_name ]>>_test_support::db::validate_test_database_name;
+use std::{io, time::Duration};
+
+use ::<<[ module_name ]>> as app_crate;
+[% if jobs_enabled %]
+use ::<<[ module_name ]>>_db as app_db_crate;
+use ::<<[ module_name ]>>_jobs as jobs_crate;
+[% endif %]
+use ::<<[ module_name ]>>_test_support::TestApp;
+use ::<<[ module_name ]>>_test_support::db::with_migrated_database;
+use anyhow::Context;
+use axum::http::StatusCode;
+use batter::{
+    cleanup::CleanupBudget,
+    lifecycle::{ShutdownBudget, Supervisor},
+    operation::OperationOwner,
+    startup::Startup,
+};
+
+fn cleanup_budget() -> anyhow::Result<CleanupBudget> {
+    Ok(CleanupBudget::new(
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )?)
+}
+
+fn shutdown_budget() -> anyhow::Result<ShutdownBudget> {
+    Ok(ShutdownBudget::new(
+        Duration::from_secs(5),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        cleanup_budget()?,
+    )?)
+}
 
 #[tokio::test]
 #[ignore = "run with the root test:postgres package script"]
-async fn disposable_postgres_connects_and_applies_migrations() -> anyhow::Result<()> {
-    let config = DatabaseTestConfig::from_test_env()?;
-    let database = TestDatabase::connect(&config).await?;
-    let database_name: String = sqlx::query_scalar("SELECT current_database()")
-        .fetch_one(database.pool())
-        .await?;
+async fn migrated_database_is_ready_through_the_public_boundary() -> anyhow::Result<()> {
+    with_migrated_database(|db| async move {
+        let context = OperationOwner::new(Duration::from_secs(5))?.into_context();
+        db.migrate(&context).await?;
+        db.migrate(&context).await?;
+        batter::sqlx::probe(db.pool(), &context).await?;
+        let _applied: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(db.pool())
+            .await?;
 
-    validate_test_database_name(&database_name)?;
-    database.migrate().await?;
-
-    let _applied_migrations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
-        .fetch_one(database.pool())
-        .await?;
-    Ok(())
+        let state = app_crate::AppState::from_database(app_crate::AppConfig::for_tests(), db);
+        let app = TestApp::from_state(state).await;
+        app.get("/health/ready").await.assert_status(StatusCode::OK);
+        let status: serde_json::Value = app.get_json("/api/status").await;
+        assert_eq!(status["ready"], true);
+        Ok(())
+    })
+    .await
 }
+
+#[tokio::test]
+#[ignore = "run with the root test:postgres package script"]
+async fn health_monitor_observes_the_database_under_supervision() -> anyhow::Result<()> {
+    with_migrated_database(|db| async move {
+        let (publish, published) = tokio::sync::oneshot::channel();
+        let monitored = db.clone();
+        let mut starting = Startup::scoped(
+            Supervisor::new(shutdown_budget()?),
+            OperationOwner::new(Duration::from_secs(10))?.into_context(),
+            cleanup_budget()?,
+            move |scope| {
+                Box::pin(async move {
+                    let health = monitored
+                        .register_health(scope.registration())
+                        .map_err(io::Error::other)?;
+                    let _ = publish.send(health);
+                    Ok::<_, io::Error>(())
+                })
+            },
+        )
+        .start();
+        let running = starting.wait().await?;
+        let health = published.await?;
+        let observed = tokio::time::timeout(Duration::from_secs(10), async {
+            while !health.is_healthy() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        let shutdown = running.shutdown_checked().await;
+        observed.context("the health monitor did not observe a healthy database")?;
+        shutdown?;
+        Ok(())
+    })
+    .await
+}
+[% if jobs_enabled %]
+
+#[tokio::test]
+#[ignore = "run with the root test:postgres package script"]
+async fn migrations_reject_a_missing_application_version() -> anyhow::Result<()> {
+    use batter::sqlx::PgLease;
+    use sqlx::{
+        SqlSafeStr,
+        migrate::{MigrateError, Migration, MigrationType, Migrator},
+    };
+
+    with_migrated_database(|db| async move {
+        let context = OperationOwner::new(Duration::from_secs(10))?.into_context();
+        let application = app_db_crate::application_migrator();
+        let version = application
+            .iter()
+            .map(|migration| migration.version)
+            .max()
+            .unwrap_or_default()
+            .checked_add(1)
+            .context("test migration version overflow")?;
+        let mut migrations = application.iter().cloned().collect::<Vec<_>>();
+        migrations.push(Migration::new(
+            version,
+            "example application migration".into(),
+            MigrationType::Simple,
+            "CREATE TABLE example_missing_migration (id BIGINT PRIMARY KEY)".into_sql_str(),
+            false,
+        ));
+        let newer = Migrator::with_migrations(migrations);
+        for _ in 0..2 {
+            let lease = PgLease::acquire(db.pool(), &context).await?;
+            context
+                .run("test.migrate.newer", |_| lease.migrate(&newer))
+                .await?;
+        }
+
+        // The deployed bundle omits the newly applied application migration.
+        // Repeat the rejection to catch a failed lease retaining the DDL lock.
+        for _ in 0..2 {
+            let error = db.migrate(&context).await.unwrap_err();
+            let migration_error = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<sqlx::Error>())
+                .and_then(|error| match error {
+                    sqlx::Error::Migrate(error) => Some(error.as_ref()),
+                    _ => None,
+                });
+            assert!(
+                matches!(migration_error, Some(MigrateError::VersionMissing(missing)) if *missing == version),
+                "expected the missing application version, got {error:#}"
+            );
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "run with the root test:postgres package script"]
+async fn example_job_runs_under_the_supervised_worker() -> anyhow::Result<()> {
+    with_migrated_database(|db| async move {
+        let worker_db = db.clone();
+        let mut starting = Startup::scoped(
+            Supervisor::new(shutdown_budget()?),
+            OperationOwner::new(Duration::from_secs(30))?.into_context(),
+            cleanup_budget()?,
+            move |scope| {
+                Box::pin(async move {
+                    let startup = OperationOwner::new(Duration::from_secs(10))
+                        .map_err(io::Error::other)?
+                        .into_context();
+                    jobs_crate::register(scope, &worker_db, Some("worker-test"), &startup)
+                        .await
+                        .map_err(io::Error::other)
+                })
+            },
+        )
+        .start();
+        let running = starting.wait().await?;
+        let executed = async {
+            running.status().wait_ready().await.map_err(|readiness| {
+                anyhow::anyhow!("worker did not become ready: {readiness:?}")
+            })?;
+            jobs_crate::enqueue_example(&db, "hello from the worker test", "worker-test-1").await?;
+            wait_for_job(&db, "worker-test-1", "SUCCEEDED").await
+        }
+        .await;
+        let shutdown = running.shutdown_checked().await;
+        executed?;
+        shutdown?;
+        Ok(())
+    })
+    .await
+}
+
+async fn wait_for_job(db: &app_db_crate::Db, key: &str, expected: &str) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let status: Option<String> =
+                sqlx::query_scalar("SELECT status::text FROM job_queue WHERE idempotency_key = $1")
+                    .bind(key)
+                    .fetch_optional(db.pool())
+                    .await?;
+            if status.as_deref() == Some(expected) {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .context("the example job did not reach its expected status")?
+}
+[% endif %]

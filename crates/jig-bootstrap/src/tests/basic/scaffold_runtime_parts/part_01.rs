@@ -7,6 +7,8 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts::default(),
         temp.path(),
@@ -36,10 +38,13 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     let manifest: toml::Value = toml::from_str(&cargo_toml).unwrap();
     let dependencies = &manifest["workspace"]["dependencies"];
     assert_eq!(dependencies["batter"]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
-    assert_eq!(dependencies["batter"]["rev"].as_str(), Some("bd836a29c9d484b96ee1ce0af0af84d58d3df1ee"));
+    assert_eq!(dependencies["batter"]["rev"].as_str(), Some("18cdf97ac544c665e0189efd28388d1e10456232"));
     assert_eq!(dependencies["batter"]["features"][0].as_str(), Some("axum"));
     assert_eq!(dependencies["batter"]["features"].as_array().unwrap().len(), 1);
-    assert_text_contains_none(&cargo_toml, &["batter-axum =", "batter-sqlx ="]);
+    assert_text_contains_none(
+        &cargo_toml,
+        &["batter-axum =", "batter-sqlx =", "postgres-test-harness =", "uuid ="],
+    );
     assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
     let repo_name = report["repo_name"].as_str().unwrap();
     let module_name = repo_name.replace('-', "_");
@@ -48,12 +53,23 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
         &runtime,
         &[
             "Startup::scoped",
-            "register_http_in",
+            "application.register_in(scope, \"http\", listener)?",
             ".with_unix_signals(\"signals\")",
-            "check_shutdown",
+            "service::start(startup, service::NoDiagnostics)",
+            "ReadinessPolicy::lifecycle_only(self.lifecycle)",
         ],
     );
-    assert_text_contains_none(&runtime, &["Startup::new", "scope.supervisor()", "install_signals"]);
+    assert_text_contains_none(
+        &runtime,
+        &[
+            "Startup::new",
+            "scope.supervisor()",
+            "install_signals",
+            "register_http_in",
+            "check_shutdown",
+            "#[cfg(feature = \"db\")]",
+        ],
+    );
     let env_example = fs::read_to_string(temp.path().join(".env.example")).unwrap();
     assert_eq!(
         env_example,
@@ -115,6 +131,8 @@ fn scaffold_playwright_api_environment_overrides_hostile_inherited_bindings() {
             db: Some(ScaffoldDb::None),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -164,6 +182,8 @@ fn assert_e2e_workflow_for_package_manager(
             db: None,
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -297,6 +317,8 @@ fn scaffold_omits_e2e_workflow_without_spa_frontends() {
                 parse_scaffold_frontend("operations:admin").unwrap(),
             ],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -326,6 +348,8 @@ fn scaffold_named_ready_scopes_the_live_status_badge() {
             db: None,
             frontends: vec![parse_scaffold_frontend("ready:spa").unwrap()],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -359,6 +383,8 @@ fn scaffold_e2e_workflow_serializes_dynamic_yaml_scalars() {
             db: None,
             frontends: vec![parse_scaffold_frontend("null:spa").unwrap()],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -412,6 +438,8 @@ fn scaffold_postgres_development_database_name_respects_identifier_limit() {
             db: Some(ScaffoldDb::Postgres),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some(repo_name),
@@ -443,6 +471,8 @@ fn scaffold_db_defaults_set_sqlx_metadata_and_disable_schema_dump() {
             db: Some(ScaffoldDb::Postgres),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts::default(),
         temp.path(),
@@ -469,6 +499,8 @@ fn scaffold_bootstrap_command_records_shared_web_dependency_state() {
                 parse_scaffold_frontend("landing").unwrap(),
             ],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -517,6 +549,8 @@ fn scaffold_separates_dependency_bootstrap_from_database_setup() {
             db: Some(ScaffoldDb::Postgres),
             frontends: vec![parse_scaffold_frontend("web").unwrap()],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -551,6 +585,8 @@ fn go_scaffold_separates_codegen_from_database_setup() {
             db: Some(ScaffoldDb::Postgres),
             frontends: vec![parse_scaffold_frontend("web").unwrap()],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -595,6 +631,8 @@ fn go_scaffold_without_postgres_does_not_emit_migration_configuration() {
             db: Some(ScaffoldDb::None),
             frontends: vec![parse_scaffold_frontend("web").unwrap()],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("example-project".into()),
@@ -624,6 +662,8 @@ fn assert_frontend_dev_scripts_for_package_manager(package_manager: &str) {
                 parse_scaffold_frontend("landing").unwrap(),
             ],
             frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
         },
         &AnswerOpts {
             repo_name: Some("demo".into()),
@@ -707,94 +747,4 @@ fn scaffold_frontend_dev_scripts_only_launch_the_dev_server() {
     for package_manager in ["bun", "npm", "pnpm", "yarn"] {
         assert_frontend_dev_scripts_for_package_manager(package_manager);
     }
-}
-
-#[test]
-fn scaffold_preserves_legacy_frontend_kind_role_inference() {
-    let temp = tempdir().unwrap();
-    let legacy_astro = toml::from_str::<FrontendApp>(
-        r#"name = "docs"
-dir = "docs-site"
-coverage_threshold = 0
-kind = "env-port"
-"#,
-    )
-    .unwrap();
-    assert_eq!(legacy_astro.role, "astro");
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: None,
-            frontends: Vec::new(),
-            frontend_list: Vec::new(),
-        },
-        &AnswerOpts {
-            repo_name: Some("demo".into()),
-            frontend_apps: vec![
-                legacy_astro,
-                FrontendApp {
-                    name: "marketing".into(),
-                    dir: "marketing".into(),
-                    coverage_threshold: 0,
-                    kind: "vite".into(),
-                    role: "spa".into(),
-                },
-            ],
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-
-    let report = plan.write(temp.path(), false).unwrap();
-    assert_eq!(report["frontends"][0]["kind"], "env-port");
-    assert_eq!(report["frontends"][0]["role"], "astro");
-    assert_eq!(report["frontends"][1]["kind"], "vite");
-    assert_eq!(report["frontends"][1]["role"], "spa");
-    assert!(temp.path().join("docs-site/astro.config.mjs").exists());
-    assert!(temp.path().join("marketing/vite.config.ts").exists());
-
-    let mut answers = AnswerOpts::default();
-    plan.apply_answer_defaults(&mut answers);
-    assert_eq!(answers.frontend_apps[0].name, "docs");
-    assert_eq!(answers.frontend_apps[0].dir, "docs-site");
-    assert_eq!(answers.frontend_apps[0].kind, "env-port");
-    assert_eq!(answers.frontend_apps[0].role, "astro");
-    assert_eq!(answers.frontend_apps[1].name, "marketing");
-    assert_eq!(answers.frontend_apps[1].dir, "marketing");
-    assert_eq!(answers.frontend_apps[1].kind, "vite");
-    assert_eq!(answers.frontend_apps[1].role, "spa");
-}
-
-#[test]
-fn scaffold_playwright_resolves_repo_root_from_nested_spa_dir() {
-    let temp = tempdir().unwrap();
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: None,
-            frontends: Vec::new(),
-            frontend_list: Vec::new(),
-        },
-        &AnswerOpts {
-            repo_name: Some("demo".into()),
-            frontend_apps: vec![FrontendApp {
-                name: "web".into(),
-                dir: "clients/web".into(),
-                coverage_threshold: 80,
-                kind: "vite".into(),
-                role: "spa".into(),
-            }],
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-
-    plan.write(temp.path(), false).unwrap();
-
-    let config = fs::read_to_string(temp.path().join("clients/web/playwright.config.ts")).unwrap();
-    assert!(config.contains(r#"path.resolve(appDir, "../..")"#));
 }

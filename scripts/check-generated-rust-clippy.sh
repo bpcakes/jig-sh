@@ -387,4 +387,43 @@ assert_mod_module_files_rejected \
   online \
   workspace
 
-echo "Generated Rust Clippy validation passed."
+# Metrics must compile without database or jobs dependencies.
+metrics_repo="$fixture_root/ExampleProject-metrics"
+init_repo "$metrics_repo" \
+  --preset rust-react \
+  --repo-name ExampleProject \
+  --db none \
+  --frontends web,admin \
+  --metrics otlp \
+  --jobs none
+prepare_and_check "$metrics_repo" "$rust_react_toolchain" online
+
+# The optional Batter services render additional crates and modules: metrics
+# export in the runtime and a Runledger jobs crate wired into PostgreSQL.
+services_repo="$fixture_root/ExampleProject-services"
+init_repo "$services_repo" \
+  --preset rust-react \
+  --repo-name ExampleProject \
+  --db postgres \
+  --frontends web,admin \
+  --metrics otlp \
+  --jobs runledger
+prepare_and_check "$services_repo" "$rust_react_toolchain" online
+
+# Jobs must also compile when metrics-only dependencies and diagnostics are absent.
+jobs_repo="$fixture_root/ExampleProject-jobs"
+init_repo "$jobs_repo" \
+  --preset rust-react \
+  --repo-name ExampleProject \
+  --db postgres \
+  --frontends web,admin \
+  --metrics none \
+  --jobs runledger
+prepare_and_check "$jobs_repo" "$rust_react_toolchain" online
+(
+  cd "$jobs_repo"
+  with_toolchain "$rust_react_toolchain" \
+    cargo test --locked -p exampleproject --all-features
+)
+
+echo "Generated Rust Clippy and configuration test validation passed."

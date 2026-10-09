@@ -6,18 +6,21 @@
 
 ## Key entrypoints
 
-- `src/lib.rs`: privileged route assembly, middleware boundary, and admin OpenAPI document.
+- `src/lib.rs`: privileged routes, the browser policy, `assemble`, `in_process`, and the admin OpenAPI document.
+- `src/authorization.rs`: `AdminAuthorizer`, `DenyAllAdminAuthorizer`, and the authorization route layer.
 
 ## Edit here for X
 
-- Add privileged handlers, DTOs, and admin-only middleware here.
+- Add privileged handlers and DTOs to `routes()` with `#[utoipa::path]`; the boundary admits exactly the documented paths.
 - Implement `AdminAuthorizer` for the real authentication/session mechanism, then replace `DenyAllAdminAuthorizer` in `apps/<<[ package_name ]>>-admin-api/src/main.rs`.
 - Call application use cases through `AppState`; keep business logic in the owning application crate.
 
 ## Invariants
 
-- Production entrypoints use `router_with_lifecycle` with the runtime's read-only lifecycle status and operation admission. The convenience `router` creates and consumes an independent readiness approval for in-process tests.
-- Keep `operational_http` around the assembled router and use its typed `CorrelationId` for error bodies; never trust an inbound request-ID header.
+- Production entrypoints use `assemble` with the runtime's operation admission and readiness policy. `in_process` uses an independent, approved lifecycle for tests.
+- The admin group uses `GroupPolicy::browser`: every response, including probes, method rejections, admission, deadline, and mutation rejections, carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`.
+- Mutating methods must carry `Sec-Fetch-Site: same-origin` and the `x-admin-request` marker before authorization runs. The admin panel sends the marker; non-browser clients must send both headers. Keep the check if the authorizer accepts browser cookies, since it is the CSRF defense.
+- Authorization runs inside admission and the request deadline; draining or not-yet-ready processes reject requests before authorization.
 - Keep `/health/live` and `/health/ready` outside request admission and admin authorization; unauthenticated probes must not expose business data.
 - Every matched privileged route passes through `AdminAuthorizer`; keep the generated deny-all authorizer until the real implementation and its tests are ready.
 - Keep the authorizer fail closed on missing, malformed, expired, or unverifiable credentials. Use `Forbidden` only for an authenticated principal that lacks permission.

@@ -500,6 +500,10 @@ impl ScaffoldOpts {
         !self.frontends.is_empty() || !self.frontend_list.is_empty()
     }
 
+    pub fn has_service_options(&self) -> bool {
+        self.metrics.is_some() || self.jobs.is_some()
+    }
+
     pub fn custom_frontend_notices(&self) -> Vec<String> {
         self.frontends
             .iter()
@@ -528,6 +532,7 @@ impl ScaffoldOpts {
             && (has_project_scaffold
                 || self.db.is_some()
                 || self.has_frontends()
+                || self.has_service_options()
                 || answers.go_module.is_some())
         {
             let scaffold = self
@@ -539,10 +544,36 @@ impl ScaffoldOpts {
             );
         }
         if self.preset == Some(ScaffoldPreset::HarnessOnly)
-            && (self.db.is_some() || self.has_frontends() || answers.go_module.is_some())
+            && (self.db.is_some()
+                || self.has_frontends()
+                || self.has_service_options()
+                || answers.go_module.is_some())
         {
             bail!(
-                "--preset harness-only cannot be combined with --db, --go-module, --frontend, or --frontends; remove the scaffold flags or use an application preset"
+                "--preset harness-only cannot be combined with --db, --go-module, --frontend, --frontends, --metrics, or --jobs; remove the scaffold flags or use an application preset"
+            );
+        }
+        if let Some(preset) = self.preset
+            && self.metrics.is_some()
+            && !preset.supports_metrics()
+        {
+            bail!(
+                "--metrics requires --preset rust-react; --preset {} does not generate a Batter service",
+                preset.as_str()
+            );
+        }
+        if let Some(preset) = self.preset
+            && self.jobs.is_some()
+            && !preset.supports_jobs()
+        {
+            bail!(
+                "--jobs requires --preset rust-react; --preset {} does not generate a Batter service",
+                preset.as_str()
+            );
+        }
+        if self.jobs == Some(ScaffoldJobs::Runledger) && self.db == Some(ScaffoldDb::None) {
+            bail!(
+                "--jobs runledger requires --db postgres because Runledger stores durable jobs in PostgreSQL"
             );
         }
         if !self

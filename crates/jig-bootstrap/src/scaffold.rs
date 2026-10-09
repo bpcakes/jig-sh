@@ -9,7 +9,8 @@ use jig_context::validate_web_package_manager;
 
 use super::{
     AnswerOpts, DevApp, FrontendApp, RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME, ScaffoldDb,
-    ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldOpts, ScaffoldPreset,
+    ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldJobs, ScaffoldMetrics, ScaffoldOpts,
+    ScaffoldPreset,
 };
 use frontend::{
     FrontendBackendContext, FrontendDatabaseContext, FrontendDevProxyContext, FrontendScaffold,
@@ -18,7 +19,8 @@ use frontend::{
 };
 use names::{
     default_repo_name, normalize_package_name, normalize_rust_react_package_name,
-    rust_react_repo_dns_label, validate_scaffold_relative_path,
+    rust_react_repo_dns_label, validate_rust_react_batter_packages,
+    validate_scaffold_relative_path,
 };
 pub(super) use project::RustOnlyArtifact;
 use project::{
@@ -75,6 +77,7 @@ impl InitScaffoldPlan {
             && opts.db.is_none()
             && opts.frontends.is_empty()
             && opts.frontend_list.is_empty()
+            && !opts.has_service_options()
         {
             return Ok(None);
         }
@@ -310,6 +313,8 @@ impl InitScaffoldPlan {
                 ReactBackendRenderContext {
                     preset: ScaffoldPreset::RustReact,
                     database: project.backend.database,
+                    metrics: project.backend.metrics,
+                    jobs: project.backend.jobs,
                     root: ".",
                     migration_dir: &project.backend.migration_dir,
                     sqlx_metadata_dir: &project.backend.sqlx_metadata_dir,
@@ -324,6 +329,8 @@ impl InitScaffoldPlan {
                     ReactBackendRenderContext {
                         preset: ScaffoldPreset::GoReact,
                         database: self.database(),
+                        metrics: ScaffoldMetrics::None,
+                        jobs: ScaffoldJobs::None,
                         root: &project.backend.component_root,
                         migration_dir: &project.backend.migration_dir,
                         sqlx_metadata_dir: &sqlx_metadata_dir,
@@ -346,6 +353,8 @@ impl InitScaffoldPlan {
         let frontend_backend = FrontendBackendContext {
             preset: backend.preset,
             root: backend.root,
+            metrics: backend.metrics,
+            jobs: backend.jobs,
             database: FrontendDatabaseContext {
                 db: backend.database,
                 migration_dir: backend.migration_dir,
@@ -390,16 +399,14 @@ impl InitScaffoldPlan {
             .unwrap_or_else(|| default_repo_name(destination));
         let package_name = normalize_rust_react_package_name(&requested_repo_name)?;
         let db = opts.db.unwrap_or(ScaffoldDb::None);
-        let batter_dependency_collision = matches!(
-            package_name.as_str(),
-            "batter" | "batter-core" | "batter-axum"
-        ) || (db == ScaffoldDb::Postgres
-            && package_name == "batter-sqlx");
-        if batter_dependency_collision {
+        let metrics = opts.metrics.unwrap_or(ScaffoldMetrics::None);
+        let jobs = opts.jobs.unwrap_or(ScaffoldJobs::None);
+        if jobs == ScaffoldJobs::Runledger && db != ScaffoldDb::Postgres {
             bail!(
-                "Rust-react repo name normalizes to '{package_name}', which conflicts with a required Batter dependency. Choose a different --repo-name."
+                "--jobs runledger requires --db postgres because Runledger stores durable jobs in PostgreSQL"
             );
         }
+        validate_rust_react_batter_packages(&package_name, db, metrics, jobs)?;
         let repo_name = package_name.clone();
         let repo_dns_label = rust_react_repo_dns_label(&repo_name);
         let (dev_proxy_port, dev_tld) = scaffold_dev_proxy_answers(answers)?;
@@ -479,6 +486,8 @@ impl InitScaffoldPlan {
             project: ScaffoldProjectPlan::RustReact(RustReactScaffoldPlan {
                 backend: RustScaffoldPlan {
                     database: db,
+                    metrics,
+                    jobs,
                     migration_dir,
                     sqlx_metadata_dir,
                 },

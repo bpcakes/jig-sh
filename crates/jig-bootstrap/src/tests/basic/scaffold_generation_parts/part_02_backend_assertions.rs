@@ -199,7 +199,7 @@ fn assert_api_entrypoint(destination: &Path) {
             "use ::my_app_http as app_http_crate;",
             "load_dotenv();",
             "warning: failed to load .env",
-            "runtime::serve(config, app_http_crate::router_with_lifecycle).await",
+            "runtime::serve(config, app_http_crate::assemble).await",
             "app_crate::AppConfig::from_env()",
             "--bootstrap-database",
             "    let command = parse_command()?;\n    let config = app_crate::AppConfig::from_env()",
@@ -217,30 +217,56 @@ fn assert_api_entrypoint(destination: &Path) {
     );
     assert_contains_none(
         &api_main,
-        &["args_os().any", "unsafe {", "std::env::set_var", "std::env::remove_var"],
+        &[
+            "args_os().any",
+            "unsafe {",
+            "std::env::set_var",
+            "std::env::remove_var",
+            "serve_with_jobs",
+            "runledger",
+        ],
     );
     let runtime = fs::read_to_string(destination.join("crates/my-app-runtime/src/lib.rs")).unwrap();
     assert_contains_all(
         &runtime,
         &[
             "Startup::scoped",
-            "register_http_in",
             ".with_unix_signals(\"signals\")",
-            "let supervisor = Supervisor::new(budget);",
+            "let completion = service::start(startup, service::NoDiagnostics).wait().await;",
+            "ServiceOutcome::StartupFailed(error) => Err(anyhow::Error::new(error.clone()))",
+            "ServiceOutcome::Shutdown(Err(error)) => Err(anyhow::Error::new(error.clone()))",
+            "let supervisor = Supervisor::new(shutdown_budget()?);",
             "let lifecycle = supervisor.status();",
             "let admission = supervisor.operation_admission();",
+            "OperationOwner::new(STARTUP_BUDGET)?.into_context()",
+            "let initialization = context.clone();",
             "ProtectedStartupScope",
-            "check_shutdown",
+            "application.register_in(scope, \"http\", listener)?",
             "reserve_cleanup(\"database.close\")",
-            "let initialization_context = startup_context.clone();",
-            "&initialization_context",
+            "db.migrate(context).await?",
+            "let health = db.register_health(scope.registration())?;",
+            "ReadinessPolicy::new(self.lifecycle, health)",
+            "ReadinessPolicy::lifecycle_only(self.lifecycle)",
+            "pub type Readiness = ReadinessPolicy<DependencyError>;",
             "let database_context = scope.context().clone();",
             "&database_context",
         ],
     );
     assert_contains_none(
         &runtime,
-        &["Startup::new", "scope.supervisor()", "install_signals", "signals.received()"],
+        &[
+            "Startup::new",
+            "scope.supervisor()",
+            "install_signals",
+            "signals.received()",
+            "low_level",
+            "register_http_in",
+            "check_shutdown",
+            "OperationContext::new",
+            "axum::Router",
+            "jobs_crate",
+            "metrics::",
+        ],
     );
 }
 
@@ -272,10 +298,16 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
     assert!(!workspace_cargo.contains("sqlx = { version = \"0.8\""));
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
     assert!(workspace_cargo.contains(
-        "batter = { git = \"https://github.com/bpcakes/batter\", rev = \"bd836a29c9d484b96ee1ce0af0af84d58d3df1ee\", features = [\"axum\", \"sqlx\"] }"
+        "batter = { git = \"https://github.com/bpcakes/batter\", rev = \"18cdf97ac544c665e0189efd28388d1e10456232\", features = [\"axum\", \"sqlx\"] }"
+    ));
+    assert!(workspace_cargo.contains(
+        "postgres-test-harness = { git = \"https://github.com/bpcakes/postgres-test-harness.git\", rev = \"3d525e6fc5745ce2e2437c7997de5cccdecff4ac\", default-features = false }"
     ));
     assert!(!workspace_cargo.contains("batter-axum ="));
     assert!(!workspace_cargo.contains("batter-sqlx ="));
+    assert!(!workspace_cargo.contains("\"otlp\""));
+    assert!(!workspace_cargo.contains("\"runledger\""));
+    assert!(!workspace_cargo.contains("my-app-jobs"));
     assert!(workspace_cargo.contains(r#""apps/my-app-admin-api""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-admin-http""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-http-common""#));
@@ -302,19 +334,37 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "let report = check_command(outcome)?",
         ],
     );
+    let app_config = fs::read_to_string(destination.join("crates/my-app/src/config.rs")).unwrap();
+    assert_contains_all(
+        &app_config,
+        &[
+            "pub struct AppConfig",
+            "pub fn from_env() -> Result<Self, SettingsError>",
+            "Self::from_source(&SettingsSource::from_pairs(std::env::vars_os())?)",
+            "present(source.text(\"HOST\")?)",
+            "present(source.text(\"PORT\")?)",
+            "present(source.text(\"BIND_ADDR\")?)",
+            "database_url: Some(SecretString::new(source.required(\"DATABASE_URL\")?)),",
+            "pub fn database_url(&self) -> Option<&SecretString>",
+            "fn resolve_bind_addr(",
+            "injected_host_and_port_override_the_dotenv_bind_address",
+            "partial_jig_bind_values_fall_back_to_bind_addr",
+            "invalid_settings_name_the_field_without_echoing_the_value",
+            "database_url_is_required_and_redacted",
+        ],
+    );
+    assert_contains_none(
+        &app_config,
+        &["std::env::var(", "database_url: Option<String>", "METRICS_OTLP_ENDPOINT"],
+    );
     let app_lib = fs::read_to_string(destination.join("crates/my-app/src/lib.rs")).unwrap();
     assert_contains_all(
         &app_lib,
         &[
-            "pub struct AppConfig",
-            "pub fn from_env() -> Result<Self>",
-            "std::env::var(\"HOST\")",
-            "std::env::var(\"PORT\")",
-            "fn resolve_bind_addr(",
-            "injected_host_and_port_override_the_dotenv_bind_address",
-            "partial_jig_bind_values_fall_back_to_bind_addr",
-            "DATABASE_URL is required when the db feature is enabled",
-            "pub async fn from_config(config: AppConfig) -> Result<Self>",
+            "mod config;",
+            "pub use config::AppConfig;",
+            "pub fn from_config(config: AppConfig) -> Self",
+            "pub fn from_database(config: AppConfig, database: db::Db) -> Self",
             "pub fn new_with_version(version: impl Into<String>)",
             "pub fn version(&self) -> &AppVersion",
             "pub fn is_ready(&self) -> bool",
@@ -329,16 +379,23 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "pub fn router",
             "bootstrap_database",
             "batter::",
+            "Db::connect(",
         ],
     );
     let http_lib = fs::read_to_string(destination.join("crates/my-app-http/src/lib.rs")).unwrap();
     assert_contains_all(
         &http_lib,
         &[
-            "pub fn router(state: AppState) -> Router",
-            "batter::axum::operational_http",
-            "pub fn router_with_lifecycle(",
-            "public::operational_routes(lifecycle, admission).fallback(not_found)",
+            "pub async fn assemble<E>(",
+            "ReadinessCondition::new(\"application-state\")?",
+            "let (router, document) = public::application_routes().split_for_parts();",
+            "GuardedRouter::from_router(router, route_inventory(&document)?)",
+            ".fallback(not_found);",
+            "HttpBoundary::new(requests::policy(admission))",
+            ".with_rendered_liveness(ProbePath::new(public::HEALTH_PATH)?, probes::liveness)?",
+            "probes::mount(boundary, readiness)?",
+            "pub async fn in_process(state: AppState) -> Result<InProcessClient, BoxError>",
+            "documented_paths_are_served_routes_or_boundary_probes",
         ],
     );
     assert_contains_none(
@@ -348,87 +405,12 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "SetRequestIdLayer",
             "PropagateRequestIdLayer",
             "router_with_shutdown",
+            "router_with_lifecycle",
+            "low_level",
+            "operational_http",
+            "into_router",
         ],
     );
-}
-
-fn assert_admin_http_crate(destination: &Path) {
-    let admin_http_lib =
-        fs::read_to_string(destination.join("crates/my-app-admin-http/src/lib.rs")).unwrap();
-    assert!(admin_http_lib.contains("pub trait AdminAuthorizer"));
-    assert!(admin_http_lib.contains("pub struct DenyAllAdminAuthorizer"));
-    assert!(admin_http_lib.contains("pub fn router<A: AdminAuthorizer>"));
-    assert!(admin_http_lib.contains("require_admin_authorization::<A>"));
-    assert!(admin_http_lib.contains("pub fn openapi() -> OpenApiDocument"));
-    assert!(admin_http_lib.contains("components(schemas(ApiErrorResponse))"));
-    assert!(admin_http_lib.contains(r#"path = "/admin-api/status""#));
-    assert!(admin_http_lib.contains("operation_id = \"getAdminStatus\""));
-    assert!(
-        admin_http_lib
-            .contains("admin_status_is_protected_and_reflects_readiness_after_authorization")
-    );
-    assert!(admin_http_lib.contains("let expected_ready = state.is_ready();"));
-    assert!(admin_http_lib.contains("assert_eq!(body[\"ready\"], expected_ready);"));
-    assert_contains_all(
-        &admin_http_lib,
-        &[
-            "pub fn router_with_lifecycle<A: AdminAuthorizer>(",
-            "lifecycle: LifecycleStatus,",
-            "admission: OperationAdmission,",
-            "request.extensions().get::<CorrelationId>()",
-            "ApiError::unauthorized(correlation_id.as_ref())",
-            "ApiError::forbidden(correlation_id.as_ref())",
-            concat!(
-                "let protected_routes = requests::guard(\n",
-                "        protected_routes.layer(middleware::from_fn_with_state(\n",
-                "            authorizer,\n",
-                "            require_admin_authorization::<A>,\n",
-                "        )),\n",
-                "        admission,\n",
-                "    );"
-            ),
-            ".with_state(lifecycle);",
-            concat!(
-                "operational_router(\n",
-                "        state,\n",
-                "        authorizer,\n",
-                "        Router::from(routes()),\n",
-                "        lifecycle,\n",
-                "        admission,\n",
-                "    )"
-            ),
-            ".layer(middleware::from_fn(batter::axum::operational_http))",
-        ],
-    );
-    assert_contains_none(
-        &admin_http_lib,
-        &[
-            "REQUEST_ID_HEADER",
-            "SetRequestIdLayer",
-            "PropagateRequestIdLayer",
-            "router_with_shutdown",
-            "observe_http",
-            "ApiError::unauthorized(request.headers())",
-            "ApiError::forbidden(request.headers())",
-        ],
-    );
-    let admin_api_main =
-        fs::read_to_string(destination.join("apps/my-app-admin-api/src/main.rs")).unwrap();
-    assert_contains_all(
-        &admin_api_main,
-        &[
-            "runtime::serve(config, |state, lifecycle, admission| {",
-            concat!(
-                "admin_http_crate::router_with_lifecycle(\n",
-                "            state,\n",
-                "            admin_http_crate::DenyAllAdminAuthorizer,\n",
-                "            lifecycle,\n",
-                "            admission,\n",
-                "        )"
-            ),
-        ],
-    );
-    assert_contains_none(&admin_api_main, &["router_with_shutdown"]);
 }
 
 fn assert_workspace_and_backend_crates(destination: &Path) {
@@ -437,105 +419,30 @@ fn assert_workspace_and_backend_crates(destination: &Path) {
     assert_admin_http_crate(destination);
 }
 
-fn assert_public_http_contract(destination: &Path) {
-    let http_common_lib =
-        fs::read_to_string(destination.join("crates/my-app-http-common/src/lib.rs")).unwrap();
-    assert!(http_common_lib.contains("pub struct ApiErrorResponse"));
-    assert!(http_common_lib.contains("pub request_id: String"));
-    assert_contains_all(
-        &http_common_lib,
-        &[
-            "use batter::axum::CorrelationId;",
-            "correlation_id: Option<&CorrelationId>",
-            "request_id: request_id(correlation_id)",
-            "pub async fn not_found(Extension(correlation_id): Extension<CorrelationId>)",
-            "ApiError::not_found(Some(&correlation_id))",
-            "fn request_id(correlation_id: Option<&CorrelationId>) -> String",
-            ".map(CorrelationId::as_str)",
-        ],
-    );
-    assert_contains_none(
-        &http_common_lib,
-        &[
-            "REQUEST_ID_HEADER",
-            "HeaderMap",
-            "request_id(headers",
-            "request.headers()",
-        ],
-    );
-    let requests =
-        fs::read_to_string(destination.join("crates/my-app-http-common/src/requests.rs")).unwrap();
-    assert_contains_all(
-        &requests,
-        &[
-            "ResponseConstructionBudget::new(Duration::from_secs(10))",
-            "RequestPolicy::new(admission, request_budget)",
-            ".with_failure_renderer(|failure, parts|",
-            concat!(
-                "crate::ApiError::new(\n",
-                "                failure.status(),\n",
-                "                failure.code(),\n",
-                "                \"The request could not be completed\",\n",
-                "                parts.extensions.get::<CorrelationId>(),\n",
-                "            )"
-            ),
-        ],
-    );
-    assert_contains_none(
-        &requests,
-        &[
-            "RequestPolicy::new(shutdown",
-            "RequestPolicy::new(admission, Duration::from_secs(10))",
-        ],
-    );
-    let public_http =
-        fs::read_to_string(destination.join("crates/my-app-http/src/public.rs")).unwrap();
-    for handler in ["health", "live", "ready", "version", "status"] {
-        assert!(public_http.contains(&format!(".routes(routes!({handler}))")));
-    }
-    assert!(public_http.contains(r#"path = "/health/live""#));
-    assert!(public_http.contains(r#"path = "/health/ready""#));
-    assert!(public_http.contains(r#"path = "/api/version""#));
-    assert!(public_http.contains(r#"path = "/api/status""#));
-    assert!(public_http.contains("body = ApiErrorResponse"));
-    assert!(public_http.contains(r#""dependency_unavailable""#));
-    assert!(public_http.contains(concat!(
-        "async fn ready(\n",
-        "    State(state): State<AppState>,\n",
-        "    Extension(lifecycle): Extension<LifecycleStatus>,\n",
-        "    Extension(correlation_id): Extension<CorrelationId>,\n",
-        ") -> Result<StatusCode, ApiError>"
-    )));
-    assert_eq!(
-        public_http
-            .matches("Extension(lifecycle): Extension<LifecycleStatus>")
-            .count(),
-        1
-    );
-    assert_eq!(
-        public_http
-            .matches("Extension(correlation_id): Extension<CorrelationId>")
-            .count(),
-        1
-    );
-    assert!(public_http.contains("if lifecycle.readiness() != Readiness::Ready"));
-    assert_eq!(public_http.matches("Some(&correlation_id)").count(), 2);
-    assert_contains_none(
-        &public_http,
-        &["HeaderMap", "ShutdownHandle", "&headers"],
-    );
-}
-
 fn assert_http_test_support(destination: &Path) {
     let test_support_cargo =
         fs::read_to_string(destination.join("crates/my-app-test-support/Cargo.toml")).unwrap();
     assert!(test_support_cargo.contains(r#"my-app = { path = "../my-app""#));
     assert!(test_support_cargo.contains(r#"my-app-http = { path = "../my-app-http""#));
-    assert!(test_support_cargo.contains(r#"tower = { workspace = true, features = ["util"] }"#));
+    assert!(
+        test_support_cargo
+            .contains(r#"batter = { workspace = true, features = ["sqlx-test-support"] }"#)
+    );
+    assert!(test_support_cargo.contains("postgres-test-harness.workspace = true"));
+    assert!(!test_support_cargo.contains("tower"));
     let test_support_app =
         fs::read_to_string(destination.join("crates/my-app-test-support/src/app.rs")).unwrap();
-    assert!(test_support_app.contains("pub struct TestApp"));
-    assert!(test_support_app.contains(".oneshot(request)"));
+    assert_contains_all(
+        &test_support_app,
+        &[
+            "pub struct TestApp",
+            "client: InProcessClient,",
+            "pub async fn new() -> Self",
+            "app_http_crate::in_process(state)",
+            "let response = self.client.request(request).await;",
+        ],
+    );
+    assert!(!test_support_app.contains(".oneshot("));
     let test_support_response =
         fs::read_to_string(destination.join("crates/my-app-test-support/src/responses.rs"))
             .unwrap();
@@ -544,19 +451,20 @@ fn assert_http_test_support(destination: &Path) {
     assert!(test_support_response.contains("pub fn assert_error"));
     let test_support_http_test =
         fs::read_to_string(destination.join("crates/my-app-test-support/tests/http.rs")).unwrap();
-    assert!(test_support_http_test.contains("use ::my_app_test_support::TestApp;"));
-    assert!(test_support_http_test.contains("async fn health_returns_ok()"));
-    assert!(test_support_http_test.contains("async fn readiness_reflects_state()"));
-    assert!(test_support_http_test.contains("StatusCode::SERVICE_UNAVAILABLE"));
-    assert!(test_support_http_test.contains("async fn responses_include_request_id()"));
-    assert!(
-        test_support_http_test
-            .contains("async fn unknown_routes_return_a_standard_error_with_the_request_id()")
-    );
-    assert!(test_support_http_test.contains("async fn version_returns_json()"));
-    assert!(
-        test_support_http_test
-            .contains("async fn status_returns_application_identity_and_readiness()")
+    assert_contains_all(
+        &test_support_http_test,
+        &[
+            "use ::my_app_test_support::TestApp;",
+            "let app = TestApp::new().await;",
+            "async fn health_returns_ok()",
+            "for path in [\"/health\", \"/health/live\"]",
+            "async fn readiness_reflects_state()",
+            "StatusCode::SERVICE_UNAVAILABLE",
+            "async fn responses_include_request_id()",
+            "async fn unknown_routes_return_a_standard_error_with_the_request_id()",
+            "async fn version_returns_json()",
+            "async fn status_returns_application_identity_and_readiness()",
+        ],
     );
 }
 
@@ -568,69 +476,160 @@ fn assert_http_contract_and_test_support(destination: &Path) {
 fn assert_database_crate_and_test_support(destination: &Path) {
     let db_lib = fs::read_to_string(destination.join("crates/my-app-db/src/lib.rs")).unwrap();
     assert_database_crate_source(&db_lib);
+    let db_tests = fs::read_to_string(destination.join("crates/my-app-db/src/tests.rs")).unwrap();
+    assert_contains_all(
+        &db_tests,
+        &[
+            "interrupted_established_probe_retires_lease_and_closes_pool",
+            "health_policy_admits_a_probe_before_observations_expire",
+            "let owner = OperationOwner::new(Duration::from_secs(5)).unwrap();",
+            "owner.cancel();",
+        ],
+    );
     let test_support_db =
         fs::read_to_string(destination.join("crates/my-app-test-support/src/db.rs")).unwrap();
-    assert!(test_support_db.contains("pub struct DatabaseTestConfig"));
-    assert!(test_support_db.contains("validate_test_database_name"));
-    assert!(test_support_db.contains("pub fn from_test_env()"));
-    assert!(test_support_db.contains("pub async fn migrate(&self)"));
+    assert_contains_all(
+        &test_support_db,
+        &[
+            "use ::my_app_db as app_db_crate;",
+            "pub type TestDbPool = app_db_crate::DbPool;",
+            "const FIXTURE_PROJECT: &str = \"my_app\";",
+            "HarnessConfig::new(FIXTURE_PROJECT)?",
+            "pub async fn with_migrated_database<F, Fut, T>(body: F) -> anyhow::Result<T>",
+            "FixtureSuite::new(harness.clone()).start(",
+            ".template(migration_template(), initialize_template)",
+            "template_spec(&bundles, TEMPLATE_REVISION)",
+            "vec![(\"application\", &app_db_crate::MIGRATOR)]",
+            "db.migrate(&context).await",
+            "std::panic::resume_unwind(error.into_panic())",
+        ],
+    );
+    assert_contains_none(
+        &test_support_db,
+        &["TEST_DATABASE_URL", "DATABASE_URL\")", "test_db_", "runledger"],
+    );
     let postgres_test =
         fs::read_to_string(destination.join("crates/my-app-test-support/tests/postgres.rs"))
             .unwrap();
-    assert!(postgres_test.contains("SELECT current_database()"));
-    assert!(postgres_test.contains("validate_test_database_name(&database_name)?"));
-    assert!(
-        postgres_test.contains("#[ignore = \"run with the root test:postgres package script\"]")
+    assert_contains_all(
+        &postgres_test,
+        &[
+            "#[ignore = \"run with the root test:postgres package script\"]",
+            "with_migrated_database(|db| async move {",
+            "migrated_database_is_ready_through_the_public_boundary",
+            "health_monitor_observes_the_database_under_supervision",
+            ".register_health(scope.registration())",
+            "running.shutdown_checked().await",
+        ],
     );
+    assert!(!postgres_test.contains("example_job_runs_under_the_supervised_worker"));
 }
 
 fn assert_database_crate_source(db_lib: &str) {
-    assert!(db_lib.contains("PgPool"));
-    assert!(db_lib.contains("sqlx::Postgres::database_exists"));
-    assert!(db_lib.contains("sqlx::Postgres::create_database"));
-    assert!(db_lib.contains("Could not confirm database existence after creation failed"));
-    assert!(db_lib.contains("create_if_missing"));
-    assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
-    assert!(db_lib.contains("connect_with_timeout"));
-    assert!(db_lib.contains("batter::sqlx::pool_in"));
-    assert!(db_lib.contains("pub async fn connect_in("));
-    assert!(db_lib.contains("context.child(DEFAULT_DB_TIMEOUT)"));
-    assert!(db_lib.contains("batter::sqlx::probe(&pool, &probe_context)"));
-    assert!(!db_lib.contains("sqlx::query(\"SELECT 1\")"));
-    assert!(db_lib.contains("interrupted_established_probe_retires_lease_and_closes_pool"));
-    assert!(db_lib.contains("migrate_with_timeout"));
+    assert_contains_all(
+        db_lib,
+        &[
+            "pub type DbPool = sqlx::PgPool;",
+            "sqlx::Postgres::database_exists",
+            "sqlx::Postgres::create_database",
+            "Could not confirm database existence after creation failed",
+            "create_if_missing",
+            "DEFAULT_DB_TIMEOUT",
+            "pub static MIGRATOR: Migrator = sqlx::migrate!(",
+            "\"../../migrations\"",
+            "pub async fn connect_in(",
+            "database_url: &SecretString,",
+            "batter::sqlx::pool_in(cleanup, PgPoolOptions::new(), options)",
+            "let probe = context.child(DEFAULT_DB_TIMEOUT)?.into_context();",
+            "batter::sqlx::probe(database.pool(), &probe)",
+            "PgLease::acquire(self.pool(), &operation)",
+            ".run(\"database.migrate\", |_| lease.migrate(&MIGRATOR))",
+            "pub fn register_health(",
+            "HealthMonitor::new(health_policy()?",
+            "monitor.register_in(&mut registration, \"database.health\")",
+            "pub type DbHealthError = OperationError<SqlxFailure>;",
+        ],
+    );
+    assert_contains_none(
+        db_lib,
+        &[
+            "sqlx::query(\"SELECT 1\")",
+            "connect_with_timeout",
+            "migrate_with_timeout",
+            "RunledgerDatabase",
+            "OperationContext::new",
+        ],
+    );
 }
 
 fn assert_postgres_test_script(destination: &Path) {
     let postgres_script = fs::read_to_string(destination.join("scripts/test-postgres.sh")).unwrap();
-    assert!(postgres_script.contains("--publish 127.0.0.1::5432"));
-    assert!(postgres_script.contains("docker rm --force"));
-    assert!(postgres_script.contains("TEST_DATABASE_URL="));
-    assert!(postgres_script.contains("test_db_my_app"));
-    assert!(postgres_script.contains("--command 'SELECT 1'"));
-    assert!(!postgres_script.contains("pg_isready"));
-    assert!(!postgres_script.contains("seq 1 60"));
-    assert!(postgres_script.contains("attempt=$((attempt + 1))"));
-    assert!(postgres_script.contains("-- --ignored --nocapture"));
+    assert_contains_all(
+        &postgres_script,
+        &[
+            "if [ -n \"${POSTGRES_TEST_ADMIN_URL:-}\" ]; then",
+            "--publish 127.0.0.1::5432",
+            "postgres:18",
+            "docker rm --force",
+            "--dbname postgres",
+            "--command 'SELECT 1'",
+            "attempt=$((attempt + 1))",
+            "export POSTGRES_TEST_ADMIN_URL=\"postgres://postgres:postgres@127.0.0.1:${host_port}/postgres?sslmode=disable\"",
+            "cargo test --locked -p my-app-test-support --test postgres -- --ignored --nocapture",
+        ],
+    );
+    assert_contains_none(
+        &postgres_script,
+        &["pg_isready", "seq 1 60", "TEST_DATABASE_URL", "test_db_", "POSTGRES_DB="],
+    );
 }
 
 fn assert_generated_backend_docs(destination: &Path) {
     let root_readme = fs::read_to_string(destination.join("README.md")).unwrap();
-    assert!(root_readme.contains("Prerequisites: Rust 1.94 or newer"));
-    assert!(root_readme.contains("bun run bootstrap"));
-    assert!(root_readme.contains("do not start with `bun install --frozen-lockfile`"));
-    assert!(root_readme.contains("Commit the generated `bun.lock`"));
-    assert!(root_readme.contains("DenyAllAdminAuthorizer"));
-    assert!(root_readme.contains("bun run test:postgres"));
-    assert!(root_readme.contains("`batter` facade"));
-    assert!(root_readme.contains("upgrade the Batter revision"));
-    assert!(root_readme.contains("Startup::scoped"));
-    assert!(root_readme.contains("local closure does not"));
+    assert_contains_all(
+        &root_readme,
+        &[
+            "Prerequisites: Rust 1.94 or newer",
+            "bun run bootstrap",
+            "do not start with `bun install --frozen-lockfile`",
+            "Commit the generated `bun.lock`",
+            "DenyAllAdminAuthorizer",
+            "`assemble` from `crates/my-app-admin-http`",
+            "x-admin-request: 1",
+            "bun run test:postgres",
+            "POSTGRES_TEST_ADMIN_URL",
+            "`batter` facade",
+            "`axum`, `sqlx`.",
+            "upgrade both pins together",
+            "upgrade the Batter revision",
+            "batter::service::start",
+            "Startup::scoped",
+            "sealed `HttpBoundary`",
+            "`AdmittedRequest`",
+            "supervised PostgreSQL health\nmonitor",
+            "local closure does not",
+        ],
+    );
+    assert_contains_none(
+        &root_readme,
+        &[
+            "router_with_lifecycle",
+            "test_db_",
+            "not a continuous database connectivity check",
+            "### Metrics export",
+            "### Background jobs",
+        ],
+    );
     let http_agents = fs::read_to_string(destination.join("crates/my-app-http/AGENTS.md")).unwrap();
     assert!(http_agents.contains("`src/public.rs`: owns public routes"));
     assert!(http_agents.contains("Never depend on `my-app-admin-http`"));
+    assert!(http_agents.contains("`HttpBoundary` owns the layer order"));
     let app_agents = fs::read_to_string(destination.join("crates/my-app/AGENTS.md")).unwrap();
-    assert!(app_agents.contains("Parse environment configuration once at startup"));
+    assert!(app_agents.contains("Capture the environment once at startup"));
+    let runtime_agents =
+        fs::read_to_string(destination.join("crates/my-app-runtime/AGENTS.md")).unwrap();
+    assert!(runtime_agents.contains("batter::service::start"));
+    assert!(!runtime_agents.contains("register_http_in"));
 }
 
 fn assert_database_support_and_docs(destination: &Path) {

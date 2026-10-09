@@ -1,29 +1,27 @@
 use std::time::Duration;
 
-use axum::{Router, middleware};
-use batter::axum::{CorrelationId, RequestPolicy, ResponseConstructionBudget, request_admission};
+use axum::response::IntoResponse;
+use batter::axum::{CorrelationId, RequestPolicy, ResponseConstructionBudget};
 use batter::lifecycle::OperationAdmission;
 
-/// Bound application handlers and preserve the application's error envelope.
-/// Call before merging probes and installing the outer operational wrapper.
-pub fn guard<S>(router: Router<S>, admission: OperationAdmission) -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    let request_budget = ResponseConstructionBudget::new(Duration::from_secs(10))
-        .expect("constant request budget is valid");
-    let policy =
-        RequestPolicy::new(admission, request_budget).with_failure_renderer(|failure, parts| {
-            use axum::response::IntoResponse;
-            crate::ApiError::new(
-                failure.status(),
-                failure.code(),
-                "The request could not be completed",
-                parts.extensions.get::<CorrelationId>(),
-            )
-            .into_response()
-        });
-    router.layer(middleware::from_fn_with_state(policy, request_admission))
+/// Response-construction deadline for business routes. It ends when the
+/// response is constructed; streaming bodies and WebSockets need their own limits.
+pub const REQUEST_BUDGET: Duration = Duration::from_secs(10);
+
+/// Lifecycle admission and the request deadline for guarded routes. Admission,
+/// deadline, and cancellation failures keep the application's error envelope.
+pub fn policy(admission: OperationAdmission) -> RequestPolicy {
+    let request_budget =
+        ResponseConstructionBudget::new(REQUEST_BUDGET).expect("constant request budget is valid");
+    RequestPolicy::new(admission, request_budget).with_failure_renderer(|failure, parts| {
+        crate::ApiError::new(
+            failure.status(),
+            failure.code(),
+            "The request could not be completed",
+            parts.extensions.get::<CorrelationId>(),
+        )
+        .into_response()
+    })
 }
 
 #[cfg(test)]
@@ -34,82 +32,120 @@ mod tests {
         http::{Request, StatusCode},
         routing::get,
     };
-    use batter::lifecycle::ShutdownHandle;
-    use tower::ServiceExt;
+    use batter::axum::{GuardedRouter, HttpBoundary, InProcessClient, ReadinessPolicy};
+    use batter::lifecycle::{ReadinessApproval, ShutdownHandle};
+
+    async fn client(router: GuardedRouter) -> (InProcessClient, ShutdownHandle, ReadinessApproval) {
+        let (shutdown, approval) = ShutdownHandle::new_with_readiness_approval();
+        let boundary = crate::probes::mount(
+            HttpBoundary::new(policy(shutdown.operation_admission())),
+            ReadinessPolicy::lifecycle_only(shutdown.status()),
+        )
+        .expect("probe paths are valid and unique");
+        let client = boundary
+            .assemble(router.fallback(crate::not_found))
+            .await
+            .expect("guarded routes do not overlap probes")
+            .in_process();
+        (client, shutdown, approval)
+    }
+
+    async fn status(client: &InProcessClient, path: &str) -> StatusCode {
+        client
+            .request(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .status()
+    }
+
+    async fn json(response: axum::response::Response) -> serde_json::Value {
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap()
+    }
 
     #[tokio::test]
     async fn lifecycle_gates_work_but_leaves_probes_reachable() {
-        let (shutdown, approval) = ShutdownHandle::new_with_readiness_approval();
-        let router = guard(
-            Router::new().route("/work", get(|| async { "done" })),
-            shutdown.operation_admission(),
-        )
-        .route("/health/live", get(batter::axum::liveness))
-        .layer(middleware::from_fn(batter::axum::operational_http));
-        let response = router
-            .clone()
-            .oneshot(Request::get("/work").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let (client, shutdown, approval) =
+            client(GuardedRouter::new().route("/work", get(|| async { "done" }))).await;
+        assert_eq!(
+            status(&client, "/work").await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(status(&client, "/health/live").await, StatusCode::OK);
+        assert_eq!(
+            status(&client, "/health/ready").await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
         approval.approve();
-        let response = router
-            .clone()
-            .oneshot(Request::get("/work").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(status(&client, "/work").await, StatusCode::OK);
+        assert_eq!(status(&client, "/health/ready").await, StatusCode::OK);
+
         shutdown.request();
-        for (path, expected) in [
-            ("/work", StatusCode::SERVICE_UNAVAILABLE),
-            ("/health/live", StatusCode::OK),
-        ] {
-            let response = router
-                .clone()
-                .oneshot(Request::get(path).body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(response.status(), expected);
-        }
+        assert_eq!(
+            status(&client, "/work").await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(status(&client, "/health/live").await, StatusCode::OK);
+        let ready = client
+            .request(Request::get("/health/ready").body(Body::empty()).unwrap())
+            .await;
+        assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let request_id = ready.headers()["x-request-id"].to_str().unwrap().to_owned();
+        let body = json(ready).await;
+        assert_eq!(body["code"], "service_unavailable");
+        assert_eq!(body["request_id"], request_id);
     }
 
     #[tokio::test(start_paused = true)]
     async fn deadline_uses_application_error_envelope_and_request_id() {
-        let (shutdown, approval) = ShutdownHandle::new_with_readiness_approval();
+        let (client, _shutdown, approval) = client(GuardedRouter::new().route(
+            "/slow",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                "too late"
+            }),
+        ))
+        .await;
         approval.approve();
-        let router = guard(
-            Router::new().route(
-                "/slow",
-                get(|| async {
-                    tokio::time::sleep(Duration::from_secs(60)).await;
-                    "too late"
-                }),
-            ),
-            shutdown.operation_admission(),
-        )
-        .layer(middleware::from_fn(batter::axum::operational_http));
-        let response = router
-            .oneshot(
+        let response = client
+            .request(
                 Request::get("/slow")
                     .header("x-request-id", "example-request")
                     .body(Body::empty())
                     .unwrap(),
             )
-            .await
-            .unwrap();
+            .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let response_request_id = response
-            .headers()
-            .get("x-request-id")
-            .unwrap()
+        let response_request_id = response.headers()["x-request-id"]
             .to_str()
             .unwrap()
             .to_owned();
         assert_ne!(response_request_id, "example-request");
-        let body = to_bytes(response.into_body(), 4096).await.unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let body = json(response).await;
         assert_eq!(body["code"], "deadline_exceeded");
         assert_eq!(body["request_id"], response_request_id);
         assert_eq!(body["message"], "The request could not be completed");
+    }
+
+    #[tokio::test]
+    async fn unmatched_paths_use_the_envelope_inside_admission() {
+        let (client, _shutdown, approval) =
+            client(GuardedRouter::new().route("/work", get(|| async { "done" }))).await;
+        assert_eq!(
+            status(&client, "/missing").await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        approval.approve();
+        let response = client
+            .request(Request::get("/missing").body(Body::empty()).unwrap())
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let request_id = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let body = json(response).await;
+        assert_eq!(body["code"], "not_found");
+        assert_eq!(body["request_id"], request_id);
     }
 }

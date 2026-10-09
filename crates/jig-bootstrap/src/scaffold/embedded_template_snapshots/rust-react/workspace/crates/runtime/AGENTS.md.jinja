@@ -2,13 +2,19 @@
 
 ## Purpose
 
-Own service initialization, native resources, and shutdown through Batter.
+Own service initialization, native resources, readiness inputs, and shutdown through Batter.
 
 ## Key entrypoints
 
-`src/lib.rs`: `serve` composes protected startup, HTTP serving, signals, and cleanup.
+`src/lib.rs`: `serve` runs protected startup through `batter::service::start`, then registers the assembled HTTP boundary.
+[% if jobs_enabled %]
+`serve_with_jobs` also registers the Runledger worker from `crates/<<[ package_name ]>>-jobs`; the public API uses it.
+[% endif %]
 [% if db_enabled %]
 `bootstrap_database` uses Batter's finite `Command` owner for setup and pool closure.
+[% endif %]
+[% if metrics_enabled %]
+`src/metrics.rs`: opt-in OTLP/HTTP export of Batter's metrics catalog, selected by `METRICS_OTLP_ENDPOINT`.
 [% endif %]
 
 ## Edit here for X
@@ -21,20 +27,32 @@ source-owned, not `.jig.toml` or generated environment settings.
 
 ## Invariants
 
-Use `Startup::scoped` with `with_unix_signals` and `register_http_in`; capture the
-read-only lifecycle status and operation admission before moving the supervisor and
-pass only those purpose-qualified capabilities to the router.
+Use `Startup::scoped` with `with_unix_signals` and pass it to `batter::service::start`.
+Capture the read-only lifecycle status and operation admission before moving the
+supervisor; HTTP surfaces receive only admission and a `ReadinessPolicy`. Register the
+assembled boundary with `AssembledHttp::register_in`, never a raw router or
+`batter::axum::low_level` helper.
 The protected scope exposes stage metadata, cleanup reservation, and supported
 registration adapters, not full supervisor control. Register cleanup before any
-subsequent fallible startup step. Keep the startup owner alive and await its result.
-Readiness requires initialized resources and started tasks.
-Shutdown must await the owned tasks and report incomplete cleanup as failure.
+subsequent fallible startup step. Completion is checked: a startup failure, an
+unsuccessful shutdown report, or a coordinator failure is an error.
+[% if db_enabled %]
+Readiness combines lifecycle, the database health monitor registered by the DB crate,
+and HTTP application conditions. The monitor probes independently of traffic, so a
+database outage turns readiness unready and recovery restores it without a restart.
+PostgreSQL startup uses the DB crate's `connect_in` (`pool_in` plus a bounded probe)
+and lease-owned migrations under children of the startup operation context.
+[% else %]
+Readiness combines lifecycle with HTTP application conditions.
+[% endif %]
 Never move Batter supervision into application state merely to access the runtime.
 Use `Command` and `check_command` for finite work, not an empty service supervisor.
-PostgreSQL database startup uses the DB crate's `batter::sqlx::pool_in` owner followed
-by `batter::sqlx::probe` under a child of the owning operation context. Register native
-runtimes with descendants through supported managed adapters;
+Register native runtimes with descendants through supported managed adapters;
 joining a wrapper task alone does not prove its descendants stopped.
+[% if metrics_enabled %]
+Metrics diagnostics are retained beside the service result and never change it or
+the exit code. Do not install another global metrics recorder.
+[% endif %]
 Shutdown phase allowances share Batter's first-stop clock; scheduling delays consume
 the budget. Cleanup has an independent allowance and cannot roll back remote effects.
 The `jig dev` proxy force-kills after a two-second SIGTERM grace period, which can

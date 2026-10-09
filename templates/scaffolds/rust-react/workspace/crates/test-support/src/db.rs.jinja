@@ -1,67 +1,169 @@
+//! Disposable PostgreSQL 18 databases for integration tests.
+//!
+//! Batter's SQLx fixture support clones each test database from a template that
+//! is migrated once per migration fingerprint, then closes the test's pools and
+//! drops the clone after the body returns, fails, or panics. The external
+//! harness server comes from `POSTGRES_TEST_ADMIN_URL`; `scripts/test-postgres.sh`
+//! provides a disposable PostgreSQL 18 container.
+
+use std::future::Future;
+use std::time::Duration;
+
 use ::<<[ module_name ]>>_db as app_db_crate;
-use anyhow::{Context, bail};
+use anyhow::Context;
+use batter::operation::OperationOwner;
+use batter::sqlx::test_support::{
+    BodyFailure, ConnectionPlan, FixtureSuite, MigrationBundle, MigrationInput, template_spec,
+};
+use postgres_test_harness::{HarnessConfig, PostgresHarness};
+use sqlx::migrate::Migrator;
+use sqlx::postgres::PgPoolOptions;
 
 pub type TestDbPool = app_db_crate::DbPool;
 
-#[derive(Clone, Debug)]
-pub struct DatabaseTestConfig {
-    database_url: String,
+/// Harness namespace for this project's template and disposable databases.
+const FIXTURE_PROJECT: &str = "<<[ fixture_project ]>>";
+
+/// Change when template initialization changes outside the migration SQL.
+const TEMPLATE_REVISION: &str = "application-migrations-v1";
+
+/// Connections one test's application pool may open.
+pub const TEST_POOL_CONNECTIONS: u32 = 4;
+
+/// Per-database permits: the fixture's own connection plus the test pool.
+const CONNECTIONS_PER_DATABASE: u32 = TEST_POOL_CONNECTIONS + 1;
+
+/// Simultaneous disposable databases per harness.
+const SIMULTANEOUS_DATABASES: usize = 4;
+
+/// Start an external-server harness; the admin URL is read from
+/// `POSTGRES_TEST_ADMIN_URL`. The server must run PostgreSQL 18.
+pub async fn harness() -> anyhow::Result<PostgresHarness> {
+    let config = HarnessConfig::new(FIXTURE_PROJECT)?
+        .with_connections_per_database(CONNECTIONS_PER_DATABASE)?
+        .with_connection_budget(CONNECTIONS_PER_DATABASE as usize * SIMULTANEOUS_DATABASES)?
+        .with_operation_timeout(Duration::from_secs(30))?;
+    PostgresHarness::start(config)
+        .await
+        .context("set POSTGRES_TEST_ADMIN_URL to a PostgreSQL 18 admin database, or run scripts/test-postgres.sh")
 }
 
-impl DatabaseTestConfig {
-    pub fn from_env() -> anyhow::Result<Self> {
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .context("set TEST_DATABASE_URL or DATABASE_URL for database-backed tests")?;
-        Ok(Self { database_url })
-    }
-
-    pub fn new(database_url: impl Into<String>) -> Self {
-        Self {
-            database_url: database_url.into(),
+/// Run `body` against a fresh clone of the migrated template database.
+///
+/// The body owns `db` and must join any work it starts before returning. The
+/// fixture closes the pool and drops the database on every path.
+pub async fn with_migrated_database<F, Fut, T>(body: F) -> anyhow::Result<T>
+where
+    F: FnOnce(app_db_crate::Db) -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<T>> + Send,
+    T: Send + 'static,
+{
+    let harness = harness().await?;
+    let run = FixtureSuite::new(harness.clone()).start(move |scope| {
+        Box::pin(async move {
+            let template = scope
+                .template(migration_template(), initialize_template)
+                .await?;
+            let plan = ConnectionPlan::new(
+                vec![PgPoolOptions::new().max_connections(1)],
+                TEST_POOL_CONNECTIONS,
+            )?;
+            let fixture = scope.from_template(&template, &plan).await?;
+            let options = fixture.pools()[0].connect_options().as_ref().clone();
+            let db = app_db_crate::Db::connect_lazy(
+                options,
+                PgPoolOptions::new().max_connections(TEST_POOL_CONNECTIONS),
+            )?;
+            let result = body(db.clone()).await;
+            db.close().await;
+            result
+        })
+    });
+    let report = run.into_report().await.context("fixture driver failed")?;
+    let shutdown = harness.shutdown().await;
+    let value = match report.into_result() {
+        Ok(value) => value,
+        Err(report) => {
+            let summary = report.to_string();
+            return Err(match report.body {
+                Err(BodyFailure::Returned(error)) => error.context(summary),
+                Err(BodyFailure::Task(error)) if error.is_panic() => {
+                    std::panic::resume_unwind(error.into_panic())
+                }
+                _ => anyhow::anyhow!(summary),
+            });
         }
-    }
-
-    /// Load the dedicated test URL without falling back to a development URL.
-    pub fn from_test_env() -> anyhow::Result<Self> {
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .context("set TEST_DATABASE_URL for isolated database integration tests")?;
-        Ok(Self { database_url })
-    }
-
-    pub fn database_url(&self) -> &str {
-        &self.database_url
-    }
+    };
+    shutdown.context("failed to shut down the PostgreSQL test harness")?;
+    Ok(value)
 }
 
-pub struct TestDatabase {
-    db: app_db_crate::Db,
+/// Fingerprint every migration the template initializer applies, so changed
+/// migrations produce a new template instead of reusing a stale one.
+fn migration_template() -> postgres_test_harness::TemplateSpec {
+    let migrators = template_migrators();
+    let identities = migrators
+        .iter()
+        .map(|(_, migrator)| {
+            migrator
+                .iter()
+                .map(|migration| {
+                    (
+                        migration.version.to_string(),
+                        format!("{:?}", migration.migration_type),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let inputs = migrators
+        .iter()
+        .zip(&identities)
+        .map(|((_, migrator), identities)| {
+            migrator
+                .iter()
+                .zip(identities)
+                .map(|(migration, (identity, kind))| MigrationInput {
+                    identity,
+                    kind,
+                    sql: migration.sql.as_str().as_bytes(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let bundles = migrators
+        .iter()
+        .zip(&inputs)
+        .map(|((identity, _), migrations)| MigrationBundle {
+            identity,
+            migrations,
+        })
+        .collect::<Vec<_>>();
+    template_spec(&bundles, TEMPLATE_REVISION)
 }
 
-impl TestDatabase {
-    pub async fn connect(config: &DatabaseTestConfig) -> anyhow::Result<Self> {
-        let db = app_db_crate::Db::connect(config.database_url()).await?;
-        Ok(Self { db })
-    }
-
-    pub fn pool(&self) -> &TestDbPool {
-        self.db.pool()
-    }
-
-    pub async fn migrate(&self) -> anyhow::Result<()> {
-        self.db.migrate().await
-    }
+/// Migration histories in the order `Db::migrate` applies them.
+fn template_migrators() -> Vec<(&'static str, &'static Migrator)> {
+[% if jobs_enabled %]
+    vec![
+        ("runledger", &batter::runledger::native::postgres::MIGRATOR),
+        ("application", &app_db_crate::MIGRATOR),
+    ]
+[% else %]
+    vec![("application", &app_db_crate::MIGRATOR)]
+[% endif %]
 }
 
-pub fn validate_test_database_name(name: &str) -> anyhow::Result<()> {
-    if !name.starts_with("test_db_") {
-        bail!("test database names must start with test_db_");
-    }
-    if !name
-        .bytes()
-        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-    {
-        bail!("test database names may only contain lowercase ASCII letters, digits, and _");
-    }
-    Ok(())
+/// Apply migrations through the production path, then close the pool.
+async fn initialize_template(
+    database_url: String,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let db = app_db_crate::Db::connect_lazy(
+        database_url.parse()?,
+        PgPoolOptions::new().max_connections(1),
+    )?;
+    let context = OperationOwner::new(Duration::from_secs(60))?.into_context();
+    let migrated = db.migrate(&context).await;
+    db.close().await;
+    Ok(migrated?)
 }

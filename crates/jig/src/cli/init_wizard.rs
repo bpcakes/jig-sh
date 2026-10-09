@@ -4,7 +4,8 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use anyhow::{Context, Result, bail};
 
 use jig_bootstrap::{
-    self, InitOpts, ScaffoldDb, ScaffoldFrontend, ScaffoldPreset, parse_scaffold_frontend,
+    self, InitOpts, ScaffoldDb, ScaffoldFrontend, ScaffoldJobs, ScaffoldMetrics, ScaffoldPreset,
+    parse_scaffold_frontend,
 };
 
 pub(super) fn prepare_init_interaction(
@@ -252,6 +253,19 @@ fn guide_project_shape<R: BufRead, W: Write>(
         let default = default_go_module_for_init(opts);
         opts.answers.go_module = Some(prompt_go_module(input, output, &default)?);
     }
+    // Optional service add-ons are offered only while the wizard is already
+    // guiding the project shape, so explicit flag invocations stay prompt-free.
+    let guided = printed_header || needs_database || needs_frontends;
+    if guided && preset.supports_metrics() && opts.scaffold.metrics.is_none() {
+        opts.scaffold.metrics = Some(prompt_metrics(input, output)?);
+    }
+    if guided
+        && preset.supports_jobs()
+        && opts.scaffold.db == Some(ScaffoldDb::Postgres)
+        && opts.scaffold.jobs.is_none()
+    {
+        opts.scaffold.jobs = Some(prompt_jobs(input, output)?);
+    }
     Ok(())
 }
 
@@ -334,6 +348,40 @@ fn prompt_database<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Resul
             "1" | "none" | "no" => return Ok(ScaffoldDb::None),
             "2" | "postgres" | "postgresql" => return Ok(ScaffoldDb::Postgres),
             _ => writeln!(output, "  Enter none or postgres.")?,
+        }
+    }
+}
+
+fn prompt_metrics<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Result<ScaffoldMetrics> {
+    loop {
+        let answer = prompt_line(
+            input,
+            output,
+            "Metrics export? [none/otlp] (none): ",
+            "none",
+            "metrics choice",
+        )?;
+        match answer.as_str() {
+            "1" | "none" | "no" => return Ok(ScaffoldMetrics::None),
+            "2" | "otlp" => return Ok(ScaffoldMetrics::Otlp),
+            _ => writeln!(output, "  Enter none or otlp.")?,
+        }
+    }
+}
+
+fn prompt_jobs<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Result<ScaffoldJobs> {
+    loop {
+        let answer = prompt_line(
+            input,
+            output,
+            "Background jobs? [none/runledger] (none): ",
+            "none",
+            "background jobs choice",
+        )?;
+        match answer.as_str() {
+            "1" | "none" | "no" => return Ok(ScaffoldJobs::None),
+            "2" | "runledger" => return Ok(ScaffoldJobs::Runledger),
+            _ => writeln!(output, "  Enter none or runledger.")?,
         }
     }
 }

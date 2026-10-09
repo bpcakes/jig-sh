@@ -17,6 +17,9 @@ members = [
 [% if db_enabled %]
   "crates/<<[ package_name ]>>-db",
 [% endif %]
+[% if jobs_enabled %]
+  "crates/<<[ package_name ]>>-jobs",
+[% endif %]
 ]
 
 [workspace.package]
@@ -30,7 +33,7 @@ cognitive_complexity = "warn"
 mod_module_files = "warn"
 
 [workspace.dependencies]
-batter = { git = "https://github.com/bpcakes/batter", rev = "<<[ batter_revision ]>>", features = ["axum"[% if db_enabled %], "sqlx"[% endif %]] }
+batter = { git = "https://github.com/bpcakes/batter", rev = "<<[ batter_revision ]>>", features = ["axum"[% if db_enabled %], "sqlx"[% endif %][% if metrics_enabled %], "otlp"[% endif %][% if jobs_enabled %], "runledger"[% endif %]] }
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
@@ -46,4 +49,10 @@ utoipa = "5.5.0"
 utoipa-axum = "0.2.0"
 [% if db_enabled %]
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "<<[ sqlx_driver ]>>", "migrate", "macros"] }
+# Batter's SQLx fixture support takes the harness by value, so this must stay on
+# the exact revision Batter selects. Upgrade both pins together.
+postgres-test-harness = { git = "https://github.com/bpcakes/postgres-test-harness.git", rev = "<<[ postgres_test_harness_revision ]>>", default-features = false }
+[% endif %]
+[% if jobs_enabled %]
+uuid = { version = "1", features = ["v7"] }
 [% endif %]

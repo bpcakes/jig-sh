@@ -2,28 +2,28 @@
 
 ## Purpose
 
-Owns only the public Axum and HTTP boundary for `<<[ repo_name ]>>`: routes, handlers, middleware, extractors, and HTTP DTOs.
+Owns only the public Axum and HTTP boundary for `<<[ repo_name ]>>`: routes, handlers, extractors, HTTP DTOs, and the public OpenAPI document.
 
 ## Key entrypoints
 
-- `src/lib.rs`: mounts the public router, applies shared middleware, and exposes the public OpenAPI document.
-- `src/public.rs`: owns public routes, HTTP DTOs, and OpenAPI operations.
+- `src/lib.rs`: `assemble` builds the public surface through Batter's `HttpBoundary`; `in_process` serves tests; `public_openapi` exports the contract.
+- `src/public.rs`: owns public routes, HTTP DTOs, OpenAPI operations, and probe documentation.
 
 ## Edit here for X
 
-- Add or change routes, handler functions, HTTP response codes, headers, request IDs, tracing middleware, and extractors here.
+- Add business routes to `application_routes` with `#[utoipa::path]`. The boundary admits exactly the documented paths, so an undocumented route is never served.
+- Read the request's operation context and correlation ID with the `AdmittedRequest` extractor; pass `admitted.context()` to nested operations.
 - Call app-crate use cases through `AppState` instead of placing business logic in handlers.
 - Regenerate committed contracts and clients with the root `contract:generate` package script.
 
 ## Invariants
 
 - Keep handlers thin and delegate domain work to `<<[ package_name ]>>`.
-- Keep observability middleware at this HTTP boundary.
-- Production entrypoints use `router_with_lifecycle` with the runtime's read-only lifecycle status and operation admission. The convenience `router` creates and consumes an independent readiness approval for in-process tests.
-- Keep `operational_http` around the assembled router so request IDs are server-generated typed correlation, never caller-selected headers.
-- Keep exactly one HTTP observer at this boundary. A quota adapter replaces it with `operational_http_with_quota` rather than nesting a second observer inside it.
-- Add business routes to `application_routes` and probes to `probe_routes`; both feed the runtime router and OpenAPI document. Keep probes outside request admission.
-- Preserve `/health/live` for process liveness and `/health/ready` for lifecycle readiness plus initialized application state. An initialized pool is not a continuous database connectivity check.
+- Production entrypoints use `assemble` with the runtime's operation admission and readiness policy. `in_process` uses an independent, approved lifecycle for tests and proves response construction only.
+- `HttpBoundary` owns the layer order: correlation and the single HTTP observer outermost, probes outside admission, and admission plus the request deadline around every route and the fallback. Do not compose `batter::axum::low_level` middleware here.
+- Request IDs are server-generated; inbound `x-request-id` headers are replaced and never used as identity.
+- `/health`, `/health/live`, and `/health/ready` are rendered by the boundary with the shared probe renderers. Keep their documentation in `probe_documentation` aligned; a test checks that documented paths equal served routes plus probes.
+- Readiness adds the `application-state` condition to the runtime's readiness policy. Add further conditions with `with_condition`; they run synchronously and must not block.
 - Never depend on `<<[ package_name ]>>-admin-http` or mount privileged routes here. Admin transport has a separate crate and binary deployment boundary.
 - Return JSON errors through `<<[ package_name ]>>-http-common`; never disclose internal error chains.
 

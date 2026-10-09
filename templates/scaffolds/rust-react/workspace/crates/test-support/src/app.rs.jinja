@@ -1,43 +1,44 @@
 use ::<<[ module_name ]>> as app_crate;
 use ::<<[ module_name ]>>_http as app_http_crate;
 use axum::{
-    Router,
     body::{Body, to_bytes},
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
+use batter::axum::InProcessClient;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tower::ServiceExt;
 
 use crate::responses::TestResponse;
 
 const TEST_BODY_LIMIT: usize = 1024 * 1024;
 
+/// In-memory client for the public HTTP boundary. Requests run through the
+/// production composition with an independent, approved lifecycle; they do not
+/// prove serving, signal handling, or native resource cleanup.
 #[derive(Clone)]
 pub struct TestApp {
-    router: Router,
+    client: InProcessClient,
 }
 
 impl TestApp {
-    pub fn new() -> Self {
-        Self::from_state(app_crate::AppState::for_tests())
+    pub async fn new() -> Self {
+        Self::from_state(app_crate::AppState::for_tests()).await
     }
 
-    pub fn from_state(state: app_crate::AppState) -> Self {
-        Self::from_router(app_http_crate::router(state))
+    pub async fn from_state(state: app_crate::AppState) -> Self {
+        Self::from_client(
+            app_http_crate::in_process(state)
+                .await
+                .expect("the public HTTP boundary assembles"),
+        )
     }
 
-    pub fn from_router(router: Router) -> Self {
-        Self { router }
+    pub fn from_client(client: InProcessClient) -> Self {
+        Self { client }
     }
 
     pub async fn request(&self, request: Request<Body>) -> TestResponse {
-        let response = self
-            .router
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("test router returned an error");
+        let response = self.client.request(request).await;
         let (parts, body) = response.into_parts();
         let body = to_bytes(body, TEST_BODY_LIMIT)
             .await
@@ -106,11 +107,5 @@ impl TestApp {
                 .expect("test request is valid"),
         )
         .await
-    }
-}
-
-impl Default for TestApp {
-    fn default() -> Self {
-        Self::new()
     }
 }

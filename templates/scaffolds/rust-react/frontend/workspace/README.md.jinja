@@ -4,44 +4,87 @@ Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAP
 
 [% if backend_language != "go" %]
 The `batter` facade is a pinned Git dependency in `Cargo.toml` (not a registry
-release) with its `axum` feature[% if db == "postgres" %] and PostgreSQL `sqlx`
-feature[% endif %] enabled. The services target Unix and require network access on
-the first build. Commit `Cargo.lock` after bootstrap; upgrade the Batter revision
-deliberately.
+release) that selects only the features this workspace uses: `axum`[% if db == "postgres" %], `sqlx`[% endif %][% if metrics == "otlp" %], `otlp`[% endif %][% if jobs == "runledger" %], `runledger`[% endif %].
+[% if db == "postgres" %]
+Database tests also pin `postgres-test-harness` to the revision that Batter's SQLx
+fixture support selects; upgrade both pins together.
+[% endif %]
+The services target Unix and require network access on the first build. Commit
+`Cargo.lock` after bootstrap; upgrade the Batter revision deliberately.
 
 `crates/<<[ package_name ]>>-runtime` owns protected startup, native signals, and
-resource cleanup. `Startup::scoped` constrains initialization to stage metadata,
-cleanup reservation, and supported registration adapters. Startup has a shared
-30-second budget, including database connection and migrations when enabled. HTTP handlers have a 10-second response
-construction budget; streaming bodies and WebSockets need separate limits. Shutdown
-drains for 10 seconds, then allows 2 seconds for cancellation and 1 second for
-abort/reap before separately bounded cleanup. These policies are application-owned.
-Failed or incomplete cleanup makes the process exit unsuccessfully.
-HTTP routers receive only read-only lifecycle status and operation admission from the
-runtime. Batter's outer operational middleware replaces inbound request IDs and makes
-its typed server-generated correlation available to handlers and error renderers.
-Shutdown phases share one first-stop clock; scheduling delay consumes the allowance.
-`jig dev` has a shorter, two-second SIGTERM grace period before force-killing the
-service process group. Slow requests can therefore be interrupted before Batter
-finishes draining or closing resources. To test the full shutdown budget, launch
-the built service binary directly and send it SIGTERM; production process managers
-must allow enough time for drain, cancellation, abort/reap, and cleanup.
+resource cleanup through `batter::service::start`. `Startup::scoped` constrains
+initialization to stage metadata, cleanup reservation, and supported registration
+adapters. Startup has a shared 30-second budget, including database connection and
+migrations when enabled. HTTP handlers have a 10-second response construction
+budget; streaming bodies and WebSockets need separate limits. Shutdown drains for
+10 seconds, then allows 2 seconds for cancellation and 1 second for abort/reap
+before separately bounded cleanup. These policies are application-owned. Failed or
+incomplete cleanup makes the process exit unsuccessfully.
+
+Each HTTP surface assembles through Batter's sealed `HttpBoundary`: server
+correlation and one HTTP observer are outermost, probes sit outside admission, and
+lifecycle admission plus the request deadline wrap every documented route and the
+fallback. OpenAPI routers join through a route inventory derived from their own
+documents, so undocumented routes are never served. Handlers read the request's
+operation context and server-generated correlation ID from `AdmittedRequest`;
+inbound `x-request-id` headers are replaced. Shutdown phases share one first-stop
+clock; scheduling delay consumes the allowance. `jig dev` has a shorter,
+two-second SIGTERM grace period before force-killing the service process group.
+Slow requests can therefore be interrupted before Batter finishes draining or
+closing resources. To test the full shutdown budget, launch the built service binary
+directly and send it SIGTERM; production process managers must allow enough time
+for drain, cancellation, abort/reap, and cleanup.
 [% if db != "none" %]
 Database setup uses Batter's finite `Command` owner with 30 seconds for work and
 independently bounded pool cleanup, including after SIGINT/SIGTERM or migration
-failure. Cancellation does not roll back database creation or committed migrations.
+failure. Migrations run on one leased connection that is retired on failure or
+cancellation. Cancellation does not roll back database creation or committed
+migrations.
 [% endif %]
 
 Public `/health/live` and `/health/ready` probes remain outside request admission.
 The separate admin service also exposes those operational probes; admin business
 routes remain denied until an application authorizer is supplied. Do not add business
 data to unauthenticated probes.
-Readiness combines the runtime lifecycle with initialized application state; it is
-not a continuous database connectivity check. PostgreSQL pool construction registers
-local cleanup before an explicit bounded connectivity check; local closure does not
-roll back remote transactions or guarantee remote session termination. Change lifecycle budgets in the
-runtime crate and request policy in `crates/<<[ package_name ]>>-http-common/src/requests.rs`;
-these are source policies, not `.jig.toml` settings.
+[% if db != "none" %]Readiness combines the runtime lifecycle, a supervised PostgreSQL health
+monitor that probes the pool every five seconds, and the application's
+`application-state` readiness condition. A database outage turns readiness to 503
+within about ten seconds and recovers without a restart, while liveness stays 200.
+PostgreSQL pool construction registers local cleanup before an explicit bounded
+connectivity check; local closure does not roll back remote transactions or
+guarantee remote session termination.[% else %]Readiness combines the runtime lifecycle with the application's
+`application-state` readiness condition.[% endif %] Configuration is captured from the
+environment once into Batter settings;[% if db != "none" %] `DATABASE_URL` is a redacted secret, and[% endif %] settings errors name the variable without echoing its value. Change lifecycle budgets
+in the runtime crate and request policy in
+`crates/<<[ package_name ]>>-http-common/src/requests.rs`; these are source policies,
+not `.jig.toml` settings.
+[% if metrics == "otlp" %]
+
+### Metrics export
+
+Set `METRICS_OTLP_ENDPOINT` to an HTTP(S) URL ending in `/v1/metrics` to export
+Batter's bounded foundation metrics catalog (operations, admission decisions, task
+exits, cleanup, and shutdown) over OTLP/HTTP every ten seconds, with a bounded final
+export after shutdown. Without it nothing is installed and no collector is
+contacted. While export is enabled, ambient `OTEL_*` variables are rejected because
+the native builders would merge them. Export diagnostics are logged and never
+change the process exit code.
+[% endif %]
+[% if jobs == "runledger" %]
+
+### Background jobs
+
+`crates/<<[ package_name ]>>-jobs` holds Runledger job handlers, the job catalog,
+worker settings, and enqueue helpers. The public API process runs the worker as a
+Batter-supervised component: startup waits for native initialization, drain stops
+claiming work, and the database pool closes only after the worker settles. The
+admin API does not run a worker. Runledger's migration history is applied before
+the application's, in the same `_sqlx_migrations` table. Set `JOBS_WORKER_ID` for a
+stable worker identity; otherwise each process derives a unique one. Enqueue
+jobs with `batter::runledger::run_atomic` together with the application writes
+they depend on.
+[% endif %]
 [% endif %]
 
 ## Quickstart
@@ -111,19 +154,27 @@ Keep application-specific exceptions narrow. Product SPAs cannot import the admi
 [% if db == "postgres" %]
 ## Disposable PostgreSQL test
 
-Run the database integration test against a fresh PostgreSQL 18 container:
+Run the database integration tests against a fresh PostgreSQL 18 container:
 
 ```sh
 <<[ web_run_command ]>> test:postgres
 ```
 
-The command binds PostgreSQL to a random loopback port, uses a `test_db_` database, and removes the container on exit. It never falls back to `DATABASE_URL`.
+The command binds PostgreSQL to a random loopback port and removes the container on exit.
+[% if backend_language == "go" %]
+It requires Docker and sets `TEST_DATABASE_URL` for the Go integration test, which checks database creation, application migrations, and generated queries against the disposable server.
+[% else %]
+Batter's fixture harness migrates one template database per migration fingerprint and gives each test its own clone, which it drops after the test even when the test fails. Set `POSTGRES_TEST_ADMIN_URL` to use an existing PostgreSQL 18 server whose role can create and drop databases instead.
+[% endif %]
+The tests never fall back to `DATABASE_URL`.
 
 [% endif %]
 [% if admin_api_enabled %]
 ## Admin boundary
 
-The admin API is a separate binary and HTTP crate; it is not mounted by the public server. The generated admin binary explicitly uses `DenyAllAdminAuthorizer`, so admitted privileged requests return `401 Unauthorized` until you implement `AdminAuthorizer` and pass that implementation to `<<[ package_name ]>>_admin_http::router_with_lifecycle`, preserving the runtime's read-only lifecycle and admission capabilities. The convenience `router` creates and consumes an independent readiness approval for in-process tests, not production lifecycle wiring. Keep the admin listener private at the network/deployment layer as well.
+The admin API is a separate binary and HTTP crate; it is not mounted by the public server. The generated admin binary explicitly uses `DenyAllAdminAuthorizer`, so admitted privileged requests return `401 Unauthorized` until you implement `AdminAuthorizer` and pass that implementation to `assemble` from `crates/<<[ package_name ]>>-admin-http` in the admin binary. The convenience `in_process` client uses an independent, approved lifecycle for tests, not production lifecycle wiring. Keep the admin listener private at the network/deployment layer as well.
+
+Every admin response, including probes and rejections, carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`. Mutating admin requests must carry `Sec-Fetch-Site: same-origin` and `x-admin-request: 1` before authorization runs; the admin panel's API client sends the marker, and browsers set Fetch Metadata. Non-browser admin clients must send both headers explicitly.
 
 Do not add credentials, secrets, or sensitive examples to `openapi/admin.json`, and do not publish the admin client with public frontend or documentation artifacts.
 

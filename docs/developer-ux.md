@@ -84,14 +84,16 @@ scripts/jig check test
 
 Setup creates `Cargo.lock`; commit it for either preset so locked checks and CI share the resolution. The root/member Cargo manifests, root `clippy.toml`, seed source, crate guide, and scaffold README are generated once and become project-owned. `jig update` maintains the harness without rewriting them. Root guidance talks about the Rust workspace and crate ownership, and neither preset configures or recommends `scripts/jig dev`.
 
-When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, Batter runtime crate, HTTP boundary and shared middleware crates, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass. An admin frontend also gets a separate admin API and HTTP crate. See [Rust applications on Batter](rust-applications.md) for lifecycle ownership and deployment limits:
+When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, Batter runtime crate, HTTP boundary and shared middleware crates, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass. An admin frontend also gets a separate admin API and HTTP crate. `--metrics otlp` adds Batter's OTLP metrics export, and `--jobs runledger` (with `--db postgres`) adds a jobs crate whose Runledger worker runs supervised in the API process; both default to `none`. See [Rust applications on Batter](rust-applications.md) for lifecycle ownership and deployment limits:
 
 ```sh
 jig presets
 jig init /path/to/new-repo \
   --preset rust-react \
   --db postgres \
-  --frontends web,landing,admin
+  --frontends web,landing,admin \
+  --metrics otlp \
+  --jobs runledger
 ```
 
 The Go + React preset creates a Go 1.26 module with chi/Huma HTTP boundaries, an offline Huma OpenAPI exporter, and the same generated React/client workspace. PostgreSQL adds pgxpool, embedded Goose migrations, sqlc queries, and checked-in generated code:

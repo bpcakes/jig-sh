@@ -1,24 +1,54 @@
+//! PostgreSQL ownership: native pool construction, migrations, and health.
+
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::Context;
-use batter::{cleanup::CleanupSlot, operation::OperationContext};
+[% if jobs_enabled %]
+use batter::runledger::{PgSessionProfile, RunledgerDatabase, native::postgres as runledger};
+[% endif %]
+use batter::{
+    cleanup::CleanupSlot,
+    health::{HealthMonitor, HealthPolicy, HealthReader},
+    operation::{OperationContext, OperationError, OperationOwner},
+    registration::Registration,
+    settings::SecretString,
+    sqlx::{PgLease, SqlxFailure},
+};
 use sqlx::{
-    migrate::MigrateDatabase,
+    migrate::{MigrateDatabase, Migrator},
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
 pub type DbPool = sqlx::<<[ db_pool ]>>;
 
+/// Failure recorded by the supervised database health monitor.
+pub type DbHealthError = OperationError<SqlxFailure>;
+
+/// Budget for each finite database step: connect, migrate, or create.
 pub const DEFAULT_DB_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Budget for one health probe, including connection acquisition.
+const HEALTH_PROBE_BUDGET: Duration = Duration::from_secs(2);
+
+/// Application migrations, applied at startup and by `--bootstrap-database`.
+pub static MIGRATOR: Migrator = sqlx::migrate!(
+    // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
+    "<<[ migration_path ]>>"
+);
 
 #[derive(Clone, Debug)]
 pub struct Db {
+[% if jobs_enabled %]
+    database: RunledgerDatabase,
+[% else %]
     pool: DbPool,
+[% endif %]
 }
 
 impl Db {
-    pub async fn create_if_missing(database_url: &str) -> anyhow::Result<bool> {
+    pub async fn create_if_missing(database_url: &SecretString) -> anyhow::Result<bool> {
+        let database_url = database_url.expose_secret();
         if Self::database_exists(database_url).await? {
             return Ok(false);
         }
@@ -54,193 +84,179 @@ impl Db {
         .map_err(Into::into)
     }
 
-    /// Connect without registering lifecycle cleanup.
-    ///
-    /// This is intended for short-lived test helpers that own and close the
-    /// returned pool directly. Service startup and commands must use
-    /// [`Self::connect_in`].
-    pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
-        Self::connect_with_timeout(database_url, DEFAULT_DB_TIMEOUT).await
-    }
-
-    pub async fn connect_with_timeout(
-        database_url: &str,
-        timeout_after: Duration,
-    ) -> anyhow::Result<Self> {
-        let pool = tokio::time::timeout(timeout_after, DbPool::connect(database_url))
-            .await
-            .with_context(|| {
-                format!("Timed out connecting to database after {timeout_after:?}")
-            })??;
-        Ok(Self { pool })
-    }
-
-    /// Construct a lazy PostgreSQL pool, publish its close finalizer, then
-    /// verify connectivity under a bounded child of the owning operation.
+    /// Construct a lazy pool, publish its close finalizer into the reserved
+    /// slot, then verify connectivity under a bounded child of `context`.
     pub async fn connect_in(
-        database_url: &str,
+        database_url: &SecretString,
         context: &OperationContext,
         cleanup: CleanupSlot<'_>,
     ) -> anyhow::Result<Self> {
-        let options = PgConnectOptions::from_str(database_url)
+        let options = PgConnectOptions::from_str(database_url.expose_secret())
             .context("Could not parse PostgreSQL database URL")?;
-        let probe_context = context.child(DEFAULT_DB_TIMEOUT)?;
-        let pool = batter::sqlx::pool_in(cleanup, PgPoolOptions::new(), options);
-        batter::sqlx::probe(&pool, &probe_context)
+[% if jobs_enabled %]
+        let database = Self::lazy(options, PgPoolOptions::new())?;
+        let closing = database.pool().clone();
+        cleanup.register(move || async move {
+            closing.close().await;
+            Ok(())
+        });
+[% else %]
+        let database = Self {
+            pool: batter::sqlx::pool_in(cleanup, PgPoolOptions::new(), options),
+        };
+[% endif %]
+        let probe = context.child(DEFAULT_DB_TIMEOUT)?.into_context();
+        batter::sqlx::probe(database.pool(), &probe)
             .await
             .context("Could not verify PostgreSQL connectivity")?;
-        Ok(Self { pool })
+        Ok(database)
     }
+
+    /// Construct a lazy pool that the caller closes with [`Self::close`].
+    ///
+    /// Tests use this with disposable databases. Services and commands must use
+    /// [`Self::connect_in`] so that their lifecycle owner closes the pool.
+    pub fn connect_lazy(
+        options: PgConnectOptions,
+        pool_options: PgPoolOptions,
+    ) -> anyhow::Result<Self> {
+[% if jobs_enabled %]
+        Self::lazy(options, pool_options)
+[% else %]
+        Ok(Self {
+            pool: pool_options.connect_lazy_with(options),
+        })
+[% endif %]
+    }
+[% if jobs_enabled %]
+
+    /// Every acquisition re-establishes this session profile, which Runledger
+    /// requires: the login role, one authoritative `public` schema, and server
+    /// timeouts disabled because Batter operation deadlines bound SQL work.
+    fn lazy(options: PgConnectOptions, pool_options: PgPoolOptions) -> anyhow::Result<Self> {
+        let login = options.get_username().to_owned();
+        let profile = PgSessionProfile::with_timeouts(
+            &login,
+            &login,
+            vec!["public".into()],
+            Duration::ZERO,
+            Duration::ZERO,
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .context("Invalid PostgreSQL session profile")?;
+        let database = RunledgerDatabase::connect_lazy(options, profile, pool_options)
+            .context("Could not construct the PostgreSQL pool")?;
+        Ok(Self { database })
+    }
+
+    /// Profiled database authority for Runledger's atomic and schema APIs.
+    pub fn runledger(&self) -> &RunledgerDatabase {
+        &self.database
+    }
+[% endif %]
 
     pub fn pool(&self) -> &DbPool {
+[% if jobs_enabled %]
+        self.database.pool()
+[% else %]
         &self.pool
+[% endif %]
     }
 
-    pub async fn migrate(&self) -> anyhow::Result<()> {
-        self.migrate_with_timeout(DEFAULT_DB_TIMEOUT).await
+    /// Close an unowned pool. Owned pools close through their cleanup slot.
+    pub async fn close(&self) {
+        self.pool().close().await;
     }
 
-    pub async fn migrate_with_timeout(&self, timeout_after: Duration) -> anyhow::Result<()> {
-        tokio::time::timeout(timeout_after, self.run_migrations())
+[% if jobs_enabled %]
+    /// Apply Runledger's history, then application migrations, and verify that
+    /// the combined schema is compatible. Both histories share `_sqlx_migrations`,
+    /// so the application migrator recognizes both bundled histories.
+    pub async fn migrate(&self, context: &OperationContext) -> anyhow::Result<()> {
+        let operation = context.child(DEFAULT_DB_TIMEOUT)?.into_context();
+        operation
+            .run("database.migrate.runledger", |_| {
+                runledger::migrate_after_idempotency_cutover(&self.database)
+            })
             .await
-            .with_context(|| {
-                format!("Timed out running database migrations after {timeout_after:?}")
-            })??;
+            .context("Failed to apply Runledger migrations")?;
+        let lease = PgLease::acquire(self.pool(), &operation)
+            .await
+            .context("Could not acquire a migration connection")?;
+        let application = application_migrator();
+        operation
+            .run("database.migrate", |_| lease.migrate(&application))
+            .await
+            .context("Failed to run database migrations")?;
+        operation
+            .run("database.migrate.verify", |_| {
+                runledger::ensure_schema_compatible_after_idempotency_cutover(&self.database)
+            })
+            .await
+            .context("The database schema is not compatible with Runledger")?;
         Ok(())
     }
+[% else %]
+    /// Apply application migrations on one leased connection under a bounded
+    /// child of `context`. Failure or cancellation retires that connection.
+    pub async fn migrate(&self, context: &OperationContext) -> anyhow::Result<()> {
+        let operation = context.child(DEFAULT_DB_TIMEOUT)?.into_context();
+        let lease = PgLease::acquire(self.pool(), &operation)
+            .await
+            .context("Could not acquire a migration connection")?;
+        operation
+            .run("database.migrate", |_| lease.migrate(&MIGRATOR))
+            .await
+            .context("Failed to run database migrations")?;
+        Ok(())
+    }
+[% endif %]
 
-    async fn run_migrations(&self) -> anyhow::Result<()> {
-        sqlx::migrate!(
-            // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
-            "<<[ migration_path ]>>"
-        )
-        .run(&self.pool)
-        .await?;
-        Ok(())
+    /// Register a supervised monitor that probes this pool independently of
+    /// HTTP traffic. Readiness reads its observations without doing I/O.
+    pub fn register_health(
+        &self,
+        mut registration: Registration<'_>,
+    ) -> anyhow::Result<HealthReader<DbHealthError>> {
+        let pool = self.pool().clone();
+        let monitor = HealthMonitor::new(health_policy()?, move || {
+            let pool = pool.clone();
+            async move {
+                let context = OperationOwner::new(HEALTH_PROBE_BUDGET)
+                    .expect("constant health probe budget is valid")
+                    .into_context();
+                batter::sqlx::probe(&pool, &context).await
+            }
+        });
+        Ok(monitor.register_in(&mut registration, "database.health")?)
     }
+}
+[% if jobs_enabled %]
+
+/// Recognize both histories without disabling SQLx's missing-version checks.
+/// Runledger's own migration API runs first; its bundled entries are already
+/// applied when this plan validates history and applies application migrations.
+pub fn application_migrator() -> Migrator {
+    Migrator::with_migrations(
+        MIGRATOR
+            .iter()
+            .chain(runledger::MIGRATOR.iter())
+            .cloned()
+            .collect(),
+    )
+}
+[% endif %]
+
+/// Probe every five seconds; an observation older than ten seconds is stale.
+fn health_policy() -> Result<HealthPolicy, batter::ConfigurationError> {
+    HealthPolicy::new(
+        HEALTH_PROBE_BUDGET,
+        Duration::from_secs(5),
+        Duration::from_secs(10),
+        Duration::from_secs(1),
+    )
 }
 
 #[cfg(test)]
-mod tests {
-    use super::Db;
-    use batter::{
-        cleanup::{CleanupBudget, CleanupOutcome, CleanupStack},
-        operation::OperationContext,
-    };
-    use std::{
-        io::{Read, Write},
-        net::{TcpListener, TcpStream},
-        time::Duration,
-    };
-
-    fn write_backend_message(stream: &mut TcpStream, tag: u8, body: &[u8]) {
-        stream.write_all(&[tag]).expect("write message tag");
-        let length = u32::try_from(body.len() + 4).expect("test message length fits in u32");
-        stream
-            .write_all(&length.to_be_bytes())
-            .expect("write message length");
-        stream.write_all(body).expect("write message body");
-    }
-
-    fn run_stalled_postgres(
-        listener: TcpListener,
-        query_started: tokio::sync::oneshot::Sender<()>,
-    ) {
-        let (mut stream, _) = listener.accept().expect("accept PostgreSQL connection");
-        let mut length = [0_u8; 4];
-        stream
-            .read_exact(&mut length)
-            .expect("read startup message length");
-        let startup_length = u32::from_be_bytes(length) as usize;
-        assert!(
-            startup_length >= 8,
-            "startup packet includes protocol version"
-        );
-        let mut startup = vec![0_u8; startup_length - 4];
-        stream
-            .read_exact(&mut startup)
-            .expect("read startup message body");
-
-        write_backend_message(&mut stream, b'R', &0_u32.to_be_bytes());
-        write_backend_message(&mut stream, b'S', b"server_version\0\x31\x38.0\0");
-        write_backend_message(&mut stream, b'S', b"client_encoding\0UTF8\0");
-        write_backend_message(&mut stream, b'K', &[0_u8; 8]);
-        write_backend_message(&mut stream, b'Z', b"I");
-        stream.flush().expect("flush PostgreSQL startup response");
-
-        let mut query_header = [0_u8; 5];
-        stream
-            .read_exact(&mut query_header)
-            .expect("read first query protocol message");
-        assert!(
-            matches!(query_header[0], b'P' | b'Q'),
-            "probe starts a PostgreSQL query"
-        );
-        query_started.send(()).expect("notify query start");
-
-        let mut remainder = [0_u8; 1024];
-        while stream
-            .read(&mut remainder)
-            .expect("read until client closes")
-            != 0
-        {}
-    }
-
-    #[tokio::test]
-    async fn interrupted_established_probe_retires_lease_and_closes_pool() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local PostgreSQL stub");
-        let port = listener.local_addr().expect("read listener address").port();
-        let (query_started, query_waiting) = tokio::sync::oneshot::channel();
-        let server = tokio::task::spawn_blocking(move || {
-            run_stalled_postgres(listener, query_started);
-        });
-
-        let mut cleanup = CleanupStack::new();
-        let context = OperationContext::new(Duration::from_secs(5)).unwrap();
-        let cancelling = context.clone();
-        let database_url = format!("postgres://postgres@127.0.0.1:{port}/example?sslmode=disable");
-        let error = {
-            let connecting = Db::connect_in(
-                &database_url,
-                &context,
-                cleanup.reserve("database.close").unwrap(),
-            );
-            tokio::pin!(connecting);
-
-            tokio::select! {
-                biased;
-                result = &mut connecting => panic!("probe completed before cancellation: {result:?}"),
-                started = query_waiting => {
-                    started.expect("the PostgreSQL stub observes the probe query");
-                    cancelling.cancel();
-                }
-            }
-            connecting
-                .await
-                .expect_err("cancellation interrupts the established query")
-        };
-        assert!(format!("{error:#}").contains("operation cancelled"));
-
-        let report = tokio::time::timeout(
-            Duration::from_secs(1),
-            cleanup.close(
-                CleanupBudget::new(
-                    Duration::from_secs(1),
-                    Duration::from_secs(1),
-                    Duration::from_secs(1),
-                )
-                .unwrap(),
-            ),
-        )
-        .await
-        .expect("pool cleanup reaches an explicit outcome within the bound");
-        assert!(report.is_success());
-        assert_eq!(report.records.len(), 1);
-        assert_eq!(report.records[0].name, "database.close");
-        assert_eq!(report.records[0].outcome, CleanupOutcome::Succeeded);
-        tokio::time::timeout(Duration::from_secs(1), server)
-            .await
-            .expect("the retired connection closes the stalled server session locally")
-            .expect("the PostgreSQL stub exits cleanly");
-    }
-}
+mod tests;

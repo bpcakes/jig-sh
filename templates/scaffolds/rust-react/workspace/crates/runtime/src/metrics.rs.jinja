@@ -1,0 +1,128 @@
+//! Opt-in OTLP/HTTP export of Batter's bounded foundation metrics catalog:
+//! operations, admission decisions, task exits, cleanup, and shutdown.
+//!
+//! Without `METRICS_OTLP_ENDPOINT` nothing is installed and no collector is
+//! contacted. Export diagnostics never change the service result or exit code.
+
+use std::{future::Future, pin::Pin, time::Duration};
+
+use ::<<[ module_name ]>>_core::APP_NAME;
+use batter::{
+    otlp::{
+        self, Prepared, Schedule,
+        diagnostics::{ExportReport, MetricsExport},
+    },
+    service::{DiagnosticCompletion, DiagnosticOutcome, Diagnostics},
+    settings::SettingsError,
+};
+
+/// Export cadence, the bound on each attempt, and the final flush allowance.
+const EXPORT_INTERVAL: Duration = Duration::from_secs(10);
+const EXPORT_ATTEMPT: Duration = Duration::from_secs(3);
+const FINAL_EXPORT: Duration = Duration::from_secs(5);
+
+/// OTLP limits the service name to 64 ASCII name bytes.
+const SERVICE_NAME_LIMIT: usize = 64;
+
+/// Selected diagnostics for one serving run.
+pub(crate) enum MetricsDiagnostics {
+    Disabled,
+    Otlp(Box<Prepared>),
+}
+
+/// Retained beside the service result, never in place of it.
+#[derive(Debug)]
+pub(crate) enum MetricsReport {
+    Disabled,
+    Export(MetricsExport),
+}
+
+/// Validate the endpoint and prepare an inert pipeline before startup. Batter
+/// rejects ambient `OTEL_*` settings because native builders would merge them.
+pub(crate) fn prepare(endpoint: Option<&str>) -> Result<MetricsDiagnostics, SettingsError> {
+    let Some(endpoint) = endpoint else {
+        return Ok(MetricsDiagnostics::Disabled);
+    };
+    let schedule = Schedule::new(EXPORT_INTERVAL, EXPORT_ATTEMPT, FINAL_EXPORT)?;
+    let prepared = otlp::prepare(endpoint, service_name(), schedule)?;
+    Ok(MetricsDiagnostics::Otlp(Box::new(prepared)))
+}
+
+fn service_name() -> &'static str {
+    &APP_NAME[..APP_NAME.len().min(SERVICE_NAME_LIMIT)]
+}
+
+impl Diagnostics for MetricsDiagnostics {
+    type Report = MetricsReport;
+
+    fn install(
+        self,
+        completion: DiagnosticCompletion,
+    ) -> impl Future<Output = Self::Report> + Send + 'static {
+        let future: Pin<Box<dyn Future<Output = Self::Report> + Send>> = match self {
+            Self::Disabled => Box::pin(async move {
+                let _ = completion.wait().await;
+                MetricsReport::Disabled
+            }),
+            Self::Otlp(prepared) => {
+                let export = (*prepared).install(completion);
+                Box::pin(async move { MetricsReport::Export(export.await) })
+            }
+        };
+        future
+    }
+}
+
+/// Log closed export categories and bounded counts; never collector content.
+pub(crate) fn report(outcome: &DiagnosticOutcome<MetricsReport>) {
+    match outcome {
+        DiagnosticOutcome::Completed(MetricsReport::Disabled) => {}
+        DiagnosticOutcome::Completed(MetricsReport::Export(MetricsExport::Exported(report))) => {
+            report_export(report);
+        }
+        DiagnosticOutcome::Completed(MetricsReport::Export(
+            MetricsExport::InstallationRejected { .. },
+        )) => tracing::warn!("another metrics recorder was installed; export was skipped"),
+        DiagnosticOutcome::InstallationPanicked(_) | DiagnosticOutcome::TaskFailed(_) => {
+            tracing::warn!("metrics export ended without a report");
+        }
+    }
+}
+
+fn report_export(report: &ExportReport) {
+    tracing::info!(
+        attempts = report.periodic.attempts,
+        acknowledged = report.periodic.acknowledged,
+        failed = report.periodic.failed,
+        final_export = ?report.final_export,
+        "metrics export finished"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_endpoint_installs_nothing() {
+        assert!(matches!(prepare(None), Ok(MetricsDiagnostics::Disabled)));
+    }
+
+    #[test]
+    fn invalid_endpoints_are_rejected_before_startup() {
+        for endpoint in [
+            "not a url",
+            "http://127.0.0.1:4318/wrong-path",
+            "http://user:secret@127.0.0.1:4318/v1/metrics",
+        ] {
+            let error = prepare(Some(endpoint)).err().expect("endpoint is rejected");
+            assert!(!format!("{error} {error:?}").contains("secret"));
+        }
+    }
+
+    #[test]
+    fn service_name_fits_the_otlp_identity_limit() {
+        assert!(!service_name().is_empty());
+        assert!(service_name().len() <= SERVICE_NAME_LIMIT);
+    }
+}

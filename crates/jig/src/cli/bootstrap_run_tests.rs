@@ -171,6 +171,8 @@ fn invalid_go_module_fails_before_vault_capture_or_destination_writes() {
                     db: Some(bootstrap::ScaffoldDb::None),
                     frontends: vec![bootstrap::parse_scaffold_frontend("web").unwrap()],
                     frontend_list: Vec::new(),
+                    metrics: None,
+                    jobs: None,
                 },
                 template: None,
                 template_mode: None,

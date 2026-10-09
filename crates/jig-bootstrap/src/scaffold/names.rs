@@ -2,10 +2,16 @@ use std::path::{Component, Path};
 
 use anyhow::{Result, bail};
 
+use super::{ScaffoldDb, ScaffoldJobs, ScaffoldMetrics};
+
 const POSTGRES_IDENTIFIER_LIMIT: usize = 63;
 const DNS_LABEL_LIMIT: usize = 63;
 const HASH_SUFFIX_LENGTH: usize = 17;
 const RUST_REACT_PACKAGE_STEM_LIMIT: usize = 216;
+/// `postgres-test-harness` namespaces databases with at most 16 lowercase
+/// ASCII letters, digits, or underscores, starting with a letter.
+const FIXTURE_PROJECT_LIMIT: usize = 16;
+const FIXTURE_PROJECT_HASH_DIGITS: usize = 4;
 
 pub(super) fn bounded_postgres_identifier(value: &str) -> String {
     if value.len() <= POSTGRES_IDENTIFIER_LIMIT {
@@ -26,6 +32,98 @@ pub(super) fn bounded_postgres_identifier(value: &str) -> String {
         prefix_end
     };
     format!("{}_{hash:016x}", &value[..prefix_end])
+}
+
+/// Derive the PostgreSQL fixture harness namespace from the module name. A
+/// shortened namespace keeps a stable hash suffix of the complete name.
+pub(super) fn fixture_project_name(module_name: &str) -> String {
+    let mut name = module_name
+        .chars()
+        .map(|ch| ch.to_ascii_lowercase())
+        .filter(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '_')
+        .collect::<String>();
+    if !name.starts_with(|ch: char| ch.is_ascii_lowercase()) {
+        name.insert(0, 'p');
+    }
+    if name.len() <= FIXTURE_PROJECT_LIMIT {
+        return name;
+    }
+    let hash = stable_hash(module_name.as_bytes()) & 0xffff;
+    name.truncate(FIXTURE_PROJECT_LIMIT - FIXTURE_PROJECT_HASH_DIGITS - 1);
+    format!(
+        "{name}_{hash:0width$x}",
+        width = FIXTURE_PROJECT_HASH_DIGITS
+    )
+}
+
+/// Reject a repository name whose generated packages would collide with a
+/// Batter-owned package that the selected shape adds to the dependency graph.
+pub(super) fn validate_rust_react_batter_packages(
+    package_name: &str,
+    database: ScaffoldDb,
+    metrics: ScaffoldMetrics,
+    jobs: ScaffoldJobs,
+) -> Result<()> {
+    let Some(generated) =
+        rust_react_batter_package_collision(package_name, database, metrics, jobs)
+    else {
+        return Ok(());
+    };
+    if generated == package_name {
+        bail!(
+            "Rust-react repo name normalizes to '{package_name}', which conflicts with a required Batter dependency. Choose a different --repo-name."
+        );
+    }
+    bail!(
+        "Rust-react repo name normalizes to '{package_name}', so the generated package '{generated}' conflicts with a required Batter dependency. Choose a different --repo-name."
+    )
+}
+
+/// Return the first generated workspace package that would share a name with a
+/// Batter-owned package selected by this application shape. Cargo package
+/// specifications such as `cargo test -p <name>` would then be ambiguous.
+fn rust_react_batter_package_collision(
+    package_name: &str,
+    database: ScaffoldDb,
+    metrics: ScaffoldMetrics,
+    jobs: ScaffoldJobs,
+) -> Option<String> {
+    let mut selected = vec!["batter", "batter-core", "batter-axum"];
+    let mut suffixes = vec![
+        "",
+        "-api",
+        "-core",
+        "-http",
+        "-http-common",
+        "-runtime",
+        "-test-support",
+        "-admin-http",
+        "-admin-api",
+    ];
+    if database == ScaffoldDb::Postgres {
+        selected.extend([
+            "batter-sqlx",
+            "batter-test-support",
+            "postgres-test-harness",
+        ]);
+        suffixes.push("-db");
+    }
+    if metrics == ScaffoldMetrics::Otlp {
+        selected.push("batter-otlp");
+    }
+    if jobs == ScaffoldJobs::Runledger {
+        selected.extend([
+            "batter-runledger",
+            "runledger-core",
+            "runledger-postgres",
+            "runledger-runtime",
+        ]);
+        suffixes.push("-jobs");
+    }
+    suffixes
+        .into_iter()
+        .map(|suffix| format!("{package_name}{suffix}"))
+        .find(|generated| selected.contains(&generated.as_str()))
 }
 
 pub(super) fn default_repo_name(destination: &Path) -> String {
@@ -326,6 +424,36 @@ pub(super) fn validate_scaffold_relative_path(label: &str, value: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_project_names_fit_the_postgres_test_harness_namespace() {
+        assert_eq!(fixture_project_name("example_app"), "example_app");
+        assert_eq!(fixture_project_name("app_123"), "app_123");
+        let long = fixture_project_name("example_project_with_a_long_name");
+        assert_eq!(long.len(), FIXTURE_PROJECT_LIMIT);
+        assert!(long.starts_with("example_pro_"));
+        assert_ne!(
+            long,
+            fixture_project_name("example_project_with_a_long_other")
+        );
+        assert_eq!(
+            long,
+            fixture_project_name("example_project_with_a_long_name")
+        );
+        for name in [long.as_str(), &fixture_project_name(&"a".repeat(216))] {
+            assert!(name.len() <= FIXTURE_PROJECT_LIMIT, "{name}");
+            assert!(
+                name.starts_with(|ch: char| ch.is_ascii_lowercase()),
+                "{name}"
+            );
+            assert!(
+                name.bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
+                "{name}"
+            );
+        }
+        assert_eq!(fixture_project_name("_private"), "p_private");
+    }
 
     #[test]
     fn go_module_rejects_relative_path_segments() {

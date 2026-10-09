@@ -319,6 +319,20 @@ pub struct ScaffoldOpts {
         help = "Comma-separated frontend scaffolds, e.g. web,landing,admin. Bare web, landing, and admin use preset shorthands. Rust-react reserves api and admin-api for backend dev apps."
     )]
     pub frontend_list: Vec<ScaffoldFrontend>,
+    #[arg(
+        long,
+        value_enum,
+        help_heading = "Project Shape",
+        help = "Metrics export for --preset rust-react; otlp compiles Batter's bounded OTLP/HTTP exporter, enabled at runtime by METRICS_OTLP_ENDPOINT"
+    )]
+    pub metrics: Option<ScaffoldMetrics>,
+    #[arg(
+        long,
+        value_enum,
+        help_heading = "Project Shape",
+        help = "Background jobs for --preset rust-react --db postgres; runledger adds a Batter-supervised Runledger worker"
+    )]
+    pub jobs: Option<ScaffoldJobs>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -334,6 +348,36 @@ pub enum ScaffoldPreset {
 pub enum ScaffoldDb {
     None,
     Postgres,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ScaffoldMetrics {
+    None,
+    Otlp,
+}
+
+impl ScaffoldMetrics {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Otlp => "otlp",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ScaffoldJobs {
+    None,
+    Runledger,
+}
+
+impl ScaffoldJobs {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Runledger => "runledger",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
