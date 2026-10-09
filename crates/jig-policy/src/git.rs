@@ -23,6 +23,7 @@ const CONTROLLED_GIT_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 fn git_command(root: &Path) -> Command {
     let mut command = Command::new("git");
     command.current_dir(root);
+    jig_git::scrub_known_repository_git_environment(&mut command);
     jig_vault::withhold_vault_passphrase(&mut command);
     command
 }
@@ -72,7 +73,6 @@ pub(super) fn controlled_git_output(
 ) -> Result<ControlledBytesOutput> {
     let mut command = git_command(root);
     command.args(args);
-    jig_git::scrub_known_repository_git_environment(&mut command);
     let output = controlled_output_bytes_with_limits(
         &mut command,
         deadline,

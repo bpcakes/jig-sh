@@ -64,15 +64,32 @@ impl GuideDiscovery {
             if kind.is_dir()
                 && let Some(child) = self.capture(&relative, directory.open_dir_nofollow(&name))
             {
+                // A nested repository's guides belong to that repository.
+                if is_nested_repository(&child) {
+                    continue;
+                }
                 self.collect(&child, &relative);
             }
         }
     }
 }
 
+/// A directory with a real `.git` entry: a gitdir with `HEAD`, or the file a
+/// worktree or submodule keeps there. A bare `.git` directory, such as a
+/// fixture, is not a repository.
+fn is_nested_repository(directory: &Dir) -> bool {
+    match directory.symlink_metadata(".git") {
+        Ok(metadata) if metadata.is_dir() => directory.symlink_metadata(".git/HEAD").is_ok(),
+        Ok(metadata) => metadata.is_file(),
+        Err(_) => false,
+    }
+}
+
 impl GuideFiles {
     /// Existing guides are independent of Git ignore rules. Directory handles
-    /// keep discovery beneath the same pinned root used for guide reads.
+    /// keep discovery beneath the same pinned root used for guide reads, and
+    /// discovery does not descend into nested repositories: their guides
+    /// belong to them.
     pub fn discover(&self) -> GuideDiscovery {
         let mut discovery = GuideDiscovery::default();
         discovery.collect(&self.root, Path::new(""));

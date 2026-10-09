@@ -117,9 +117,20 @@
   is not migrated by `jig update`.
 
 ### Fixed
+
 - Reject `rust-react` repository names whose generated packages would collide
   with Batter-owned packages that the selected shape adds, such as
   `runledger-core` for a repository named `runledger` with `--jobs runledger`.
+- Rendered files keep the trailing newline their templates end with. Earlier
+  renders dropped it, so generated launchers, workflows, and manifests were
+  incomplete text files and the source checkout's launcher parity check
+  failed after every re-render.
+- The guides seeded into the agent map during `init`, `adopt`, and `update`
+  now come from the same Git-aware listing as `agent-map generate`, so
+  Git-ignored guides no longer appear in `agent-map.md` after an update.
+  Guide discovery for `check agent-guides` and the agent map no longer
+  descends into nested repositories, whose guides belong to them; Git ignore
+  rules still do not exclude existing guides.
 - Preserve operator guidance when an output or process failure also encounters
   an audit integrity refusal, and keep malformed journal contents out of errors.
 - Let CLI and bootstrap initialization finish a recorded init even if today's

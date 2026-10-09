@@ -194,6 +194,7 @@ pub(super) fn list_guides(root: &Path) -> Result<Vec<String>> {
                     && !Path::new(&path)
                         .components()
                         .any(is_ignored_guide_component)
+                    && has_repository_owned_ancestors(root, Path::new(&path))?
                 {
                     guides.insert(path);
                 }
@@ -203,6 +204,42 @@ pub(super) fn list_guides(root: &Path) -> Result<Vec<String>> {
         collect_guides(root, root, &mut guides)?;
     }
     Ok(guides.into_iter().collect())
+}
+
+fn has_repository_owned_ancestors(root: &Path, guide: &Path) -> Result<bool> {
+    let mut directory = root.to_path_buf();
+    for component in guide.parent().unwrap_or_else(|| Path::new("")).components() {
+        directory.push(component);
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if !metadata.is_dir() => return Ok(false),
+            Ok(_) => {}
+            // Preserve listing of tracked deletions; preview seeding skips
+            // missing leaves. No deeper directory can exist in this case.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to inspect {}", directory.display()));
+            }
+        }
+        // Git index membership does not establish the current filesystem
+        // boundary: a tracked directory can become a nested checkout.
+        if is_nested_repository(&directory) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// A directory with a real `.git` entry: a gitdir with `HEAD`, or the file a
+/// worktree or submodule keeps there. A bare `.git` directory is not one.
+fn is_nested_repository(directory: &Path) -> bool {
+    match fs::symlink_metadata(directory.join(".git")) {
+        Ok(metadata) if metadata.is_dir() => {
+            fs::symlink_metadata(directory.join(".git/HEAD")).is_ok()
+        }
+        Ok(metadata) => metadata.is_file(),
+        Err(_) => false,
+    }
 }
 
 fn collect_guides(root: &Path, current: &Path, guides: &mut BTreeSet<String>) -> Result<()> {
@@ -216,6 +253,10 @@ fn collect_guides(root: &Path, current: &Path, guides: &mut BTreeSet<String>) ->
             continue;
         }
         if entry.file_type()?.is_dir() {
+            // A nested repository's guides belong to that repository.
+            if is_nested_repository(&path) {
+                continue;
+            }
             collect_guides(root, &path, guides)?;
         } else if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md") {
             guides.insert(relative_string(root, &path)?);
@@ -640,3 +681,6 @@ targets = [
         assert_eq!(output["guide_count"], 3);
     }
 }
+
+#[cfg(test)]
+mod list_guides_tests;
