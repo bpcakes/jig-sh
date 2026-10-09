@@ -1,308 +1,312 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Style, Stylize},
+    style::{Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::Paragraph,
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
-use super::{ACCENT, BAD, MUTED, WARN, panel, stale_projection_style, stale_usage_style};
-use crate::model::{App, Focus, Inspection, WindowRole};
+use super::{
+    View,
+    meter::{Bar, Look, meter},
+    panel, stale_projection_style, stale_usage_style,
+    wrap::{Detail, wrap},
+};
+use crate::model::{Focus, Inspection, WindowRole, WindowView};
+use jig_tui::format_percent;
 
 const STALE_PREFIX: &str = "stale · ";
+/// Long enough to read a pace tick, short enough to scan in a wide pane.
+const MAX_METER: usize = 48;
+const MIN_INLINE_METER: usize = 16;
+const LABEL_LIMIT: usize = 18;
 
-/// A detail line and the column its wrapped continuation rows start at.
-pub(super) struct Detail {
-    line: Line<'static>,
-    hang: usize,
-}
-
-pub(super) fn draw_details(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    now: u64,
-    best: Option<usize>,
-) {
-    let block = panel(detail_title(app), app.focus == Focus::Details);
-    if app.selected_row().is_none() {
+pub(super) fn draw_details(frame: &mut Frame, area: Rect, view: &View<'_>) {
+    let app = view.app;
+    let focused = app.focus == Focus::Details;
+    let Some(row) = app.selected_row() else {
         app.set_detail_scroll_limit(0);
-        frame.render_widget(Paragraph::new("No home selected.").block(block), area);
+        frame.render_widget(
+            Paragraph::new("No home selected.").block(panel(view, "selected home", "", focused)),
+            area,
+        );
         return;
+    };
+    let mut block = panel(view, row.display_name(), "", focused);
+    if let Inspection::Ready(details) = row.inspection() {
+        let summary = [details.account_label(), details.plan.as_str()]
+            .into_iter()
+            .filter(|text| *text != "-")
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if !summary.is_empty() {
+            block = block.title(
+                Line::from(Span::styled(
+                    format!(" {summary} "),
+                    Style::default().fg(view.theme.muted()),
+                ))
+                .right_aligned(),
+            );
+        }
     }
-    let width = usize::from(area.width.saturating_sub(2));
-    let lines = detail_lines(app, now, best)
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let width = usize::from(inner.width);
+    let lines = detail_lines(view, width)
         .into_iter()
         .flat_map(|detail| wrap(detail, width))
         .collect::<Vec<_>>();
-    let visible_rows = usize::from(area.height.saturating_sub(2));
-    let max_scroll = u16::try_from(lines.len().saturating_sub(visible_rows)).unwrap_or(u16::MAX);
+    let max_scroll =
+        u16::try_from(lines.len().saturating_sub(usize::from(inner.height))).unwrap_or(u16::MAX);
     app.set_detail_scroll_limit(max_scroll);
     frame.render_widget(
-        Paragraph::new(lines)
-            .block(block)
-            .scroll((app.detail_scroll.min(max_scroll), 0)),
-        area,
+        Paragraph::new(lines).scroll((app.detail_scroll.min(max_scroll), 0)),
+        inner,
     );
 }
 
-/// Account and usage first, since they decide the choice; the home's identity follows.
-fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Detail> {
+/// Usage first, since it decides the choice; the account and the home's
+/// identity follow as aligned label columns.
+fn detail_lines(view: &View<'_>, width: usize) -> Vec<Detail> {
+    let app = view.app;
+    let theme = view.theme;
     let Some(row) = app.selected_row() else {
         return Vec::new();
     };
     let mut lines = Vec::new();
     if app.selected.is_some()
-        && app.selected == best
-        && let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation()
+        && app.selected == view.best
+        && let Some(recommendation) = row.usage_snapshot_assessment_at(view.now).recommendation()
     {
-        lines.push(key_value("Recommendation", recommendation.label));
+        lines.push(styled(
+            &format!("★ {}", recommendation.label),
+            Style::default()
+                .fg(theme.best())
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.push(blank());
     }
+    let mut facts: Vec<(String, String)> = Vec::new();
+    // The account's facts come first; a blank line sets the home's apart.
+    let mut account_facts = 0;
+    let mut errors = Vec::new();
     if !app.static_configuration {
         match row.inspection() {
-            Inspection::Loading => lines.push(styled(
-                "Loading account and usage… You can launch now.",
-                Style::default().fg(WARN),
-            )),
-            Inspection::Unavailable => lines.push(styled(
-                "Inspection stopped before this home completed.",
-                Style::default().fg(BAD),
-            )),
+            Inspection::Loading => {
+                lines.push(styled(
+                    "Loading account and usage… You can launch now.",
+                    Style::default().fg(theme.warn()),
+                ));
+                lines.push(blank());
+            }
+            Inspection::Unavailable => {
+                lines.push(styled(
+                    "Inspection stopped before this home completed.",
+                    Style::default().fg(theme.bad()),
+                ));
+                lines.push(blank());
+            }
             Inspection::Ready(details) => {
-                lines.extend([
-                    key_value("Account", details.account_label()),
-                    key_value("Type", &details.account_type),
-                    key_value("Plan", &details.plan),
-                    key_value("Status", &details.status),
-                ]);
+                // Align every bucket's meters on one column.
+                let role_width = details
+                    .buckets
+                    .iter()
+                    .flat_map(|bucket| details.windows_at(bucket, view.now))
+                    .map(|window| window_name(&window).width())
+                    .max()
+                    .unwrap_or(0);
                 for bucket in &details.buckets {
-                    lines.push(blank());
                     lines.push(styled(
                         &format!("{} usage", bucket.label()),
-                        Style::default().fg(ACCENT).bold(),
+                        Style::default().fg(theme.accent()).bold(),
                     ));
                     if bucket.plan != "-" && bucket.plan != details.plan {
-                        lines.push(key_value("Plan", &bucket.plan));
+                        lines.push(styled(&format!("Plan: {}", bucket.plan), Style::default()));
                     }
                     if bucket.reached != "-" {
-                        lines.push(key_value("Reached", &bucket.reached));
-                    }
-                    for (index, window) in bucket.windows.iter().enumerate() {
-                        let role = bucket.window_role(index);
-                        let assessment =
-                            details.window_usage_snapshot_assessment_at(bucket, index, now);
-                        let projection = assessment.projection();
-                        // A generic window's role does not name its duration.
-                        let usage = if role == WindowRole::Window {
-                            window.usage_detail()
-                        } else {
-                            window.usage_amounts()
-                        };
-                        lines.push(snapshot_line(
-                            "  ",
-                            &format!("{role}: "),
-                            &format!("{usage} · {}", window.reset_label_at(now)),
-                            assessment.quota_is_stale(),
-                            stale_usage_style(assessment.quota_is_stale()),
-                        ));
-                        lines.push(snapshot_line(
-                            "    ",
-                            "At current pace: ",
-                            &projection.outcome_label(),
-                            assessment.projection_is_stale(),
-                            stale_projection_style(projection, assessment.projection_is_stale()),
+                        lines.push(styled(
+                            &format!("Reached: {}", bucket.reached),
+                            Style::default(),
                         ));
                     }
+                    let windows = details.windows_at(bucket, view.now);
+                    for (position, window) in windows.iter().enumerate() {
+                        if position > 0 {
+                            lines.push(blank());
+                        }
+                        lines.extend(window_lines(view, window, role_width, width));
+                    }
+                    lines.push(blank());
                 }
-                if let Some(sample_age) = details.usage_sample_age_label_at(now) {
-                    lines.push(key_value(
-                        "Usage sample",
-                        &format!("{sample_age} · reopen to refresh"),
+                account_facts = 4;
+                facts.extend([
+                    ("Account".to_owned(), details.account_label().to_owned()),
+                    ("Plan".to_owned(), details.plan.clone()),
+                    ("Type".to_owned(), details.account_type.clone()),
+                    ("Status".to_owned(), details.status.clone()),
+                ]);
+                if let Some(sample_age) = details.usage_sample_age_label_at(view.now) {
+                    account_facts += 1;
+                    facts.push((
+                        "Usage sample".to_owned(),
+                        format!("{sample_age} · reopen to refresh"),
                     ));
                 }
                 if let Some(error) = &details.inspection_error {
-                    lines.push(error_line("Inspection", error));
+                    errors.push(("Inspection", error.clone()));
                 }
                 if let Some(error) = &details.usage_error {
-                    lines.push(error_line("Usage", error));
+                    errors.push(("Usage", error.clone()));
                 }
             }
         }
-        lines.push(blank());
     }
-    lines.extend([
-        key_value("Name", row.display_name()),
-        key_value("Path", row.display_path()),
-        key_value("Current", if row.is_current() { "yes" } else { "no" }),
+    facts.extend([
+        ("Name".to_owned(), row.display_name().to_owned()),
+        ("Path".to_owned(), row.display_path().to_owned()),
+        (
+            "Current".to_owned(),
+            if row.is_current() { "yes" } else { "no" }.to_owned(),
+        ),
     ]);
     if let Some(details) = &row.configuration_details {
-        lines.extend(details.iter().map(|(label, value)| key_value(label, value)));
+        facts.extend(details.iter().cloned());
+    }
+    let label_width = facts
+        .iter()
+        .map(|(label, _)| label.width())
+        .max()
+        .unwrap_or(0)
+        .min(LABEL_LIMIT);
+    let label_style = Style::default().fg(theme.muted());
+    for (position, (label, value)) in facts.iter().enumerate() {
+        if position > 0 && position == account_facts {
+            lines.push(blank());
+        }
+        lines.push(Detail::labeled(label, value, label_width, label_style));
+    }
+    for (label, error) in errors {
+        lines.push(error_line(theme.bad(), &format!("{label} error: "), &error));
     }
     if let Some(error) = &app.inspection_error {
-        lines.push(error_line("Worker", error));
+        lines.push(error_line(theme.bad(), "Worker error: ", error));
     }
     for warning in &app.discovery_warnings {
-        lines.push(Detail {
-            hang: "Discovery warning: ".width(),
-            line: Line::styled(
-                format!("Discovery warning: {warning}"),
-                Style::default().fg(WARN),
-            ),
-        });
+        lines.push(error_line(theme.warn(), "Discovery warning: ", warning));
     }
     lines
 }
 
-fn detail_title(app: &App) -> &'static str {
-    if app.focus == Focus::Details {
-        "Selected home  [focused]"
+/// A usage window. Wide panes put the label, a long meter, and the used quota
+/// with its reset on one line; narrow ones give the meter its own line. The
+/// pace follows either way.
+fn window_lines(
+    view: &View<'_>,
+    window: &WindowView<'_>,
+    role_width: usize,
+    width: usize,
+) -> Vec<Detail> {
+    let theme = view.theme;
+    let quota_stale = window.assessment.quota_is_stale();
+    let projection = window.assessment.projection();
+    let projection_stale = window.assessment.projection_is_stale();
+    let reset = window.window.reset_label_at(view.now);
+    let pace = |indent: usize| {
+        let mut line = snapshot_line(
+            "At current pace: ",
+            &projection.outcome_label(),
+            projection_stale,
+            stale_projection_style(theme, projection, projection_stale),
+        );
+        line.line.spans.insert(0, Span::raw(" ".repeat(indent)));
+        line.hang += indent;
+        line
+    };
+    let label = super::pad(&window_name(window), role_width + 2);
+    let used = window.gauge.used.map_or_else(
+        || "usage unavailable".to_owned(),
+        |used| format!("{} used", format_percent(used)),
+    );
+    let tail = format!(
+        "  {}{used} · {reset}",
+        if quota_stale { STALE_PREFIX } else { "" }
+    );
+    let meter_width = width
+        .saturating_sub(label.width() + tail.width())
+        .min(MAX_METER);
+    if meter_width >= MIN_INLINE_METER {
+        let mut spans = vec![Span::styled(label.clone(), Style::default().bold())];
+        spans.extend(meter(
+            theme,
+            window.gauge,
+            meter_width,
+            block_look(quota_stale),
+        ));
+        spans.push(Span::styled(tail, stale_usage_style(theme, quota_stale)));
+        return vec![Detail::new(Line::from(spans), 0), pace(label.width())];
+    }
+    // A generic window's role does not name its duration.
+    let usage = if window.role == WindowRole::Window {
+        window.window.usage_detail()
     } else {
-        "Selected home"
+        window.window.usage_amounts()
+    };
+    let mut meter_line = vec![Span::raw("  ")];
+    meter_line.extend(meter(
+        theme,
+        window.gauge,
+        width.saturating_sub(2).min(MAX_METER),
+        block_look(quota_stale),
+    ));
+    vec![
+        snapshot_line(
+            &format!("{}: ", window.role),
+            &format!("{usage} · {reset}"),
+            quota_stale,
+            stale_usage_style(theme, quota_stale),
+        ),
+        Detail::new(Line::from(meter_line), 0),
+        pace(0),
+    ]
+}
+
+fn block_look(stale: bool) -> Look {
+    Look {
+        bar: Bar::Block,
+        stale,
+        selected: false,
     }
 }
 
-pub(super) fn key_value(label: &str, value: &str) -> Detail {
-    let label = format!("{label}: ");
-    Detail {
-        hang: label.width(),
-        line: Line::from(vec![
-            Span::styled(label, Style::default().fg(MUTED)),
-            Span::raw(value.to_owned()),
-        ]),
+/// The window's role, or its duration when the role is only generic.
+fn window_name(window: &WindowView<'_>) -> String {
+    match (window.role, window.window.duration_minutes) {
+        (WindowRole::Window, Some(minutes)) => crate::usage::format_duration(minutes),
+        (role, _) => role.to_string(),
     }
 }
 
 fn styled(text: &str, style: Style) -> Detail {
-    Detail {
-        line: Line::styled(text.to_owned(), style),
-        hang: 0,
-    }
+    Detail::new(Line::styled(text.to_owned(), style), 0)
 }
 
 fn blank() -> Detail {
     styled("", Style::default())
 }
 
-fn error_line(label: &str, error: &str) -> Detail {
-    let label = format!("{label} error: ");
-    Detail {
-        hang: label.width(),
-        line: Line::styled(format!("{label}{error}"), Style::default().fg(BAD)),
-    }
+fn error_line(color: ratatui::style::Color, label: &str, error: &str) -> Detail {
+    Detail::new(
+        Line::styled(format!("{label}{error}"), Style::default().fg(color)),
+        label.width(),
+    )
 }
 
-/// An indented `label: value` usage line that names a stale sample in text, not only color.
-fn snapshot_line(indent: &str, label: &str, value: &str, stale: bool, style: Style) -> Detail {
-    let prefix = format!("{indent}{}{label}", if stale { STALE_PREFIX } else { "" });
-    Detail {
-        hang: prefix.width(),
-        line: Line::styled(format!("{prefix}{value}"), style),
-    }
-}
-
-/// Word-wraps a detail to `width`, starting continuation rows at its hang
-/// column (at most half the width) so wrapped values stay under their label.
-pub(super) fn wrap(detail: Detail, width: usize) -> Vec<Line<'static>> {
-    if width == 0 || detail.line.width() <= width {
-        return vec![detail.line];
-    }
-    let hang = detail.hang.min(width / 2);
-    let line_style = detail.line.style;
-    let mut rows = Vec::new();
-    let mut row = WrappedRow::new(0);
-    for span in detail.line.spans {
-        for word in span.content.split_inclusive(' ') {
-            let mut word = word;
-            while !word.is_empty() {
-                if row.width + word.trim_end().width() <= width {
-                    row.push(word, span.style);
-                    break;
-                }
-                let fits_a_fresh_row = word.trim_end().width() <= width - hang;
-                if row.has_text && (fits_a_fresh_row || row.width >= width) {
-                    rows.push(row.finish().style(line_style));
-                    row = WrappedRow::new(hang);
-                    continue;
-                }
-                // The word is wider than a whole row; break it at this row's end.
-                let (head, tail) = split_at_width(word, width.saturating_sub(row.width));
-                if head.is_empty() && row.has_text {
-                    rows.push(row.finish().style(line_style));
-                    row = WrappedRow::new(hang);
-                    continue;
-                }
-                let (head, tail) = if head.is_empty() {
-                    // Not even one character fits an empty row; take it anyway.
-                    word.split_at(word.chars().next().map_or(0, char::len_utf8))
-                } else {
-                    (head, tail)
-                };
-                row.push(head, span.style);
-                rows.push(row.finish().style(line_style));
-                row = WrappedRow::new(hang);
-                word = tail;
-            }
-        }
-    }
-    if row.has_text {
-        rows.push(row.finish().style(line_style));
-    }
-    rows
-}
-
-struct WrappedRow {
-    spans: Vec<Span<'static>>,
-    width: usize,
-    has_text: bool,
-}
-
-impl WrappedRow {
-    fn new(indent: usize) -> Self {
-        Self {
-            spans: if indent == 0 {
-                Vec::new()
-            } else {
-                vec![Span::raw(" ".repeat(indent))]
-            },
-            width: indent,
-            has_text: false,
-        }
-    }
-
-    fn push(&mut self, text: &str, style: Style) {
-        self.width += text.width();
-        self.has_text = true;
-        match self.spans.last_mut() {
-            Some(last) if last.style == style => last.content.to_mut().push_str(text),
-            _ => self.spans.push(Span::styled(text.to_owned(), style)),
-        }
-    }
-
-    fn finish(mut self) -> Line<'static> {
-        while let Some(last) = self.spans.last_mut() {
-            let trimmed = last.content.trim_end().len();
-            if trimmed > 0 {
-                last.content.to_mut().truncate(trimmed);
-                break;
-            }
-            self.spans.pop();
-        }
-        Line::from(self.spans)
-    }
-}
-
-/// Splits off the longest prefix that fits `width`.
-fn split_at_width(word: &str, width: usize) -> (&str, &str) {
-    let mut used = 0;
-    let mut end = 0;
-    for (offset, character) in word.char_indices() {
-        let character_width = character.width().unwrap_or(0);
-        if used + character_width > width {
-            break;
-        }
-        used += character_width;
-        end = offset + character.len_utf8();
-    }
-    word.split_at(end)
+/// A `label: value` usage line that names a stale sample in text, not only color.
+fn snapshot_line(label: &str, value: &str, stale: bool, style: Style) -> Detail {
+    let prefix = format!("{}{label}", if stale { STALE_PREFIX } else { "" });
+    Detail::new(
+        Line::styled(format!("{prefix}{value}"), style),
+        prefix.width(),
+    )
 }

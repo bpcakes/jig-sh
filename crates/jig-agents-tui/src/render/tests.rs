@@ -41,18 +41,41 @@ fn filtered_selection_stays_visible_across_table_layout_changes() {
         for width in [120, 80, 50, 120] {
             let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
             terminal
-                .draw(|frame| draw_list(frame, frame.area(), &app, 0, None))
+                .draw(|frame| {
+                    draw_list(
+                        frame,
+                        frame.area(),
+                        &View {
+                            app: &app,
+                            theme: Theme::default(),
+                            now: 0,
+                            best: None,
+                        },
+                    )
+                })
                 .unwrap();
             let screen = terminal.backend().to_string();
             let selected_line = screen.lines().find(|line| line.contains('›')).unwrap();
             assert!(selected_line.contains("keep-18"), "{screen}");
-            assert!(app.list_offset_for_viewport(12) > 0);
+            // Twelve rows less the borders and the column header.
+            assert!(app.list_offset_for_viewport(9) > 0);
         }
 
         app.move_selection(-1);
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal
-            .draw(|frame| draw_list(frame, frame.area(), &app, 0, None))
+            .draw(|frame| {
+                draw_list(
+                    frame,
+                    frame.area(),
+                    &View {
+                        app: &app,
+                        theme: Theme::default(),
+                        now: 0,
+                        best: None,
+                    },
+                )
+            })
             .unwrap();
         let screen = terminal.backend().to_string();
         let selected_line = screen.lines().find(|line| line.contains('›')).unwrap();
@@ -113,12 +136,12 @@ fn panes_stack_whenever_the_details_keep_a_comfortable_height() {
         );
     }
     // Too short to stack comfortably, and wide enough for both panes.
-    for (homes, width, height) in [(4, 130, 30), (12, 160, 30), (4, 200, 24)] {
+    for (homes, width, height) in [(4, 130, 26), (12, 160, 30), (4, 200, 22)] {
         let layout = layout::picker_layout(Rect::new(0, 0, width, height), &example_app(homes));
         assert!(side_by_side(&layout), "{homes} homes at {width}x{height}");
     }
     // Too short to stack comfortably, but too narrow to split: squeeze the stack.
-    let layout = layout::picker_layout(Rect::new(0, 0, 110, 24), &example_app(4));
+    let layout = layout::picker_layout(Rect::new(0, 0, 110, 22), &example_app(4));
     assert!(!side_by_side(&layout));
     assert!(layout.details.unwrap().height < 20);
 }
@@ -144,18 +167,19 @@ fn stacked_list_fits_its_rows_and_leaves_the_rest_to_details() {
     let (list, details) = (layout.list.unwrap(), layout.details.unwrap());
     assert_eq!(list.height, 3 + 2 * 2);
     assert_eq!(details.y, list.bottom());
-    assert_eq!(details.height, 20 - list.height);
+    // One header row and one footer row leave 22 for the panes.
+    assert_eq!(details.height, 22 - list.height);
 
     let layout = layout::picker_layout(area, &example_app(30));
     let (list, details) = (layout.list.unwrap(), layout.details.unwrap());
-    assert_eq!(list.height, 12, "a long list keeps to its share");
-    assert_eq!(details.height, 8);
+    assert_eq!(list.height, 13, "a long list keeps to its share");
+    assert_eq!(details.height, 9);
 }
 
 #[test]
 fn short_narrow_terminals_show_only_the_focused_pane() {
     let mut app = example_app(4);
-    let area = Rect::new(0, 0, 80, 14);
+    let area = Rect::new(0, 0, 80, 12);
     let layout = layout::picker_layout(area, &app);
     assert_eq!(layout.list.map(|list| list.height), Some(10));
     assert!(layout.details.is_none());
@@ -165,11 +189,13 @@ fn short_narrow_terminals_show_only_the_focused_pane() {
     assert!(layout.list.is_none());
     assert_eq!(layout.details.map(|details| details.height), Some(10));
 
-    let mut terminal = Terminal::new(TestBackend::new(80, 14)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
     terminal.draw(|frame| draw_at(frame, &app, 0)).unwrap();
     let screen = terminal.backend().to_string();
-    assert!(screen.contains("Selected home  [focused]"), "{screen}");
-    assert!(!screen.contains("Homes"), "{screen}");
+    // Only the details show, titled with the home; the footer names the mode.
+    assert!(screen.contains("╭ example-0 "), "{screen}");
+    assert!(!screen.contains("╭ homes"), "{screen}");
+    assert!(screen.contains("Tab  homes"), "{screen}");
 }
 
 /// Four inspected Claude homes with five-hour and weekly windows.
@@ -232,22 +258,16 @@ fn every_list_style_shows_whole_usage_and_names_the_projected_window() {
     let app = claude_app(NOW);
     for width in [50, 80, 104, 130, 170] {
         let screen = render(&app, width, 40, NOW).backend().to_string();
+        let list = screen.split("╰").next().unwrap();
         if width >= 60 {
-            for usage in [
-                "5h 58% · weekly 82% left",
-                "5h 88% · weekly 39% left",
-                "5h 20% · weekly 70% left",
-                "5h 95% · weekly 91% left",
-            ] {
-                assert!(screen.contains(usage), "{width}: {screen}");
+            // Every window's used quota sits beside its meter.
+            for used in ["42%", "18%", "12%", "61%", "80%", "30%", "5%", "9%"] {
+                assert!(list.contains(used), "{width}: {screen}");
             }
         }
-        for projection in [
-            "5h: ~30% left at reset",
-            "weekly: runs out ~1.2d early",
-            "5h: runs out ~1.2h early",
-        ] {
-            assert!(screen.contains(projection), "{width}: {screen}");
+        // The projection names its window.
+        for projection in ["~30% left", "out ~1.2d early", "out ~1.2h early"] {
+            assert!(list.contains(projection), "{width}: {screen}");
         }
         for account in ["person0@example.com", "person3@example.com"] {
             assert!(screen.contains(account), "{width}: {screen}");
@@ -264,20 +284,17 @@ fn details_lead_with_account_and_usage_before_the_home_identity() {
             .find(text)
             .unwrap_or_else(|| panic!("missing {text}: {screen}"))
     };
-    assert!(position("Account: person0") < position("claude usage"));
-    assert!(position("claude usage") < position("Path: /tmp/ExampleHome/.claude"));
+    assert!(position("claude usage") < position("Account  "));
+    assert!(position("Account  ") < position("/tmp/ExampleHome/.claude "));
     // A role that names its duration does not repeat it.
-    assert!(
-        screen.contains("5h: 42% used · 58% left · resets in 2h"),
-        "{screen}"
-    );
+    assert!(screen.contains("42% used · resets in 2h"), "{screen}");
     assert!(!screen.contains("5h window"), "{screen}");
 }
 
 #[test]
 fn wrapped_details_hang_under_their_value() {
-    let lines = details::wrap(
-        details::key_value(
+    let lines = wrap::wrap(
+        labeled(
             "CLAUDE_CONFIG_DIR",
             "/tmp/ExampleHome/a-long-configuration-directory",
         ),
@@ -287,41 +304,38 @@ fn wrapped_details_hang_under_their_value() {
     assert_eq!(
         rows,
         [
-            "CLAUDE_CONFIG_DIR: /tmp/Exampl",
+            "CLAUDE_CONFIG_DIR  /tmp/Exampl",
             "               eHome/a-long-co",
             "               nfiguration-dir",
             "               ectory",
         ]
     );
 
-    let rows = details::wrap(
-        details::key_value("Usage sample", "just now · reopen to refresh"),
-        30,
-    )
-    .iter()
-    .map(ToString::to_string)
-    .collect::<Vec<_>>();
+    let rows = wrap::wrap(labeled("Usage sample", "just now · reopen to refresh"), 30)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
     assert_eq!(
         rows,
         [
-            "Usage sample: just now ·",
+            "Usage sample  just now ·",
             "              reopen to",
             "              refresh"
         ]
     );
 
-    let rows = details::wrap(details::key_value("Name", "界界界界界界"), 9)
+    let rows = wrap::wrap(labeled("Name", "界界界界界界"), 9)
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    assert_eq!(rows, ["Name: 界", "    界界", "    界界", "    界"]);
+    assert_eq!(rows, ["Name  界", "    界界", "    界界", "    界"]);
 
     // One cell short of a double-width character moves it to the next row.
-    let rows = details::wrap(details::key_value("Name", "a界界界"), 8)
+    let rows = wrap::wrap(labeled("Name", "a界界界"), 8)
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    assert_eq!(rows, ["Name: a", "    界界", "    界"]);
+    assert_eq!(rows, ["Name  a", "    界界", "    界"]);
     assert!(
         rows.iter()
             .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 8),
@@ -337,49 +351,77 @@ fn narrow_footers_keep_launch_and_cancel_longest() {
             .backend()
             .to_string()
             .lines()
-            .rev()
-            .nth(1)
+            .last()
             .unwrap()
             .to_owned()
     };
+    // Each hint is a ` key ` chip followed by its action.
     let wide = footer(120);
     for hint in [
-        "↑/↓ j/k move",
-        "/ search",
-        "Tab details",
-        "Enter launch",
-        "Esc/q cancel",
+        " ↑↓  move",
+        " /  search",
+        " Tab  details",
+        " Enter  launch",
+        " Esc/q  cancel",
     ] {
         assert!(wide.contains(hint), "{wide}");
     }
     let narrow = footer(MIN_WIDTH);
-    assert!(narrow.contains("Enter launch"), "{narrow}");
-    assert!(narrow.contains("Esc/q cancel"), "{narrow}");
-    assert!(!narrow.contains("Tab details"), "{narrow}");
+    assert!(narrow.contains("Enter  launch"), "{narrow}");
+    assert!(narrow.contains("Esc/q  cancel"), "{narrow}");
+    assert!(!narrow.contains("Tab  details"), "{narrow}");
 }
 
 #[test]
 fn the_focused_pane_has_an_accent_border() {
     const NOW: u64 = 1_800_000_000;
     let mut app = claude_app(NOW);
-    let border =
-        |terminal: &Terminal<TestBackend>, x| terminal.backend().buffer().cell((x, 2)).unwrap().fg;
-    let layout = layout::picker_layout(Rect::new(0, 0, 130, 30), &app);
+    let layout = layout::picker_layout(Rect::new(0, 0, 130, 26), &app);
     assert!(side_by_side(&layout));
-    let details_x = layout.details.unwrap().x;
-    let terminal = render(&app, 130, 30, NOW);
-    assert_eq!(border(&terminal, 0), ACCENT);
-    assert_ne!(border(&terminal, details_x), ACCENT);
+    let (top, details_x) = (layout.list.unwrap().y, layout.details.unwrap().x);
+    let border = |terminal: &Terminal<TestBackend>, x| {
+        terminal.backend().buffer().cell((x, top)).unwrap().fg
+    };
+    let terminal = render(&app, 130, 26, NOW);
+    assert_eq!(border(&terminal, 0), Theme::default().accent());
+    assert_ne!(border(&terminal, details_x), Theme::default().accent());
 
     app.toggle_focus();
-    let terminal = render(&app, 130, 30, NOW);
-    assert_ne!(border(&terminal, 0), ACCENT);
-    assert_eq!(border(&terminal, details_x), ACCENT);
+    let terminal = render(&app, 130, 26, NOW);
+    assert_ne!(border(&terminal, 0), Theme::default().accent());
+    assert_eq!(border(&terminal, details_x), Theme::default().accent());
+}
+
+fn labeled(label: &str, value: &str) -> wrap::Detail {
+    use unicode_width::UnicodeWidthStr;
+    wrap::Detail::labeled(
+        label,
+        value,
+        label.width(),
+        ratatui::style::Style::default(),
+    )
 }
 
 #[test]
-fn column_fitting_trims_the_widest_column_first() {
-    assert_eq!(list::fit_widths(40, [(10, 4), (12, 4)]), [10, 12]);
-    assert_eq!(list::fit_widths(18, [(10, 4), (12, 4)]), [9, 9]);
-    assert_eq!(list::fit_widths(5, [(10, 4), (12, 4)]), [4, 4]);
+fn no_color_keeps_every_glyph_and_status_without_any_color() {
+    use ratatui::style::Color;
+    const NOW: u64 = 1_800_000_000;
+    let app = claude_app(NOW);
+    let mut terminal = Terminal::new(TestBackend::new(120, 34)).unwrap();
+    terminal
+        .draw(|frame| draw_with(frame, &app, Theme::new(theme::ColorDepth::Monochrome), NOW))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    assert!(
+        buffer
+            .content
+            .iter()
+            .all(|cell| matches!(cell.fg, Color::Reset) && matches!(cell.bg, Color::Reset)),
+        "{}",
+        terminal.backend()
+    );
+    let screen = terminal.backend().to_string();
+    for text in ["›", "◆", "●", "━", "█", "│", "out ~1.2d early", "42% used"] {
+        assert!(screen.contains(text), "missing {text}: {screen}");
+    }
 }

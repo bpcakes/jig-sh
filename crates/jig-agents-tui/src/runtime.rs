@@ -28,6 +28,7 @@ pub(crate) fn run(
 ) -> Result<Option<usize>> {
     require_terminal(command, "pass a home explicitly for non-interactive use")?;
     let mut terminal = TerminalSession::enter(app.title())?;
+    let theme = render::Theme::detect();
     let external_cancellation: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(cancelled);
     let mut worker = match source {
         Some(source) => {
@@ -57,7 +58,7 @@ pub(crate) fn run(
             Instant::now(),
             |app| {
                 terminal
-                    .draw(|frame| render::draw(frame, app))
+                    .draw(|frame| render::draw_themed(frame, app, theme))
                     .context("failed to draw the home picker")?;
                 Ok(())
             },

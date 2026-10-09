@@ -10,9 +10,9 @@ use crate::model::{App, Focus};
 pub(super) const MIN_WIDTH: u16 = 46;
 pub(super) const MIN_HEIGHT: u16 = 12;
 pub(super) const STACKED_ROW_HEIGHT: u16 = 2;
-const HEADER_HEIGHT: u16 = 2;
-const FOOTER_HEIGHT: u16 = 2;
-const SEARCH_FOOTER_HEIGHT: u16 = 3;
+const HEADER_HEIGHT: u16 = 1;
+const FOOTER_HEIGHT: u16 = 1;
+const SEARCH_FOOTER_HEIGHT: u16 = 2;
 const TABLE_CHROME_HEIGHT: u16 = 3;
 /// Narrowest list that keeps the two-line table's columns readable.
 const TWO_LINE_LIST_MIN_WIDTH: u16 = 60;

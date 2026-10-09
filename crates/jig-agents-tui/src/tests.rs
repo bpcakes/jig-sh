@@ -90,74 +90,7 @@ fn starts_with_visible_loading_rows_and_current_selection() {
     let app = app(homes());
     assert_eq!(app.selected, Some(0));
     assert!(matches!(app.rows[0].inspection(), Inspection::Loading));
-    assert_eq!(app.rows[0].usage(), "loading…");
-}
-
-#[test]
-fn update_is_indexed_and_single_codex_window_is_weekly() {
-    let mut app = app(homes());
-    app.apply_update(ready_update(1));
-
-    assert_eq!(app.completed, 1);
-    assert_eq!(app.rows[1].account(), "person@example.com");
-    assert_eq!(app.rows[1].usage(), "weekly 75% left");
-    assert!(matches!(app.rows[0].inspection(), Inspection::Loading));
-}
-
-#[test]
-fn single_codex_window_uses_its_reported_duration_role() {
-    let mut app = app(homes());
-    let mut update = ready_update(0);
-    update.details["rate_limits"][0]["primary"]["duration_minutes"] = json!(300);
-
-    app.apply_update(update);
-
-    assert_eq!(app.rows[0].usage(), "5h 75% left");
-}
-
-#[test]
-fn duplicate_codex_window_durations_receive_the_same_role() {
-    let mut app = app(homes());
-    let mut update = ready_update(0);
-    update.details["rate_limits"][0]["primary"] =
-        json!({ "used_percent": 10, "duration_minutes": 300 });
-    update.details["rate_limits"][0]["secondary"] =
-        json!({ "used_percent": 20, "duration_minutes": 300 });
-
-    app.apply_update(update);
-
-    assert_eq!(app.rows[0].usage(), "5h 90% · 5h 80% left");
-}
-
-#[test]
-fn unrecognized_codex_window_durations_remain_distinguishable() {
-    let mut app = app(homes());
-    let mut update = ready_update(0);
-    update.details["rate_limits"][0]["primary"] =
-        json!({ "used_percent": 10, "duration_minutes": 120 });
-    update.details["rate_limits"][0]["secondary"] =
-        json!({ "used_percent": 20, "duration_minutes": 240 });
-
-    app.apply_update(update);
-
-    assert_eq!(app.rows[0].usage(), "2h 90% · 4h 80% left");
-}
-
-#[test]
-fn unrecognized_codex_duration_remains_identifiable_in_projection() {
-    const NOW: u64 = 2_000_000_000;
-    let mut app = app(homes());
-    app.apply_update_at(projected_update(0, 25.0, 120, 0.5, NOW), NOW);
-
-    assert!(matches!(
-        app.rows[0].projection(),
-        Projection::Remaining {
-            role: WindowRole::DurationMinutes(120),
-            percent,
-            partial: false,
-        } if (percent - 50.0).abs() < PROJECTION_TOLERANCE
-    ));
-    assert_eq!(app.rows[0].projection().label(), "2h: ~50% left at reset");
+    assert_eq!(app.rows[0].primary_usage(), None);
 }
 
 #[test]
@@ -339,7 +272,10 @@ fn overreported_quota_is_clamped_to_zero_remaining_and_exhausted() {
     update.details["rate_limits"][0]["primary"]["used_percent"] = json!(100.5);
     app.apply_update_at(update, NOW);
 
-    assert_eq!(app.rows[0].usage(), "weekly 0% left");
+    assert_eq!(
+        app.rows[0].primary_usage().unwrap().1,
+        [(WindowRole::Weekly, Some(100.5))]
+    );
     assert!(matches!(
         app.rows[0].projection(),
         Projection::Exhausted {
@@ -507,7 +443,10 @@ fn generic_usage_fallback_keeps_bucket_window_context_without_ranking() {
     update.details["rate_limits"][0]["primary"]["resets_at"] = json!(NOW + 43_200);
     app.apply_update_at(update, NOW);
 
-    assert_eq!(app.rows[0].usage(), "Spark 1d 75% left");
+    assert_eq!(
+        app.rows[0].primary_usage(),
+        Some(("Spark".into(), vec![(WindowRole::Window, Some(25.0))]))
+    );
     assert!(matches!(
         app.rows[0].projection(),
         Projection::Remaining {
@@ -784,19 +723,19 @@ fn search_cursor_uses_terminal_cell_width() {
     app.push_filter('界');
 
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
-    terminal.backend_mut().assert_cursor_position((10, 28));
+    terminal.backend_mut().assert_cursor_position((10, 29));
 
     app.clear_filter();
     app.push_filter('e');
     app.push_filter('\u{301}');
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
-    terminal.backend_mut().assert_cursor_position((9, 28));
+    terminal.backend_mut().assert_cursor_position((9, 29));
 
     app.clear_filter();
     app.push_filter('\u{201c}');
     app.push_filter('\u{fe01}');
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
-    terminal.backend_mut().assert_cursor_position((9, 28));
+    terminal.backend_mut().assert_cursor_position((9, 29));
 }
 
 #[test]
@@ -949,13 +888,13 @@ fn list_viewport_retains_context_when_navigation_reverses() {
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
     app.move_selection(12);
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
-    let scrolled_offset = app.list_offset_for_viewport(14);
+    let scrolled_offset = app.list_offset_for_viewport(13);
     assert!(scrolled_offset > 0);
 
     app.move_selection(-1);
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
 
-    assert_eq!(app.list_offset_for_viewport(14), scrolled_offset);
+    assert_eq!(app.list_offset_for_viewport(13), scrolled_offset);
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("codex-12"), "{rendered}");
 }
@@ -983,3 +922,4 @@ fn bidi_controls_are_sanitized_while_script_joiners_are_preserved() {
 }
 
 mod projection_rendering;
+mod window_roles;

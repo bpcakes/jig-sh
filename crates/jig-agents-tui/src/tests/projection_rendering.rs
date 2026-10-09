@@ -24,8 +24,9 @@ fn rendering_shows_loading_then_selected_account_and_usage() {
         .unwrap();
     let ready = terminal.backend().to_string();
     assert!(ready.contains("person@example.com"), "{ready}");
-    assert!(ready.contains("weekly 75% left"), "{ready}");
-    assert!(ready.contains("+*"), "{ready}");
+    assert!(ready.contains("25%"), "{ready}");
+    // Selected, best at current pace, and current.
+    assert!(ready.contains("›◆●"), "{ready}");
     assert!(ready.contains("best projected headroom"), "{ready}");
     assert!(ready.contains("Usage sample"), "{ready}");
     assert!(ready.contains("just now"), "{ready}");
@@ -94,14 +95,16 @@ fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
         .unwrap();
 
     let rendered = terminal.backend().to_string();
-    assert!(rendered.contains("stale"), "{rendered}");
-    assert!(rendered.contains("stale · weekly 75% left"), "{rendered}");
-    assert!(rendered.contains("stale · weekly: 25% used"), "{rendered}");
+    assert!(rendered.contains("stale · wk ~50% left"), "{rendered}");
+    assert!(
+        rendered.contains("stale · 25% used · resets in"),
+        "{rendered}"
+    );
     assert!(
         rendered.contains("stale · At current pace: ~50% left at reset"),
         "{rendered}"
     );
-    assert!(!rendered.contains("+*"), "{rendered}");
+    assert!(!rendered.contains("◆"), "{rendered}");
     assert!(rendered.contains("no rankable projection"), "{rendered}");
 }
 
@@ -118,7 +121,11 @@ fn stale_remaining_is_labeled_even_when_projection_metadata_is_unavailable() {
         .unwrap();
 
     let rendered = terminal.backend().to_string();
-    assert!(rendered.contains("stale · weekly 75% left"), "{rendered}");
+    assert!(
+        rendered.contains("stale · projection unavailable"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("stale · 25% used"), "{rendered}");
     assert!(
         rendered.contains("stale · At current pace: projection unavailable"),
         "{rendered}"
@@ -142,19 +149,10 @@ fn common_width_lists_keep_stale_state_visible() {
             .unwrap();
 
         let rendered = terminal.backend().to_string();
-        let lines = rendered.lines().collect::<Vec<_>>();
-        let usage_line = lines
-            .iter()
-            .position(|line| line.contains("stale · weekly 75% left"))
-            .expect("inspected account row should remain visible");
-        // The one-line list keeps the projection beside the usage; the
-        // two-line list puts it on the row's second line.
-        assert!(
-            lines[usage_line..=usage_line + 1]
-                .iter()
-                .any(|line| line.contains("stale · weekly: ~50% left at reset")),
-            "{width}: {rendered}"
-        );
+        // The list names the stale outcome in text, not only in muted color.
+        let list = rendered.split("╰").next().unwrap();
+        assert!(list.contains("stale · "), "{width}: {rendered}");
+        assert!(list.contains("~50% left"), "{width}: {rendered}");
     }
 }
 
@@ -241,7 +239,7 @@ fn over_pace_recommendation_is_labeled_as_the_least_projected_overrun() {
         .unwrap();
 
     let rendered = terminal.backend().to_string();
-    assert!(rendered.contains("+*"), "{rendered}");
+    assert!(rendered.contains("›◆●"), "{rendered}");
     assert!(rendered.contains("least projected overrun"), "{rendered}");
     assert!(rendered.contains("runs out early"), "{rendered}");
     assert!(!rendered.contains("best projected headroom"), "{rendered}");
@@ -266,11 +264,8 @@ fn common_width_lists_keep_non_selected_projection_outcomes_visible() {
             rendered.contains("person@example.com"),
             "{width}: {rendered}"
         );
-        assert!(rendered.contains("weekly 40% left"), "{width}: {rendered}");
-        assert!(
-            rendered.contains("runs out ~1.2d early"),
-            "{width}: {rendered}"
-        );
+        assert!(rendered.contains("60%"), "{width}: {rendered}");
+        assert!(rendered.contains("out ~1.2d early"), "{width}: {rendered}");
     }
 }
 
@@ -306,10 +301,7 @@ fn compact_warmup_shows_current_remaining_instead_of_only_collecting() {
         .unwrap();
 
     let rendered = terminal.backend().to_string();
-    assert!(
-        rendered.contains("weekly: 5% left · collecting"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("wk 5% left · collecting"), "{rendered}");
     assert_eq!(app.best_projection_index_at(NOW), None);
 }
 
@@ -329,10 +321,7 @@ fn full_table_breakpoint_keeps_long_projection_labels_visible() {
         .unwrap();
 
     let rendered = terminal.backend().to_string();
-    assert!(
-        rendered.contains("weekly: exhausted until reset"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("wk exhausted"), "{rendered}");
 }
 
 #[test]
@@ -348,12 +337,9 @@ fn compact_layout_keeps_the_projection_visible() {
         .unwrap();
 
     let rendered = terminal.backend().to_string();
-    assert!(rendered.contains("Projection"), "{rendered}");
+    assert!(rendered.contains("projection"), "{rendered}");
     assert!(rendered.contains("person@example.com"), "{rendered}");
-    assert!(
-        rendered.contains("weekly: ~50% left at reset"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("wk ~50% left"), "{rendered}");
 }
 
 #[test]
