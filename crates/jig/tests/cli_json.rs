@@ -19,7 +19,7 @@ use fs4::fs_std::FileExt;
 use serde_json::{Value, json};
 use support::tempdir;
 
-#[path = "cli_json_parts/cognitive_helpers.rs"]
+#[path = "cli_json/cognitive_helpers.rs"]
 mod cognitive_helpers;
 use cognitive_helpers::*;
 
@@ -614,8 +614,10 @@ fn forbidden_rust_library_answers_fail_before_template_vault_and_publication() {
     assert!(!destination.exists());
 }
 
-include!("cli_json_parts/rust_cli.rs");
-include!("cli_json_parts/rust_only_acceptance.rs");
+#[path = "cli_json/rust_cli.rs"]
+mod rust_cli;
+#[path = "cli_json/rust_only_acceptance.rs"]
+mod rust_only_acceptance;
 
 #[test]
 fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
@@ -660,12 +662,13 @@ fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
     }
 }
 
-#[path = "cli_json_parts/info_commands_edge_cases.rs"]
+#[path = "cli_json/info_commands_edge_cases.rs"]
 mod info_commands_edge_cases;
 mod support;
 use info_commands_edge_cases::*;
 
-include!("cli_json_parts/loop_commands.rs");
+#[path = "cli_json/loop_commands.rs"]
+mod loop_commands;
 
 #[path = "cli_json/adoption_components.rs"]
 mod adoption_components;

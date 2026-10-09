@@ -1,5 +1,11 @@
 use super::*;
 
+mod database_setup;
+mod frontend_apps;
+mod frontend_workflows;
+mod output_paths;
+mod workspace;
+
 fn assert_text_contains_all(contents: &str, expected: &[&str]) {
     for value in expected {
         assert!(contents.contains(value), "missing expected text: {value}");
@@ -20,9 +26,3 @@ fn assert_command_succeeded(label: &str, output: &std::process::Output) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
-
-include!("scaffold_runtime_parts/part_01.rs");
-include!("scaffold_runtime_parts/part_02.rs");
-include!("scaffold_runtime_parts/part_03.rs");
-include!("scaffold_runtime_parts/part_04.rs");
-include!("scaffold_runtime_parts/part_05.rs");

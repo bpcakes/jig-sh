@@ -1,0 +1,581 @@
+use super::*;
+
+#[test]
+fn scaffold_defaults_to_web_frontend_and_no_db() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        &AnswerOpts::default(),
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    let report = plan.write(temp.path(), false).unwrap();
+
+    assert_eq!(report["db"], "none");
+    assert_eq!(report["frontends"][0]["name"], "web");
+    assert_eq!(report["frontends"][0]["kind"], "vite");
+    assert_eq!(report["frontends"][0]["role"], "spa");
+    assert!(temp.path().join("apps/web/package.json").exists());
+    let has_db_crate = fs::read_dir(temp.path().join("crates"))
+        .unwrap()
+        .any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with("-db")
+        });
+    assert!(!has_db_crate);
+    let cargo_toml = fs::read_to_string(temp.path().join("Cargo.toml")).unwrap();
+    assert_text_contains_none(&cargo_toml, &["sqlx ="]);
+    let manifest: toml::Value = toml::from_str(&cargo_toml).unwrap();
+    let dependencies = &manifest["workspace"]["dependencies"];
+    assert_eq!(
+        dependencies["batter"]["git"].as_str(),
+        Some("https://github.com/bpcakes/batter")
+    );
+    assert_eq!(
+        dependencies["batter"]["rev"].as_str(),
+        Some("18cdf97ac544c665e0189efd28388d1e10456232")
+    );
+    assert_eq!(dependencies["batter"]["features"][0].as_str(), Some("axum"));
+    assert_eq!(
+        dependencies["batter"]["features"].as_array().unwrap().len(),
+        1
+    );
+    assert_text_contains_none(
+        &cargo_toml,
+        &[
+            "batter-axum =",
+            "batter-sqlx =",
+            "postgres-test-harness =",
+            "uuid =",
+        ],
+    );
+    assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
+    let repo_name = report["repo_name"].as_str().unwrap();
+    let module_name = repo_name.replace('-', "_");
+    let runtime = fs::read_to_string(
+        temp.path()
+            .join(format!("crates/{repo_name}-runtime/src/lib.rs")),
+    )
+    .unwrap();
+    assert_text_contains_all(
+        &runtime,
+        &[
+            "Startup::scoped",
+            "application.register_in(scope, \"http\", listener)?",
+            ".with_unix_signals(\"signals\")",
+            "service::start(startup, service::NoDiagnostics)",
+            "ReadinessPolicy::lifecycle_only(self.lifecycle)",
+        ],
+    );
+    assert_text_contains_none(
+        &runtime,
+        &[
+            "Startup::new",
+            "scope.supervisor()",
+            "install_signals",
+            "register_http_in",
+            "check_shutdown",
+            "#[cfg(feature = \"db\")]",
+        ],
+    );
+    let env_example = fs::read_to_string(temp.path().join(".env.example")).unwrap();
+    assert_eq!(
+        env_example,
+        format!(
+            "BIND_ADDR=127.0.0.1:3000\nRUST_LOG={module_name}=info,{module_name}_api=info,batter=info,batter_axum=info\n"
+        )
+    );
+    let playwright = fs::read_to_string(temp.path().join("apps/web/playwright.config.ts")).unwrap();
+    assert_text_contains_all(
+        &playwright,
+        &["const backendCommand = \"cargo run --locked"],
+    );
+    assert_text_contains_none(
+        &playwright,
+        &["-- --bootstrap-database", "E2E_DATABASE_URL"],
+    );
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/e2e.yml")).unwrap();
+    assert_text_contains_none(
+        &workflow,
+        &["image: postgres", "E2E_DATABASE_URL", "SQLX_OFFLINE"],
+    );
+    let api_main = fs::read_to_string(
+        temp.path()
+            .join("apps")
+            .join(format!("{repo_name}-api/src/main.rs")),
+    )
+    .unwrap();
+    assert_text_contains_all(
+        &api_main,
+        &[
+            "    parse_command()?;\n    let config = app_crate::AppConfig::from_env()",
+            "match (arguments.next(), arguments.next())",
+            "unexpected API argument",
+        ],
+    );
+    assert_text_contains_none(
+        &api_main,
+        &[
+            "let command = parse_command()?;",
+            "--bootstrap-database",
+            "args_os().any",
+        ],
+    );
+
+    let output = std::process::Command::new("cargo")
+        .args(["fmt", "--all", "--", "--check"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert_command_succeeded("cargo fmt for the no-database scaffold", &output);
+}
+
+#[test]
+fn scaffold_playwright_api_environment_overrides_hostile_inherited_bindings() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+    plan.write(temp.path(), false).unwrap();
+
+    let config = fs::read_to_string(temp.path().join("apps/web/playwright.config.ts")).unwrap();
+    let api_server_config = config
+        .split_once(r#"name: "Rust API""#)
+        .unwrap()
+        .1
+        .split_once(r#"name: "Vite web""#)
+        .unwrap()
+        .0;
+    for fixed_binding in [
+        r#"HOST: "127.0.0.1""#,
+        "PORT: String(apiPort)",
+        r"BIND_ADDR: `127.0.0.1:${apiPort}`",
+    ] {
+        assert!(
+            api_server_config.contains(fixed_binding),
+            "hostile inherited bindings must be replaced by {fixed_binding}"
+        );
+    }
+    assert!(!api_server_config.contains("process.env.HOST"));
+    assert!(!api_server_config.contains("process.env.PORT"));
+}
+
+fn assert_e2e_workflow_for_package_manager(
+    root: &Path,
+    package_manager: &str,
+    setup: &str,
+    run: &str,
+    root_cache_locks: &str,
+    app_cache_locks: &str,
+) {
+    let destination = root.join(package_manager);
+    fs::create_dir(&destination).unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ci_github_runner: Some("macos-14".into()),
+            web_package_manager: Some(package_manager.into()),
+            ..AnswerOpts::default()
+        },
+        &destination,
+    )
+    .unwrap()
+    .unwrap();
+    plan.write(&destination, false).unwrap();
+
+    let workflow = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
+    let workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&workflow)
+        .expect("generated E2E workflow must be valid YAML");
+    assert_eq!(workflow_yaml["jobs"]["e2e"]["runs-on"], "macos-14");
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["defaults"]["run"]["shell"],
+        "bash"
+    );
+    assert_text_contains_all(
+        &workflow,
+        &[
+            setup,
+            "Classic required status checks can remain pending",
+            "Bootstrap Node for dependency metadata",
+            "scripts/check-webapps.sh node-version-file",
+            "status=$?",
+            "if [ \"$status\" -eq 1 ]",
+            "exit \"$status\"",
+            "${RUNNER_TEMP:?GitHub Actions did not provide RUNNER_TEMP}",
+            "mktemp -d \"$RUNNER_TEMP/jig-node-version.XXXXXX\"",
+            "set -o noclobber",
+            "APP_DIR: ${{ matrix.app.dir }}",
+            r#"scripts/check-webapps.sh dependencies-install "$APP_DIR""#,
+            "PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.agent/tmp/ms-playwright",
+            "- name: Cache Playwright Chromium",
+            "path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}",
+            "playwright-chromium-${{ hashFiles(",
+            "hashFiles('package.json', format('{0}/package.json', matrix.app.dir),",
+            root_cache_locks,
+            app_cache_locks,
+            r#"- "**/.yarnrc.yml""#,
+            r#"- "**/.yarn/**""#,
+            r#"- "**/.node-version""#,
+            r#"- "**/.npmrc""#,
+            "${{ matrix.app.dir }}/",
+            r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e:install:ci"#,
+            r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e"#,
+        ],
+    );
+    assert_text_contains_none(
+        &workflow,
+        &[
+            "if ! node_version_file=",
+            "> .node-version",
+            &format!("{run} test:e2e"),
+            r#"cd "$APP_DIR" &&"#,
+            "test:e2e:install --",
+        ],
+    );
+    assert_eq!(workflow.matches(r#"- "rust-toolchain""#).count(), 2);
+    if package_manager == "npm" {
+        assert_text_contains_all(
+            &workflow,
+            &[
+                "            npm-shrinkwrap.json",
+                "            package-lock.json",
+                "            ${{ matrix.app.dir }}/npm-shrinkwrap.json",
+                "            ${{ matrix.app.dir }}/package-lock.json",
+            ],
+        );
+        assert_eq!(workflow.matches(r#"- "npm-shrinkwrap.json""#).count(), 2);
+    }
+}
+
+#[test]
+fn scaffold_e2e_workflow_uses_each_package_manager_portably() {
+    let temp = tempdir().unwrap();
+    for (package_manager, setup, run, root_cache_locks, app_cache_locks) in [
+        (
+            "bun",
+            "oven-sh/setup-bun@v2",
+            "bun run",
+            "'bun.lock', 'bun.lockb'",
+            "format('{0}/bun.lock', matrix.app.dir), format('{0}/bun.lockb', matrix.app.dir)",
+        ),
+        (
+            "npm",
+            "npm install --global npm@",
+            "npm run",
+            "'npm-shrinkwrap.json', 'package-lock.json'",
+            "format('{0}/npm-shrinkwrap.json', matrix.app.dir), format('{0}/package-lock.json', matrix.app.dir)",
+        ),
+        (
+            "pnpm",
+            r#"package_manager_spec="$(scripts/check-webapps.sh package-manager-spec"#,
+            "pnpm run",
+            "'pnpm-lock.yaml'",
+            "format('{0}/pnpm-lock.yaml', matrix.app.dir)",
+        ),
+        (
+            "yarn",
+            r#"package_manager_spec="$(scripts/check-webapps.sh package-manager-spec"#,
+            "yarn run",
+            "'yarn.lock'",
+            "format('{0}/yarn.lock', matrix.app.dir)",
+        ),
+    ] {
+        assert_e2e_workflow_for_package_manager(
+            temp.path(),
+            package_manager,
+            setup,
+            run,
+            root_cache_locks,
+            app_cache_locks,
+        );
+    }
+}
+
+#[test]
+fn scaffold_omits_e2e_workflow_without_spa_frontends() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: vec![
+                parse_scaffold_frontend("docs:astro").unwrap(),
+                parse_scaffold_frontend("operations:admin").unwrap(),
+            ],
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(
+        !plan
+            .output_paths()
+            .iter()
+            .any(|path| path == Path::new(".github/workflows/e2e.yml"))
+    );
+    plan.write(temp.path(), false).unwrap();
+    assert!(!temp.path().join(".github/workflows/e2e.yml").exists());
+}
+
+#[test]
+fn scaffold_named_ready_scopes_the_live_status_badge() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: vec![parse_scaffold_frontend("ready:spa").unwrap()],
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    plan.write(temp.path(), false).unwrap();
+    let app = fs::read_to_string(temp.path().join("apps/ready/src/App.tsx")).unwrap();
+    let spec = fs::read_to_string(temp.path().join("apps/ready/e2e/app.spec.ts")).unwrap();
+
+    assert!(app.contains(r#"aria-labelledby="service-status-card-label""#));
+    assert!(app.contains(r#"id="service-status-card-label">Rust API"#));
+    assert!(spec.contains(r#"getByRole("heading", { name: "Ready" })"#));
+    assert!(spec.contains(r#"getByRole("group", { name: "Rust API", exact: true })"#));
+    assert!(spec.contains(r#"serviceStatusCard.getByText("Ready", { exact: true })"#));
+    assert!(!spec.contains(r#"page.getByText("Ready", { exact: true })"#));
+}
+
+#[test]
+fn scaffold_e2e_workflow_serializes_dynamic_yaml_scalars() {
+    let temp = tempdir().unwrap();
+    let default_branch = r#"release/"quoted"\branch"#;
+    let runner = "self-hosted # e2e";
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: vec![parse_scaffold_frontend("null:spa").unwrap()],
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            default_branch: Some(default_branch.into()),
+            ci_github_runner: Some(runner.into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    plan.write(temp.path(), false).unwrap();
+
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/e2e.yml")).unwrap();
+    let workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
+    assert_eq!(workflow_yaml["on"]["push"]["branches"][0], default_branch);
+    assert_eq!(workflow_yaml["jobs"]["e2e"]["runs-on"], runner);
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["defaults"]["run"]["shell"],
+        "bash"
+    );
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["strategy"]["matrix"]["app"][0]["name"],
+        "null"
+    );
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["strategy"]["matrix"]["app"][0]["dir"],
+        "apps/null"
+    );
+    assert_eq!(
+        workflow_yaml["on"]["pull_request"]["paths"], workflow_yaml["on"]["push"]["paths"],
+        "pull and push must render from one E2E path authority"
+    );
+    let setup_bun = workflow_yaml["jobs"]["e2e"]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["name"] == "Setup Bun")
+        .unwrap();
+    assert_eq!(setup_bun["with"]["bun-version"], "1.3.14");
+}
+
+fn assert_frontend_dev_scripts_for_package_manager(package_manager: &str) {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: vec![
+                parse_scaffold_frontend("web").unwrap(),
+                parse_scaffold_frontend("landing").unwrap(),
+            ],
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            web_package_manager: Some(package_manager.into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(
+        plan.output_paths()
+            .iter()
+            .any(|path| path == Path::new(".yarnrc.yml")),
+        package_manager == "yarn"
+    );
+    plan.write(temp.path(), false).unwrap();
+    assert_text_contains_all(
+        &fs::read_to_string(temp.path().join("apps/web/package.json")).unwrap(),
+        &[r#""dev": "vite""#],
+    );
+    assert_text_contains_none(
+        &fs::read_to_string(temp.path().join("apps/web/package.json")).unwrap(),
+        &[" install && "],
+    );
+    assert_text_contains_all(
+        &fs::read_to_string(temp.path().join("apps/landing/package.json")).unwrap(),
+        &[r#""dev": "astro dev""#],
+    );
+    assert_text_contains_none(
+        &fs::read_to_string(temp.path().join("apps/landing/package.json")).unwrap(),
+        &[" install && "],
+    );
+    assert_text_contains_all(
+        &fs::read_to_string(temp.path().join("apps/landing/astro.config.mjs")).unwrap(),
+        &[
+            "process.env.HOST?.trim()",
+            "process.env.PORT",
+            "strictPort: true",
+        ],
+    );
+    assert_text_contains_all(
+        &fs::read_to_string(temp.path().join("package.json")).unwrap(),
+        &[&format!(r#""packageManager": "{package_manager}@"#)],
+    );
+    assert_eq!(
+        temp.path().join("pnpm-workspace.yaml").exists(),
+        package_manager == "pnpm"
+    );
+    assert_eq!(
+        temp.path().join(".yarnrc.yml").exists(),
+        package_manager == "yarn"
+    );
+    if package_manager == "pnpm" {
+        let pnpm_workspace = fs::read_to_string(temp.path().join("pnpm-workspace.yaml")).unwrap();
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pnpm_workspace).unwrap();
+        assert_eq!(parsed["enableGlobalVirtualStore"].as_bool(), Some(false));
+        assert_eq!(parsed["linkWorkspacePackages"].as_bool(), Some(true));
+        assert_eq!(parsed["overrides"]["js-yaml"], "4.3.1");
+        assert_text_contains_all(
+            &pnpm_workspace,
+            &[
+                "pre-run validation rewrite installed executable shims",
+                "Keep\n# this allowlist narrow",
+                "authorizes dependency code execution",
+                "\nallowBuilds:\n  esbuild: true\n",
+            ],
+        );
+    }
+    if package_manager == "yarn" {
+        assert_eq!(
+            fs::read_to_string(temp.path().join(".yarnrc.yml")).unwrap(),
+            "nodeLinker: node-modules\n"
+        );
+    }
+}
+
+#[test]
+fn scaffold_frontend_dev_scripts_only_launch_the_dev_server() {
+    for package_manager in ["bun", "npm", "pnpm", "yarn"] {
+        assert_frontend_dev_scripts_for_package_manager(package_manager);
+    }
+}
+
+#[test]
+fn scaffold_playwright_resolves_repo_root_from_nested_spa_dir() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            frontend_apps: vec![FrontendApp {
+                name: "web".into(),
+                dir: "clients/web".into(),
+                coverage_threshold: 80,
+                kind: "vite".into(),
+                role: "spa".into(),
+            }],
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    plan.write(temp.path(), false).unwrap();
+
+    let config = fs::read_to_string(temp.path().join("clients/web/playwright.config.ts")).unwrap();
+    assert!(config.contains(r#"path.resolve(appDir, "../..")"#));
+}

@@ -1,6 +1,6 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
-#[path = "vault_lifecycle_parts/support.rs"]
+#[path = "vault_lifecycle/support.rs"]
 mod vault_lifecycle_support;
 
 use vault_lifecycle_support::*;
