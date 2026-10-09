@@ -71,8 +71,8 @@ jobs:
 [% if go_sqlc_ci_enabled %]
       - name: Check sqlc drift
         run: scripts/jig check <<[ go_sqlc_ci_target ]>>
-[% endif %]
-[% endif %]
+[% endif -%]
+[% endif -%]
 [% if file_budget_ci_enabled %]
   file-budget:
     name: Enforce repository file budgets
@@ -127,10 +127,9 @@ jobs:
               scripts/jig check repo:file-budget
               ;;
           esac
-[% endif %]
+[% endif -%]
 
-[% if rust_backend_enabled %]
-[% if sqlx_enabled %]
+[% if rust_backend_enabled and sqlx_enabled %]
   sqlx-unchecked-queries:
     name: Verify non-test SQLx queries are compile-time checked
     runs-on: <<[ ci_github_runner | tojson ]>>
@@ -157,8 +156,7 @@ jobs:
         run: |
           scripts/jig check sqlx-unchecked-non-test
 
-[% endif %]
-[% endif %]
+[% endif -%]
 [% if sqlx_enabled or go_postgres_enabled %]
   migration-immutability:
     name: Enforce migration immutability
@@ -220,4 +218,4 @@ jobs:
       - name: Check migration immutability
         run: |
           scripts/jig check migration-immutability --changed-against "${{ steps.base_ref.outputs.ref }}"
-[% endif %]
+[% endif -%]

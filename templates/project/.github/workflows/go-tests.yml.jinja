@@ -95,7 +95,7 @@ jobs:
       - run: scripts/jig check <<[ go_lint_ci_target ]>>
       - run: scripts/jig check <<[ go_test_locked_ci_target ]>>
 [% if go_sqlc_ci_enabled %]      - run: scripts/jig check <<[ go_sqlc_ci_target ]>>
-[% endif %]
+[% endif -%]
 [% if go_postgres_integration_ci_enabled %]
   postgres-integration:
     # GitHub-hosted macOS runners do not provide the Docker daemon required by
@@ -136,4 +136,4 @@ jobs:
             vendor/modules.txt
             **/vendor/modules.txt
       - run: bash scripts/test-postgres.sh
-[% endif %]
+[% endif -%]
