@@ -215,15 +215,12 @@ sleep 30
     set_nonblocking(&master);
 
     let mut output = Vec::new();
-    read_until(
-        &mut master,
-        &mut output,
-        "Codex Home Picker",
-        Duration::from_secs(3),
-    );
+    // The first frame can span several PTY reads, so wait for each part of it
+    // rather than asserting on whatever arrived with the title.
+    for expected in ["Codex Home Picker", "codex-work", "loading"] {
+        read_until(&mut master, &mut output, expected, Duration::from_secs(3));
+    }
     let initial = String::from_utf8_lossy(&output);
-    assert!(initial.contains("codex-work"), "{initial}");
-    assert!(initial.contains("loading"), "{initial}");
     assert!(!initial.contains("Select a Codex home"), "{initial}");
 
     master.write_all(b"/work").unwrap();
