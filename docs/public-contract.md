@@ -62,7 +62,7 @@ Existing complete authored models remain authoritative during readoption and
 update; selection flags on those models fail with guidance to edit `.jig.toml`.
 
 
-`scripts/jig info freshness` is a read-only CLI adoption preview with runtime-owned
+`scripts/jig info inputs` is a read-only CLI adoption preview with runtime-owned
 `schema_version: 1` JSON. Each `targets` entry has `target`, `current`, `proposed`,
 `reason`, `inputs`, `proposed_inputs` and `exhaustive_requires_owner_assertion`;
 `changed_targets` identifies proposed authority changes. Repeat exact `--target
@@ -75,7 +75,7 @@ paired unified diff for `.jig.toml` and `.agent/jig-contract.json` (an empty dif
 for a no-op); with `--json`, it adds the string `patch` to the report. The preview
 executes no configured action and writes no repository files. Patch generation
 and assertions require epoch 8 or later. Existing inspection projections
-tools are unchanged. See [declaration adoption](target-freshness-integration.md#preview-and-apply-declarations)
+tools are unchanged. See [declaration adoption](action-input-declarations.md#preview-and-apply-declarations)
 for qualification boundaries and the review/apply workflow.
 
 At contract epoch 9, `scripts/jig check agent-guides` validates existing root and
@@ -842,8 +842,8 @@ Validation:
 
 Generated checks keep the defaults. `jig update` and recopy preserve explicit
 authored values and their provenance. The `--projection agent-v1` inspection
-projection and `scripts/jig info freshness` report effective values, and
-`info freshness` can produce a reviewed patch that declares `worktree` or
+projection and `scripts/jig info inputs` report effective values, and
+`info inputs` can produce a reviewed patch that declares `worktree` or
 `exhaustive` for selected read-only command checks.
 
 Run records written by earlier runtimes carry a `target_freshness` object

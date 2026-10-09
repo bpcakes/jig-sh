@@ -3,9 +3,9 @@
 ## Local development
 
 Choose checks that validate the affected behavior. Broaden verification for shared
-behavior, failures, or unresolved risks; ordinary development does not require receipt
+behavior, failures, or unresolved risks; ordinary development does not require run-history
 inspection or a full workspace test run. `scripts/jig file-budget audit`
-provides standalone source-size diagnostics without creating runs or receipts.
+provides standalone source-size diagnostics without creating runs.
 
 The configured full Rust test commands use cargo-nextest 0.9.130 or newer so tests
 that mutate process-global environment or working-directory state run in

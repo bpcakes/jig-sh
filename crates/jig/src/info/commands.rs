@@ -629,12 +629,32 @@ fn command_status_label(status: &str) -> &'static str {
     }
 }
 
+/// Prefix for remediation commands. Invoked from the repository root, next
+/// steps use the documented `scripts/jig ...` form; from any other directory
+/// they stay anchored to the discovered root so they remain correct to copy.
+/// The report's `root` field always carries the absolute path.
 pub(super) fn command_prefix(ctx: &RepoContext) -> String {
-    if repo_launcher_available(ctx) {
-        jig_repository::shell::quote(&ctx.root().join("scripts/jig").display().to_string())
-    } else {
+    command_prefix_from(ctx, invoked_at_root(ctx))
+}
+
+fn command_prefix_from(ctx: &RepoContext, at_root: bool) -> String {
+    if !repo_launcher_available(ctx) {
         "jig".into()
+    } else if at_root {
+        "scripts/jig".into()
+    } else {
+        jig_repository::shell::quote(&ctx.root().join("scripts/jig").display().to_string())
     }
+}
+
+fn invoked_at_root(ctx: &RepoContext) -> bool {
+    let Some(cwd) = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| cwd.canonicalize().ok())
+    else {
+        return false;
+    };
+    ctx.root().canonicalize().is_ok_and(|root| root == cwd)
 }
 
 pub(super) fn dev_proxy_available(ctx: Option<&RepoContext>) -> bool {
@@ -663,8 +683,16 @@ fn is_executable_file(path: &std::path::Path) -> bool {
 }
 
 fn adopt_command(ctx: &RepoContext) -> String {
-    let destination = jig_repository::shell::quote(&ctx.root().display().to_string());
-    let mut command = format!("{} adopt {destination}", command_prefix(ctx));
+    adopt_command_from(ctx, invoked_at_root(ctx))
+}
+
+fn adopt_command_from(ctx: &RepoContext, at_root: bool) -> String {
+    let destination = if at_root {
+        ".".to_string()
+    } else {
+        jig_repository::shell::quote(&ctx.root().display().to_string())
+    };
+    let mut command = format!("{} adopt {destination}", command_prefix_from(ctx, at_root));
     let stored_source = ctx.source_path().trim();
     let local_source = ctx.template_local_path().trim();
     let local_source = (!local_source.is_empty()).then(|| {

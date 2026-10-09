@@ -1,3 +1,5 @@
+> Moved from `docs/` to `docs/plans/` on 2026-10-09 as a historical record. Paths and commands below refer to the original location.
+
 # Rust-only `jig init` presets
 
 Status: delivery plan, converted to Beads and reviewed to evidenced steady state;

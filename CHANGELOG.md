@@ -51,6 +51,19 @@
 
 ### Changed
 
+- Rename `info freshness` to `info inputs`; `freshness` remains a hidden alias.
+  The report's `command` field is now `info inputs`. The command previews
+  action input declarations, and Jig has recorded no target freshness since
+  `jig work` was removed. `docs/target-freshness-integration.md` moves to
+  `docs/action-input-declarations.md`.
+- When invoked from the repository root, `info --commands` next steps use
+  `scripts/jig ...` and `adopt .` instead of embedding absolute launcher and
+  repository paths. From any other directory they stay anchored to the
+  discovered root, and the report's `root` field always carries the absolute
+  path.
+- Retire leftover work-era wording: the `info` help no longer mentions gates,
+  and the generated `AGENTS.md` no longer says `file-budget audit` creates no
+  receipts.
 - **Breaking:** authenticated vault operations now require a writable per-user
   `~/.jig/vault-witness`, including operations on format 1 and 2 vaults selected
   with `--home` or `JIG_VAULT_HOME`. Shared witness locks serialize legacy

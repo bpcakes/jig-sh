@@ -26,8 +26,8 @@ reject `worktree`.
 Inspect current and proposed policies without running checks or writing repository files:
 
 ```sh
-scripts/jig info freshness
-scripts/jig info freshness --target api:fmt --json
+scripts/jig info inputs
+scripts/jig info inputs --target api:fmt --json
 ```
 
 Selectors are exact `component:action` addresses from `info targets`; repeat
@@ -47,7 +47,7 @@ After auditing the formatter's effective command and Cargo configuration, assert
 Git independence explicitly to produce a patch:
 
 ```sh
-scripts/jig info freshness --target api:fmt --assert-worktree \
+scripts/jig info inputs --target api:fmt --assert-worktree \
   --patch > /tmp/jig-freshness.patch
 ```
 
@@ -71,7 +71,7 @@ and make the ownership assertions explicitly. For example, after verifying a
 formatter's complete read set, append any missing patterns:
 
 ```sh
-scripts/jig info freshness --target api:fmt \
+scripts/jig info inputs --target api:fmt \
   --assert-worktree --assert-exhaustive \
   --input 'scripts/check-format.sh' --input 'fixtures/**/*.source' \
   --patch > /tmp/jig-freshness.patch

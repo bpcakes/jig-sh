@@ -44,7 +44,7 @@ process startup and existing repository context loading.
 | Staged | 3423.696 | 1287.738 |
 | Untracked | 3354.590 | 1305.726 |
 
-[All initial sample counters](benchmarks/target-freshness-initial.jsonl) include
+[All initial sample counters](../benchmarks/target-freshness-initial.jsonl) include
 elapsed time, committed/index parsing, worktree collection, discovered entries,
 content bytes, graph size, and the enforced deadline. Batched samples also
 separate shared Git execution time (`git_us`) from parsing. Initial committed
@@ -116,7 +116,7 @@ p95. It still fails the all-cases threshold. The next frozen revision, with raw-
 removal, completed 100/100: clean 1,012.732 ms, narrow dirty 962.319 ms, wide
 dirty 959.500 ms, staged 977.811 ms, and untracked 973.856 ms p95. This still
 fails qualification because the clean case exceeds the limit.
-[All 700 release samples](benchmarks/target-freshness-release.jsonl) preserve
+[All 700 release samples](../benchmarks/target-freshness-release.jsonl) preserve
 the observations, including the failed cold runs and enforced cgroup limits.
 
 The batched debug result fit the two-second inspection deadline but exceeded
@@ -214,7 +214,7 @@ uses a sliding window of at most 64 open source files to overlap sibling I/O;
 all content still passes through the same streaming hash, byte accounting, and
 metadata checks. The queue drains before descending or closing a directory.
 
-[Integration experiments](benchmarks/target-freshness-integration-experiments.jsonl)
+[Integration experiments](../benchmarks/target-freshness-integration-experiments.jsonl)
 retain the complete collector run and the failed smoke runs, including a host
 smoke performed alongside focused tests on a host with more than 3,400 processes.
 That host smoke hit the two-second phase deadline and is not a substitute for
@@ -295,7 +295,7 @@ remained fresh after an unrelated edit, and finish succeeded. This result uses
 binary SHA-256 `a9186d9663c22a7470da0c173a2c4173e9145cd1aacc16d42cf7fa89ef00dd4b`.
 The five constrained limit cases also passed, including 480 MiB recording and
 explicit inspection, and refusal for bytes/entries over the ceiling and required
-ignored/symlink inputs. [Raw local qualification reports](benchmarks/target-freshness-integration-qualified-local.jsonl)
+ignored/symlink inputs. [Raw local qualification reports](../benchmarks/target-freshness-integration-qualified-local.jsonl)
 include every sample and limit outcome. These local results are separate from the
 actual hosted-CI warm/cold matrix reported below.
 
@@ -322,7 +322,7 @@ Constrained cold samples also verified physical reads through the throttled
 device. Hosted CI and constrained storage each passed all five limit cases,
 including 480 MiB recording, explicit inspection and finish, and bounded refusal
 for oversized source, entry overflow, ignored inputs and symlinks.
-[Complete CI reports](benchmarks/target-freshness-integration-qualified-ci.jsonl)
+[Complete CI reports](../benchmarks/target-freshness-integration-qualified-ci.jsonl)
 retain the samples, counters, outcomes and exact runtime identity. Downloaded
 artifact checksums were verified before inspecting the reports, and the phase
 and full-command p95 values were recalculated from the samples. These results

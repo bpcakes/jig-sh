@@ -21,7 +21,7 @@ NATIVE_FIXTURE = r'''
 #define VERSION "0.4.0"
 #endif
 #ifndef CONTRACT
-#define CONTRACT "8"
+#define CONTRACT "9"
 #endif
 #ifndef PIN_AWARE_UPDATE
 #define PIN_AWARE_UPDATE 0
@@ -64,8 +64,8 @@ class SourceRuntimeTests(unittest.TestCase):
         source = directory / "example.c"
         source.write_text(NATIVE_FIXTURE)
         cls.binaries = {}
-        for name, version, contract in [("release", "0.4.0", "8"),
-                                        ("newer", "0.5.0", "8"),
+        for name, version, contract in [("release", "0.4.0", "9"),
+                                        ("newer", "0.5.0", "9"),
                                         ("incompatible", "0.4.0", "7")]:
             binary = directory / name
             subprocess.run(["cc", str(source), "-o", str(binary),
@@ -87,7 +87,7 @@ class SourceRuntimeTests(unittest.TestCase):
         (self.root / "crates/jig/src/main.rs").write_text("fn main() {}\n")
         (self.root / ".jig.toml").write_text('_src_path = "embedded:jig-sh"\n')
         (self.root / ".jig/source-runtime-version").write_text("0.4.0\n")
-        (self.root / ".agent/jig-contract.json").write_text('{"contract_version":8}\n')
+        (self.root / ".agent/jig-contract.json").write_text('{"contract_version":9}\n')
         self.bin = self.root / "tools"
         # Supply only required tools, so a workstation's installed Jig cannot
         # accidentally satisfy a missing-runtime test.
@@ -161,7 +161,7 @@ class SourceRuntimeTests(unittest.TestCase):
 
     def test_wrong_version_or_incompatible_release_is_not_cached(self):
         for name, message in [("newer", "does not match pinned release"),
-                              ("incompatible", "cannot run contract 8")]:
+                              ("incompatible", "cannot run contract 9")]:
             with self.subTest(name=name):
                 self.install(name)
                 result = self.launcher("--version")

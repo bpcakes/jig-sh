@@ -118,7 +118,7 @@ Facts checked at the baseline:
 - `runtime/work/gates/dashboard.rs` already batches receipt indexing and shares
   a fingerprint and plan-change observations within a request. `status.rs` uses
   that path. `repository/freshness/budget.rs` and
-  `docs/target-freshness-integration.md` define bounded observation: inspection
+  `docs/action-input-declarations.md` define bounded observation: inspection
   defaults to 2,000 ms, with an explicit maximum of 30,000 ms. Deadline exhaustion
   is unknown, not stale. Do not assume no batching exists.
 - `cli/work.rs`, `command/work.rs`, and `cli/structured_error.rs` own argument and
@@ -270,7 +270,7 @@ including external IDs. All six deliveries remain open.
 ### T-05 — Make compact evidence inspection bounded and economical
 - Outcome: One existing compact inspection gives current completion/recovery information without redundant source/journal work or an automatic full-suite retry after observation timeout.
 - Context: D-04. `jig-sh-9wcn.9` owns the shared summary projection; this task owns measured collection cost and bounded inspection behavior, not a second projection.
-- Changes: `runtime/work/gates/dashboard.rs`, `gates/collection.rs`, `gates/target_evidence.rs`, `repository/freshness/budget.rs`, `status.rs`, existing compact CLI/MCP projections, and `docs/target-freshness-integration.md`. Keep any observation metrics separate from proof identity.
+- Changes: `runtime/work/gates/dashboard.rs`, `gates/collection.rs`, `gates/target_evidence.rs`, `repository/freshness/budget.rs`, `status.rs`, existing compact CLI/MCP projections, and `docs/action-input-declarations.md`. Keep any observation metrics separate from proof identity.
 - Depends on: jig-sh-9wcn.9
 - Verify: First profile journal lookup versus source collection at 1 and 20 plans with 1,000 and 10,000 generic receipts, cold/warm, up to three trials each. Instrument repeated scans and observe total elapsed time separately. Reuse existing index/baseline caches; optimize the demonstrated duplicate phase. Assert one request shares eligible observations, source/journal/config changes invalidate them, cancellation/resource ceilings still stop collection, and deadline exhaustion yields unknown with read-only recovery. Standard defaults/shapes remain compatible and finish independently revalidates after a source edit.
 - Recovery: Request-local optimizations can be reverted without state migration. Keep bounded standard mode and detailed evidence available; do not persist a summary as closure authority.

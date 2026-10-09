@@ -219,7 +219,7 @@ pub(crate) enum CommandKind {
         after_help = doctor::DOCTOR_AFTER_HELP
     )]
     Doctor,
-    /// Summarize repo Jig configuration, capabilities, gates, and dev apps.
+    /// Summarize repo Jig configuration, capabilities, and dev apps.
     #[command(
         name = root_commands::INFO.name,
         display_order = root_commands::INFO.display_order,

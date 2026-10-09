@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use jig_context::CURRENT_CONTRACT_VERSION;
 use jig_dashboard::{RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION};
 use serde_json::Value;
 
@@ -262,9 +263,9 @@ fn product_version_is_independent_of_the_runner_contract_epoch() {
     );
     let contract: Value =
         serde_json::from_slice(&fs::read(root.join(".agent/jig-contract.json")).unwrap()).unwrap();
-    assert_eq!(contract["contract_version"], 8);
+    assert_eq!(contract["contract_version"], CURRENT_CONTRACT_VERSION);
     let launcher = fs::read_to_string(root.join("scripts/jig")).unwrap();
-    assert!(launcher.contains("CONTRACT_VERSION=\"8\""));
+    assert!(launcher.contains(&format!("CONTRACT_VERSION=\"{CURRENT_CONTRACT_VERSION}\"")));
 }
 
 #[test]

@@ -1,3 +1,5 @@
+> Moved from `docs/` to `docs/plans/` on 2026-10-09 as a historical record. Paths and commands below refer to the original location.
+
 # Rust-only init presets plan review evidence
 
 This ledger records the review history for
