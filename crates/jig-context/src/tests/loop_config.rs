@@ -1,3 +1,138 @@
+use super::*;
+
+#[test]
+fn loop_config_accepts_compiled_in_workflow_kinds() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[loop]
+lease_ttl_seconds = 60
+max_attempts = 2
+
+[[loop.workflows]]
+id = "status-check"
+kind = "noop_status"
+
+[[loop.workflows]]
+id = "pr-status"
+kind = "github_pr_status"
+
+[[loop.workflows]]
+id = "pr-manager"
+kind = "pr_manager"
+codex_home = "work"
+"#,
+    )
+    .unwrap();
+
+    validate_config(&config).unwrap();
+}
+
+#[test]
+fn loop_config_rejects_codex_home_for_non_codex_workflow() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "pr-status"
+kind = "github_pr_status"
+codex_home = "work"
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("can set codex_home only when kind is 'pr_manager' or 'codex_task'"));
+}
+
+#[test]
+fn loop_config_rejects_an_empty_codex_home() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "pr-manager"
+kind = "pr_manager"
+codex_home = ""
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("codex_home must not be empty"));
+}
+
+#[test]
+fn loop_config_rejects_unknown_workflow_kinds() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "pr-manager"
+kind = "github_pr_loop"
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("Unsupported loop workflow kind 'github_pr_loop'"));
+}
+
+#[test]
+fn loop_config_rejects_zero_backoff() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[loop]
+backoff_seconds = 0
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("[loop].backoff_seconds must be greater than zero"));
+}
+
+#[test]
+fn loop_config_rejects_colon_in_workflow_ids() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "status:check"
+kind = "noop_status"
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("Unsupported loop workflow id value 'status:check'"));
+}
+
 #[test]
 fn loop_config_rejects_invalid_schedule_and_timezone() {
     let invalid_schedule: RepoConfig = toml::from_str(

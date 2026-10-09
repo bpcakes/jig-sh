@@ -1,3 +1,7 @@
+use jig_contract::FeatureContext;
+
+use crate::RepoContext;
+
 impl FeatureContext for RepoContext {
     fn contract_version(&self) -> u32 {
         self.contract_version()
