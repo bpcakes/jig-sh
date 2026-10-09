@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn pr_manager_does_not_push_a_repair_based_on_changed_review_feedback() {
@@ -9,8 +11,7 @@ fn pr_manager_does_not_push_a_repair_based_on_changed_review_feedback() {
     let head_sha = git_stdout(temp.path(), ["rev-parse", "codex/widgets"])
         .trim()
         .to_string();
-    let original_remote_src =
-        git_stdout(&origin, ["show", "refs/heads/codex/widgets:src.rs"]);
+    let original_remote_src = git_stdout(&origin, ["show", "refs/heads/codex/widgets:src.rs"]);
     let feedback_changed = temp.path().join("feedback-changed");
     let _gh = fake_gh(
         temp.path(),
@@ -72,10 +73,7 @@ exit 2
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
-    let _changed = EnvVarGuard::set(
-        "JIG_TEST_FEEDBACK_CHANGED",
-        feedback_changed.as_os_str(),
-    );
+    let _changed = EnvVarGuard::set("JIG_TEST_FEEDBACK_CHANGED", feedback_changed.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = crate::runtime::dispatch(
@@ -96,7 +94,10 @@ exit 2
         action["attention_kind"],
         "review_feedback_changed_before_push"
     );
-    assert_eq!(action["review_thread_revalidation"]["reason"], "review_thread_changed");
+    assert_eq!(
+        action["review_thread_revalidation"]["reason"],
+        "review_thread_changed"
+    );
     assert_eq!(action["push"]["status"], "not_attempted");
     assert_eq!(action["worktree_retained"], true);
     assert!(Path::new(action["worktree"].as_str().unwrap()).exists());
@@ -118,8 +119,7 @@ fn pr_manager_does_not_push_when_review_feedback_authority_changes() {
     let head_sha = git_stdout(temp.path(), ["rev-parse", "codex/widgets"])
         .trim()
         .to_string();
-    let original_remote_src =
-        git_stdout(&origin, ["show", "refs/heads/codex/widgets:src.rs"]);
+    let original_remote_src = git_stdout(&origin, ["show", "refs/heads/codex/widgets:src.rs"]);
     let authority_changed = temp.path().join("review-authority-changed");
     let _gh = fake_gh(
         temp.path(),
@@ -239,8 +239,7 @@ fn pr_manager_does_not_push_when_new_trusted_review_feedback_appears() {
     let head_sha = git_stdout(temp.path(), ["rev-parse", "codex/widgets"])
         .trim()
         .to_string();
-    let original_remote_src =
-        git_stdout(&origin, ["show", "refs/heads/codex/widgets:src.rs"]);
+    let original_remote_src = git_stdout(&origin, ["show", "refs/heads/codex/widgets:src.rs"]);
     let feedback_added = temp.path().join("feedback-added");
     let _gh = fake_gh(
         temp.path(),
@@ -430,8 +429,7 @@ exit 2
     assert!(Path::new(action["worktree"].as_str().unwrap()).exists());
     assert!(output["attempts"].as_array().unwrap().is_empty());
     assert_ne!(
-        git_stdout(&origin, ["rev-parse", "refs/heads/codex/widgets"])
-            .trim(),
+        git_stdout(&origin, ["rev-parse", "refs/heads/codex/widgets"]).trim(),
         head_sha
     );
 }

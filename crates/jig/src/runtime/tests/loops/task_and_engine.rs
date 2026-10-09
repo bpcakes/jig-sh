@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn loop_tick_noop_records_idle_evidence() {
     let temp = tempdir().unwrap();
@@ -24,10 +26,8 @@ fn loop_tick_noop_records_idle_evidence() {
     assert!(output["observed"].get("open_plan_count").is_none());
     assert!(output.get("receipt_id").is_none());
 
-    let shown = crate::runtime::tests::common::loop_show(
-        &ctx,
-        output["occurrence_id"].as_str().unwrap(),
-    );
+    let shown =
+        crate::runtime::tests::common::loop_show(&ctx, output["occurrence_id"].as_str().unwrap());
     assert_eq!(shown["occurrence"]["status"], "succeeded", "{shown:#}");
     assert_eq!(shown["evidence"]["tick"]["status"], "idle");
     assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
@@ -510,10 +510,8 @@ while :; do sleep 1; done
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
-    let _worker_started = EnvVarGuard::set(
-        "JIG_TEST_TASK_WORKER_STARTED",
-        worker_started.as_os_str(),
-    );
+    let _worker_started =
+        EnvVarGuard::set("JIG_TEST_TASK_WORKER_STARTED", worker_started.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let repo_root = temp.path().to_path_buf();
     let revoker = std::thread::spawn(move || {

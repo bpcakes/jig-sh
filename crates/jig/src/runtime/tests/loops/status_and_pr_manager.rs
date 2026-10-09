@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn loop_configured_noop_workflow_uses_toml_tuning() {
     let temp = tempdir().unwrap();
@@ -124,13 +126,12 @@ esac
         "PRRT_1"
     );
     assert_eq!(
-        output["observed"]["pull_requests"][0]["review_threads"]["nodes"][0]["comments"]
-            ["nodes"][0]["author"]["permission"],
+        output["observed"]["pull_requests"][0]["review_threads"]["nodes"][0]["comments"]["nodes"]
+            [0]["author"]["permission"],
         "write"
     );
     assert_eq!(
-        output["observed"]["pull_requests"][0]["review_threads"]["summary"]
-            ["trusted_unresolved"],
+        output["observed"]["pull_requests"][0]["review_threads"]["summary"]["trusted_unresolved"],
         1
     );
     assert_eq!(

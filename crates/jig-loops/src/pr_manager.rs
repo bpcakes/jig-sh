@@ -734,6 +734,8 @@ mod review_thread_boundary_tests;
 mod review_thread_budget_tests;
 #[cfg(test)]
 mod review_thread_capability_tests;
+#[cfg(all(test, unix))]
+mod review_thread_reply_tests;
 include!("pr_manager/git.rs");
 #[cfg(test)]
 mod attempt_clear_tests;

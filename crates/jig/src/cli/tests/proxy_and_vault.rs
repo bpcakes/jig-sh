@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn parses_proxy_run_command() {
     let cli = Cli::try_parse_from([
@@ -709,18 +711,34 @@ fn parses_hidden_proxy_no_http2_runtime_flag() {
 
 #[test]
 fn private_certificate_scope_requires_foreground_and_preserves_names() {
-    assert!(Cli::try_parse_from([
-        "jig", "proxy", "start", "--certificate-dns-name", "exampleproject.test",
-    ]).is_err());
+    assert!(
+        Cli::try_parse_from([
+            "jig",
+            "proxy",
+            "start",
+            "--certificate-dns-name",
+            "exampleproject.test",
+        ])
+        .is_err()
+    );
     let cli = Cli::try_parse_from([
-        "jig", "proxy", "start", "--foreground",
-        "--certificate-dns-name", "*.exampleproject.test",
-        "--certificate-dns-name", "exampleproject.test",
-    ]).unwrap();
+        "jig",
+        "proxy",
+        "start",
+        "--foreground",
+        "--certificate-dns-name",
+        "*.exampleproject.test",
+        "--certificate-dns-name",
+        "exampleproject.test",
+    ])
+    .unwrap();
     match cli.command {
         CommandKind::Proxy(ProxyCommand::Start(opts)) => {
             let request = crate::command::ProxyStartRequest::from(opts);
-            assert_eq!(request.certificate_dns_name, ["*.exampleproject.test", "exampleproject.test"]);
+            assert_eq!(
+                request.certificate_dns_name,
+                ["*.exampleproject.test", "exampleproject.test"]
+            );
         }
         other => panic!("expected proxy start command, got {other:?}"),
     }

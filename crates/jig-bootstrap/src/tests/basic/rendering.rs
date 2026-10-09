@@ -926,7 +926,7 @@ fn apply_staged_render_rejects_unsafe_backup_ancestors_before_managed_mutation()
     assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
 }
 
-include!("rendering/leaf_conflicts.rs");
+mod leaf_conflicts;
 
 mod guidance;
 mod guidance_policy;

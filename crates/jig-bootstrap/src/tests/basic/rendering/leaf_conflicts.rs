@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn rendered_conflicts_detects_executable_bit_changes() {

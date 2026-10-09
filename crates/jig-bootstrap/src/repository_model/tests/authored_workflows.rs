@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn authored_mixed_go_postgres_model_defaults_its_owned_migration_directory() {
     let api = ComponentSpec {
