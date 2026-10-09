@@ -29,7 +29,7 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 - Inspection is cooperative: cancel and join the worker before restoring the terminal.
 - Do not read authentication files or the Keychain; account and usage details arrive only through `InspectionSource`.
 - Missing or additive JSON fields render as unknown instead of panicking.
-- Layout tiers are monotonic: widening the terminal never selects a poorer list style, and side-by-side details keep their readable width range.
+- Panes stack whenever the details keep a comfortable height below the list; side by side is only for terminals too short for that, and keeps the details within their readable width range. The arrangement depends on the terminal size and the number of homes, never on the selection or the search.
 
 ## Common commands
 

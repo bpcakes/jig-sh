@@ -59,12 +59,13 @@
 ### Changed
 
 - The `claude launch` and `codex launch` home pickers choose their layout from
-  one set of breakpoints. The list and details sit side by side from 104
-  columns, with the details at a readable 44–64 columns and the rest going to
-  the list, so widening the terminal never squeezes the list into a poorer
-  style. Narrower terminals stack the list above the details, sized to its
-  rows instead of a fixed 58%, and terminals too short for both show one pane
-  at a time, with Tab switching between them.
+  one set of breakpoints. The list sits above the details, sized to its rows
+  instead of a fixed 58%, whenever that leaves the details room to show a
+  home without scrolling, so tall terminals no longer split into two narrow
+  columns. Shorter terminals sit the panes side by side from 120 columns,
+  with the details at a readable 56–72 columns and the rest going to the
+  list, and terminals too short for both show one pane at a time, with Tab
+  switching between them.
 - Rename the internal home-picker crate `jig-codex-tui` to `jig-agents-tui`,
   since it serves Claude as well as Codex, and drop its unused Codex-only
   entry points. Only `jig-sh` depended on it; `jig-codex-tui` stays on

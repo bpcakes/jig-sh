@@ -7,8 +7,6 @@ use ratatui::{
 };
 
 use crate::model::{App, ExitState, Projection, unix_timestamp_now};
-#[cfg(test)]
-use layout::ListStyle;
 use layout::{MIN_HEIGHT, MIN_WIDTH};
 use list::draw_list;
 

@@ -74,27 +74,67 @@ fn example_app(count: usize) -> App {
     )
 }
 
+fn side_by_side(layout: &layout::PickerLayout) -> bool {
+    matches!((layout.list, layout.details), (Some(list), Some(details)) if details.x > list.x)
+}
+
 #[test]
-fn wider_terminals_never_yield_a_poorer_list_or_cramped_details() {
-    let app = example_app(4);
-    let mut previous = ListStyle::Compact;
-    for width in MIN_WIDTH..=260 {
-        let layout = layout::picker_layout(Rect::new(0, 0, width, 30), &app);
-        let list = layout.list.unwrap();
-        let details = layout.details.unwrap();
-        let style = ListStyle::for_width(list.width);
-        assert!(style >= previous, "{width}: {style:?} after {previous:?}");
-        previous = style;
-        if details.x > list.x {
-            assert_eq!(list.y, details.y, "{width}");
-            assert!((44..=64).contains(&details.width), "{width}: {details:?}");
-            assert!(style >= ListStyle::TwoLine, "{width}: {style:?}");
-        } else {
-            assert_eq!(list.width, width, "{width}");
-            assert_eq!(details.width, width, "{width}");
+fn side_by_side_panes_keep_readable_widths() {
+    for rows in [4, 12] {
+        let app = example_app(rows);
+        for height in [MIN_HEIGHT, 30, 101] {
+            for width in MIN_WIDTH..=260 {
+                let layout = layout::picker_layout(Rect::new(0, 0, width, height), &app);
+                let size = format!("{rows} homes at {width}x{height}");
+                if side_by_side(&layout) {
+                    let (list, details) = (layout.list.unwrap(), layout.details.unwrap());
+                    assert!(list.width >= 64, "{size}: {list:?}");
+                    assert!((56..=72).contains(&details.width), "{size}: {details:?}");
+                } else if let Some(list) = layout.list {
+                    assert_eq!(list.width, width, "{size}");
+                }
+            }
         }
     }
-    assert_eq!(previous, ListStyle::Full);
+}
+
+#[test]
+fn panes_stack_whenever_the_details_keep_a_comfortable_height() {
+    // A tall, narrow multiplexer pane: wide enough to split, but stacking
+    // shows everything at full width.
+    for (homes, width, height) in [(4, 109, 101), (4, 200, 60), (4, 100, 40), (12, 130, 60)] {
+        let layout = layout::picker_layout(Rect::new(0, 0, width, height), &example_app(homes));
+        assert!(!side_by_side(&layout), "{homes} homes at {width}x{height}");
+        let details = layout.details.unwrap();
+        assert_eq!(details.width, width);
+        assert!(
+            details.height >= 20,
+            "{homes} homes at {width}x{height}: {details:?}"
+        );
+    }
+    // Too short to stack comfortably, and wide enough for both panes.
+    for (homes, width, height) in [(4, 130, 30), (12, 160, 30), (4, 200, 24)] {
+        let layout = layout::picker_layout(Rect::new(0, 0, width, height), &example_app(homes));
+        assert!(side_by_side(&layout), "{homes} homes at {width}x{height}");
+    }
+    // Too short to stack comfortably, but too narrow to split: squeeze the stack.
+    let layout = layout::picker_layout(Rect::new(0, 0, 110, 24), &example_app(4));
+    assert!(!side_by_side(&layout));
+    assert!(layout.details.unwrap().height < 20);
+}
+
+#[test]
+fn searching_never_changes_the_arrangement() {
+    for (width, height) in [(130, 30), (130, 31), (130, 32), (109, 101), (80, 24)] {
+        let mut app = example_app(12);
+        let before = side_by_side(&layout::picker_layout(Rect::new(0, 0, width, height), &app));
+        app.searching = true;
+        for character in "example-1".chars() {
+            app.push_filter(character);
+            let during = layout::picker_layout(Rect::new(0, 0, width, height), &app);
+            assert_eq!(side_by_side(&during), before, "{width}x{height}");
+        }
+    }
 }
 
 #[test]
@@ -324,15 +364,17 @@ fn the_focused_pane_has_an_accent_border() {
     let mut app = claude_app(NOW);
     let border =
         |terminal: &Terminal<TestBackend>, x| terminal.backend().buffer().cell((x, 2)).unwrap().fg;
-    // At 130 columns the list spans 0..78 and the details start at column 78.
+    let layout = layout::picker_layout(Rect::new(0, 0, 130, 30), &app);
+    assert!(side_by_side(&layout));
+    let details_x = layout.details.unwrap().x;
     let terminal = render(&app, 130, 30, NOW);
     assert_eq!(border(&terminal, 0), ACCENT);
-    assert_ne!(border(&terminal, 78), ACCENT);
+    assert_ne!(border(&terminal, details_x), ACCENT);
 
     app.toggle_focus();
     let terminal = render(&app, 130, 30, NOW);
     assert_ne!(border(&terminal, 0), ACCENT);
-    assert_eq!(border(&terminal, 78), ACCENT);
+    assert_eq!(border(&terminal, details_x), ACCENT);
 }
 
 #[test]
