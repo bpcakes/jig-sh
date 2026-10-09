@@ -14,7 +14,7 @@
 - Change shared worker cancellation or joining behavior: `src/lib.rs` in `CooperativeWorker`.
 - Change terminal-safe text handling: `src/lib.rs` in `sanitize_text`.
 - Change unified dashboard interaction: `crates/jig-ui/`.
-- Change Codex-picker interaction: `crates/jig-codex-tui/`.
+- Change Claude/Codex home-picker interaction: `crates/jig-agents-tui/`.
 - Change Vault-manager interaction: `crates/jig-vault-tui/`.
 
 ## Invariants
@@ -30,5 +30,5 @@
 - `cargo test -p jig-tui`
 - `cargo clippy -p jig-tui --all-targets -- -D warnings`
 - `cargo test -p jig-ui`
-- `cargo test -p jig-codex-tui`
+- `cargo test -p jig-agents-tui`
 - `cargo test -p jig-vault-tui`

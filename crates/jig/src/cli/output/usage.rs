@@ -1,4 +1,4 @@
-use jig_codex_tui::usage::{WindowRole, format_duration, remaining_percent, valid_used_percent};
+use jig_agents_tui::usage::{WindowRole, format_duration, remaining_percent, valid_used_percent};
 use jig_tui::{format_countdown, format_percent, sanitize_text};
 
 use super::value_str;

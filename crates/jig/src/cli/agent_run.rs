@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use jig_agents::agent_provider::{AgentProvider, Discovery, HomeInspection, PreparedLaunch};
-use jig_codex_tui::{ConfigurationHome, Home, HomeUpdate, InspectionSource};
+use jig_agents_tui::{ConfigurationHome, Home, HomeUpdate, InspectionSource};
 
 use super::output::{Render, emit};
 
@@ -100,7 +100,7 @@ fn select<P: AgentProvider>(provider: &P) -> Result<Option<P::Home>> {
     )?;
     select_with(provider, |entries, source, warnings| {
         super::home_picker::supervise(|cancelled| {
-            jig_codex_tui::select_provider_with_cancellation(
+            jig_agents_tui::select_provider_with_cancellation(
                 &format!("{} Home Picker", P::METADATA.name),
                 &command,
                 entries,

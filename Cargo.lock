@@ -1455,6 +1455,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-agents-tui"
+version = "0.7.3-dev"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "jig-tui",
+ "ratatui",
+ "serde_json",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
 name = "jig-bootstrap"
 version = "0.7.3-dev"
 dependencies = [
@@ -1488,18 +1500,6 @@ dependencies = [
  "time",
  "toml",
  "ulid",
-]
-
-[[package]]
-name = "jig-codex-tui"
-version = "0.7.3-dev"
-dependencies = [
- "anyhow",
- "crossterm",
- "jig-tui",
- "ratatui",
- "serde_json",
- "unicode-width 0.2.0",
 ]
 
 [[package]]
@@ -1760,8 +1760,8 @@ dependencies = [
  "fs4",
  "globset",
  "jig-agents",
+ "jig-agents-tui",
  "jig-bootstrap",
- "jig-codex-tui",
  "jig-commands",
  "jig-context",
  "jig-contract",

@@ -65,6 +65,10 @@
   style. Narrower terminals stack the list above the details, sized to its
   rows instead of a fixed 58%, and terminals too short for both show one pane
   at a time, with Tab switching between them.
+- Rename the internal home-picker crate `jig-codex-tui` to `jig-agents-tui`,
+  since it serves Claude as well as Codex. Only `jig-sh` depended on it;
+  `jig-codex-tui` stays on crates.io at v0.7.2 and receives no further
+  releases.
 - The home pickers size list columns to their content, so remaining quota is
   no longer cut off, and show it as one compact label per home (`5h 58% ·
   weekly 82% left`). The projection always names its window. The details

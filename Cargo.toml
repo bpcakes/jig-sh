@@ -2,8 +2,8 @@
 members = [
     "crates/jig",
     "crates/jig-agents",
+    "crates/jig-agents-tui",
     "crates/jig-bootstrap",
-    "crates/jig-codex-tui",
     "crates/jig-commands",
     "crates/jig-context",
     "crates/jig-contract",
@@ -82,7 +82,7 @@ jig-dev-proxy = { path = "crates/jig-dev-proxy", version = "=0.7.3-dev" }
 jig-commands = { path = "crates/jig-commands", version = "=0.7.3-dev" }
 jig-context = { path = "crates/jig-context", version = "=0.7.3-dev" }
 jig-contract = { path = "crates/jig-contract", version = "=0.7.3-dev" }
-jig-codex-tui = { path = "crates/jig-codex-tui", version = "=0.7.3-dev" }
+jig-agents-tui = { path = "crates/jig-agents-tui", version = "=0.7.3-dev" }
 jig-core = { path = "crates/jig-core", version = "=0.7.3-dev" }
 jig-execution = { path = "crates/jig-execution", version = "=0.7.3-dev" }
 jig-features = { path = "crates/jig-features", version = "=0.7.3-dev" }

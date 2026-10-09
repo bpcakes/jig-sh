@@ -33,5 +33,5 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 
 ## Common commands
 
-- `cargo test -p jig-codex-tui`
-- `cargo clippy -p jig-codex-tui --all-targets -- -D warnings`
+- `cargo test -p jig-agents-tui`
+- `cargo clippy -p jig-agents-tui --all-targets -- -D warnings`

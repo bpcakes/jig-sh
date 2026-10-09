@@ -45,7 +45,7 @@ During a release, the remote `vVERSION` tag is pushed after the crates publish s
 - `crates/jig-file-budget/`, `crates/jig-policy/`: file-budget policy, repository policy checks, agent guides, and the agent map
 - `crates/jig-loops/`, `crates/jig-agents/`: scheduled and manual agent loops; Claude and Codex home discovery and launch
 - `crates/jig-dev-proxy/`: local HTTP/HTTPS proxy and process supervision
-- `crates/jig-tui/`, `crates/jig-ui/`, `crates/jig-dashboard/`, `crates/jig-codex-tui/`, `crates/jig-vault/`, `crates/jig-vault-tui/`: TUI foundations, the unified dashboard and its data contracts, the Codex home picker, and the vault
+- `crates/jig-tui/`, `crates/jig-ui/`, `crates/jig-dashboard/`, `crates/jig-agents-tui/`, `crates/jig-vault/`, `crates/jig-vault-tui/`: TUI foundations, the unified dashboard and its data contracts, the Claude and Codex home picker, and the vault
 - `templates/project/`: files rendered into downstream repositories
 - `examples/`: sample `.jig.toml` answer files
 - `scripts/validate-fixtures.sh`: rendered-repository validation; see [local validation](docs/local-validation.md)
