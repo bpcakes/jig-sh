@@ -80,7 +80,7 @@ fn detail_lines(view: &View<'_>, width: usize) -> Vec<Detail> {
         && let Some(recommendation) = row.usage_snapshot_assessment_at(view.now).recommendation()
     {
         lines.push(styled(
-            &format!("★ {}", recommendation.label),
+            &format!("◆ {}", recommendation.label),
             Style::default()
                 .fg(theme.best())
                 .add_modifier(Modifier::BOLD),

@@ -27,7 +27,7 @@ fn rendering_shows_loading_then_selected_account_and_usage() {
     assert!(ready.contains("25%"), "{ready}");
     // Selected, best at current pace, and current.
     assert!(ready.contains("›◆●"), "{ready}");
-    assert!(ready.contains("best projected headroom"), "{ready}");
+    assert!(ready.contains("◆ best projected headroom"), "{ready}");
     assert!(ready.contains("Usage sample"), "{ready}");
     assert!(ready.contains("just now"), "{ready}");
     assert!(
