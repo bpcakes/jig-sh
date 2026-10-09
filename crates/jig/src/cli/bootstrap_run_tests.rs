@@ -633,7 +633,7 @@ fn adopt_human_summary_includes_repository_notes_after_frontend_guidance() {
             "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.",
             "Re-run scripts/jig doctor after setup changes to confirm readiness.",
             "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION.",
-            "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs or receipts.",
+            "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs.",
             "Frontend checks expect package scripts for lint, typecheck, build:bundle, and test:coverage plus a package-manager lockfile; generated preset apps include them.",
             "Frontend checks are available as scripts/jig check typescript-lint, typescript-typecheck, typescript-build, and typescript-coverage; select those relevant to the change.",
             "Use scripts/jig check contract for harness wiring changes and scripts/jig check agent-guides for ownership guidance changes.",

@@ -37,7 +37,7 @@ override `--sqlx-enabled` when these limits affect your repository.
 
 ### Review input declarations
 
-Use `scripts/jig info freshness` to inspect conservative recommendations for each
+Use `scripts/jig info inputs` to inspect conservative recommendations for each
 action's `inputs_policy` and `source_state`, and `--patch` to preview paired
 authoring/manifest changes. Generated checks keep the Git source-state default,
 including Cargo formatters whose command resolution can change through aliases.
@@ -52,7 +52,7 @@ policy is `worktree` with `inferred` provenance and the command still matches th
 old Cargo formatter shape. Changed runners require owner review.
 Declaring exhaustive inputs requires an explicit ownership assertion; Jig never
 infers it from affected-file hints. See
-[Preview and apply declarations](target-freshness-integration.md#preview-and-apply-declarations)
+[Preview and apply declarations](action-input-declarations.md#preview-and-apply-declarations)
 for exact target selection, custom inputs, review/apply commands and limitations.
 
 ### Frontend dependency installation

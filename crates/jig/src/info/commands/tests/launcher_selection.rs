@@ -38,11 +38,19 @@ marketplaces = []
             .unwrap()
             .contains("--template /tmp/template")
     );
+    // Next steps are relative to the repository root; the report's `root`
+    // field carries the absolute path.
+    assert!(
+        !command_by_name(&output, "sqlx")["next_step"]
+            .as_str()
+            .unwrap()
+            .contains(&temp.path().display().to_string())
+    );
     assert!(
         command_by_name(&output, "sqlx")["next_step"]
             .as_str()
             .unwrap()
-            .contains(&temp.path().display().to_string())
+            .contains("`jig adopt . ")
     );
     assert!(
         !command_by_name(&output, "sqlx")["next_step"]

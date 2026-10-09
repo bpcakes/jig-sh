@@ -107,7 +107,7 @@ pub fn preview(ctx: &RepoContext, request: &Request) -> Result<serde_json::Value
     // Also checks that the context and files still describe one authority snapshot.
     let patch = super::patch::prepare(ctx, &changes, request.patch)?;
     let mut output = serde_json::json!({
-        "ok": true, "command": "info freshness", "schema_version": 1,
+        "ok": true, "command": "info inputs", "schema_version": 1,
         "contract_version": ctx.contract_version(), "targets": recommendations,
         "changed_targets": changes.iter().map(|(_, action)| &action.target).collect::<Vec<_>>(),
         "input_ownership": "Exhaustive inputs require owner review of every repository file the action reads, including nonstandard source paths, configuration, fixtures and toolchain pins. Command recognition alone does not establish completeness.",

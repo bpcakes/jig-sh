@@ -629,9 +629,12 @@ fn command_status_label(status: &str) -> &'static str {
     }
 }
 
+/// Prefix for remediation commands. Next steps are written relative to the
+/// repository root, which the report's `root` field identifies, so they match
+/// the documented `scripts/jig ...` form instead of embedding absolute paths.
 pub(super) fn command_prefix(ctx: &RepoContext) -> String {
     if repo_launcher_available(ctx) {
-        jig_repository::shell::quote(&ctx.root().join("scripts/jig").display().to_string())
+        "scripts/jig".into()
     } else {
         "jig".into()
     }
@@ -663,8 +666,7 @@ fn is_executable_file(path: &std::path::Path) -> bool {
 }
 
 fn adopt_command(ctx: &RepoContext) -> String {
-    let destination = jig_repository::shell::quote(&ctx.root().display().to_string());
-    let mut command = format!("{} adopt {destination}", command_prefix(ctx));
+    let mut command = format!("{} adopt .", command_prefix(ctx));
     let stored_source = ctx.source_path().trim();
     let local_source = ctx.template_local_path().trim();
     let local_source = (!local_source.is_empty()).then(|| {

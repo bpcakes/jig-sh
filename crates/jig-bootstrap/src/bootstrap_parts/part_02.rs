@@ -95,7 +95,7 @@ fn initial_notes(
     };
     if file_budget_audit_available && !minimal_footprint {
         notes.push(
-            "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs or receipts.".into(),
+            "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs.".into(),
         );
     }
     if scaffold_plan.is_some() {

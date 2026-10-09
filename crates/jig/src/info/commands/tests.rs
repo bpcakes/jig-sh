@@ -185,7 +185,7 @@ marketplaces = []
     write_full_launcher(temp.path());
 
     let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-    let launcher = temp.path().join("scripts/jig").display().to_string();
+    let launcher = "scripts/jig";
     let agent = json!({
         "ok": false,
         "codex": { "available": true, "probe_error": null },

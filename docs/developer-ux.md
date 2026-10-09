@@ -159,14 +159,14 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. Operator-only setup such as `vault init`, which needs a human-chosen passphrase, is reported as `operator_setup` instead of a next step. The launcher keeps `doctor` and `check contract` reachable through a capability-only final runtime probe against its rendered contract epoch, so a missing or malformed repository manifest can be reported instead of blocking its own diagnostic. Ordinary commands still require strict repository validation. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux and macOS retain the exact child process-group identity until descendants are proven gone, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records each run in run history.
-- `scripts/jig file-budget audit` provides standalone source-size diagnostics without creating runs or receipts.
+- `scripts/jig file-budget audit` provides standalone source-size diagnostics without creating runs.
 - `scripts/jig state summary` summarizes run history: runs, target results, failures, and the most recent target results. `scripts/jig work` was removed and is an unknown command.
 - `scripts/jig status` collects local repository, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 - `scripts/jig claude homes` lists Claude Code configuration directories; `scripts/jig claude launch` opens the shared searchable picker or an explicit home. Add `--usage` for subscription limits.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
-- `scripts/jig info freshness` previews action input declarations (`inputs_policy` and `source_state`) without writing files.
+- `scripts/jig info inputs` previews action input declarations (`inputs_policy` and `source_state`) without writing files.
 
 Checks record structured results in local, Git-ignored, append-only run history under `.agent/state/runs.jsonl`. Local inspection shows the exact target and run, the contract and input digests, the conclusion and exit code, findings, and the tail of a failed target's output. This history is not shared through commits. Every check run executes its targets; earlier results are never reused in place of execution.
 
@@ -450,6 +450,6 @@ The intentional friction is part of the UX. Trusting a local CA, exposing a prox
 - [Adoption Guide](./adoption.md)
 - [Configuration Reference](./configuration.md)
 - [Public Contract](./public-contract.md)
-- [Action input declarations](./target-freshness-integration.md)
+- [Action input declarations](./action-input-declarations.md)
 - [Scheduled Codex Tasks](./codex-task-operations.md)
 - [Repo Intent For Agents](./repo-intent.md)

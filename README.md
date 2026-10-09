@@ -234,7 +234,7 @@ The native `repo:file-budget` action enforces the repository-owned
 `.jig/file-budget.toml` source-size policy; `scripts/jig file-budget audit`
 gives the same diagnostics without creating a run. See
 [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop),
-[action input declarations](docs/target-freshness-integration.md), and the
+[action input declarations](docs/action-input-declarations.md), and the
 [Public Contract](docs/public-contract.md).
 
 ### Local development with stable URLs: `dev` and `proxy`
@@ -388,7 +388,7 @@ for release notes.
 - [Adoption](docs/adoption.md): previewing and adding Jig to an existing repository
 - [Public Contract](docs/public-contract.md): contract epochs, CLI, runs, and state
 - [Rust applications on Batter](docs/rust-applications.md): runtime ownership and operational limits
-- [Action input declarations](docs/target-freshness-integration.md): input and source-state declarations
+- [Action input declarations](docs/action-input-declarations.md): input and source-state declarations
 - [Scheduled Codex Tasks](docs/codex-task-operations.md): unattended `codex_task` workflows
 - [Platform Support](docs/platform-support.md): supported hosts and feature limits
 - [`examples/`](examples/): visible `.jig.toml` answer files

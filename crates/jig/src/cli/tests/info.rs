@@ -48,12 +48,22 @@ fn parses_top_level_info_command_and_explain_alias() {
     let rejected = Cli::try_parse_from(["jig", "info", "--summary"]);
     assert!(rejected.is_err());
 
-    let freshness = Cli::try_parse_from(["jig", "info", "freshness", "--json"]).unwrap();
-    assert!(freshness.json);
+    let inputs = Cli::try_parse_from(["jig", "info", "inputs", "--json"]).unwrap();
+    assert!(inputs.json);
     assert!(matches!(
-        freshness.command,
+        inputs.command,
         CommandKind::Info(InfoOpts {
-            subject: Some(InfoCommand::Freshness(_)),
+            subject: Some(InfoCommand::Inputs(_)),
+            ..
+        })
+    ));
+
+    // `freshness` stays accepted as a hidden alias for existing automation.
+    let alias = Cli::try_parse_from(["jig", "info", "freshness", "--json"]).unwrap();
+    assert!(matches!(
+        alias.command,
+        CommandKind::Info(InfoOpts {
+            subject: Some(InfoCommand::Inputs(_)),
             ..
         })
     ));
@@ -64,7 +74,7 @@ fn freshness_assertions_require_explicit_targets_and_input_ownership() {
     let cli = Cli::try_parse_from([
         "jig",
         "info",
-        "freshness",
+        "inputs",
         "--target",
         "workspace:fmt",
         "--assert-worktree",
@@ -77,7 +87,7 @@ fn freshness_assertions_require_explicit_targets_and_input_ownership() {
     .unwrap();
     assert!(cli.json);
     let CommandKind::Info(InfoOpts {
-        subject: Some(InfoCommand::Freshness(opts)),
+        subject: Some(InfoCommand::Inputs(opts)),
         ..
     }) = cli.command
     else {

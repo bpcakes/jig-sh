@@ -12,7 +12,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing[% if vault.scope == "repo" %], except operator-owned vault setup (see Vault)[% endif %].
 - Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
 [% if file_budget_audit_available %]
-- Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs or receipts.
+- Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs.
 [% endif %]
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.

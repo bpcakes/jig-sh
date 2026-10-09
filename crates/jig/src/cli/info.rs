@@ -78,8 +78,9 @@ impl InfoOpts {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum InfoCommand {
-    /// Preview freshness policies and conservative adoption recommendations.
-    Freshness(FreshnessOpts),
+    /// Preview action input declarations and conservative adoption recommendations.
+    #[command(alias = "freshness")]
+    Inputs(FreshnessOpts),
     /// Print the highest Go module toolchain selector used by managed CI.
     #[command(name = "go-version", hide = true)]
     GoVersion,
@@ -120,11 +121,11 @@ pub(crate) struct FreshnessOpts {
 
 pub(super) fn run_info_command(opts: InfoOpts, json_output: bool) -> Result<()> {
     opts.validate_projection()?;
-    if let Some(InfoCommand::Freshness(freshness)) = opts.subject.as_ref() {
+    if let Some(InfoCommand::Inputs(inputs)) = opts.subject.as_ref() {
         if opts.commands {
             bail!("--commands cannot be combined with an info subject");
         }
-        return freshness::run(freshness, json_output);
+        return freshness::run(inputs, json_output);
     }
     if matches!(opts.subject.as_ref(), Some(InfoCommand::GoVersion)) {
         if opts.commands {
@@ -133,7 +134,7 @@ pub(super) fn run_info_command(opts: InfoOpts, json_output: bool) -> Result<()> 
         return run_go_version(json_output);
     }
     let request = opts.subject.map(|subject| match subject {
-        InfoCommand::GoVersion | InfoCommand::Freshness(_) => {
+        InfoCommand::GoVersion | InfoCommand::Inputs(_) => {
             unreachable!("handled above")
         }
         InfoCommand::Workspace => InspectRequest::Workspace,
