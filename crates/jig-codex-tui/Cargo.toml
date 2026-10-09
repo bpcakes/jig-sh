@@ -20,6 +20,7 @@ crossterm.workspace = true
 jig-tui.workspace = true
 ratatui.workspace = true
 serde_json.workspace = true
+unicode-width.workspace = true
 
 [lints]
 workspace = true

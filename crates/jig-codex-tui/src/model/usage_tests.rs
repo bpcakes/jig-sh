@@ -9,12 +9,12 @@ fn subscription_windows_preserve_tui_labels_and_order() {
             (
                 json!({"used_percent":20,"duration_minutes":10080}),
                 json!({"used_percent":10,"duration_minutes":300}),
-                "5h 90% left, weekly 80% left",
+                "5h 90% · weekly 80% left",
             ),
             (
                 json!({"used_percent":10,"duration_minutes":300}),
                 json!({"used_percent":20,"duration_minutes":300}),
-                "5h 90% left, 5h 80% left",
+                "5h 90% · 5h 80% left",
             ),
             (
                 json!({"used_percent":0,"duration_minutes":120}),
@@ -38,6 +38,39 @@ fn subscription_windows_preserve_tui_labels_and_order() {
     .unwrap();
     assert_eq!(bucket.summary(), "other 5h 100% left");
     assert_eq!(bucket.window_role(0), WindowRole::Window);
+}
+
+#[test]
+fn summary_marks_unknown_windows_and_says_left_once() {
+    let subscription = ["claude".to_owned()];
+    for (primary, secondary, expected) in [
+        (json!(null), json!(20), "5h ? · weekly 80% left"),
+        (
+            json!(null),
+            json!(null),
+            "5h ? · weekly ? remaining unavailable",
+        ),
+        (
+            json!(null),
+            json!("missing"),
+            "5h ? · weekly ? remaining unavailable",
+        ),
+    ] {
+        let bucket = RateLimitBucket::from_value(
+            &json!({"id": "claude",
+                "primary": {"used_percent": primary, "duration_minutes": 300},
+                "secondary": {"used_percent": secondary, "duration_minutes": 10080}}),
+            &subscription,
+        )
+        .unwrap();
+        assert_eq!(bucket.summary(), expected);
+    }
+    let bucket = RateLimitBucket::from_value(
+        &json!({"id": "claude", "primary": {"used_percent": null, "duration_minutes": 10080}}),
+        &subscription,
+    )
+    .unwrap();
+    assert_eq!(bucket.summary(), "weekly remaining unavailable");
 }
 
 #[test]

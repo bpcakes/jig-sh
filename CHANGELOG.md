@@ -65,6 +65,14 @@
   style. Narrower terminals stack the list above the details, sized to its
   rows instead of a fixed 58%, and terminals too short for both show one pane
   at a time, with Tab switching between them.
+- The home pickers size list columns to their content, so remaining quota is
+  no longer cut off, and show it as one compact label per home (`5h 58% ·
+  weekly 82% left`). The projection always names its window. The details
+  pane lists account and usage before the home's path and configuration,
+  drops the window duration its label already names, and indents wrapped
+  lines under their value. The focused pane has an accent border, the
+  footer drops its least important key hints first on narrow terminals, and
+  the Claude picker no longer says "Codex" when no projection can be ranked.
 - Rename `info freshness` to `info inputs`; `freshness` remains a hidden alias.
   The report's `command` field is now `info inputs`. The command previews
   action input declarations, and Jig has recorded no target freshness since

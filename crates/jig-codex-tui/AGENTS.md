@@ -8,14 +8,17 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 
 - `src/lib.rs`: provider selection accepts an explicit primary subscription bucket and optional inspection source; legacy Codex/configuration entrypoints remain compatibility wrappers. This is a same-release boundary supplied by `jig-sh`; configuration selection returns the original entry index so modes sharing a path remain distinct.
 - `src/model.rs`: home rows and additive inspection decoding; `src/model/app.rs` owns filtering and selection, and `src/model/configuration.rs` prepares static or inspected configuration entries.
-- `src/render.rs`: Ratatui widgets and visual states; `src/render/layout.rs` owns every breakpoint and decides which panes are visible and which list style fits.
+- `src/render.rs`: frame entrypoint, header, and shared pane and status styles. `src/render/layout.rs` owns every breakpoint and decides which panes are visible and which list style fits; `src/render/list.rs` sizes and draws the list tables, `src/render/details.rs` builds and wraps the selected-home pane, and `src/render/footer.rs` fits key hints to the width.
 - `src/runtime.rs`: event loop and background inspection ownership.
 - `src/usage.rs`: normalized quota validation, remaining calculation, and duration labels shared with the matching CLI release.
 
 ## Edit here for X
 
 - Picker interaction or keyboard behavior: `src/model/app.rs` and `src/runtime.rs`.
-- List, detail pane, loading, or small-terminal presentation: `src/render.rs`; the configuration list is in `src/render/configuration.rs`.
+- List columns and markers: `src/render/list.rs`; the configuration list is in `src/render/configuration.rs`.
+- Detail pane content, order, or wrapping: `src/render/details.rs`.
+- Footer key hints and search prompt: `src/render/footer.rs`.
+- Header, loading, or small-terminal presentation: `src/render.rs`.
 - Breakpoints, pane arrangement, or pane sizes: `src/render/layout.rs`.
 - CLI/runtime data boundary: `src/lib.rs`.
 

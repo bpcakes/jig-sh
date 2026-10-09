@@ -131,3 +131,213 @@ fn short_narrow_terminals_show_only_the_focused_pane() {
     assert!(screen.contains("Selected home  [focused]"), "{screen}");
     assert!(!screen.contains("Homes"), "{screen}");
 }
+
+/// Four inspected Claude homes with five-hour and weekly windows.
+fn claude_app(now: u64) -> App {
+    let homes = ["claude", "claude-work", "claude-personal", "claude-team"]
+        .iter()
+        .enumerate()
+        .map(|(index, name)| ConfigurationHome {
+            home: Home {
+                path: format!("/tmp/ExampleHome/.{name}").into(),
+                name: (*name).into(),
+                current: index == 0,
+            },
+            details: vec![(
+                "CLAUDE_CONFIG_DIR".into(),
+                format!("/tmp/ExampleHome/.{name}"),
+            )],
+        })
+        .collect();
+    let mut app = App::provider(
+        "Claude Home Picker",
+        homes,
+        Vec::new(),
+        true,
+        Some("claude"),
+    );
+    for (index, (five_hour, weekly)) in [(42, 18), (12, 61), (80, 30), (5, 9)]
+        .into_iter()
+        .enumerate()
+    {
+        app.apply_update_at(
+            crate::HomeUpdate {
+                index,
+                details: serde_json::json!({
+                    "account": {"type": "claude.ai", "email": format!("person{index}@example.com"), "plan_type": "max"},
+                    "status": "authenticated",
+                    "rate_limits": [{
+                        "id": "claude",
+                        "primary": {"used_percent": five_hour, "duration_minutes": 300, "resets_at": now + 7_200},
+                        "secondary": {"used_percent": weekly, "duration_minutes": 10_080, "resets_at": now + 300_000}
+                    }]
+                }),
+            },
+            now,
+        );
+    }
+    app.finish_inspection(None);
+    app
+}
+
+fn render(app: &App, width: u16, height: u16, now: u64) -> Terminal<TestBackend> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| draw_at(frame, app, now)).unwrap();
+    terminal
+}
+
+#[test]
+fn every_list_style_shows_whole_usage_and_names_the_projected_window() {
+    const NOW: u64 = 1_800_000_000;
+    let app = claude_app(NOW);
+    for width in [50, 80, 104, 130, 170] {
+        let screen = render(&app, width, 40, NOW).backend().to_string();
+        if width >= 60 {
+            for usage in [
+                "5h 58% · weekly 82% left",
+                "5h 88% · weekly 39% left",
+                "5h 20% · weekly 70% left",
+                "5h 95% · weekly 91% left",
+            ] {
+                assert!(screen.contains(usage), "{width}: {screen}");
+            }
+        }
+        for projection in [
+            "5h: ~30% left at reset",
+            "weekly: runs out ~1.2d early",
+            "5h: runs out ~1.2h early",
+        ] {
+            assert!(screen.contains(projection), "{width}: {screen}");
+        }
+        for account in ["person0@example.com", "person3@example.com"] {
+            assert!(screen.contains(account), "{width}: {screen}");
+        }
+    }
+}
+
+#[test]
+fn details_lead_with_account_and_usage_before_the_home_identity() {
+    const NOW: u64 = 1_800_000_000;
+    let screen = render(&claude_app(NOW), 130, 30, NOW).backend().to_string();
+    let position = |text: &str| {
+        screen
+            .find(text)
+            .unwrap_or_else(|| panic!("missing {text}: {screen}"))
+    };
+    assert!(position("Account: person0") < position("claude usage"));
+    assert!(position("claude usage") < position("Path: /tmp/ExampleHome/.claude"));
+    // A role that names its duration does not repeat it.
+    assert!(
+        screen.contains("5h: 42% used · 58% left · resets in 2h"),
+        "{screen}"
+    );
+    assert!(!screen.contains("5h window"), "{screen}");
+}
+
+#[test]
+fn wrapped_details_hang_under_their_value() {
+    let lines = details::wrap(
+        details::key_value(
+            "CLAUDE_CONFIG_DIR",
+            "/tmp/ExampleHome/a-long-configuration-directory",
+        ),
+        30,
+    );
+    let rows = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            "CLAUDE_CONFIG_DIR: /tmp/Exampl",
+            "               eHome/a-long-co",
+            "               nfiguration-dir",
+            "               ectory",
+        ]
+    );
+
+    let rows = details::wrap(
+        details::key_value("Usage sample", "just now · reopen to refresh"),
+        30,
+    )
+    .iter()
+    .map(ToString::to_string)
+    .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            "Usage sample: just now ·",
+            "              reopen to",
+            "              refresh"
+        ]
+    );
+
+    let rows = details::wrap(details::key_value("Name", "界界界界界界"), 9)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(rows, ["Name: 界", "    界界", "    界界", "    界"]);
+
+    // One cell short of a double-width character moves it to the next row.
+    let rows = details::wrap(details::key_value("Name", "a界界界"), 8)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(rows, ["Name: a", "    界界", "    界"]);
+    assert!(
+        rows.iter()
+            .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 8),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn narrow_footers_keep_launch_and_cancel_longest() {
+    let app = example_app(2);
+    let footer = |width| {
+        render(&app, width, 20, 0)
+            .backend()
+            .to_string()
+            .lines()
+            .rev()
+            .nth(1)
+            .unwrap()
+            .to_owned()
+    };
+    let wide = footer(120);
+    for hint in [
+        "↑/↓ j/k move",
+        "/ search",
+        "Tab details",
+        "Enter launch",
+        "Esc/q cancel",
+    ] {
+        assert!(wide.contains(hint), "{wide}");
+    }
+    let narrow = footer(MIN_WIDTH);
+    assert!(narrow.contains("Enter launch"), "{narrow}");
+    assert!(narrow.contains("Esc/q cancel"), "{narrow}");
+    assert!(!narrow.contains("Tab details"), "{narrow}");
+}
+
+#[test]
+fn the_focused_pane_has_an_accent_border() {
+    const NOW: u64 = 1_800_000_000;
+    let mut app = claude_app(NOW);
+    let border =
+        |terminal: &Terminal<TestBackend>, x| terminal.backend().buffer().cell((x, 2)).unwrap().fg;
+    // At 130 columns the list spans 0..78 and the details start at column 78.
+    let terminal = render(&app, 130, 30, NOW);
+    assert_eq!(border(&terminal, 0), ACCENT);
+    assert_ne!(border(&terminal, 78), ACCENT);
+
+    app.toggle_focus();
+    let terminal = render(&app, 130, 30, NOW);
+    assert_ne!(border(&terminal, 0), ACCENT);
+    assert_eq!(border(&terminal, 78), ACCENT);
+}
+
+#[test]
+fn column_fitting_trims_the_widest_column_first() {
+    assert_eq!(list::fit_widths(40, [(10, 4), (12, 4)]), [10, 12]);
+    assert_eq!(list::fit_widths(18, [(10, 4), (12, 4)]), [9, 9]);
+    assert_eq!(list::fit_widths(5, [(10, 4), (12, 4)]), [4, 4]);
+}

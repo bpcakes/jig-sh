@@ -384,45 +384,34 @@ impl RateLimitBucket {
         }
     }
 
+    /// Remaining quota per window, e.g. `5h 58% · weekly 82% left`.
     pub(crate) fn summary(&self) -> String {
         match self.windows.as_slice() {
             [] => "unavailable".into(),
-            [only] if self.subscription => format!(
-                "{} {}",
-                only.subscription_role()
-                    .map(|role| role.to_string())
-                    .unwrap_or_else(|| format_duration(only.duration_minutes)),
-                only.remaining()
+            windows if self.subscription => remaining_summary(
+                windows
+                    .iter()
+                    .take(2)
+                    .map(|window| {
+                        let role = window
+                            .subscription_role()
+                            .map(|role| role.to_string())
+                            .unwrap_or_else(|| format_duration(window.duration_minutes));
+                        (role, window)
+                    })
+                    .collect(),
             ),
-            [only] => self.generic_summary(std::slice::from_ref(only)),
-            [first, second, ..] if self.subscription => [first, second]
-                .into_iter()
-                .map(|window| match window.subscription_role() {
-                    Some(role) => format!("{role} {}", window.remaining()),
-                    None => format!(
-                        "{} {}",
-                        format_duration(window.duration_minutes),
-                        window.remaining()
-                    ),
-                })
-                .collect::<Vec<_>>()
-                .join(", "),
             windows => self.generic_summary(windows),
         }
     }
 
     fn generic_summary(&self, windows: &[RateLimitWindow]) -> String {
-        let summary = windows
-            .iter()
-            .map(|window| {
-                format!(
-                    "{} {}",
-                    format_duration(window.duration_minutes),
-                    window.remaining()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
+        let summary = remaining_summary(
+            windows
+                .iter()
+                .map(|window| (format_duration(window.duration_minutes), window))
+                .collect(),
+        );
         if self.label() == UNKNOWN {
             summary
         } else {
@@ -553,22 +542,34 @@ impl RateLimitWindow {
     }
 
     pub(crate) fn remaining(&self) -> String {
-        self.valid_used_percent()
-            .map(|used| format!("{} left", format_percent(remaining_percent(used))))
+        self.remaining_percent()
+            .map(|remaining| format!("{remaining} left"))
             .unwrap_or_else(|| "remaining unavailable".into())
     }
 
+    fn remaining_percent(&self) -> Option<String> {
+        self.valid_used_percent()
+            .map(|used| format_percent(remaining_percent(used)))
+    }
+
+    /// Used and remaining quota, for a line whose label already names the window.
+    pub(crate) fn usage_amounts(&self) -> String {
+        self.valid_used_percent().map_or_else(
+            || "usage unavailable".into(),
+            |used| {
+                format!(
+                    "{} used · {} left",
+                    format_percent(used),
+                    format_percent(remaining_percent(used))
+                )
+            },
+        )
+    }
+
     pub(crate) fn usage_detail(&self) -> String {
-        let Some(used) = self.valid_used_percent() else {
-            return format!(
-                "usage unavailable · {} window",
-                format_duration(self.duration_minutes)
-            );
-        };
         format!(
-            "{} used · {} left · {} window",
-            format_percent(used),
-            format_percent(remaining_percent(used)),
+            "{} · {} window",
+            self.usage_amounts(),
             format_duration(self.duration_minutes)
         )
     }
@@ -674,6 +675,29 @@ fn optional_text(value: &Value, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+/// Joins labeled windows into one remaining-quota summary that says `left` once.
+fn remaining_summary(windows: Vec<(String, &RateLimitWindow)>) -> String {
+    if let [(label, window)] = windows.as_slice() {
+        return format!("{label} {}", window.remaining());
+    }
+    let summary = windows
+        .iter()
+        .map(|(label, window)| {
+            let remaining = window.remaining_percent();
+            format!("{label} {}", remaining.as_deref().unwrap_or("?"))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if windows
+        .iter()
+        .any(|(_, window)| window.remaining_percent().is_some())
+    {
+        format!("{summary} left")
+    } else {
+        format!("{summary} remaining unavailable")
+    }
 }
 
 fn format_duration(minutes: Option<u64>) -> String {
