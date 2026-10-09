@@ -1,11 +1,13 @@
-struct ProxyRuntimeGuard {
+use super::*;
+
+pub(super) struct ProxyRuntimeGuard {
     repo: PathBuf,
     state_dir: PathBuf,
     http_port: u16,
     armed: bool,
 }
 
-struct ProxyStopOutput {
+pub(super) struct ProxyStopOutput {
     output: std::process::Output,
     repo: PathBuf,
     state_dir: PathBuf,
@@ -15,7 +17,7 @@ struct ProxyStopOutput {
 }
 
 impl ProxyStopOutput {
-    fn success(&self) -> bool {
+    pub(super) fn success(&self) -> bool {
         self.output.status.success() || self.identity_verified_fallback_stopped_proxy
     }
 }
@@ -38,7 +40,7 @@ impl std::fmt::Display for ProxyStopOutput {
 }
 
 impl ProxyRuntimeGuard {
-    fn new(repo: &Path, state_dir: &Path, http_port: u16) -> Self {
+    pub(super) fn new(repo: &Path, state_dir: &Path, http_port: u16) -> Self {
         Self {
             repo: repo.to_path_buf(),
             state_dir: state_dir.to_path_buf(),
@@ -47,7 +49,7 @@ impl ProxyRuntimeGuard {
         }
     }
 
-    fn stop(mut self) -> ProxyStopOutput {
+    pub(super) fn stop(mut self) -> ProxyStopOutput {
         self.armed = false;
         let proxy_identity = capture_test_proxy_identity(&self.state_dir);
         let output = self.stop_inner().expect("stop background proxy");
@@ -88,7 +90,7 @@ impl ProxyRuntimeGuard {
 }
 
 #[cfg(target_os = "linux")]
-fn capture_test_proxy_identity(state_dir: &Path) -> Option<VerifiedProcessIdentity> {
+pub(super) fn capture_test_proxy_identity(state_dir: &Path) -> Option<VerifiedProcessIdentity> {
     let pid = fs::read_to_string(state_dir.join("proxy.pid"))
         .ok()?
         .trim()
@@ -101,14 +103,14 @@ fn capture_test_proxy_identity(state_dir: &Path) -> Option<VerifiedProcessIdenti
 }
 
 #[cfg(target_os = "macos")]
-fn capture_test_proxy_identity(_state_dir: &Path) -> Option<VerifiedProcessIdentity> {
+pub(super) fn capture_test_proxy_identity(_state_dir: &Path) -> Option<VerifiedProcessIdentity> {
     // The CI failure this fallback addresses is Linux systemd user-manager
     // discovery. Keep macOS cleanup on the public stop path until an equally
     // strong executable-identity check is available there.
     None
 }
 
-fn state_dir_entries(state_dir: &Path) -> String {
+pub(super) fn state_dir_entries(state_dir: &Path) -> String {
     match fs::read_dir(state_dir) {
         Ok(entries) => {
             let mut names = entries
