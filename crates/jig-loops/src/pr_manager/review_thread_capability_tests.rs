@@ -1,6 +1,11 @@
+use super::*;
+
+use jig_execution::NoopExecutionObserver;
 use tempfile::tempdir;
 
-use super::*;
+use super::review_thread_witness::{
+    fetch_review_thread_witness_state, observed_review_thread_witnesses,
+};
 
 #[test]
 fn observed_witness_preserves_viewer_mutation_capabilities() {

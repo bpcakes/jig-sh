@@ -1,4 +1,20 @@
-pub(super) fn pr_manager_tick(
+use anyhow::{Result, anyhow};
+use jig_context::RepoContext;
+use jig_execution::ExecutionControl;
+use serde_json::{Value, json};
+
+use super::{
+    PrCandidate, PrManagerExecution, classify_pull_request, clear_observed_healthy_attempt,
+    handle_actionable_pr, pending_checks_action, pr_manager_action_consumed_tick,
+};
+use crate::github;
+use crate::occurrence::OccurrenceWorktreeReservation;
+use crate::state::{AttemptStore, LeaseStore};
+use crate::workflow::{
+    ResolvedWorkflow, UnexecutedReason, WorkflowCompletion, WorkflowExecution, WorkflowTick,
+};
+
+pub(crate) fn pr_manager_tick(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
     attempt_store: &mut AttemptStore,
@@ -52,7 +68,7 @@ pub(super) fn pr_manager_tick(
     )
 }
 
-fn pr_manager_tick_from_snapshot(
+pub(super) fn pr_manager_tick_from_snapshot(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
     lease_store: &mut LeaseStore,
@@ -71,9 +87,7 @@ fn pr_manager_tick_from_snapshot(
     if let Some(action) = incomplete_pr_list_action(&observed) {
         let actions = vec![action];
         let completion = pr_manager_completion(&actions);
-        return Ok(WorkflowTick::with_completion(
-            observed, actions, completion,
-        ));
+        return Ok(WorkflowTick::with_completion(observed, actions, completion));
     }
     let default_branch = observed
         .pointer("/repository/default_branch")
@@ -102,12 +116,9 @@ fn pr_manager_tick_from_snapshot(
         match candidate {
             PrCandidate::Skip(action) => actions.push(action),
             PrCandidate::Idle(item) => {
-                match clear_observed_healthy_attempt(
-                    workflow,
-                    attempt_store,
-                    &item,
-                    &|| execution.observer.cancelled(),
-                ) {
+                match clear_observed_healthy_attempt(workflow, attempt_store, &item, &|| {
+                    execution.observer.cancelled()
+                }) {
                     Ok(Some(action)) => actions.push(action),
                     Ok(None) => {}
                     Err(error) => {
@@ -158,7 +169,7 @@ fn pr_manager_tick_from_snapshot(
     Ok(WorkflowTick::with_completion(observed, actions, completion))
 }
 
-fn pr_manager_completion(actions: &[Value]) -> WorkflowCompletion {
+pub(super) fn pr_manager_completion(actions: &[Value]) -> WorkflowCompletion {
     let mut completion = WorkflowCompletion::from_actions(actions);
     if let Some(reason) = actions.iter().find_map(|action| {
         match action.get("unexecuted_reason").and_then(Value::as_str) {
@@ -188,7 +199,7 @@ fn pr_manager_unexecuted_tick(
     WorkflowTick::with_completion(observed, actions, completion)
 }
 
-fn incomplete_pr_list_action(observed: &Value) -> Option<Value> {
+pub(super) fn incomplete_pr_list_action(observed: &Value) -> Option<Value> {
     let pr_list_truncated = observed
         .pointer("/summary/pr_list_truncated")
         .and_then(Value::as_bool)
@@ -206,7 +217,7 @@ fn incomplete_pr_list_action(observed: &Value) -> Option<Value> {
     }))
 }
 
-fn incomplete_pull_request_action(pull_request: &Value) -> Option<Value> {
+pub(super) fn incomplete_pull_request_action(pull_request: &Value) -> Option<Value> {
     let truncated = pull_request
         .pointer("/review_threads/page_info/truncated")
         .and_then(Value::as_bool)

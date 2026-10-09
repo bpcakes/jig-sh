@@ -1,3 +1,17 @@
+use std::path::Path;
+
+use anyhow::anyhow;
+use jig_context::RepoContext;
+use jig_execution::ExecutionControl;
+use serde_json::{Value, json};
+
+use super::outcome::{PrRepairOutcome, PrRepairStepError, PrRepairStepResult};
+use super::push::{remote_branch_ref, remote_head_for_ref};
+use super::review_thread_witness::observed_review_thread_witnesses;
+use super::worktree::PreparedPrWorktree;
+use super::{PrRepairContext, pr_worktree_value};
+use crate::github;
+
 enum PrePushReviewAuthority {
     Current,
     Changed {
@@ -58,7 +72,9 @@ fn revalidate_observed_review_threads(
         let thread_id = observed
             .keys()
             .chain(current.keys())
-            .find(|thread_id| !observed.contains_key(*thread_id) || !current.contains_key(*thread_id))
+            .find(|thread_id| {
+                !observed.contains_key(*thread_id) || !current.contains_key(*thread_id)
+            })
             .cloned()
             .unwrap_or_default();
         return Ok(PrePushReviewAuthority::Changed {
@@ -77,7 +93,7 @@ fn revalidate_observed_review_threads(
     Ok(PrePushReviewAuthority::Current)
 }
 
-fn pre_push_review_authority_outcome<L: serde::Serialize>(
+pub(super) fn pre_push_review_authority_outcome<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     pull_request: &Value,
     worktree: &PreparedPrWorktree,
@@ -86,18 +102,17 @@ fn pre_push_review_authority_outcome<L: serde::Serialize>(
     worker: &Value,
     observer: &mut dyn ExecutionControl,
 ) -> Option<PrRepairOutcome> {
-    let (attention_kind, error, revalidation) =
-        match revalidate_observed_review_threads(
-            repair.repo,
-            pull_request,
-            worktree.path(),
-            &repair.item.head_ref,
-            &repair.item.head_sha,
-            observer,
-        ) {
-            Ok(PrePushReviewAuthority::Current) => return None,
-            Ok(PrePushReviewAuthority::Changed { thread_id, reason }) => {
-                let error = thread_id.as_deref().map_or_else(
+    let (attention_kind, error, revalidation) = match revalidate_observed_review_threads(
+        repair.repo,
+        pull_request,
+        worktree.path(),
+        &repair.item.head_ref,
+        &repair.item.head_sha,
+        observer,
+    ) {
+        Ok(PrePushReviewAuthority::Current) => return None,
+        Ok(PrePushReviewAuthority::Changed { thread_id, reason }) => {
+            let error = thread_id.as_deref().map_or_else(
                     || {
                         "The pull request head changed after the worker ran; the local repair was retained and was not pushed".to_string()
                     },
@@ -107,38 +122,38 @@ fn pre_push_review_authority_outcome<L: serde::Serialize>(
                         )
                     },
                 );
-                (
-                    if reason == "pr_head_changed" {
-                        "pr_head_changed_before_push"
-                    } else {
-                        "review_feedback_changed_before_push"
-                    },
-                    error,
-                    json!({"status": "changed", "thread_id": thread_id, "reason": reason}),
-                )
-            }
-            Err(_) if observer.cancelled() => {
-                return Some(PrRepairOutcome::WorkerCancelled {
-                    before_start: false,
-                    worker: worker.clone(),
-                    worktree: worktree.clone(),
-                });
-            }
-            Err(PrRepairStepError::Cancelled(_)) => {
-                return Some(PrRepairOutcome::WorkerCancelled {
-                    before_start: false,
-                    worker: worker.clone(),
-                    worktree: worktree.clone(),
-                });
-            }
-            Err(PrRepairStepError::Failed(error)) => (
-                "review_feedback_revalidation_failed",
-                format!(
-                    "Review feedback could not be revalidated after the worker ran, so the local repair was retained and was not pushed: {error:#}"
-                ),
-                json!({"status": "failed", "error": format!("{error:#}")}),
+            (
+                if reason == "pr_head_changed" {
+                    "pr_head_changed_before_push"
+                } else {
+                    "review_feedback_changed_before_push"
+                },
+                error,
+                json!({"status": "changed", "thread_id": thread_id, "reason": reason}),
+            )
+        }
+        Err(_) if observer.cancelled() => {
+            return Some(PrRepairOutcome::WorkerCancelled {
+                before_start: false,
+                worker: worker.clone(),
+                worktree: worktree.clone(),
+            });
+        }
+        Err(PrRepairStepError::Cancelled(_)) => {
+            return Some(PrRepairOutcome::WorkerCancelled {
+                before_start: false,
+                worker: worker.clone(),
+                worktree: worktree.clone(),
+            });
+        }
+        Err(PrRepairStepError::Failed(error)) => (
+            "review_feedback_revalidation_failed",
+            format!(
+                "Review feedback could not be revalidated after the worker ran, so the local repair was retained and was not pushed: {error:#}"
             ),
-        };
+            json!({"status": "failed", "error": format!("{error:#}")}),
+        ),
+    };
     Some(PrRepairOutcome::NeedsAttention {
         action: json!({
             "kind": "pr_manager_worker",

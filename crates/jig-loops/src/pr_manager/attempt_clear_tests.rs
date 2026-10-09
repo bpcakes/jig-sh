@@ -1,6 +1,7 @@
+use super::*;
+
 use tempfile::tempdir;
 
-use super::*;
 use crate::test_env::TestRepoBuilder;
 
 #[test]

@@ -1,4 +1,7 @@
-fn pr_worker_output_schema(max_review_thread_replies: usize) -> Value {
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Value, json};
+
+pub(super) fn pr_worker_output_schema(max_review_thread_replies: usize) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -36,7 +39,7 @@ fn pr_worker_output_schema(max_review_thread_replies: usize) -> Value {
     })
 }
 
-fn parse_pr_worker_output(stdout: &[u8]) -> Result<Value> {
+pub(super) fn parse_pr_worker_output(stdout: &[u8]) -> Result<Value> {
     if stdout.is_empty() {
         bail!("PR manager worker did not write structured output");
     }

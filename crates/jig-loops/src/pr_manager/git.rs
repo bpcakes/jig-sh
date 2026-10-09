@@ -1,8 +1,24 @@
+use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+
+use anyhow::anyhow;
+use jig_context::{CommandTimeout, RepoContext};
+use jig_execution::{ExecutionCommandError, ExecutionControl, run_authoritative_execution_command};
+use jig_git::metadata::{path_from_git_bytes, trim_ascii_line};
+use jig_git::{git_program, scrub_known_repository_git_environment};
+use sha2::{Digest, Sha256};
+
+use super::outcome::{PrRepairStepError, PrRepairStepResult};
+
 const PR_MANAGER_GIT_NAME: &str = "Jig PR Manager";
+
 const PR_MANAGER_GIT_EMAIL: &str = "jig-pr-manager@users.noreply.github.com";
+
 const PR_WORKTREE_REF_PREFIX_LEN: usize = 48;
 
-fn bounded_path_component(value: &str) -> String {
+pub(super) fn bounded_path_component(value: &str) -> String {
     let readable = value
         .chars()
         .map(|ch| {
@@ -23,7 +39,7 @@ fn bounded_path_component(value: &str) -> String {
     format!("{readable}-{digest}")
 }
 
-fn git_with_pr_manager_identity<I, S>(args: I) -> Vec<OsString>
+pub(super) fn git_with_pr_manager_identity<I, S>(args: I) -> Vec<OsString>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -40,7 +56,8 @@ where
     );
     command
 }
-fn git_checked<I, S>(
+
+pub(super) fn git_checked<I, S>(
     ctx: &RepoContext,
     cwd: &Path,
     args: I,
@@ -98,7 +115,7 @@ fn conflict_marker_diagnostics(
         .collect())
 }
 
-fn require_no_merge_introduced_conflict_markers(
+pub(super) fn require_no_merge_introduced_conflict_markers(
     ctx: &RepoContext,
     cwd: &Path,
     observed_head: &str,
@@ -106,22 +123,14 @@ fn require_no_merge_introduced_conflict_markers(
     candidate_head: Option<&str>,
     observer: &mut dyn ExecutionControl,
 ) -> PrRepairStepResult<()> {
-    let observed = conflict_marker_diagnostics(
-        ctx,
-        cwd,
-        observed_head,
-        candidate_head,
-        observer,
-    )?;
+    let observed = conflict_marker_diagnostics(ctx, cwd, observed_head, candidate_head, observer)?;
     let introduced = if let Some(incoming_base_head) = incoming_base_head {
-        let incoming = conflict_marker_diagnostics(
-            ctx,
-            cwd,
-            incoming_base_head,
-            candidate_head,
-            observer,
-        )?;
-        observed.intersection(&incoming).cloned().collect::<Vec<_>>()
+        let incoming =
+            conflict_marker_diagnostics(ctx, cwd, incoming_base_head, candidate_head, observer)?;
+        observed
+            .intersection(&incoming)
+            .cloned()
+            .collect::<Vec<_>>()
     } else {
         observed.into_iter().collect()
     };
@@ -138,7 +147,7 @@ fn require_no_merge_introduced_conflict_markers(
     )))
 }
 
-fn git_stdout<I, S>(
+pub(super) fn git_stdout<I, S>(
     ctx: &RepoContext,
     cwd: &Path,
     args: I,
@@ -152,7 +161,7 @@ where
     Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
 }
 
-fn git_stdout_path<I, S>(
+pub(super) fn git_stdout_path<I, S>(
     ctx: &RepoContext,
     cwd: &Path,
     args: I,
@@ -192,7 +201,7 @@ where
     Ok(output.stdout)
 }
 
-fn git_output<I, S>(
+pub(super) fn git_output<I, S>(
     ctx: &RepoContext,
     cwd: &Path,
     args: I,
@@ -211,7 +220,7 @@ where
         .map_err(|error| pr_git_execution_error(&label, error))
 }
 
-fn git_execution_output<I, S>(
+pub(super) fn git_execution_output<I, S>(
     cwd: &Path,
     args: I,
     timeout: CommandTimeout,
@@ -257,8 +266,8 @@ fn pr_git_label(args: &[OsString]) -> String {
         }
         break Some(argument);
     }
-        .map(|arg| arg.to_string_lossy())
-        .unwrap_or_else(|| "command".into());
+    .map(|arg| arg.to_string_lossy())
+    .unwrap_or_else(|| "command".into());
     format!("PR manager git {operation}")
 }
 
@@ -274,7 +283,7 @@ fn pr_git_execution_error(label: &str, error: ExecutionCommandError) -> PrRepair
     }
 }
 
-fn git_command<I, S>(cwd: &Path, args: I) -> Command
+pub(super) fn git_command<I, S>(cwd: &Path, args: I) -> Command
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -291,7 +300,7 @@ where
     command
 }
 
-fn git_error(label: &str, output: std::process::Output) -> anyhow::Error {
+pub(super) fn git_error(label: &str, output: std::process::Output) -> anyhow::Error {
     anyhow!(
         "{} with status {}. stdout: {} stderr: {}",
         label,

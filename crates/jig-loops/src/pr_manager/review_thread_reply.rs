@@ -1,9 +1,28 @@
-enum ReviewThreadReply {
+use std::ffi::OsString;
+
+use anyhow::Context;
+use jig_context::RepoContext;
+use jig_execution::{ExecutionCommandError, ExecutionControl};
+use serde_json::Value;
+
+use super::review_thread_budget::ReviewThreadUpdateBudget;
+use super::review_thread_queries::add_review_thread_reply_mutation;
+use super::review_thread_witness::{
+    ReviewThreadWitness, legacy_review_thread_reply_marker, review_thread_mutation_change_reason,
+    review_thread_reply_marker,
+};
+use super::review_threads::{
+    reconcile_reply_mutation, reconciled_reply_response, review_thread_reply_comment,
+    review_thread_resolution_state, validate_reply_mutation_response,
+};
+use crate::github;
+
+pub(super) enum ReviewThreadReply {
     Posted(Value),
     Changed(&'static str),
 }
 
-fn post_review_thread_reply(
+pub(super) fn post_review_thread_reply(
     ctx: &RepoContext,
     thread_id: &str,
     body: &str,
@@ -14,13 +33,9 @@ fn post_review_thread_reply(
 ) -> std::result::Result<ReviewThreadReply, ExecutionCommandError> {
     let marker = review_thread_reply_marker(thread_id, repair_version, witness);
     let legacy_marker = legacy_review_thread_reply_marker(thread_id, repair_version, witness, body);
-    if let Some(comment) = review_thread_reply_comment(
-        ctx,
-        thread_id,
-        &[&marker, &legacy_marker],
-        observer,
-        budget,
-    )? {
+    if let Some(comment) =
+        review_thread_reply_comment(ctx, thread_id, &[&marker, &legacy_marker], observer, budget)?
+    {
         return Ok(ReviewThreadReply::Posted(reconciled_reply_response(
             &comment,
         )));
@@ -69,6 +84,5 @@ fn post_review_thread_reply(
         observer,
     )
     .and_then(validate_reply_mutation_response);
-    reconcile_reply_mutation(ctx, thread_id, &marker, result, budget)
-        .map(ReviewThreadReply::Posted)
+    reconcile_reply_mutation(ctx, thread_id, &marker, result, budget).map(ReviewThreadReply::Posted)
 }

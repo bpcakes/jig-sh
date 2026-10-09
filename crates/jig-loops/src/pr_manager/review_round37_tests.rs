@@ -1,10 +1,13 @@
+use super::*;
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use jig_execution::NoopExecutionObserver;
 use tempfile::tempdir;
 
-use super::*;
+use super::worktree::pr_worktree_path;
 use crate::test_env::{TestRepoBuilder, lock_env};
 
 fn workflow() -> ResolvedWorkflow {

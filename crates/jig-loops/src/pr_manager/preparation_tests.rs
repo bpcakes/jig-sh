@@ -1,3 +1,5 @@
+use super::*;
+
 use std::ffi::OsStr;
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
@@ -5,17 +7,22 @@ use std::fs;
 #[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use jig_execution::NoopExecutionObserver;
+use jig_git::GIT_BIN_ENV;
 use tempfile::tempdir;
 
-use super::*;
+use super::outcome::record_pr_repair_outcome_under_branch_lease;
+use super::worktree::pr_worktree_path;
+use super::worktree_identity::pr_worktree_is_registered;
 use crate::occurrence::{
     OccurrenceAttentionScope, OccurrenceClaim, OccurrenceGuard, OccurrenceStore,
 };
+use crate::state::LOOP_RUNTIME_DIR;
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
-use jig_git::GIT_BIN_ENV;
 
 struct CancelWhenPresent(PathBuf);
 

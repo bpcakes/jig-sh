@@ -1,7 +1,18 @@
+use super::*;
+
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::{Duration, Instant};
+
 use tempfile::tempdir;
 
-use super::*;
+use super::outcome::{branch_lease_cleanup_attention, record_pr_repair_outcome_under_branch_lease};
+use super::tick::pr_manager_completion;
+use super::worktree::pr_worktree_root;
 use crate::authority::resolve_protected_loop_authority;
+use crate::state::{LOOP_CACHE_DIR, LOOP_RUNTIME_DIR};
+use crate::workflow::{UnexecutedReason, WorkflowExecution};
 use crate::workflow::{WorkflowCompletion, WorkflowOutcome};
 
 fn workflow() -> ResolvedWorkflow {

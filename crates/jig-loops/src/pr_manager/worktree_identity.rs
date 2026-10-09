@@ -1,4 +1,21 @@
-fn pr_worktree_is_registered(
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use cap_std::ambient_authority;
+use cap_std::fs::Dir;
+use jig_context::RepoContext;
+use jig_execution::ExecutionControl;
+use jig_git::metadata::{
+    MAX_GIT_POINTER_BYTES, parse_gitdir_pointer, path_from_git_bytes, read_nofollow_regular_file,
+    trim_ascii_line,
+};
+
+use super::git::{git_output, git_stdout_path};
+use super::outcome::pr_step_error;
+use crate::managed_path::inspect_managed_directory;
+
+pub(super) fn pr_worktree_is_registered(
     ctx: &RepoContext,
     worktree: &Path,
     observer: &mut dyn ExecutionControl,
@@ -48,9 +65,8 @@ fn validate_linked_worktree_gitfile(
     worktree: &Path,
     observer: &mut dyn ExecutionControl,
 ) -> Result<bool> {
-    let worktree_dir = Dir::open_ambient_dir(worktree, ambient_authority()).with_context(|| {
-        format!("Failed to open PR repair worktree {}", worktree.display())
-    })?;
+    let worktree_dir = Dir::open_ambient_dir(worktree, ambient_authority())
+        .with_context(|| format!("Failed to open PR repair worktree {}", worktree.display()))?;
     let Some(gitdir_pointer) =
         read_nofollow_regular_file(&worktree_dir, ".git", MAX_GIT_POINTER_BYTES)?
     else {
@@ -63,13 +79,8 @@ fn validate_linked_worktree_gitfile(
         Ok(path) => path,
         Err(_) => return Ok(false),
     };
-    let common = git_stdout_path(
-        ctx,
-        ctx.root(),
-        ["rev-parse", "--git-common-dir"],
-        observer,
-    )
-    .map_err(pr_step_error)?;
+    let common = git_stdout_path(ctx, ctx.root(), ["rev-parse", "--git-common-dir"], observer)
+        .map_err(pr_step_error)?;
     let common = if common.is_absolute() {
         common
     } else {
@@ -79,12 +90,13 @@ fn validate_linked_worktree_gitfile(
     if gitdir.parent() != Some(common.join("worktrees").as_path()) {
         return Ok(false);
     }
-    let gitdir_directory = Dir::open_ambient_dir(&gitdir, ambient_authority()).with_context(|| {
-        format!(
-            "Failed to open linked-worktree Git directory {}",
-            gitdir.display()
-        )
-    })?;
+    let gitdir_directory =
+        Dir::open_ambient_dir(&gitdir, ambient_authority()).with_context(|| {
+            format!(
+                "Failed to open linked-worktree Git directory {}",
+                gitdir.display()
+            )
+        })?;
     let Some(back_pointer) =
         read_nofollow_regular_file(&gitdir_directory, "gitdir", MAX_GIT_POINTER_BYTES)?
     else {

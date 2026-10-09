@@ -1,9 +1,19 @@
+use super::*;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
+use jig_execution::NoopExecutionObserver;
 use tempfile::tempdir;
 
-use super::*;
+use super::review_thread_budget::ReviewThreadUpdateBudget;
+use super::review_thread_reply::{ReviewThreadReply, post_review_thread_reply};
+use super::review_thread_witness::{
+    LiveReviewThreadState, ReviewThreadResolution, ReviewThreadWitness,
+    observed_review_thread_witnesses, review_thread_matches_witness,
+    review_thread_mutation_change_reason, review_thread_reply_marker,
+    review_thread_resolution_before_mutation,
+};
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
 struct CancelledControl;

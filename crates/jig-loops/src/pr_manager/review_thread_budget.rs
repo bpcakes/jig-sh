@@ -1,21 +1,32 @@
-const REVIEW_THREAD_COMMENT_PAGE_LIMIT: usize = 100;
-const REVIEW_THREAD_PRIMARY_REQUESTS_PER_INTENT: usize = REVIEW_THREAD_COMMENT_PAGE_LIMIT * 3 + 2;
-const REVIEW_THREAD_RECONCILIATION_REQUESTS_PER_INTENT: usize =
-    REVIEW_THREAD_COMMENT_PAGE_LIMIT + 1;
-const REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT: usize =
-    REVIEW_THREAD_PRIMARY_REQUESTS_PER_INTENT
-        + REVIEW_THREAD_RECONCILIATION_REQUESTS_PER_INTENT;
-const REVIEW_THREAD_UPDATE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const MUTATION_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(30);
+use std::time::{Duration, Instant};
 
-struct ReviewThreadUpdateBudget {
-    started_at: Instant,
-    timeout: Duration,
-    request_count: usize,
+use anyhow::anyhow;
+use jig_context::CommandTimeout;
+use jig_execution::ExecutionCommandError;
+
+pub(super) const REVIEW_THREAD_COMMENT_PAGE_LIMIT: usize = 100;
+
+pub(super) const REVIEW_THREAD_PRIMARY_REQUESTS_PER_INTENT: usize =
+    REVIEW_THREAD_COMMENT_PAGE_LIMIT * 3 + 2;
+
+pub(super) const REVIEW_THREAD_RECONCILIATION_REQUESTS_PER_INTENT: usize =
+    REVIEW_THREAD_COMMENT_PAGE_LIMIT + 1;
+
+pub(super) const REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT: usize =
+    REVIEW_THREAD_PRIMARY_REQUESTS_PER_INTENT + REVIEW_THREAD_RECONCILIATION_REQUESTS_PER_INTENT;
+
+pub(super) const REVIEW_THREAD_UPDATE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+pub(super) const MUTATION_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub(super) struct ReviewThreadUpdateBudget {
+    pub(super) started_at: Instant,
+    pub(super) timeout: Duration,
+    pub(super) request_count: usize,
     request_limit: usize,
     primary_request_count: usize,
     primary_request_limit: usize,
-    intent_started_at: Instant,
+    pub(super) intent_started_at: Instant,
     intent_timeout: Duration,
     intent_request_count: usize,
     intent_primary_request_count: usize,
@@ -23,7 +34,7 @@ struct ReviewThreadUpdateBudget {
 }
 
 impl ReviewThreadUpdateBudget {
-    fn new(command_timeout: CommandTimeout, actionable_intent_count: usize) -> Self {
+    pub(super) fn new(command_timeout: CommandTimeout, actionable_intent_count: usize) -> Self {
         let started_at = Instant::now();
         let intent_multiplier = u32::try_from(actionable_intent_count.max(1)).unwrap_or(u32::MAX);
         let timeout = command_timeout
@@ -47,7 +58,7 @@ impl ReviewThreadUpdateBudget {
         }
     }
 
-    fn begin_intent(&mut self, command_timeout: CommandTimeout) {
+    pub(super) fn begin_intent(&mut self, command_timeout: CommandTimeout) {
         self.intent_started_at = Instant::now();
         self.intent_timeout = command_timeout
             .duration()
@@ -57,11 +68,11 @@ impl ReviewThreadUpdateBudget {
         self.reconciliation_started_at = None;
     }
 
-    fn begin_reconciliation(&mut self) {
+    pub(super) fn begin_reconciliation(&mut self) {
         self.reconciliation_started_at = Some(Instant::now());
     }
 
-    fn reserve_request(
+    pub(super) fn reserve_request(
         &mut self,
         requested_timeout: Duration,
     ) -> std::result::Result<Duration, ExecutionCommandError> {
@@ -110,7 +121,7 @@ impl ReviewThreadUpdateBudget {
         Ok(timeout)
     }
 
-    fn reserve_reconciliation_request(
+    pub(super) fn reserve_reconciliation_request(
         &mut self,
         requested_timeout: Duration,
     ) -> std::result::Result<Duration, ExecutionCommandError> {
