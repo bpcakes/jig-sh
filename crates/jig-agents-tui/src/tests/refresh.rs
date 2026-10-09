@@ -1,4 +1,4 @@
-//! Refreshing usage without reopening the picker.
+//! Inspection progress, and refreshing usage without reopening the picker.
 
 use super::*;
 
@@ -126,4 +126,16 @@ fn static_configurations_never_refresh() {
         Action::Ignore
     );
     assert!(!screen(&app, 120, 30).contains("refresh"));
+}
+
+#[test]
+fn update_arriving_after_worker_completion_repairs_progress() {
+    let mut app = app(homes());
+    app.finish_inspection(None);
+    assert!(matches!(app.rows[0].inspection(), Inspection::Unavailable));
+
+    app.apply_update(ready_update(0));
+
+    assert_eq!(app.completed, 1);
+    assert!(matches!(app.rows[0].inspection(), Inspection::Ready(_)));
 }

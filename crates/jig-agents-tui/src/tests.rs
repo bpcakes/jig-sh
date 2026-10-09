@@ -513,18 +513,6 @@ fn best_projection_uses_the_tightest_returned_codex_window() {
 }
 
 #[test]
-fn update_arriving_after_worker_completion_repairs_progress() {
-    let mut app = app(homes());
-    app.finish_inspection(None);
-    assert!(matches!(app.rows[0].inspection(), Inspection::Unavailable));
-
-    app.apply_update(ready_update(0));
-
-    assert_eq!(app.completed, 1);
-    assert!(matches!(app.rows[0].inspection(), Inspection::Ready(_)));
-}
-
-#[test]
 fn search_filters_details_and_enter_selects_exact_path_while_loading() {
     let mut app = app(homes());
     assert_eq!(
