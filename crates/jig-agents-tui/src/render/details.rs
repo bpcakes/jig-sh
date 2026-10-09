@@ -25,6 +25,7 @@ const LABEL_LIMIT: usize = 18;
 pub(super) fn draw_details(frame: &mut Frame, area: Rect, view: &View<'_>) {
     let app = view.app;
     let focused = app.focus == Focus::Details;
+    app.set_hit_areas(|areas| areas.details = Some(area));
     let Some(row) = app.selected_row() else {
         app.set_detail_scroll_limit(0);
         frame.render_widget(

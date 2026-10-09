@@ -16,6 +16,8 @@ use crate::{
     render,
 };
 
+mod mouse;
+
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const ACTIVE_REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 const IDLE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -27,7 +29,7 @@ pub(crate) fn run(
     cancelled: impl Fn() -> bool + Send + Sync + 'static,
 ) -> Result<Option<usize>> {
     require_terminal(command, "pass a home explicitly for non-interactive use")?;
-    let mut terminal = TerminalSession::enter(app.title())?;
+    let mut terminal = TerminalSession::enter_with_mouse(app.title())?;
     let theme = render::Theme::detect();
     let external_cancellation: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(cancelled);
     // Kept so a refresh can inspect again with the same source.
@@ -77,46 +79,48 @@ pub(crate) fn run(
         }
 
         if event::poll(EVENT_POLL_INTERVAL).context("failed to poll home picker input")? {
-            match event::read().context("failed to read home picker input")? {
-                Event::Key(key) if is_actionable_key(key) => match handle_key(&mut app, key) {
-                    Action::Ignore => {}
-                    Action::Redraw => dirty = true,
-                    Action::Refresh => {
-                        // `can_refresh` means the previous worker has already
-                        // finished, so replacing it joins nothing.
-                        if let Some(source) = &source {
-                            app.begin_refresh();
-                            worker = InspectionWorker::spawn(
-                                Arc::clone(source),
-                                Arc::clone(&external_cancellation),
-                            )?;
-                            dirty = true;
-                        }
+            let action = match event::read().context("failed to read home picker input")? {
+                Event::Key(key) if is_actionable_key(key) => handle_key(&mut app, key),
+                Event::Mouse(mouse) => mouse::handle_mouse(&mut app, mouse, Instant::now()),
+                Event::Resize(_, _) => Action::Redraw,
+                _ => Action::Ignore,
+            };
+            match action {
+                Action::Ignore => {}
+                Action::Redraw => dirty = true,
+                Action::Refresh => {
+                    // `can_refresh` means the previous worker has already
+                    // finished, so replacing it joins nothing.
+                    if let Some(source) = &source {
+                        app.begin_refresh();
+                        worker = InspectionWorker::spawn(
+                            Arc::clone(source),
+                            Arc::clone(&external_cancellation),
+                        )?;
+                        dirty = true;
                     }
-                    Action::Cancel => {
+                }
+                Action::Cancel => {
+                    return finish_run(
+                        &mut terminal,
+                        &mut app,
+                        &mut worker,
+                        ExitState::Cancelling,
+                        None,
+                    );
+                }
+                Action::Select => {
+                    let selected = app.selected.filter(|index| *index < app.rows.len());
+                    if selected.is_some() {
                         return finish_run(
                             &mut terminal,
                             &mut app,
                             &mut worker,
-                            ExitState::Cancelling,
-                            None,
+                            ExitState::Launching,
+                            selected,
                         );
                     }
-                    Action::Select => {
-                        let selected = app.selected.filter(|index| *index < app.rows.len());
-                        if selected.is_some() {
-                            return finish_run(
-                                &mut terminal,
-                                &mut app,
-                                &mut worker,
-                                ExitState::Launching,
-                                selected,
-                            );
-                        }
-                    }
-                },
-                Event::Resize(_, _) => dirty = true,
-                _ => {}
+                }
             }
         }
     }

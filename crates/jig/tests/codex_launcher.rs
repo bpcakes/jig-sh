@@ -765,3 +765,6 @@ fn wait_for_process_exit(pid: libc::pid_t, timeout: Duration) {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[path = "codex_launcher/mouse.rs"]
+mod mouse;
