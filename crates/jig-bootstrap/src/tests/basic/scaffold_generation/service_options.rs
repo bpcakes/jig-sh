@@ -1,3 +1,5 @@
+use super::*;
+
 fn rust_react_service_plan(
     destination: &Path,
     repo_name: &str,
@@ -147,7 +149,8 @@ fn rust_react_service_options_add_metrics_export_and_a_runledger_worker() {
     let test_support_db =
         fs::read_to_string(root.join("crates/my-app-test-support/src/db.rs")).unwrap();
     assert!(
-        test_support_db.contains("(\"runledger\", &batter::runledger::native::postgres::MIGRATOR),")
+        test_support_db
+            .contains("(\"runledger\", &batter::runledger::native::postgres::MIGRATOR),")
     );
     let postgres_test =
         fs::read_to_string(root.join("crates/my-app-test-support/tests/postgres.rs")).unwrap();
@@ -193,10 +196,7 @@ fn rust_react_service_options_default_to_none() {
     assert_eq!(report["jobs"], "none");
     assert_paths_absent(
         temp.path(),
-        &[
-            "crates/my-app-jobs",
-            "crates/my-app-runtime/src/metrics.rs",
-        ],
+        &["crates/my-app-jobs", "crates/my-app-runtime/src/metrics.rs"],
     );
     let workspace = fs::read_to_string(temp.path().join("Cargo.toml")).unwrap();
     assert!(workspace.contains(r#"features = ["axum"] }"#));
@@ -220,7 +220,11 @@ fn metrics_without_a_database_renders_the_exporter_only() {
     let workspace = fs::read_to_string(temp.path().join("Cargo.toml")).unwrap();
     assert!(workspace.contains(r#"features = ["axum", "otlp"] }"#));
     assert!(!workspace.contains("uuid ="));
-    assert!(temp.path().join("crates/my-app-runtime/src/metrics.rs").exists());
+    assert!(
+        temp.path()
+            .join("crates/my-app-runtime/src/metrics.rs")
+            .exists()
+    );
     assert!(!temp.path().join("crates/my-app-jobs").exists());
 }
 
@@ -258,7 +262,10 @@ fn service_options_require_rust_react_and_runledger_requires_postgres() {
     .validate_init_invariants(&AnswerOpts::default())
     .unwrap_err()
     .to_string();
-    assert!(harness_only.contains("--metrics, or --jobs"), "{harness_only}");
+    assert!(
+        harness_only.contains("--metrics, or --jobs"),
+        "{harness_only}"
+    );
 
     let explicit_none = ScaffoldOpts {
         preset: Some(ScaffoldPreset::RustReact),
@@ -338,7 +345,10 @@ fn rust_react_rejects_names_colliding_with_selected_service_packages() {
             "{name}: {error}"
         );
         assert!(error.contains(expected), "{name}: {error}");
-        assert!(error.contains("Choose a different --repo-name"), "{name}: {error}");
+        assert!(
+            error.contains("Choose a different --repo-name"),
+            "{name}: {error}"
+        );
     }
     for (name, db) in [
         ("runledger", ScaffoldDb::Postgres),

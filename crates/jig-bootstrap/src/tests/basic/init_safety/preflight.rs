@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn scaffold_rejects_conflicting_file_unless_forced_and_reports_rerun() {
     let temp = tempdir().unwrap();
@@ -91,7 +93,10 @@ fn assert_existing_symlink_rejected(force: bool) {
         .unwrap_err()
         .to_string();
     assert!(error.contains("is a symlink"), "{error}");
-    assert_eq!(fs::read_to_string(&outside_file).unwrap(), "outside sentinel\n");
+    assert_eq!(
+        fs::read_to_string(&outside_file).unwrap(),
+        "outside sentinel\n"
+    );
     assert!(!destination.path().join("apps").exists());
     assert!(!destination.path().join("web").exists());
 }
@@ -310,7 +315,6 @@ fn init_rejects_portable_scaffold_output_collisions_before_any_repository_write(
     }
 }
 
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn harness_only_init_rejects_non_unicode_managed_parent_before_publication() {
@@ -357,103 +361,6 @@ fn harness_only_init_rejects_non_unicode_managed_parent_before_publication() {
     assert!(!destination.exists());
 }
 
-
-
-#[test]
-fn init_rolls_back_new_destination_after_planned_output_collision() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-
-    let app = |name: &str, dir: &str| FrontendApp {
-        name: name.into(),
-        dir: dir.into(),
-        coverage_threshold: 80,
-        kind: "vite".into(),
-        role: "spa".into(),
-    };
-
-    for force in [false, true] {
-        for (case_name, frontend_apps) in [
-            (
-                "internal-case-folded-frontends",
-                vec![app("first", "Web"), app("second", "web")],
-            ),
-            (
-                "managed-scaffold-ancestor",
-                vec![app("client", "scripts/jig")],
-            ),
-        ] {
-            let created_ancestor = temp.path().join(format!("{case_name}-{force}"));
-            let destination = created_ancestor.join("nested/new-repo");
-            assert!(!destination.exists());
-
-            let error = run_init(InitOpts {
-                path: destination.clone(),
-                scaffold: ScaffoldOpts {
-                    preset: Some(ScaffoldPreset::RustReact),
-                    db: Some(ScaffoldDb::None),
-                    frontends: Vec::new(),
-                    frontend_list: Vec::new(),
-                    metrics: None,
-                    jobs: None,
-                },
-                template: Some(template.path().display().to_string()),
-                template_mode: None,
-                vcs_ref: None,
-                force,
-                defaults: false,
-                no_input: true,
-                no_vault: true,
-                answers: AnswerOpts {
-                    repo_name: Some("demo".into()),
-                    frontend_apps,
-                    ..AnswerOpts::default()
-                },
-            })
-            .unwrap_err()
-            .to_string();
-
-            assert!(
-                error.contains("Portable planned repository file collision"),
-                "{case_name}/{force}: {error}"
-            );
-            assert!(
-                !destination.exists(),
-                "{case_name}/{force}: failed init left its new destination behind"
-            );
-            assert!(
-                !created_ancestor.exists(),
-                "{case_name}/{force}: failed init left created parent directories behind"
-            );
-        }
-    }
-}
-
-#[test]
-fn init_destination_rollback_preserves_existing_and_concurrently_created_destinations() {
-    let temp = tempdir().unwrap();
-
-    let pre_existing = temp.path().join("pre-existing");
-    fs::create_dir(&pre_existing).unwrap();
-    InitMutationTransaction::create(&pre_existing)
-        .unwrap()
-        .rollback()
-        .unwrap();
-    assert!(pre_existing.is_dir());
-
-    let with_content = temp.path().join("created/with-content");
-    let mut rollback = InitMutationTransaction::create(&with_content).unwrap();
-    fs::create_dir_all(&with_content).unwrap();
-    fs::write(with_content.join("concurrent.txt"), "preserve\n").unwrap();
-    rollback.rollback().unwrap();
-    assert_eq!(
-        fs::read_to_string(with_content.join("concurrent.txt")).unwrap(),
-        "preserve\n"
-    );
-    assert!(temp.path().join("created").is_dir());
-}
-
 #[cfg(unix)]
 #[test]
 fn init_rejects_an_existing_final_symlink_destination() {
@@ -472,125 +379,48 @@ fn init_rejects_an_existing_final_symlink_destination() {
     assert!(error.contains("not a real directory"), "{error}");
 }
 
-#[cfg(unix)]
 #[test]
-fn missing_init_tree_is_private_then_published_with_normal_directory_mode() {
-    use std::os::unix::fs::PermissionsExt;
-
+fn init_destination_accepts_an_existing_real_directory_after_create_is_denied() {
     let temp = tempdir().unwrap();
-    let probe = temp.path().join("mode-probe");
-    fs::create_dir(&probe).unwrap();
-    let expected_mode = fs::metadata(&probe).unwrap().permissions().mode() & 0o777;
-    fs::remove_dir(&probe).unwrap();
+    let existing = temp.path().join("existing");
+    fs::create_dir(&existing).unwrap();
 
-    let destination = temp.path().join("new-top/nested/repo");
-    let mut transaction = InitMutationTransaction::create(&destination).unwrap();
-    let staging = transaction
-        .staged_publication
-        .as_ref()
-        .unwrap()
-        .publish_source
-        .clone();
-    assert_eq!(
-        fs::metadata(&staging).unwrap().permissions().mode() & 0o777,
-        0o700
-    );
-    fs::write(
-        transaction.work_destination().join("sentinel"),
-        "complete\n",
+    validate_existing_init_directory_after_create_error(
+        &existing,
+        io::Error::new(io::ErrorKind::PermissionDenied, "root create denied"),
+        true,
     )
     .unwrap();
-    assert!(!destination.exists());
 
-    transaction.commit().unwrap();
-    assert_eq!(
-        fs::metadata(temp.path().join("new-top"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        expected_mode
-    );
-    assert_eq!(
-        fs::read_to_string(destination.join("sentinel")).unwrap(),
-        "complete\n"
-    );
-    assert!(!staging.exists());
-}
-
-#[test]
-fn missing_init_tree_publication_never_replaces_concurrent_top_component() {
-    let temp = tempdir().unwrap();
-    let destination = temp.path().join("contended/nested/repo");
-    let mut transaction = InitMutationTransaction::create(&destination).unwrap();
-    let staging = transaction
-        .staged_publication
-        .as_ref()
-        .unwrap()
-        .publish_source
-        .clone();
-    fs::write(transaction.work_destination().join("generated"), "jig\n").unwrap();
-    fs::create_dir(temp.path().join("contended")).unwrap();
-    fs::write(temp.path().join("contended/foreign"), "preserve\n").unwrap();
-
-    let error = transaction.commit().unwrap_err().to_string();
-    assert!(
-        error.contains("without replacing concurrent path"),
-        "{error}"
-    );
-    assert_eq!(
-        fs::read_to_string(temp.path().join("contended/foreign")).unwrap(),
-        "preserve\n"
-    );
-    assert!(!destination.exists());
-    assert!(!staging.exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn missing_init_tree_rejects_an_intermediate_symlink_swap_before_file_publication() {
-    use std::os::unix::fs::symlink;
-
-    let temp = tempdir().unwrap();
-    let destination = temp.path().join("new-top/nested/repo");
-    let mut transaction = InitMutationTransaction::create(&destination).unwrap();
-    let relative = Path::new("generated");
-    transaction.prepare_file_publication(relative).unwrap();
-
-    let staging = transaction
-        .staged_publication
-        .as_ref()
-        .unwrap()
-        .publish_source
-        .clone();
-    let intermediate = staging.join("nested");
-    let retained_intermediate = staging.join("nested-original");
-    let foreign_intermediate = temp.path().join("foreign-nested");
-    fs::create_dir(&foreign_intermediate).unwrap();
-    fs::create_dir(foreign_intermediate.join("repo")).unwrap();
-    fs::write(foreign_intermediate.join("marker"), "preserve\n").unwrap();
-    fs::rename(&intermediate, &retained_intermediate).unwrap();
-    symlink(&foreign_intermediate, &intermediate).unwrap();
-
-    let error = path::write_repository_file_atomic_staged(
-        transaction.work_destination(),
-        relative,
-        b"jig\n",
-        path::RepositoryFileLeaf::Missing,
-        || transaction.verify_destination_identity(),
+    let file = temp.path().join("file");
+    fs::write(&file, "not a directory\n").unwrap();
+    let error = validate_existing_init_directory_after_create_error(
+        &file,
+        io::Error::new(io::ErrorKind::AlreadyExists, "already exists"),
+        true,
     )
     .unwrap_err()
     .to_string();
-    assert!(error.contains("replaced while init was running"), "{error}");
-    assert!(!foreign_intermediate.join("repo/generated").exists());
-    assert_eq!(
-        fs::read_to_string(foreign_intermediate.join("marker")).unwrap(),
-        "preserve\n"
-    );
+    assert!(error.contains("not a real directory"), "{error}");
+}
 
-    let rollback = transaction.rollback().unwrap_err().to_string();
-    assert!(rollback.contains("Preserving the complete staging tree"));
-    fs::remove_file(&intermediate).unwrap();
-    fs::rename(&retained_intermediate, &intermediate).unwrap();
-    fs::remove_dir_all(&staging).unwrap();
+#[cfg(unix)]
+#[test]
+fn init_destination_never_accepts_an_existing_directory_symlink_after_create_fails() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let target = temp.path().join("target");
+    let link = temp.path().join("link");
+    fs::create_dir(&target).unwrap();
+    symlink(&target, &link).unwrap();
+
+    let error = validate_existing_init_directory_after_create_error(
+        &link,
+        io::Error::new(io::ErrorKind::AlreadyExists, "already exists"),
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("not a real directory"), "{error}");
 }

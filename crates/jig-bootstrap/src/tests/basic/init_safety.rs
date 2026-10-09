@@ -1,6 +1,10 @@
 use super::*;
 
-include!("init_safety_parts/part_01.rs");
-include!("init_safety_parts/part_02.rs");
-include!("init_safety_parts/rust_only.rs");
-include!("init_safety_parts/clippy.rs");
+mod clippy;
+mod generation_budget;
+mod preflight;
+mod publication;
+mod rollback;
+mod rust_only;
+
+use publication::*;

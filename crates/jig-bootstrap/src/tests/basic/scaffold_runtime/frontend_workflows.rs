@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn scaffold_defaults_to_web_frontend_and_no_db() {
     let temp = tempdir().unwrap();
@@ -37,18 +39,36 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     assert_text_contains_none(&cargo_toml, &["sqlx ="]);
     let manifest: toml::Value = toml::from_str(&cargo_toml).unwrap();
     let dependencies = &manifest["workspace"]["dependencies"];
-    assert_eq!(dependencies["batter"]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
-    assert_eq!(dependencies["batter"]["rev"].as_str(), Some("18cdf97ac544c665e0189efd28388d1e10456232"));
+    assert_eq!(
+        dependencies["batter"]["git"].as_str(),
+        Some("https://github.com/bpcakes/batter")
+    );
+    assert_eq!(
+        dependencies["batter"]["rev"].as_str(),
+        Some("18cdf97ac544c665e0189efd28388d1e10456232")
+    );
     assert_eq!(dependencies["batter"]["features"][0].as_str(), Some("axum"));
-    assert_eq!(dependencies["batter"]["features"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        dependencies["batter"]["features"].as_array().unwrap().len(),
+        1
+    );
     assert_text_contains_none(
         &cargo_toml,
-        &["batter-axum =", "batter-sqlx =", "postgres-test-harness =", "uuid ="],
+        &[
+            "batter-axum =",
+            "batter-sqlx =",
+            "postgres-test-harness =",
+            "uuid =",
+        ],
     );
     assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
     let repo_name = report["repo_name"].as_str().unwrap();
     let module_name = repo_name.replace('-', "_");
-    let runtime = fs::read_to_string(temp.path().join(format!("crates/{repo_name}-runtime/src/lib.rs"))).unwrap();
+    let runtime = fs::read_to_string(
+        temp.path()
+            .join(format!("crates/{repo_name}-runtime/src/lib.rs")),
+    )
+    .unwrap();
     assert_text_contains_all(
         &runtime,
         &[
@@ -428,229 +448,6 @@ fn scaffold_e2e_workflow_serializes_dynamic_yaml_scalars() {
     assert_eq!(setup_bun["with"]["bun-version"], "1.3.14");
 }
 
-#[test]
-fn scaffold_postgres_development_database_name_respects_identifier_limit() {
-    let temp = tempdir().unwrap();
-    let repo_name = "project".repeat(12);
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: Some(ScaffoldDb::Postgres),
-            frontends: Vec::new(),
-            frontend_list: Vec::new(),
-            metrics: None,
-            jobs: None,
-        },
-        &AnswerOpts {
-            repo_name: Some(repo_name),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-
-    plan.write(temp.path(), false).unwrap();
-
-    let env_example = fs::read_to_string(temp.path().join(".env.example")).unwrap();
-    let database_name = env_example
-        .lines()
-        .find_map(|line| line.strip_prefix("DATABASE_URL="))
-        .and_then(|url| url.rsplit('/').next())
-        .unwrap();
-    assert_eq!(database_name.len(), 63);
-    assert!(database_name.contains('_'));
-}
-
-#[test]
-fn scaffold_db_defaults_set_sqlx_metadata_and_disable_schema_dump() {
-    let temp = tempdir().unwrap();
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: Some(ScaffoldDb::Postgres),
-            frontends: Vec::new(),
-            frontend_list: Vec::new(),
-            metrics: None,
-            jobs: None,
-        },
-        &AnswerOpts::default(),
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-    let mut answers = AnswerOpts::default();
-
-    plan.apply_answer_defaults(&mut answers);
-
-    assert_eq!(answers.rust_sqlx_metadata_dir.as_deref(), Some(".sqlx"));
-    assert_eq!(answers.schema_dump_enabled, Some(false));
-}
-
-#[test]
-fn scaffold_bootstrap_command_records_shared_web_dependency_state() {
-    let temp = tempdir().unwrap();
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: None,
-            frontends: vec![
-                parse_scaffold_frontend("web").unwrap(),
-                parse_scaffold_frontend("landing").unwrap(),
-            ],
-            frontend_list: Vec::new(),
-            metrics: None,
-            jobs: None,
-        },
-        &AnswerOpts {
-            repo_name: Some("demo".into()),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-
-    for package_manager in ["bun", "npm", "pnpm", "yarn"] {
-        let mut answers = AnswerOpts {
-            web_package_manager: Some(package_manager.into()),
-            ..AnswerOpts::default()
-        };
-        plan.apply_answer_defaults(&mut answers);
-        let bootstrap_command = answers.bootstrap_command.unwrap();
-        assert!(bootstrap_command.ends_with("&& scripts/check-webapps.sh bootstrap"));
-        assert_eq!(
-            bootstrap_command
-                .matches("scripts/check-webapps.sh bootstrap")
-                .count(),
-            1
-        );
-        assert!(!bootstrap_command.contains("cd web"));
-        assert!(!bootstrap_command.contains("cd landing"));
-    }
-
-    let mut default_answers = AnswerOpts::default();
-    plan.apply_answer_defaults(&mut default_answers);
-    assert_eq!(default_answers.web_package_manager.as_deref(), Some("bun"));
-    assert!(
-        default_answers
-            .bootstrap_command
-            .unwrap()
-            .ends_with("&& scripts/check-webapps.sh bootstrap")
-    );
-}
-
-#[test]
-fn scaffold_separates_dependency_bootstrap_from_database_setup() {
-    let temp = tempdir().unwrap();
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: Some(ScaffoldDb::Postgres),
-            frontends: vec![parse_scaffold_frontend("web").unwrap()],
-            frontend_list: Vec::new(),
-            metrics: None,
-            jobs: None,
-        },
-        &AnswerOpts {
-            repo_name: Some("demo".into()),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-    let mut answers = AnswerOpts::default();
-
-    plan.apply_answer_defaults(&mut answers);
-
-    let command = answers.bootstrap_command.unwrap();
-    assert_text_contains_none(&command, &["DATABASE_URL", "--bootstrap-database"]);
-    let cargo_fetch = command.find("cargo fetch").unwrap();
-    let frontend_bootstrap = command.find("scripts/check-webapps.sh bootstrap").unwrap();
-    assert!(cargo_fetch < frontend_bootstrap);
-    plan.write(temp.path(), false).unwrap();
-    let setup = fs::read_to_string(temp.path().join("scripts/setup-database.sh")).unwrap();
-    let env_check = setup.find("if [ -z \"${DATABASE_URL:-}\" ] && ! awk").unwrap();
-    let database_bootstrap = setup.find("cargo run -p demo-api -- --bootstrap-database").unwrap();
-    assert!(env_check < database_bootstrap);
-}
-
-#[test]
-fn go_scaffold_separates_codegen_from_database_setup() {
-    let temp = tempdir().unwrap();
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::GoReact),
-            db: Some(ScaffoldDb::Postgres),
-            frontends: vec![parse_scaffold_frontend("web").unwrap()],
-            frontend_list: Vec::new(),
-            metrics: None,
-            jobs: None,
-        },
-        &AnswerOpts {
-            repo_name: Some("demo".into()),
-            go_module: Some("github.com/acme/demo".into()),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-    let mut answers = AnswerOpts::default();
-
-    plan.apply_answer_defaults(&mut answers);
-
-    assert_eq!(
-        answers.migration_dir.as_deref(),
-        Some("internal/database/migrations")
-    );
-    let command = answers.bootstrap_command.unwrap();
-    let module_tidy = command.find("go mod tidy").unwrap();
-    let frontend_bootstrap = command.find("scripts/check-webapps.sh bootstrap").unwrap();
-    assert_text_contains_none(&command, &["DATABASE_URL", "--bootstrap-database"]);
-    let sqlc_generate = command.find("go tool sqlc generate").unwrap();
-    let contract_generate = command.find("node scripts/contracts.mjs generate").unwrap();
-    assert!(module_tidy < frontend_bootstrap);
-    assert!(frontend_bootstrap < sqlc_generate);
-    assert!(sqlc_generate < contract_generate);
-    plan.write(temp.path(), false).unwrap();
-    let setup = fs::read_to_string(temp.path().join("scripts/setup-database.sh")).unwrap();
-    let database_guard = setup.find("Missing DATABASE_URL").unwrap();
-    let sqlc_generate = setup.find("go tool sqlc generate").unwrap();
-    let database_bootstrap = setup.find("go run ./cmd/api --bootstrap-database").unwrap();
-    assert!(database_guard < sqlc_generate && sqlc_generate < database_bootstrap);
-}
-
-#[test]
-fn go_scaffold_without_postgres_does_not_emit_migration_configuration() {
-    let temp = tempdir().unwrap();
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::GoReact),
-            db: Some(ScaffoldDb::None),
-            frontends: vec![parse_scaffold_frontend("web").unwrap()],
-            frontend_list: Vec::new(),
-            metrics: None,
-            jobs: None,
-        },
-        &AnswerOpts {
-            repo_name: Some("example-project".into()),
-            go_module: Some("example.com/example-project".into()),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-    let mut answers = AnswerOpts::default();
-
-    plan.apply_answer_defaults(&mut answers);
-
-    assert_eq!(answers.go_database, Some(jig_context::backend::GoDatabase::None));
-    assert_eq!(answers.migration_dir, None);
-}
-
 fn assert_frontend_dev_scripts_for_package_manager(package_manager: &str) {
     let temp = tempdir().unwrap();
     let plan = scaffold::InitScaffoldPlan::from_opts(
@@ -747,4 +544,38 @@ fn scaffold_frontend_dev_scripts_only_launch_the_dev_server() {
     for package_manager in ["bun", "npm", "pnpm", "yarn"] {
         assert_frontend_dev_scripts_for_package_manager(package_manager);
     }
+}
+
+#[test]
+fn scaffold_playwright_resolves_repo_root_from_nested_spa_dir() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            frontend_apps: vec![FrontendApp {
+                name: "web".into(),
+                dir: "clients/web".into(),
+                coverage_threshold: 80,
+                kind: "vite".into(),
+                role: "spa".into(),
+            }],
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    plan.write(temp.path(), false).unwrap();
+
+    let config = fs::read_to_string(temp.path().join("clients/web/playwright.config.ts")).unwrap();
+    assert!(config.contains(r#"path.resolve(appDir, "../..")"#));
 }

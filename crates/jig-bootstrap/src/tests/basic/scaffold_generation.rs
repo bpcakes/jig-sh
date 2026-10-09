@@ -1,5 +1,26 @@
 use super::*;
 
+mod formatting;
+mod go_react;
+mod go_react_workflows;
+mod identity_validation;
+mod init_answers;
+mod limit_validation;
+mod rust_only;
+mod rust_only_compatibility;
+mod rust_react_admin;
+mod rust_react_backend;
+mod rust_react_spa;
+mod rust_react_workspace;
+mod service_options;
+
+use go_react::*;
+use rust_only::*;
+use rust_react_admin::*;
+use rust_react_backend::*;
+use rust_react_spa::*;
+use rust_react_workspace::*;
+
 fn assert_contains_all(contents: &str, expected: &[&str]) {
     for value in expected {
         assert!(contents.contains(value), "missing expected text: {value}");
@@ -56,19 +77,39 @@ fn rendered_contents<'a>(rendered: &'a [scaffold::ScaffoldFile], path: &str) -> 
         .as_str()
 }
 
-include!("scaffold_generation_parts/part_01.rs");
-include!("scaffold_generation_parts/part_02_assertions.rs");
-include!("scaffold_generation_parts/part_02_backend_assertions.rs");
-include!("scaffold_generation_parts/part_02_http_assertions.rs");
-include!("scaffold_generation_parts/part_02.rs");
-include!("scaffold_generation_parts/part_03.rs");
-include!("scaffold_generation_parts/part_04.rs");
-include!("scaffold_generation_parts/rendered_formatting.rs");
-include!("scaffold_generation_parts/part_05.rs");
-include!("scaffold_generation_parts/rust_only_acceptance.rs");
-include!("scaffold_generation_parts/rust_only_compatibility.rs");
-include!("scaffold_generation_parts/rust_library.rs");
-include!("scaffold_generation_parts/rust_cli.rs");
-include!("scaffold_generation_parts/clippy_defaults.rs");
-include!("scaffold_generation_parts/service_options.rs");
-include!("scaffold_generation_parts/postgres_readme.rs");
+#[cfg(unix)]
+fn test_program_is_available(program: &str, args: &[&str]) -> bool {
+    match Command::new(program).args(args).output() {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => panic!("failed to probe {program}: {error}"),
+    }
+}
+
+#[cfg(unix)]
+fn assert_rust_only_command_output_success(label: &str, output: &std::process::Output) {
+    assert!(
+        output.status.success(),
+        "{label} failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn assert_rendered_paths(rendered: &[scaffold::ScaffoldFile], expected: &[&str]) {
+    for path in expected {
+        assert!(
+            rendered.iter().any(|file| file.relative == *path),
+            "missing nested Go component output {path}"
+        );
+    }
+}
+
+fn assert_rendered_paths_absent(rendered: &[scaffold::ScaffoldFile], forbidden: &[&str]) {
+    for path in forbidden {
+        assert!(
+            rendered.iter().all(|file| file.relative != *path),
+            "Go component output escaped to the repository root: {path}"
+        );
+    }
+}

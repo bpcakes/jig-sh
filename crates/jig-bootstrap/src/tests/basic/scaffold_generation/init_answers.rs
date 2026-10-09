@@ -1,3 +1,5 @@
+use super::*;
+
 fn assert_native_init_config(destination: &Path) {
     assert!(destination.exists());
     assert!(destination.join(".jig.toml").exists());
@@ -22,7 +24,10 @@ fn assert_native_init_ignore_files(destination: &Path) {
         ".agent/tmp/",
         "# BEGIN JIG MANAGED BLOCK",
     ] {
-        assert!(gitignore.contains(expected), "missing gitignore entry {expected}");
+        assert!(
+            gitignore.contains(expected),
+            "missing gitignore entry {expected}"
+        );
     }
     let attributes = fs::read_to_string(destination.join(".gitattributes")).unwrap();
     assert!(attributes.contains(".agent/state/*.jsonl merge=union"));
@@ -43,7 +48,11 @@ fn assert_native_init_ignore_files(destination: &Path) {
 fn assert_native_init_manifest(destination: &Path) {
     assert!(destination.join("scripts/jig").exists());
     let paths = managed_manifest_paths(destination);
-    assert!(paths.iter().any(|path| path == managed_paths::MANIFEST_PATH));
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == managed_paths::MANIFEST_PATH)
+    );
     assert!(paths.iter().all(|path| destination.join(path).is_file()));
 }
 

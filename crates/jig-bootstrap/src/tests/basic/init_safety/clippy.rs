@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn rust_scaffolds_treat_clippy_config_as_project_owned_whole_file() {
     for preset in [
@@ -31,10 +33,24 @@ fn rust_scaffolds_treat_clippy_config_as_project_owned_whole_file() {
         fs::write(&clippy_path, project_owned).unwrap();
         let before_conflict = regular_file_tree_snapshot(destination.path());
 
-        let error = plan.write(destination.path(), false).unwrap_err().to_string();
-        assert!(error.contains("clippy.toml"), "{}: {error}", preset.as_str());
-        assert!(error.contains("pass --force"), "{}: {error}", preset.as_str());
-        assert_eq!(regular_file_tree_snapshot(destination.path()), before_conflict);
+        let error = plan
+            .write(destination.path(), false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("clippy.toml"),
+            "{}: {error}",
+            preset.as_str()
+        );
+        assert!(
+            error.contains("pass --force"),
+            "{}: {error}",
+            preset.as_str()
+        );
+        assert_eq!(
+            regular_file_tree_snapshot(destination.path()),
+            before_conflict
+        );
 
         let forced = plan.write(destination.path(), true).unwrap();
         assert_eq!(forced["files_modified"], serde_json::json!(["clippy.toml"]));

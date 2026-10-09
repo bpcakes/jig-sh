@@ -1,3 +1,5 @@
+use super::*;
+
 fn assert_legacy_scaffold_files(
     destination: &Path,
     scaffold: &serde_json::Value,
@@ -14,15 +16,30 @@ fn assert_legacy_scaffold_files(
         .collect::<BTreeSet<_>>();
     assert_eq!(created_paths.len(), created.len());
     for path in &created_paths {
-        assert!(destination.join(path).is_file(), "reported file is missing: {path}");
+        assert!(
+            destination.join(path).is_file(),
+            "reported file is missing: {path}"
+        );
     }
     for path in required {
-        assert!(created_paths.contains(path), "unreported compatibility file: {path}");
-        assert!(destination.join(path).is_file(), "missing compatibility file: {path}");
+        assert!(
+            created_paths.contains(path),
+            "unreported compatibility file: {path}"
+        );
+        assert!(
+            destination.join(path).is_file(),
+            "missing compatibility file: {path}"
+        );
     }
     for path in absent {
-        assert!(!created_paths.contains(path), "unexpected compatibility report path: {path}");
-        assert!(!destination.join(path).exists(), "unexpected compatibility output: {path}");
+        assert!(
+            !created_paths.contains(path),
+            "unexpected compatibility report path: {path}"
+        );
+        assert!(
+            !destination.join(path).exists(),
+            "unexpected compatibility output: {path}"
+        );
     }
 }
 
@@ -91,10 +108,9 @@ fn rust_only_foundation_preserves_rust_react_output_and_report() {
             "openapi/admin.json",
         ],
     );
-    let cargo = toml::from_str::<toml::Value>(
-        &fs::read_to_string(destination.join("Cargo.toml")).unwrap(),
-    )
-    .unwrap();
+    let cargo =
+        toml::from_str::<toml::Value>(&fs::read_to_string(destination.join("Cargo.toml")).unwrap())
+            .unwrap();
     assert_eq!(
         cargo["workspace"]["members"].as_array().unwrap(),
         &[
@@ -219,10 +235,24 @@ fn rust_only_foundation_preserves_harness_only_output_and_report() {
         "agent-map.md",
         "scripts/jig",
     ] {
-        assert!(destination.join(path).is_file(), "missing harness file: {path}");
+        assert!(
+            destination.join(path).is_file(),
+            "missing harness file: {path}"
+        );
     }
-    for path in ["Cargo.toml", "README.md", "go.mod", "package.json", "apps", "crates", "web"] {
-        assert!(!destination.join(path).exists(), "unexpected project output: {path}");
+    for path in [
+        "Cargo.toml",
+        "README.md",
+        "go.mod",
+        "package.json",
+        "apps",
+        "crates",
+        "web",
+    ] {
+        assert!(
+            !destination.join(path).exists(),
+            "unexpected project output: {path}"
+        );
     }
     let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(config.contains("sqlx_enabled = false"));

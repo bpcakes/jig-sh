@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[derive(Clone, Copy)]
 struct RustOnlyAcceptanceCase {
@@ -594,4 +596,53 @@ fn assert_rust_only_generated_repository(case: RustOnlyAcceptanceCase) {
     let config = toml::from_str::<toml::Value>(&config_text).unwrap();
     verify_rust_only_repository(&destination, &config, case);
     assert_rust_only_update_preserves_project_files(&destination, case);
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_library_init_generates_exact_buildable_neutral_workspace() {
+    assert_rust_only_generated_repository(RustOnlyAcceptanceCase::library());
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_cli_init_generates_exact_buildable_runnable_neutral_workspace() {
+    assert_rust_only_generated_repository(RustOnlyAcceptanceCase::cli());
+}
+
+pub(super) fn assert_generated_rust_clippy_defaults(destination: &Path) {
+    let root_manifest_path = destination.join("Cargo.toml");
+    let root_manifest =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&root_manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        root_manifest["workspace"]["lints"]["clippy"]["cognitive_complexity"].as_str(),
+        Some("warn")
+    );
+    assert_eq!(
+        root_manifest["workspace"]["lints"]["clippy"]["mod_module_files"].as_str(),
+        Some("warn")
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("clippy.toml")).unwrap(),
+        "cognitive-complexity-threshold = 20\n"
+    );
+    let readme = fs::read_to_string(destination.join("README.md")).unwrap();
+    assert!(readme.contains("`cognitive_complexity` nursery lint"));
+    assert!(readme.contains("`mod_module_files` restriction lint"));
+    assert!(readme.contains("treats all warnings as failures"));
+    assert!(readme.contains("Clippy configuration is project-owned after init"));
+
+    for member in root_manifest["workspace"]["members"].as_array().unwrap() {
+        let member = member.as_str().unwrap();
+        let member_manifest_path = destination.join(member).join("Cargo.toml");
+        let member_manifest =
+            toml::from_str::<toml::Value>(&fs::read_to_string(&member_manifest_path).unwrap())
+                .unwrap();
+        assert_eq!(
+            member_manifest["lints"]["workspace"].as_bool(),
+            Some(true),
+            "{} does not inherit workspace lints",
+            member_manifest_path.display()
+        );
+    }
 }

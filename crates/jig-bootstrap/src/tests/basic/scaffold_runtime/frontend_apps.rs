@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn scaffold_uses_explicit_frontend_role_without_name_inference() {
     let temp = tempdir().unwrap();
@@ -340,7 +342,12 @@ fn scaffold_rejects_mixed_scaffold_and_existing_frontend_app_inputs() {
 #[test]
 fn scaffold_rejects_frontend_dirs_reserved_for_rust_roots() {
     let temp = tempdir().unwrap();
-    for dir in ["apps", "apps/demo-api", "apps/demo-api/ui", "apps/demo-admin-api"] {
+    for dir in [
+        "apps",
+        "apps/demo-api",
+        "apps/demo-api/ui",
+        "apps/demo-admin-api",
+    ] {
         let error = scaffold::InitScaffoldPlan::from_opts(
             &ScaffoldOpts {
                 preset: Some(ScaffoldPreset::RustReact),
@@ -426,32 +433,17 @@ fn go_scaffold_rejects_answer_frontends_under_backend_roots() {
 }
 
 #[test]
-fn scaffold_db_rejects_explicit_sqlx_disabled_answer() {
+fn scaffold_preserves_legacy_frontend_kind_role_inference() {
     let temp = tempdir().unwrap();
-    let error = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: Some(ScaffoldDb::Postgres),
-            frontends: Vec::new(),
-            frontend_list: Vec::new(),
-            metrics: None,
-            jobs: None,
-        },
-        &AnswerOpts {
-            sqlx_enabled: Some(false),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
+    let legacy_astro = toml::from_str::<FrontendApp>(
+        r#"name = "docs"
+dir = "docs-site"
+coverage_threshold = 0
+kind = "env-port"
+"#,
     )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Scaffold --db requires SQLx"));
-}
-
-#[test]
-fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
-    let temp = tempdir().unwrap();
+    .unwrap();
+    assert_eq!(legacy_astro.role, "astro");
     let plan = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
             preset: Some(ScaffoldPreset::RustReact),
@@ -462,7 +454,17 @@ fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
             jobs: None,
         },
         &AnswerOpts {
-            repo_name: Some("123-type".into()),
+            repo_name: Some("demo".into()),
+            frontend_apps: vec![
+                legacy_astro,
+                FrontendApp {
+                    name: "marketing".into(),
+                    dir: "marketing".into(),
+                    coverage_threshold: 0,
+                    kind: "vite".into(),
+                    role: "spa".into(),
+                },
+            ],
             ..AnswerOpts::default()
         },
         temp.path(),
@@ -470,78 +472,22 @@ fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
     .unwrap()
     .unwrap();
 
-    assert!(plan.summary().contains("repo name app-123-type"));
-    assert!(
-        plan.sanitized_repo_name_note()
-            .unwrap()
-            .contains("normalized to 'app-123-type'")
-    );
-    plan.write(temp.path(), false).unwrap();
+    let report = plan.write(temp.path(), false).unwrap();
+    assert_eq!(report["frontends"][0]["kind"], "env-port");
+    assert_eq!(report["frontends"][0]["role"], "astro");
+    assert_eq!(report["frontends"][1]["kind"], "vite");
+    assert_eq!(report["frontends"][1]["role"], "spa");
+    assert!(temp.path().join("docs-site/astro.config.mjs").exists());
+    assert!(temp.path().join("marketing/vite.config.ts").exists());
 
-    assert!(
-        temp.path()
-            .join("apps/app-123-type-api/src/main.rs")
-            .exists()
-    );
-    let main_rs =
-        fs::read_to_string(temp.path().join("apps/app-123-type-api/src/main.rs")).unwrap();
-    assert!(main_rs.contains("use ::app_123_type_http as app_http_crate;"));
-    assert!(main_rs.contains("runtime::serve(config, app_http_crate::assemble)"));
-    let core_lib =
-        fs::read_to_string(temp.path().join("crates/app-123-type-core/src/lib.rs")).unwrap();
-    assert!(core_lib.contains("#[allow(clippy::useless_concat)]\npub const APP_NAME"));
-    assert!(core_lib.contains("pub const APP_NAME: &str = concat!("));
-    assert!(core_lib.contains("\"app-123-type\","));
-
-    let mixed_case = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: None,
-            frontends: Vec::new(),
-            frontend_list: Vec::new(),
-            metrics: None,
-            jobs: None,
-        },
-        &AnswerOpts {
-            repo_name: Some("MyApp".into()),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-    assert!(
-        mixed_case
-            .sanitized_repo_name_note()
-            .unwrap()
-            .contains("normalized to 'myapp'")
-    );
+    let mut answers = AnswerOpts::default();
+    plan.apply_answer_defaults(&mut answers);
+    assert_eq!(answers.frontend_apps[0].name, "docs");
+    assert_eq!(answers.frontend_apps[0].dir, "docs-site");
+    assert_eq!(answers.frontend_apps[0].kind, "env-port");
+    assert_eq!(answers.frontend_apps[0].role, "astro");
+    assert_eq!(answers.frontend_apps[1].name, "marketing");
+    assert_eq!(answers.frontend_apps[1].dir, "marketing");
+    assert_eq!(answers.frontend_apps[1].kind, "vite");
+    assert_eq!(answers.frontend_apps[1].role, "spa");
 }
-
-#[test]
-fn go_scaffold_keeps_names_that_are_only_rust_keywords() {
-    let temp = tempdir().unwrap();
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::GoReact),
-            db: Some(ScaffoldDb::None),
-            ..ScaffoldOpts::default()
-        },
-        &AnswerOpts {
-            repo_name: Some("loop".into()),
-            go_module: Some("example.com/loop".into()),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-
-    assert!(plan.summary().contains("Go backend for loop"));
-    assert!(plan.sanitized_repo_name_note().is_none());
-    plan.write(temp.path(), false).unwrap();
-    let workspace = fs::read_to_string(temp.path().join("package.json")).unwrap();
-    assert!(workspace.contains(r#""name": "loop-workspace""#));
-}
-
-mod output_paths;

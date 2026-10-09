@@ -1,3 +1,4 @@
+use super::*;
 use crate::scaffold::InitScaffoldPlan;
 
 #[cfg(unix)]
@@ -52,10 +53,9 @@ fn rust_only_template_scaffold_collisions_fail_before_publication_and_rollback_n
                     "template-owned collision\n",
                 )
                 .unwrap();
-                let created_parent = temp.path().join(format!(
-                    "{}-{template_name}-{force}",
-                    preset.as_str()
-                ));
+                let created_parent = temp
+                    .path()
+                    .join(format!("{}-{template_name}-{force}", preset.as_str()));
                 let destination = created_parent.join("nested/ExampleProject");
 
                 let error = run_init(rust_only_init_opts(
@@ -140,12 +140,8 @@ fn rust_only_public_init_rejects_package_names_beyond_the_cargo_boundary() {
     for preset in [ScaffoldPreset::RustLibrary, ScaffoldPreset::RustCli] {
         let temp = tempdir().unwrap();
         let destination = temp.path().join("ExampleProject");
-        let mut opts = rust_only_init_opts(
-            destination.clone(),
-            preset,
-            Some(template.path()),
-            false,
-        );
+        let mut opts =
+            rust_only_init_opts(destination.clone(), preset, Some(template.path()), false);
         opts.answers.repo_name = Some("r".repeat(217));
 
         let error = run_init(opts).unwrap_err().to_string();
@@ -172,11 +168,19 @@ fn rust_only_late_failure_removes_new_destinations_and_restores_forced_preimages
         let created_parent = temp.path().join(format!("{}-new", preset.as_str()));
         let destination = created_parent.join("nested/ExampleProject");
         let error = with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
-            run_init(rust_only_init_opts(destination.clone(), preset, None, false))
+            run_init(rust_only_init_opts(
+                destination.clone(),
+                preset,
+                None,
+                false,
+            ))
         })
         .unwrap_err()
         .to_string();
-        assert!(error.contains("injected Rust-only rollback test"), "{error}");
+        assert!(
+            error.contains("injected Rust-only rollback test"),
+            "{error}"
+        );
         assert!(!destination.exists(), "late failure left generated output");
         assert!(
             !created_parent.exists(),
@@ -203,11 +207,7 @@ fn rust_only_late_failure_removes_new_destinations_and_restores_forced_preimages
             fs::Permissions::from_mode(0o600),
         )
         .unwrap();
-        fs::set_permissions(
-            existing.join(&source),
-            fs::Permissions::from_mode(0o640),
-        )
-        .unwrap();
+        fs::set_permissions(existing.join(&source), fs::Permissions::from_mode(0o640)).unwrap();
         let before = regular_file_tree_snapshot(&existing);
 
         let error = with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
@@ -215,7 +215,10 @@ fn rust_only_late_failure_removes_new_destinations_and_restores_forced_preimages
         })
         .unwrap_err()
         .to_string();
-        assert!(error.contains("injected Rust-only rollback test"), "{error}");
+        assert!(
+            error.contains("injected Rust-only rollback test"),
+            "{error}"
+        );
         assert_eq!(regular_file_tree_snapshot(&existing), before);
         assert_eq!(
             fs::metadata(existing.join("Cargo.toml"))
@@ -258,14 +261,9 @@ fn rust_only_scaffold_generations_fit_exactly_at_the_transaction_budget_boundary
         let admitted_repeats = MAX_EXISTING_INIT_RETAINED_GENERATIONS - planned.len();
 
         validate_retained_generation_budget(&planned, admitted_repeats, None, 0).unwrap();
-        let error = validate_retained_generation_budget(
-            &planned,
-            admitted_repeats + 1,
-            None,
-            0,
-        )
-        .unwrap_err()
-        .to_string();
+        let error = validate_retained_generation_budget(&planned, admitted_repeats + 1, None, 0)
+            .unwrap_err()
+            .to_string();
         assert!(
             error.contains(&format!(
                 "plans {} generated file generations",
