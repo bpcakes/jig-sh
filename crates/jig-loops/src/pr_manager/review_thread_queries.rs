@@ -1,4 +1,4 @@
-const fn add_review_thread_reply_mutation() -> &'static str {
+pub(super) const fn add_review_thread_reply_mutation() -> &'static str {
     r"
 mutation($threadId: ID!, $body: String!) {
   addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $threadId, body: $body}) {
@@ -11,7 +11,7 @@ mutation($threadId: ID!, $body: String!) {
 "
 }
 
-const fn resolve_review_thread_mutation() -> &'static str {
+pub(super) const fn resolve_review_thread_mutation() -> &'static str {
     r"
 mutation($threadId: ID!) {
   resolveReviewThread(input: {threadId: $threadId}) {
@@ -24,7 +24,7 @@ mutation($threadId: ID!) {
 "
 }
 
-const fn review_thread_reply_state_query() -> &'static str {
+pub(super) const fn review_thread_reply_state_query() -> &'static str {
     r"
 query ReviewThreadState($threadId: ID!, $commentsBefore: String) {
   node(id: $threadId) {
@@ -48,7 +48,7 @@ query ReviewThreadState($threadId: ID!, $commentsBefore: String) {
 "
 }
 
-const fn review_thread_resolution_state_query() -> &'static str {
+pub(super) const fn review_thread_resolution_state_query() -> &'static str {
     r"
 query ReviewThreadState($threadId: ID!) {
   node(id: $threadId) {
@@ -70,7 +70,7 @@ query ReviewThreadState($threadId: ID!) {
 "
 }
 
-const fn review_thread_witness_state_query() -> &'static str {
+pub(super) const fn review_thread_witness_state_query() -> &'static str {
     r"
 query ReviewThreadWitnessState($threadId: ID!, $commentsBefore: String) {
   node(id: $threadId) {

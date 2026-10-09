@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn scheduled_repo_task_blocks_after_leaving_the_shared_checkout_dirty() {
@@ -47,21 +49,26 @@ printf 'task complete\n' > "$out"
         "the main repository is not a linked worktree: {first:#}"
     );
 
-    let second = jig_loops::dispatch_due_at(
-        &ctx,
-        dispatch_at.saturating_add(60_000),
-    )
-    .unwrap();
+    let second = jig_loops::dispatch_due_at(&ctx, dispatch_at.saturating_add(60_000)).unwrap();
 
     assert_eq!(second["status"], "needs_attention", "{second:#}");
     assert_eq!(second["executed_count"], 0, "{second:#}");
-    assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
+    assert_eq!(
+        second["actions"][0]["reason"],
+        "occurrence_requires_attention"
+    );
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
     let task = &first["actions"][0]["tick"]["actions"][0];
     let diagnostic = &task["checkout"]["diagnostics"];
     assert_eq!(diagnostic["reasons"], json!(["application_changes"]));
-    assert_eq!(diagnostic["observed_paths"], json!(["scheduled-change.txt"]));
-    assert!(diagnostic.get("parent_receipt_id").is_none(), "{diagnostic:#}");
+    assert_eq!(
+        diagnostic["observed_paths"],
+        json!(["scheduled-change.txt"])
+    );
+    assert!(
+        diagnostic.get("parent_receipt_id").is_none(),
+        "{diagnostic:#}"
+    );
     assert_eq!(task["worker"]["status"], "passed");
     assert_eq!(task["output"], "task complete\n");
 }
@@ -201,9 +208,15 @@ esac
     assert!(Path::new(worktree).exists());
     let operator_note = Path::new(worktree).join("operator-note.txt");
     fs::write(&operator_note, "preserve until acknowledgement\n").unwrap();
-    assert_eq!(action["tick"]["actions"][0]["attention_kind"], "ambiguous_push");
+    assert_eq!(
+        action["tick"]["actions"][0]["attention_kind"],
+        "ambiguous_push"
+    );
     assert_eq!(action["tick"]["actions"][0]["worktree_retained"], true);
-    assert_eq!(action["tick"]["actions"][0]["push"]["status"], "unconfirmed");
+    assert_eq!(
+        action["tick"]["actions"][0]["push"]["status"],
+        "unconfirmed"
+    );
     assert!(
         action["occurrence"]["error"]
             .as_str()
@@ -211,15 +224,14 @@ esac
         "{first:#}"
     );
 
-    let second = jig_loops::dispatch_due_at(
-        &ctx,
-        dispatch_at.saturating_add(60_000),
-    )
-    .unwrap();
+    let second = jig_loops::dispatch_due_at(&ctx, dispatch_at.saturating_add(60_000)).unwrap();
 
     assert_eq!(second["status"], "needs_attention", "{second:#}");
     assert_eq!(second["executed_count"], 0, "{second:#}");
-    assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
+    assert_eq!(
+        second["actions"][0]["reason"],
+        "occurrence_requires_attention"
+    );
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
     assert_eq!(
         fs::read_to_string(operator_note).unwrap(),
@@ -278,10 +290,8 @@ while :; do sleep 1; done
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
-    let _worker_started = EnvVarGuard::set(
-        "JIG_TEST_BRANCH_WORKER_STARTED",
-        worker_started.as_os_str(),
-    );
+    let _worker_started =
+        EnvVarGuard::set("JIG_TEST_BRANCH_WORKER_STARTED", worker_started.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();
     let repo_root = temp.path().to_path_buf();
@@ -306,7 +316,10 @@ while :; do sleep 1; done
     assert_eq!(first["status"], "needs_attention", "{first:#}");
     assert_eq!(first["needs_attention_count"], 1, "{first:#}");
     assert_eq!(dispatch_action["occurrence"]["status"], "needs_attention");
-    assert_eq!(dispatch_action["tick"]["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        dispatch_action["tick"]["actions"].as_array().unwrap().len(),
+        1
+    );
     assert_eq!(
         worker_action["attention_kind"],
         "branch_lease_lost_after_start"
@@ -323,13 +336,12 @@ while :; do sleep 1; done
             .contains("partial scheduled repair")
     );
 
-    let second = jig_loops::dispatch_due_at(
-        &ctx,
-        dispatch_at.saturating_add(60_000),
-    )
-    .unwrap();
+    let second = jig_loops::dispatch_due_at(&ctx, dispatch_at.saturating_add(60_000)).unwrap();
     assert_eq!(second["executed_count"], 0, "{second:#}");
-    assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
+    assert_eq!(
+        second["actions"][0]["reason"],
+        "occurrence_requires_attention"
+    );
     assert!(
         fs::read_to_string(Path::new(worktree).join("src.rs"))
             .unwrap()
@@ -338,7 +350,7 @@ while :; do sleep 1; done
 }
 
 #[cfg(unix)]
-fn append_scheduled_pr_manager_workflow(root: &Path) {
+pub(super) fn append_scheduled_pr_manager_workflow(root: &Path) {
     let config = fs::read_to_string(root.join(".jig.toml")).unwrap();
     fs::write(
         root.join(".jig.toml"),
@@ -355,7 +367,7 @@ schedule = "* * * * *"
 }
 
 #[cfg(unix)]
-fn fixed_dispatch_time() -> u64 {
+pub(super) fn fixed_dispatch_time() -> u64 {
     u64::try_from(
         chrono::DateTime::parse_from_rfc3339("2026-08-30T12:34:30Z")
             .unwrap()

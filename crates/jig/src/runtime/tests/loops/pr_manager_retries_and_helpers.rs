@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn loop_tick_pr_manager_bounds_repeated_ineffective_repairs_until_healthy() {
@@ -480,8 +482,7 @@ exit 2
     let action = &run["ticks"][0]["actions"][0];
     assert_eq!(action["status"], "needs_attention", "{run:#}");
     assert_eq!(
-        action["attention_kind"],
-        "failed_repair_worktree_retained",
+        action["attention_kind"], "failed_repair_worktree_retained",
         "{run:#}"
     );
     assert_eq!(action["completed_status"], "failed", "{run:#}");
@@ -570,7 +571,7 @@ esac
 }
 
 #[cfg(unix)]
-fn append_github_pr_status_workflow(root: &Path) {
+pub(super) fn append_github_pr_status_workflow(root: &Path) {
     let config = fs::read_to_string(root.join(".jig.toml")).unwrap();
     fs::write(
         root.join(".jig.toml"),
@@ -586,12 +587,12 @@ kind = "github_pr_status"
 }
 
 #[cfg(unix)]
-fn append_pr_manager_workflow(root: &Path) {
+pub(super) fn append_pr_manager_workflow(root: &Path) {
     append_pr_manager_workflow_with_home(root, None);
 }
 
 #[cfg(unix)]
-fn append_pr_manager_workflow_with_home(root: &Path, codex_home: Option<&str>) {
+pub(super) fn append_pr_manager_workflow_with_home(root: &Path, codex_home: Option<&str>) {
     let config = fs::read_to_string(root.join(".jig.toml")).unwrap();
     let codex_home = codex_home
         .map(|home| format!("codex_home = {home:?}\n"))
@@ -611,7 +612,7 @@ kind = "pr_manager"
 }
 
 #[cfg(unix)]
-fn setup_origin_with_pr_branch(root: &Path) -> std::path::PathBuf {
+pub(super) fn setup_origin_with_pr_branch(root: &Path) -> std::path::PathBuf {
     let origin = root.join(".tmp-origin.git");
     git_ok(root, ["init"]);
     git_ok(root, ["checkout", "-b", "main"]);
@@ -633,7 +634,7 @@ fn setup_origin_with_pr_branch(root: &Path) -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
-fn setup_origin_with_conflicting_pr_branch(root: &Path) -> std::path::PathBuf {
+pub(super) fn setup_origin_with_conflicting_pr_branch(root: &Path) -> std::path::PathBuf {
     let origin = root.join(".tmp-conflict-origin.git");
     git_ok(root, ["init"]);
     git_ok(root, ["checkout", "-b", "main"]);
@@ -659,7 +660,7 @@ fn setup_origin_with_conflicting_pr_branch(root: &Path) -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
-fn git_ok<const N: usize>(cwd: &Path, args: [&str; N]) {
+pub(super) fn git_ok<const N: usize>(cwd: &Path, args: [&str; N]) {
     let output = Command::new("git")
         .current_dir(cwd)
         .args(args)
@@ -675,7 +676,7 @@ fn git_ok<const N: usize>(cwd: &Path, args: [&str; N]) {
 }
 
 #[cfg(unix)]
-fn git_stdout<const N: usize>(cwd: &Path, args: [&str; N]) -> String {
+pub(super) fn git_stdout<const N: usize>(cwd: &Path, args: [&str; N]) -> String {
     let output = Command::new("git")
         .current_dir(cwd)
         .args(args)
@@ -692,7 +693,7 @@ fn git_stdout<const N: usize>(cwd: &Path, args: [&str; N]) -> String {
 }
 
 #[cfg(unix)]
-fn fake_gh(root: &std::path::Path, body: &str) -> EnvVarGuard {
+pub(super) fn fake_gh(root: &std::path::Path, body: &str) -> EnvVarGuard {
     use std::os::unix::fs::PermissionsExt;
 
     let bin = root.join("fake-gh");

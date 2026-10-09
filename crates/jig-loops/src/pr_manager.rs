@@ -1,44 +1,31 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::path::Path;
 
-use anyhow::{Context, Result, anyhow, bail};
-use cap_std::{ambient_authority, fs::Dir};
-use jig_context::{CommandTimeout, RepoContext};
-use jig_execution::{
-    AdditionalCancellationControl, ExecutionCommandError, ExecutionControl, NoopExecutionObserver,
-    run_authoritative_execution_command,
-};
+use anyhow::{Result, anyhow};
+use jig_context::RepoContext;
+use jig_execution::{AdditionalCancellationControl, ExecutionControl};
 use jig_owned_process::ProcessOutputOverflowPolicy;
 use jig_state::now_ms;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
+use self::git::git_stdout;
+use self::outcome::{
+    PrPushError, PrRepairOutcome, PrRepairStepError, PrRepairStepResult, record_pr_repair_outcome,
+    with_branch_lease_result,
+};
+use self::pre_push_review::pre_push_review_authority_outcome;
+use self::push::{commit_and_push, start_base_merge, validation_tree_after_base_merge};
+use self::review_thread_witness::observed_review_thread_ids;
+use self::review_threads::post_review_thread_updates;
+pub(super) use self::tick::pr_manager_tick;
+use self::worker_output::{parse_pr_worker_output, pr_worker_output_schema};
+use self::worker_prompt::pr_worker_prompt;
+use self::worktree::{PrWorktreeCleanup, PreparedPrWorktree, prepare_worktree};
+use super::occurrence::{OccurrenceWorktreeReservation, encode_worktree_path};
+use super::state::{AttemptRecord, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore};
+use super::workflow::ResolvedWorkflow;
 use crate::worker_runner::{
     CodexExecFailure, CodexExecOutcome, CodexExecRequest, WorkerRunLabel, run_codex_exec,
 };
-use jig_git::metadata::{
-    MAX_GIT_POINTER_BYTES, parse_gitdir_pointer, path_from_git_bytes, read_nofollow_regular_file,
-    trim_ascii_line,
-};
-use jig_git::{git_program, scrub_known_repository_git_environment};
-
-use super::github;
-use super::managed_path::{ensure_managed_directory, inspect_managed_directory};
-use super::occurrence::{OccurrenceWorktreeReservation, encode_worktree_path};
-#[cfg(test)]
-use super::state::LOOP_CACHE_DIR;
-use super::state::{
-    AttemptRecord, AttemptStore, LOOP_RUNTIME_DIR, LeaseAcquire, LeaseGuard, LeaseStore,
-};
-use super::workflow::{
-    ResolvedWorkflow, UnexecutedReason, WorkflowCompletion, WorkflowExecution, WorkflowTick,
-};
-
-include!("pr_manager/tick.rs");
 
 enum PrCandidate {
     Actionable(PrWorkItem),
@@ -395,8 +382,6 @@ fn finalize_pr_repair_outcome<L: serde::Serialize>(
     Ok(with_branch_lease_result(action, release_error.as_ref()))
 }
 
-include!("pr_manager/outcome.rs");
-
 fn attempt_blocking_action(
     workflow: &ResolvedWorkflow,
     attempt_store: &mut AttemptStore,
@@ -710,22 +695,39 @@ fn post_commit_cancellation_error(repair_version: &str) -> String {
     )
 }
 
-include!("pr_manager/review_thread_queries.rs");
-include!("pr_manager/review_thread_witness.rs");
-include!("pr_manager/review_thread_reply.rs");
-include!("pr_manager/review_threads.rs");
-include!("pr_manager/pre_push_review.rs");
-include!("pr_manager/worker_output.rs");
-include!("pr_manager/worktree_identity.rs");
-include!("pr_manager/worktree_and_push.rs");
-include!("pr_manager/push_error_tests.rs");
-include!("pr_manager/review_round4_tests.rs");
-include!("pr_manager/review_round37_tests.rs");
-include!("pr_manager/cancellation_tests.rs");
-include!("pr_manager/review_thread_budget_tests.rs");
-include!("pr_manager/review_thread_boundary_tests.rs");
-include!("pr_manager/review_thread_capability_tests.rs");
-include!("pr_manager/preparation_tests.rs");
-include!("pr_manager/git.rs");
-include!("pr_manager/attempt_clear_tests.rs");
-include!("pr_manager/tests.rs");
+#[cfg(test)]
+mod attempt_clear_tests;
+#[cfg(test)]
+mod cancellation_tests;
+mod git;
+mod outcome;
+mod pre_push_review;
+#[cfg(all(test, unix))]
+mod preparation_tests;
+mod push;
+#[cfg(test)]
+mod push_error_tests;
+#[cfg(all(test, unix))]
+mod review_round37_tests;
+#[cfg(test)]
+mod review_round4_tests;
+#[cfg(all(test, unix))]
+mod review_thread_boundary_tests;
+mod review_thread_budget;
+#[cfg(test)]
+mod review_thread_budget_tests;
+#[cfg(test)]
+mod review_thread_capability_tests;
+mod review_thread_queries;
+mod review_thread_reply;
+#[cfg(all(test, unix))]
+mod review_thread_reply_tests;
+mod review_thread_witness;
+mod review_threads;
+#[cfg(test)]
+mod tests;
+mod tick;
+mod worker_output;
+mod worker_prompt;
+mod worktree;
+mod worktree_identity;

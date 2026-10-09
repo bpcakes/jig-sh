@@ -1,6 +1,8 @@
+use super::*;
+
 const LOCK_FILE_CREATE_RETRIES: usize = 8;
 
-fn open_or_create_lock_file(directory: &Dir, name: &OsStr, path: &Path) -> Result<File> {
+pub(super) fn open_or_create_lock_file(directory: &Dir, name: &OsStr, path: &Path) -> Result<File> {
     // Separate existing opens from exclusive creation so concurrent cold starts
     // converge on one inode without relying on a contended O_CREAT open.
     for _ in 0..LOCK_FILE_CREATE_RETRIES {
@@ -23,7 +25,11 @@ fn open_or_create_lock_file(directory: &Dir, name: &OsStr, path: &Path) -> Resul
     )
 }
 
-fn open_optional_regular_file(directory: &Dir, name: &OsStr, path: &Path) -> Result<Option<File>> {
+pub(super) fn open_optional_regular_file(
+    directory: &Dir,
+    name: &OsStr,
+    path: &Path,
+) -> Result<Option<File>> {
     match open_regular_file(directory, name, false, false, false, path) {
         Ok(file) => Ok(Some(file)),
         Err(error) if error_has_io_kind(&error, io::ErrorKind::NotFound) => Ok(None),
@@ -31,7 +37,7 @@ fn open_optional_regular_file(directory: &Dir, name: &OsStr, path: &Path) -> Res
     }
 }
 
-fn open_regular_file(
+pub(super) fn open_regular_file(
     directory: &Dir,
     name: &OsStr,
     writable: bool,

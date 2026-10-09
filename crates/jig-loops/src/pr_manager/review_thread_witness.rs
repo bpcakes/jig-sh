@@ -1,11 +1,21 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use anyhow::anyhow;
+use jig_execution::ExecutionCommandError;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use super::review_thread_budget::REVIEW_THREAD_COMMENT_PAGE_LIMIT;
+use super::review_threads::reconciled_resolve_response;
+
 #[derive(Clone, Eq, PartialEq)]
-struct ReviewThreadWitness {
-    comment_count: u64,
-    comment_ids: BTreeSet<String>,
-    resolution_generation: String,
-    reply_generation: String,
-    viewer_can_reply: bool,
-    viewer_can_resolve: bool,
+pub(super) struct ReviewThreadWitness {
+    pub(super) comment_count: u64,
+    pub(super) comment_ids: BTreeSet<String>,
+    pub(super) resolution_generation: String,
+    pub(super) reply_generation: String,
+    pub(super) viewer_can_reply: bool,
+    pub(super) viewer_can_resolve: bool,
 }
 
 impl Default for ReviewThreadWitness {
@@ -22,11 +32,11 @@ impl Default for ReviewThreadWitness {
     }
 }
 
-struct LiveReviewThreadState {
-    is_resolved: bool,
-    head_sha: String,
-    total_count: u64,
-    comments: Vec<Value>,
+pub(super) struct LiveReviewThreadState {
+    pub(super) is_resolved: bool,
+    pub(super) head_sha: String,
+    pub(super) total_count: u64,
+    pub(super) comments: Vec<Value>,
 }
 
 struct ReviewThreadWitnessPage {
@@ -38,12 +48,12 @@ struct ReviewThreadWitnessPage {
     start_cursor: Option<String>,
 }
 
-enum ReviewThreadResolution {
+pub(super) enum ReviewThreadResolution {
     Resolved(Value),
     Changed(&'static str),
 }
 
-fn review_thread_resolution_before_mutation(
+pub(super) fn review_thread_resolution_before_mutation(
     state: &LiveReviewThreadState,
     thread_id: &str,
     repair_version: &str,
@@ -59,7 +69,7 @@ fn review_thread_resolution_before_mutation(
     }
 }
 
-fn observed_review_thread_witnesses(
+pub(super) fn observed_review_thread_witnesses(
     pull_request: &Value,
 ) -> BTreeMap<String, ReviewThreadWitness> {
     actionable_review_threads(pull_request)
@@ -97,24 +107,21 @@ fn observed_review_thread_witnesses(
         .collect()
 }
 
-fn review_reply_generation(thread: &Value) -> String {
+pub(super) fn review_reply_generation(thread: &Value) -> String {
     review_comment_generation(
         thread
-        .pointer("/comments/nodes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|comment| {
-            comment
-                .pointer("/author/trusted")
-                .and_then(Value::as_bool)
-                == Some(true)
-                && !(comment.get("viewerDidAuthor").and_then(Value::as_bool) == Some(true)
-                    && comment
-                        .get("body")
-                        .and_then(Value::as_str)
-                        .is_some_and(|body| body.contains("<!-- jig-pr-manager:review-reply:")))
-        }),
+            .pointer("/comments/nodes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|comment| {
+                comment.pointer("/author/trusted").and_then(Value::as_bool) == Some(true)
+                    && !(comment.get("viewerDidAuthor").and_then(Value::as_bool) == Some(true)
+                        && comment
+                            .get("body")
+                            .and_then(Value::as_str)
+                            .is_some_and(|body| body.contains("<!-- jig-pr-manager:review-reply:")))
+            }),
         None,
     )
 }
@@ -124,10 +131,10 @@ fn review_comment_generation<'a>(
     excluded_comment_id: Option<&str>,
 ) -> String {
     let mut digest = Sha256::new();
-    for comment in comments.into_iter().filter(|comment| {
-        excluded_comment_id
-            != comment.get("id").and_then(Value::as_str)
-    }) {
+    for comment in comments
+        .into_iter()
+        .filter(|comment| excluded_comment_id != comment.get("id").and_then(Value::as_str))
+    {
         for field in ["id", "updatedAt", "body"] {
             let value = comment
                 .get(field)
@@ -141,7 +148,7 @@ fn review_comment_generation<'a>(
     format!("{:x}", digest.finalize())
 }
 
-fn review_thread_reply_marker(
+pub(super) fn review_thread_reply_marker(
     thread_id: &str,
     repair_version: &str,
     witness: &ReviewThreadWitness,
@@ -156,7 +163,7 @@ fn review_thread_reply_marker(
     )
 }
 
-fn legacy_review_thread_reply_marker(
+pub(super) fn legacy_review_thread_reply_marker(
     thread_id: &str,
     repair_version: &str,
     witness: &ReviewThreadWitness,
@@ -182,14 +189,14 @@ fn review_thread_reply_marker_digest<'a>(values: impl IntoIterator<Item = &'a [u
     format!("{:x}", digest.finalize())
 }
 
-fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {
+pub(super) fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {
     actionable_review_threads(pull_request)
         .filter_map(|thread| thread.get("id").and_then(Value::as_str))
         .map(str::to_string)
         .collect()
 }
 
-fn actionable_review_threads(pull_request: &Value) -> impl Iterator<Item = &Value> {
+pub(super) fn actionable_review_threads(pull_request: &Value) -> impl Iterator<Item = &Value> {
     pull_request
         .pointer("/review_threads/nodes")
         .and_then(Value::as_array)
@@ -207,12 +214,13 @@ fn actionable_review_threads(pull_request: &Value) -> impl Iterator<Item = &Valu
         })
 }
 
-fn review_thread_matches_witness(
+pub(super) fn review_thread_matches_witness(
     state: &LiveReviewThreadState,
     witness: &ReviewThreadWitness,
     reply_comment_id: Option<&str>,
 ) -> bool {
-    let added_reply = reply_comment_id.is_some_and(|reply_id| !witness.comment_ids.contains(reply_id));
+    let added_reply =
+        reply_comment_id.is_some_and(|reply_id| !witness.comment_ids.contains(reply_id));
     let expected_count = witness.comment_count.saturating_add(u64::from(added_reply));
     state.total_count == expected_count
         && review_comment_generation(
@@ -221,7 +229,7 @@ fn review_thread_matches_witness(
         ) == witness.resolution_generation
 }
 
-fn review_thread_mutation_change_reason(
+pub(super) fn review_thread_mutation_change_reason(
     state: &LiveReviewThreadState,
     witness: &ReviewThreadWitness,
     reply_comment_id: Option<&str>,
@@ -229,8 +237,7 @@ fn review_thread_mutation_change_reason(
 ) -> Option<&'static str> {
     if state.head_sha != repair_version {
         Some("pr_head_changed")
-    } else if state.is_resolved
-        || !review_thread_matches_witness(state, witness, reply_comment_id)
+    } else if state.is_resolved || !review_thread_matches_witness(state, witness, reply_comment_id)
     {
         Some("review_thread_changed")
     } else {
@@ -238,7 +245,7 @@ fn review_thread_mutation_change_reason(
     }
 }
 
-fn fetch_review_thread_witness_state(
+pub(super) fn fetch_review_thread_witness_state(
     thread_id: &str,
     mut fetch: impl FnMut(Option<&str>) -> std::result::Result<Value, ExecutionCommandError>,
 ) -> std::result::Result<LiveReviewThreadState, ExecutionCommandError> {
@@ -253,7 +260,9 @@ fn fetch_review_thread_witness_state(
         let page_total = page.total_count;
         let page_resolved = page.is_resolved;
         let page_head_sha = page.head_sha.clone();
-        if total_count.replace(page_total).is_some_and(|count| count != page_total)
+        if total_count
+            .replace(page_total)
+            .is_some_and(|count| count != page_total)
             || is_resolved
                 .replace(page_resolved)
                 .is_some_and(|resolved| resolved != page_resolved)
@@ -316,9 +325,7 @@ fn validate_review_thread_witness_page(
                 .pointer("/data/node/pullRequest/headRefOid")?
                 .as_str()?
                 .to_string(),
-            total_count: value
-                .pointer("/data/node/comments/totalCount")?
-                .as_u64()?,
+            total_count: value.pointer("/data/node/comments/totalCount")?.as_u64()?,
             has_previous_page: value
                 .pointer("/data/node/comments/pageInfo/hasPreviousPage")?
                 .as_bool()?,

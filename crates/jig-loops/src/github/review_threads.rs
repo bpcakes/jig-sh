@@ -1,6 +1,21 @@
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+
+use anyhow::{Result, anyhow};
+use jig_context::RepoContext;
+use jig_execution::{ExecutionCommandError, ExecutionControl};
+use serde_json::{Value, json};
+
+use super::trust::{RepositoryPermissionCache, untrusted_author_snapshot};
+use super::{
+    GITHUB_SNAPSHOT_EVIDENCE_BYTE_LIMIT, GithubSnapshotClient, REVIEW_THREAD_PAGE_LIMIT,
+    RepositorySnapshot, repository_snapshot, require_serialized_snapshot_budget,
+    review_thread_summary,
+};
+
 const REVIEW_THREAD_COMMENT_PAGE_LIMIT: usize = 10;
 
-pub(super) fn github_pr_review_threads_snapshot(
+pub(crate) fn github_pr_review_threads_snapshot(
     ctx: &RepoContext,
     pr_number: u64,
     observer: &mut dyn ExecutionControl,
@@ -18,7 +33,7 @@ pub(super) fn github_pr_review_threads_snapshot(
     Ok(snapshot)
 }
 
-fn review_threads_snapshot(
+pub(super) fn review_threads_snapshot(
     client: &mut GithubSnapshotClient<'_>,
     repository: &RepositorySnapshot,
     pr_number: u64,
@@ -54,7 +69,10 @@ fn review_threads_snapshot(
             .get("totalCount")
             .and_then(Value::as_u64)
             .ok_or_else(|| anyhow!("GitHub GraphQL reviewThreads.totalCount was missing"))?;
-        if total_count.replace(observed_total).is_some_and(|total| total != observed_total) {
+        if total_count
+            .replace(observed_total)
+            .is_some_and(|total| total != observed_total)
+        {
             truncated = true;
             break;
         }
@@ -104,8 +122,8 @@ fn review_threads_snapshot(
         cursor = next_cursor;
     }
 
-    truncated |= has_next_page
-        || total_count.is_some_and(|total_count| total_count != nodes.len() as u64);
+    truncated |=
+        has_next_page || total_count.is_some_and(|total_count| total_count != nodes.len() as u64);
 
     Ok(json!({
         "summary": review_thread_summary(&nodes),
@@ -126,13 +144,10 @@ fn review_thread_page(
     pr_number: u64,
     cursor: Option<&str>,
 ) -> Result<Value> {
-    client.json(
-        review_thread_page_args(repository, pr_number, cursor),
-        &[0],
-    )
+    client.json(review_thread_page_args(repository, pr_number, cursor), &[0])
 }
 
-fn review_thread_page_args(
+pub(super) fn review_thread_page_args(
     repository: &RepositorySnapshot,
     pr_number: u64,
     cursor: Option<&str>,
@@ -297,9 +312,8 @@ fn review_thread_comments(
         .iter()
         .filter_map(|comment| comment.get("id").and_then(Value::as_str))
         .collect::<std::collections::BTreeSet<_>>();
-    truncated |= has_previous_page
-        || total_count != nodes.len() as u64
-        || comment_ids.len() != nodes.len();
+    truncated |=
+        has_previous_page || total_count != nodes.len() as u64 || comment_ids.len() != nodes.len();
     Ok(ReviewThreadComments {
         nodes,
         total_count,

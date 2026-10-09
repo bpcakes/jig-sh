@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn scheduled_worker_observes_its_published_running_claim_before_start() {
@@ -159,9 +161,8 @@ printf 'task complete\n'
     assert!(
         output["actions"][0]["tick"]["release_warning"]
             .as_str()
-            .is_some_and(|error| error.contains(
-                "Loop state migration marker exists without protected state"
-            )),
+            .is_some_and(|error| error
+                .contains("Loop state migration marker exists without protected state")),
         "{output:#}"
     );
 }
@@ -181,14 +182,12 @@ fn scheduled_codex_start_failure_keeps_worker_evidence_without_consuming_occurre
 
     assert_eq!(output["ok"], false, "{output:#}");
     assert_eq!(
-        output["actions"][0]["reason"],
-        "pre_execution_error",
+        output["actions"][0]["reason"], "pre_execution_error",
         "{output:#}"
     );
     assert_eq!(output["actions"][0]["retryable"], true, "{output:#}");
     assert_eq!(
-        output["actions"][0]["occurrence_state_persisted"],
-        false,
+        output["actions"][0]["occurrence_state_persisted"], false,
         "{output:#}"
     );
     let worker = &output["actions"][0]["tick"]["actions"][0]["worker"];
@@ -231,8 +230,7 @@ printf 'task complete\n'
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
     let attempts_path = temp.path().join(".git/jig/loop/attempts.json");
-    let _attempts_path =
-        EnvVarGuard::set("JIG_TEST_ATTEMPTS_PATH", attempts_path.as_os_str());
+    let _attempts_path = EnvVarGuard::set("JIG_TEST_ATTEMPTS_PATH", attempts_path.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = dispatch_loop(&ctx);
@@ -380,11 +378,14 @@ fn missing_durable_ledger_behind_migration_marker_blocks_worker_launch() {
         error.contains("migration marker exists without durable state"),
         "{error}"
     );
-    assert!(!marker.exists(), "worker must not start without a durable claim");
+    assert!(
+        !marker.exists(),
+        "worker must not start without a durable claim"
+    );
 }
 
 #[cfg(unix)]
-fn configure_scheduled_task(
+pub(super) fn configure_scheduled_task(
     temp: &tempfile::TempDir,
     id: &str,
     extra_config: &str,

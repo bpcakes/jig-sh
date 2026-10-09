@@ -724,7 +724,7 @@ fn parses_agent_bootstrap_marketplace() {
     }
 }
 
-include!("tests/proxy_and_vault.rs");
+mod proxy_and_vault;
 
 mod info;
 mod launcher_only;

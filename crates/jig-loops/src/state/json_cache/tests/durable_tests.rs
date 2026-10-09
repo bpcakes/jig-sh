@@ -1,3 +1,6 @@
+use super::*;
+use crate::state::json_cache::durable::durable_json_commit_may_have_landed;
+
 #[test]
 fn durable_publish_classifies_a_post_replace_sync_failure_as_ambiguous() {
     let temp = tempdir().unwrap();

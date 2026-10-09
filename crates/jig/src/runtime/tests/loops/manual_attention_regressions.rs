@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn retained_manual_task_is_durable_and_blocks_manual_and_scheduled_reentry() {
@@ -53,12 +55,14 @@ printf 'task complete\n' > "$out"
         })),
     )
     .unwrap();
-    assert!(status["scheduled_occurrences"]
-        .as_array()
-        .is_some_and(|records| records.iter().any(|record| {
-            record["occurrence_id"] == occurrence["occurrence_id"]
-                && record["worktree"] == retained
-        })));
+    assert!(
+        status["scheduled_occurrences"]
+            .as_array()
+            .is_some_and(|records| records.iter().any(|record| {
+                record["occurrence_id"] == occurrence["occurrence_id"]
+                    && record["worktree"] == retained
+            }))
+    );
 
     let second = crate::runtime::dispatch(
         &ctx,
@@ -73,16 +77,14 @@ printf 'task complete\n' > "$out"
     assert_eq!(second["status"], "needs_attention", "{second:#}");
     assert_eq!(second["ok"], false, "{second:#}");
     assert!(second["occurrence_id"].is_null(), "{second:#}");
-    assert_eq!(
-        second["actions"][0]["reason"],
-        "manual_occurrence_blocked"
+    assert_eq!(second["actions"][0]["reason"], "manual_occurrence_blocked");
+    assert!(
+        second["actions"][0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Retained worktree"))
     );
-    assert!(second["actions"][0]["error"]
-        .as_str()
-        .is_some_and(|error| error.contains("Retained worktree")));
 
-    let scheduled =
-        jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+    let scheduled = jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
     assert_eq!(scheduled["executed_count"], 0, "{scheduled:#}");
     assert_eq!(
         scheduled["actions"][0]["reason"],
@@ -129,9 +131,11 @@ fn manual_tick_evidence_failure_preserves_attention_and_blocks_reentry() {
     assert_eq!(blocked["actions"][0]["reason"], "manual_occurrence_blocked");
     let occurrence = &blocked["actions"][0]["occurrence"];
     assert_eq!(occurrence["status"], "needs_attention");
-    assert!(occurrence["error"]
-        .as_str()
-        .is_some_and(|error| error.contains("Failed to record loop occurrence evidence")));
+    assert!(
+        occurrence["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Failed to record loop occurrence evidence"))
+    );
 }
 
 #[cfg(unix)]
@@ -189,9 +193,11 @@ printf 'task complete\n' > "$out"
     let occurrence = &records[0];
     assert_eq!(occurrence["status"], "needs_attention", "{status:#}");
     assert_eq!(occurrence["worker_invoked"], true);
-    assert!(occurrence["error"].as_str().is_some_and(|error| {
-        error.contains("Failed to record loop occurrence evidence")
-    }));
+    assert!(
+        occurrence["error"]
+            .as_str()
+            .is_some_and(|error| { error.contains("Failed to record loop occurrence evidence") })
+    );
     assert_eq!(
         status["needs_attention"]["scheduled_occurrences"]
             .as_array()
@@ -206,7 +212,10 @@ printf 'task complete\n' > "$out"
     // worktree removal; neither operation acknowledges the evidence failure.
     fs::remove_file(&evidence_path).unwrap();
     git_ok(Path::new(retained), ["add", "manual-change.txt"]);
-    git_ok(Path::new(retained), ["commit", "-m", "preserve fixture result"]);
+    git_ok(
+        Path::new(retained),
+        ["commit", "-m", "preserve fixture result"],
+    );
     git_ok(temp.path(), ["worktree", "remove", retained]);
     assert!(!Path::new(retained).exists());
     let blocked = crate::runtime::dispatch(&ctx, tick()).unwrap();
@@ -216,10 +225,12 @@ printf 'task complete\n' > "$out"
         blocked["actions"][0]["occurrence"]["occurrence_id"],
         occurrence["occurrence_id"]
     );
-    assert!(blocked["actions"][0]["error"]
-        .as_str()
-        .unwrap()
-        .contains("requires acknowledgement"));
+    assert!(
+        blocked["actions"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("requires acknowledgement")
+    );
     let scheduled = jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
     assert_eq!(scheduled["executed_count"], 0, "{scheduled:#}");
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
@@ -268,8 +279,7 @@ printf 'task complete\n' > "$out"
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _run_log = EnvVarGuard::set("JIG_TEST_RUN_LOG", run_log.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let dispatch =
-        jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+    let dispatch = jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
     assert_eq!(dispatch["needs_attention_count"], 1, "{dispatch:#}");
 
     let blocked = crate::runtime::dispatch(
@@ -285,10 +295,7 @@ printf 'task complete\n' > "$out"
     assert_eq!(blocked["status"], "needs_attention", "{blocked:#}");
     assert_eq!(blocked["ok"], false, "{blocked:#}");
     assert!(blocked["occurrence_id"].is_null(), "{blocked:#}");
-    assert_eq!(
-        blocked["actions"][0]["reason"],
-        "manual_occurrence_blocked"
-    );
+    assert_eq!(blocked["actions"][0]["reason"], "manual_occurrence_blocked");
     assert_eq!(fs::read_to_string(&run_log).unwrap(), "run\n");
 
     let tick = crate::runtime::dispatch(

@@ -1,12 +1,34 @@
-struct ReviewThreadPostResult {
-    posts: Value,
-    failed: bool,
-    cancelled: bool,
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::time::{Duration, Instant};
+
+use anyhow::anyhow;
+use jig_context::RepoContext;
+use jig_execution::{ExecutionCommandError, ExecutionControl, NoopExecutionObserver};
+use serde_json::{Value, json};
+
+use super::review_thread_budget::{
+    MUTATION_RECONCILIATION_TIMEOUT, REVIEW_THREAD_COMMENT_PAGE_LIMIT, ReviewThreadUpdateBudget,
+};
+use super::review_thread_queries::{
+    resolve_review_thread_mutation, review_thread_reply_state_query,
+    review_thread_resolution_state_query, review_thread_witness_state_query,
+};
+use super::review_thread_reply::{ReviewThreadReply, post_review_thread_reply};
+use super::review_thread_witness::{
+    LiveReviewThreadState, ReviewThreadResolution, ReviewThreadWitness,
+    fetch_review_thread_witness_state, observed_review_thread_witnesses,
+    review_thread_mutation_change_reason, review_thread_resolution_before_mutation,
+};
+use crate::github;
+
+pub(super) struct ReviewThreadPostResult {
+    pub(super) posts: Value,
+    pub(super) failed: bool,
+    pub(super) cancelled: bool,
 }
 
-include!("review_thread_budget.rs");
-
-fn post_review_thread_updates(
+pub(super) fn post_review_thread_updates(
     ctx: &RepoContext,
     pull_request: &Value,
     worker_output: &Value,
@@ -27,8 +49,7 @@ fn post_review_thread_updates(
         .len();
     let mut posts = Vec::new();
     let mut handled_thread_ids = BTreeSet::new();
-    let mut budget =
-        ReviewThreadUpdateBudget::new(ctx.command_timeout(), actionable_intent_count);
+    let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout(), actionable_intent_count);
     let mut failed = false;
     let mut cancelled = false;
     for (index, reply) in replies.iter().enumerate() {
@@ -299,7 +320,7 @@ fn review_thread_id(reply: &Value) -> &str {
         .trim()
 }
 
-fn resolve_review_thread(
+pub(super) fn resolve_review_thread(
     ctx: &RepoContext,
     thread_id: &str,
     witness: &ReviewThreadWitness,
@@ -338,7 +359,7 @@ fn resolve_review_thread(
     reconcile_resolve_mutation(ctx, thread_id, result, budget).map(ReviewThreadResolution::Resolved)
 }
 
-fn review_thread_reply_comment(
+pub(super) fn review_thread_reply_comment(
     ctx: &RepoContext,
     thread_id: &str,
     markers: &[&str],
@@ -385,7 +406,10 @@ fn review_thread_reply_comment_for_reconciliation(
     })
 }
 
-fn review_thread_reply_state_args(thread_id: &str, cursor: Option<&str>) -> Vec<OsString> {
+pub(super) fn review_thread_reply_state_args(
+    thread_id: &str,
+    cursor: Option<&str>,
+) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("api"),
         OsString::from("graphql"),
@@ -401,7 +425,7 @@ fn review_thread_reply_state_args(thread_id: &str, cursor: Option<&str>) -> Vec<
     args
 }
 
-fn review_thread_resolution_state(
+pub(super) fn review_thread_resolution_state(
     ctx: &RepoContext,
     thread_id: &str,
     observer: &mut dyn ExecutionControl,
@@ -445,7 +469,7 @@ fn review_thread_resolution_state_for_reconciliation(
     .and_then(|value| validate_review_thread_resolution_state(value, thread_id))
 }
 
-fn remaining_reconciliation_timeout(
+pub(super) fn remaining_reconciliation_timeout(
     deadline: Instant,
 ) -> std::result::Result<Duration, ExecutionCommandError> {
     remaining_operation_timeout(
@@ -455,7 +479,7 @@ fn remaining_reconciliation_timeout(
     )
 }
 
-fn remaining_operation_timeout(
+pub(super) fn remaining_operation_timeout(
     deadline: Instant,
     total_timeout: Duration,
     operation: &str,
@@ -475,10 +499,7 @@ fn review_thread_resolution_state_args(thread_id: &str) -> Vec<OsString> {
         OsString::from("api"),
         OsString::from("graphql"),
         OsString::from("-f"),
-        OsString::from(format!(
-            "query={}",
-            review_thread_resolution_state_query()
-        )),
+        OsString::from(format!("query={}", review_thread_resolution_state_query())),
         OsString::from("-f"),
         OsString::from(format!("threadId={thread_id}")),
     ]
@@ -500,7 +521,7 @@ fn review_thread_witness_state_args(thread_id: &str, cursor: Option<&str>) -> Ve
     args
 }
 
-fn fetch_review_thread_reply_comment_with_markers(
+pub(super) fn fetch_review_thread_reply_comment_with_markers(
     thread_id: &str,
     markers: &[&str],
     mut fetch: impl FnMut(Option<&str>) -> std::result::Result<Value, ExecutionCommandError>,
@@ -539,7 +560,7 @@ fn review_thread_comments_have_previous_page(state: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn validate_review_thread_reply_state(
+pub(super) fn validate_review_thread_reply_state(
     value: Value,
     thread_id: &str,
 ) -> std::result::Result<Value, ExecutionCommandError> {
@@ -550,10 +571,7 @@ fn validate_review_thread_reply_state(
     let has_previous_page = value
         .pointer("/data/node/comments/pageInfo/hasPreviousPage")
         .and_then(Value::as_bool);
-    if observed_id != Some(thread_id)
-        || comments.is_none()
-        || has_previous_page.is_none()
-    {
+    if observed_id != Some(thread_id) || comments.is_none() || has_previous_page.is_none() {
         return Err(ExecutionCommandError::failed(anyhow!(
             "GitHub review thread state query returned an invalid payload for {thread_id}"
         )));
@@ -561,7 +579,7 @@ fn validate_review_thread_reply_state(
     Ok(value)
 }
 
-fn validate_review_thread_resolution_state(
+pub(super) fn validate_review_thread_resolution_state(
     value: Value,
     thread_id: &str,
 ) -> std::result::Result<Value, ExecutionCommandError> {
@@ -592,7 +610,7 @@ fn validate_review_thread_resolution_state(
     Ok(value)
 }
 
-fn validate_reply_mutation_response(
+pub(super) fn validate_reply_mutation_response(
     value: Value,
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let id = value
@@ -611,7 +629,7 @@ fn validate_reply_mutation_response(
     Ok(value)
 }
 
-fn validate_resolve_mutation_response(
+pub(super) fn validate_resolve_mutation_response(
     value: Value,
 ) -> std::result::Result<Value, ExecutionCommandError> {
     if value
@@ -626,7 +644,7 @@ fn validate_resolve_mutation_response(
     Ok(value)
 }
 
-fn reconcile_reply_mutation(
+pub(super) fn reconcile_reply_mutation(
     ctx: &RepoContext,
     thread_id: &str,
     marker: &str,
@@ -639,19 +657,15 @@ fn reconcile_reply_mutation(
         Err(error) => error,
     };
     budget.begin_reconciliation();
-    if let Ok(Some(comment)) = review_thread_reply_comment_for_reconciliation(
-        ctx,
-        thread_id,
-        marker,
-        budget,
-    )
+    if let Ok(Some(comment)) =
+        review_thread_reply_comment_for_reconciliation(ctx, thread_id, marker, budget)
     {
         return Ok(reconciled_reply_response(&comment));
     }
     Err(error)
 }
 
-fn reconcile_resolve_mutation(
+pub(super) fn reconcile_resolve_mutation(
     ctx: &RepoContext,
     thread_id: &str,
     result: std::result::Result<Value, ExecutionCommandError>,
@@ -663,8 +677,7 @@ fn reconcile_resolve_mutation(
         Err(error) => error,
     };
     budget.begin_reconciliation();
-    if let Ok(state) =
-        review_thread_resolution_state_for_reconciliation(ctx, thread_id, budget)
+    if let Ok(state) = review_thread_resolution_state_for_reconciliation(ctx, thread_id, budget)
         && state
             .pointer("/data/node/isResolved")
             .and_then(Value::as_bool)
@@ -675,7 +688,7 @@ fn reconcile_resolve_mutation(
     Err(error)
 }
 
-fn review_thread_comment_with_markers<'a>(
+pub(super) fn review_thread_comment_with_markers<'a>(
     state: &'a Value,
     markers: &[&str],
 ) -> Option<&'a Value> {
@@ -684,9 +697,10 @@ fn review_thread_comment_with_markers<'a>(
         .as_array()?
         .iter()
         .find(|comment| {
-            let has_marker = comment.get("body").and_then(Value::as_str).is_some_and(|body| {
-                markers.iter().any(|marker| body.contains(marker))
-            });
+            let has_marker = comment
+                .get("body")
+                .and_then(Value::as_str)
+                .is_some_and(|body| markers.iter().any(|marker| body.contains(marker)));
             let has_id = comment
                 .get("id")
                 .and_then(Value::as_str)
@@ -700,7 +714,7 @@ fn review_thread_comment_with_markers<'a>(
         })
 }
 
-fn reconciled_reply_response(comment: &Value) -> Value {
+pub(super) fn reconciled_reply_response(comment: &Value) -> Value {
     json!({
         "data": {
             "addPullRequestReviewThreadReply": {
@@ -714,7 +728,7 @@ fn reconciled_reply_response(comment: &Value) -> Value {
     })
 }
 
-fn reconciled_resolve_response(thread_id: &str) -> Value {
+pub(super) fn reconciled_resolve_response(thread_id: &str) -> Value {
     json!({
         "data": {
             "resolveReviewThread": {

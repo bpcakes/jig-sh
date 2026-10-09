@@ -15,6 +15,9 @@ use cap_std::{
 };
 use fs4::fs_std::FileExt;
 
+use self::durable::publish_durable_json;
+use self::lock_file::{open_optional_regular_file, open_or_create_lock_file, open_regular_file};
+use self::temp_names::{temporary_file_name, temporary_file_prefix};
 use super::bounded_json::{encode_bounded_json, read_bounded_json};
 use super::*;
 
@@ -27,9 +30,9 @@ mod lock_creation_tests;
 
 const CACHE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-include!("json_cache/temp_names.rs");
-include!("json_cache/durable.rs");
-include!("json_cache/lock_file.rs");
+mod durable;
+mod lock_file;
+mod temp_names;
 
 #[cfg(test)]
 pub(super) fn with_json_cache_lock<T, S>(
@@ -690,5 +693,5 @@ mod tests {
         }));
     }
 
-    include!("json_cache/durable_tests.rs");
+    mod durable_tests;
 }

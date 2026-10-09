@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -12,6 +11,11 @@ use jig_execution::{
     ExecutionCommandError, ExecutionControl, run_authoritative_execution_command_for_duration,
 };
 use jig_git::scrub_known_repository_git_environment;
+
+pub(super) use self::review_threads::github_pr_review_threads_snapshot;
+
+use self::review_threads::review_threads_snapshot;
+use self::trust::RepositoryPermissionCache;
 
 use super::workflow::WorkflowTick;
 
@@ -31,8 +35,8 @@ const GITHUB_SNAPSHOT_EVIDENCE_BYTE_LIMIT: usize = 16 * 1024 * 1024;
 const GITHUB_SNAPSHOT_REVIEW_ITEM_LIMIT: usize = 10_000;
 const GITHUB_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-include!("github/trust.rs");
-include!("github/review_threads.rs");
+mod review_threads;
+mod trust;
 
 pub(super) fn github_pr_status_tick(
     ctx: &RepoContext,
@@ -667,4 +671,4 @@ fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
 }
 
 #[cfg(test)]
-include!("github/tests.rs");
+mod tests;

@@ -1,3 +1,5 @@
+use super::*;
+
 /// The SQLx answer that resolution will apply, known before rendering.
 #[derive(Debug, Default)]
 pub struct EffectiveSqlx {
@@ -19,7 +21,7 @@ impl AnswerInput {
         Self::from_explicit_file(path)
     }
 
-    pub(super) fn from_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
+    pub(crate) fn from_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
         let Some(path) = opts.answers_file.as_deref() else {
             return Ok(Self {
                 raw: RawAnswers::default(),
@@ -37,11 +39,11 @@ impl AnswerInput {
         Self::from_explicit_file(&path)
     }
 
-    fn from_init_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
+    pub(super) fn from_init_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
         Self::from_init_opts_at_with_reader(opts, path_base, |path| fs::read_to_string(path))
     }
 
-    fn from_init_opts_at_with_reader(
+    pub(super) fn from_init_opts_at_with_reader(
         opts: &AnswerOpts,
         path_base: &Path,
         read: impl FnOnce(&Path) -> std::io::Result<String>,
@@ -65,7 +67,7 @@ impl AnswerInput {
         Ok(input)
     }
 
-    pub(super) fn from_file(path: &Path) -> Result<Self> {
+    pub(crate) fn from_file(path: &Path) -> Result<Self> {
         Self::from_file_with_reader(path, |path| fs::read_to_string(path))
     }
 
@@ -87,11 +89,9 @@ impl AnswerInput {
         raw.normalize_app_dirs()?;
         raw.normalize_legacy_frontend_metadata(&table);
         let mut authored_repository_commands = authored_repository_commands_from_table(&table);
-        let migration_notes = normalize_generated_clippy_defaults(
-            &mut raw,
-            &mut authored_repository_commands,
-        )
-        .warnings();
+        let migration_notes =
+            normalize_generated_clippy_defaults(&mut raw, &mut authored_repository_commands)
+                .warnings();
         let preserve_repository_model =
             loaded_repository_model_is_custom(&raw, authored_repository_commands.as_ref());
         Ok(Self {
@@ -126,7 +126,7 @@ impl AnswerInput {
         Ok(input)
     }
 
-    fn validate_explicit_file_semantics(&self) -> Result<()> {
+    pub(super) fn validate_explicit_file_semantics(&self) -> Result<()> {
         if self
             .raw
             .repository
@@ -141,7 +141,7 @@ impl AnswerInput {
         Ok(())
     }
 
-    fn validate_rust_only(
+    pub(super) fn validate_rust_only(
         &self,
         preset: ScaffoldPreset,
         scaffold: &ScaffoldOpts,
@@ -274,11 +274,11 @@ impl AnswerInput {
         Ok(())
     }
 
-    pub(super) const fn shape(&self) -> &AnswerInputShape {
+    pub(crate) const fn shape(&self) -> &AnswerInputShape {
         &self.shape
     }
 
-    pub(super) fn preferred_rendered_command_keys(&self, cli: &AnswerOpts) -> BTreeSet<String> {
+    pub(crate) fn preferred_rendered_command_keys(&self, cli: &AnswerOpts) -> BTreeSet<String> {
         let mut keys = BTreeSet::new();
         for (answer_key, command_key, cli_supplied) in [
             (
@@ -351,11 +351,7 @@ impl AnswerInput {
 
     /// Applies resolution's SQLx precedence (CLI and inferred answers over the
     /// file, then `--defaults`, then enabled) so reviews match generated checks.
-    pub fn effective_sqlx(
-        &self,
-        cli: &AnswerOpts,
-        use_defaults: bool,
-    ) -> EffectiveSqlx {
+    pub fn effective_sqlx(&self, cli: &AnswerOpts, use_defaults: bool) -> EffectiveSqlx {
         let mut raw = self.raw.clone();
         raw.merge_opts(cli);
         if use_defaults {
@@ -386,4 +382,15 @@ impl AnswerInput {
         answers.scaffold_go_component_roots = scaffold_go_component_roots;
         Ok(answers)
     }
+}
+
+fn nonempty_answer_string(value: &str) -> bool {
+    !value.trim().is_empty()
+}
+
+fn reject_rust_only_input(preset: ScaffoldPreset, input: &str) -> Result<()> {
+    bail!(
+        "--preset {} cannot be combined with incompatible input `{input}`; remove that input or select a matching preset",
+        preset.as_str()
+    )
 }

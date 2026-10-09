@@ -698,4 +698,4 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     assert_eq!(rerendered.default_check_profile.as_str(), "ci");
 }
 
-include!("tests/authored_workflows.rs");
+mod authored_workflows;

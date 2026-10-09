@@ -1,4 +1,15 @@
-fn record_pr_repair_outcome<L: serde::Serialize>(
+use std::path::{Path, PathBuf};
+
+use anyhow::{Result, anyhow};
+use serde_json::{Value, json};
+
+use super::worktree::{PrWorktreeCleanup, PreparedPrWorktree};
+use super::{PrRepairContext, PrWorkItem, pr_worktree_value};
+use crate::state::AttemptRecord;
+use crate::state::AttemptStore;
+use crate::workflow::UnexecutedReason;
+
+pub(super) fn record_pr_repair_outcome<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     attempt_store: &mut AttemptStore,
     outcome: PrRepairOutcome,
@@ -64,22 +75,25 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                     cleanup,
                 ));
             }
-            let action = with_branch_lease_result(json!({
-                "kind": "pr_manager_worker",
-                "status": "needs_attention",
-                "attention_kind": "cancelled_after_start",
-                "pr_number": repair.item.pr_number,
-                "item_key": repair.item.item_key,
-                "title": repair.item.title,
-                "branch": repair.item.head_ref,
-                "head_sha": repair.item.head_sha,
-                "reasons": repair.item.reasons,
-                "worktree": pr_worktree_value(worktree.path()),
-                "lease": repair.lease,
-                "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
-                "worker": worker,
-                "error": error,
-            }), cleanup_authority_error);
+            let action = with_branch_lease_result(
+                json!({
+                    "kind": "pr_manager_worker",
+                    "status": "needs_attention",
+                    "attention_kind": "cancelled_after_start",
+                    "pr_number": repair.item.pr_number,
+                    "item_key": repair.item.item_key,
+                    "title": repair.item.title,
+                    "branch": repair.item.head_ref,
+                    "head_sha": repair.item.head_sha,
+                    "reasons": repair.item.reasons,
+                    "worktree": pr_worktree_value(worktree.path()),
+                    "lease": repair.lease,
+                    "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
+                    "worker": worker,
+                    "error": error,
+                }),
+                cleanup_authority_error,
+            );
             Ok(finalize_pr_worktree(
                 cleanup,
                 action,
@@ -121,7 +135,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
 }
 
 #[cfg(test)]
-fn record_pr_repair_outcome_under_branch_lease<L: serde::Serialize>(
+pub(super) fn record_pr_repair_outcome_under_branch_lease<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     attempt_store: &mut AttemptStore,
     outcome: PrRepairOutcome,
@@ -240,7 +254,7 @@ fn finalize_failed_pr_worktree<L: serde::Serialize>(
     }
 }
 
-fn pr_step_error(error: PrRepairStepError) -> anyhow::Error {
+pub(super) fn pr_step_error(error: PrRepairStepError) -> anyhow::Error {
     match error {
         PrRepairStepError::Cancelled(detail) => anyhow!(detail),
         PrRepairStepError::Failed(error) => error,
@@ -272,7 +286,9 @@ fn worktree_inspection_attention(mut action: Value, inspection_error: anyhow::Er
     action["inspection_error"] = json!(inspection_error);
     action["error"] = json!(format!(
         "PR repair failed and its worktree could not be proven disposable: {}; completed action: {}",
-        action["inspection_error"].as_str().unwrap_or("unknown inspection failure"),
+        action["inspection_error"]
+            .as_str()
+            .unwrap_or("unknown inspection failure"),
         completed_error.as_str().unwrap_or("unknown repair failure")
     ));
     action
@@ -300,7 +316,7 @@ fn attempt_state_attention(mut action: Value, attempt_error: anyhow::Error) -> V
     action
 }
 
-fn pr_worker_action(
+pub(super) fn pr_worker_action(
     item: &PrWorkItem,
     lease: &impl serde::Serialize,
     codex_home: Option<&Path>,
@@ -331,7 +347,7 @@ fn pr_worker_action(
     action
 }
 
-fn finalize_pr_worktree(
+pub(super) fn finalize_pr_worktree(
     cleanup: &mut PrWorktreeCleanup<'_>,
     mut action: Value,
     worktree: &Path,
@@ -375,7 +391,10 @@ fn worktree_cleanup_attention(mut action: Value, cleanup_error: anyhow::Error) -
     action
 }
 
-fn branch_lease_cleanup_attention(mut action: Value, authority_error: &anyhow::Error) -> Value {
+pub(super) fn branch_lease_cleanup_attention(
+    mut action: Value,
+    authority_error: &anyhow::Error,
+) -> Value {
     let completed_error = action["error"].as_str().map(str::to_string);
     action["completed_status"] = action["status"].clone();
     if let Some(completed_error) = completed_error.as_deref() {
@@ -396,7 +415,7 @@ fn branch_lease_cleanup_attention(mut action: Value, authority_error: &anyhow::E
     action
 }
 
-enum PrRepairOutcome {
+pub(super) enum PrRepairOutcome {
     Completed {
         action: Value,
         worktree: PathBuf,
@@ -427,13 +446,13 @@ enum PrRepairOutcome {
 }
 
 #[derive(Debug)]
-enum PrRepairStepError {
+pub(super) enum PrRepairStepError {
     Cancelled(String),
     Failed(anyhow::Error),
 }
 
 impl PrRepairStepError {
-    fn failed(error: impl Into<anyhow::Error>) -> Self {
+    pub(super) fn failed(error: impl Into<anyhow::Error>) -> Self {
         Self::Failed(error.into())
     }
 }
@@ -444,10 +463,10 @@ impl From<anyhow::Error> for PrRepairStepError {
     }
 }
 
-type PrRepairStepResult<T> = std::result::Result<T, PrRepairStepError>;
+pub(super) type PrRepairStepResult<T> = std::result::Result<T, PrRepairStepError>;
 
 #[derive(Debug)]
-enum PrPushError {
+pub(super) enum PrPushError {
     Step(PrRepairStepError),
     Ambiguous {
         error: anyhow::Error,
@@ -461,4 +480,40 @@ impl From<PrRepairStepError> for PrPushError {
     }
 }
 
-type PrPushResult<T> = std::result::Result<T, PrPushError>;
+pub(super) type PrPushResult<T> = std::result::Result<T, PrPushError>;
+
+pub(super) fn with_attempt(mut action: Value, attempt: AttemptRecord) -> Value {
+    if let Some(object) = action.as_object_mut() {
+        object.insert("attempt".into(), json!(attempt));
+    }
+    action
+}
+
+pub(super) fn with_branch_lease_result(
+    mut action: Value,
+    release_error: Option<&anyhow::Error>,
+) -> Value {
+    if let Some(release_error) = release_error {
+        if action.get("lease_error").is_some() {
+            action["lease_release_error"] = json!(format!("{release_error:#}"));
+            return action;
+        }
+        let completed_error = action["error"].as_str().map(str::to_string);
+        action["completed_status"] = action["status"].clone();
+        if let Some(completed_error) = completed_error.as_deref() {
+            action["completed_error"] = json!(completed_error);
+        }
+        action["status"] = json!("needs_attention");
+        action["attention_kind"] = json!("branch_lease_lost_after_start");
+        action["lease_error"] = json!(format!("{release_error:#}"));
+        action["error"] = json!(match completed_error {
+            Some(completed_error) => format!(
+                "Branch repair completed, but lease renewal or release failed: {release_error:#}; completed action: {completed_error}"
+            ),
+            None => format!(
+                "Branch repair completed, but lease renewal or release failed: {release_error:#}"
+            ),
+        });
+    }
+    action
+}

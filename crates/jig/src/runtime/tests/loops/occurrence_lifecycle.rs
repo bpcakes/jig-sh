@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn loop_acknowledge_occurrence_resolves_attention_without_reopening_the_schedule() {
     let temp = tempdir().unwrap();
