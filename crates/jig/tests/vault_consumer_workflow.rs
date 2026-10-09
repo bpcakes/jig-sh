@@ -1,6 +1,6 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
-#[path = "vault_consumer_workflow_parts/support.rs"]
+#[path = "vault_consumer_workflow/support.rs"]
 mod vault_consumer_workflow_support;
 
 use vault_consumer_workflow_support::*;

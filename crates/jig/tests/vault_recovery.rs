@@ -15,16 +15,16 @@ use secrecy::SecretString;
 
 const PASSPHRASE: &str = "test-only-recovery-passphrase";
 
-#[path = "vault_recovery_parts/rekey_policy.rs"]
+#[path = "vault_recovery/rekey_policy.rs"]
 mod rekey_policy;
 
-#[path = "vault_recovery_parts/init_policy.rs"]
+#[path = "vault_recovery/init_policy.rs"]
 mod init_policy;
 
-#[path = "vault_recovery_parts/integrity.rs"]
+#[path = "vault_recovery/integrity.rs"]
 mod integrity;
 
-#[path = "vault_recovery_parts/collisions.rs"]
+#[path = "vault_recovery/collisions.rs"]
 mod collisions;
 
 fn passphrase() -> SecretString {
