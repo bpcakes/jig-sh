@@ -134,7 +134,11 @@ async fn migrations_reject_a_missing_application_version() -> anyhow::Result<()>
             let error = db.migrate(&context).await.unwrap_err();
             let migration_error = error
                 .chain()
-                .find_map(|cause| cause.downcast_ref::<MigrateError>());
+                .find_map(|cause| cause.downcast_ref::<sqlx::Error>())
+                .and_then(|error| match error {
+                    sqlx::Error::Migrate(error) => Some(error.as_ref()),
+                    _ => None,
+                });
             assert!(
                 matches!(migration_error, Some(MigrateError::VersionMissing(missing)) if *missing == version),
                 "expected the missing application version, got {error:#}"
