@@ -1,16 +1,22 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    layout::Rect,
+    style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::model::{App, ExitState, Focus, Inspection, Projection, unix_timestamp_now};
-use layout::{ListStyle, MIN_HEIGHT, MIN_WIDTH, STACKED_ROW_HEIGHT};
+use crate::model::{App, ExitState, Projection, unix_timestamp_now};
+#[cfg(test)]
+use layout::ListStyle;
+use layout::{MIN_HEIGHT, MIN_WIDTH};
+use list::draw_list;
 
 mod configuration;
+mod details;
+mod footer;
 mod layout;
+mod list;
 
 #[cfg(test)]
 mod tests;
@@ -34,7 +40,7 @@ pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
                 "Terminal too small: {}x{}.\n{} needs at least {MIN_WIDTH}x{MIN_HEIGHT}.\nResize, or press q to cancel.",
                 area.width, area.height, app.title()
             ))
-            .block(panel(app.title()))
+            .block(panel(app.title(), false))
             .wrap(Wrap { trim: true }),
             area,
         );
@@ -48,9 +54,9 @@ pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
         draw_list(frame, list, app, now, best);
     }
     if let Some(details) = layout.details {
-        draw_details(frame, details, app, now, best);
+        details::draw_details(frame, details, app, now, best);
     }
-    draw_footer(frame, layout.footer, app);
+    footer::draw_footer(frame, layout.footer, app);
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -143,403 +149,15 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<usize>) {
-    let visible = app.visible_indices();
-    if visible.is_empty() {
-        frame.render_widget(
-            Paragraph::new("No homes match the current search.")
-                .block(panel("Homes"))
-                .wrap(Wrap { trim: true }),
-            area,
-        );
-        return;
-    }
-    if app.static_configuration {
-        configuration::draw_list(frame, area, app, &visible);
-        return;
-    }
-    match ListStyle::for_width(area.width) {
-        ListStyle::Compact => {
-            draw_compact_list(frame, area, app, &visible, now, best);
-            return;
-        }
-        ListStyle::TwoLine => {
-            draw_projection_list(frame, area, app, &visible, now, best);
-            return;
-        }
-        ListStyle::Full => {}
-    }
-    let rows = visible
-        .iter()
-        .map(|index| {
-            let row = &app.rows[*index];
-            let assessment = row.usage_snapshot_assessment_at(now);
-            let projection = assessment.projection();
-            let quota_stale = assessment.quota_is_stale();
-            let projection_stale = assessment.projection_is_stale();
-            Row::new([
-                Cell::from(row_marker(*index, row.is_current(), best)),
-                Cell::from(row.display_name().to_owned()),
-                Cell::from(row.account()),
-                Cell::from(stale_snapshot_label(row.usage(), quota_stale))
-                    .style(stale_usage_style(quota_stale)),
-                Cell::from(stale_snapshot_label(projection.label(), projection_stale))
-                    .style(stale_projection_style(projection, projection_stale)),
-            ])
-            .style(inspection_row_style(row.inspection()))
-        })
-        .collect::<Vec<_>>();
-    let widths = [
-        Constraint::Length(2),
-        Constraint::Percentage(21),
-        Constraint::Percentage(24),
-        Constraint::Percentage(22),
-        Constraint::Percentage(33),
-    ];
-    let table = Table::new(rows, widths)
-        .header(
-            Row::new(["", "Home", "Account", "Remaining now", "Projection"])
-                .style(Style::default().fg(ACCENT).bold()),
-        )
-        .block(panel(homes_panel_title(best, false)));
-    draw_home_table(frame, area, app, &visible, table);
-}
-
-fn draw_projection_list(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    visible: &[usize],
-    now: u64,
-    best: Option<usize>,
-) {
-    let rows = visible
-        .iter()
-        .map(|index| {
-            let row = &app.rows[*index];
-            let assessment = row.usage_snapshot_assessment_at(now);
-            let projection = assessment.projection();
-            let quota_stale = assessment.quota_is_stale();
-            let projection_stale = assessment.projection_is_stale();
-            Row::new([
-                Cell::from(row_marker(*index, row.is_current(), best)),
-                Cell::from(format!("{}\n{}", row.display_name(), row.account())),
-                Cell::from(stale_snapshot_label(row.usage(), quota_stale))
-                    .style(stale_usage_style(quota_stale)),
-                Cell::from(stale_snapshot_label(
-                    projection.list_outcome_label(),
-                    projection_stale,
-                ))
-                .style(stale_projection_style(projection, projection_stale)),
-            ])
-            .height(STACKED_ROW_HEIGHT)
-            .style(inspection_row_style(row.inspection()))
-        })
-        .collect::<Vec<_>>();
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(2),
-            Constraint::Percentage(33),
-            Constraint::Percentage(25),
-            Constraint::Percentage(42),
-        ],
-    )
-    .header(
-        Row::new(["", "Home / Account", "Remaining now", "Projection"])
-            .style(Style::default().fg(ACCENT).bold()),
-    )
-    .block(panel(homes_panel_title(best, false)));
-    draw_home_table(frame, area, app, visible, table);
-}
-
-fn draw_compact_list(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    visible: &[usize],
-    now: u64,
-    best: Option<usize>,
-) {
-    let rows = visible
-        .iter()
-        .map(|index| {
-            let row = &app.rows[*index];
-            let assessment = row.usage_snapshot_assessment_at(now);
-            let projection = assessment.projection();
-            let projection_stale = assessment.projection_is_stale();
-            Row::new([
-                Cell::from(row_marker(*index, row.is_current(), best)),
-                Cell::from(format!(
-                    "{} · {}\n{}",
-                    row.display_name(),
-                    row.account(),
-                    stale_snapshot_label(projection.label(), projection_stale)
-                ))
-                .style(stale_projection_style(projection, projection_stale)),
-            ])
-            .height(STACKED_ROW_HEIGHT)
-            .style(inspection_row_style(row.inspection()))
-        })
-        .collect::<Vec<_>>();
-    let table = Table::new(rows, [Constraint::Length(2), Constraint::Percentage(100)])
-        .header(
-            Row::new(["", "Home · Account / Projection"]).style(Style::default().fg(ACCENT).bold()),
-        )
-        .block(panel(homes_panel_title(best, true)));
-    draw_home_table(frame, area, app, visible, table);
-}
-
-fn draw_home_table(frame: &mut Frame, area: Rect, app: &App, visible: &[usize], table: Table<'_>) {
-    let table = table
-        .row_highlight_style(
-            Style::default()
-                .bg(Color::Blue)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("›");
-    let mut state = TableState::default()
-        .with_offset(app.list_offset_for_viewport(area.height))
-        .with_selected(
-            app.selected
-                .and_then(|selected| visible.iter().position(|index| *index == selected)),
-        );
-    frame.render_stateful_widget(table, area, &mut state);
-    app.set_list_offset(state.offset());
-}
-
-fn inspection_row_style(inspection: &Inspection) -> Style {
-    match inspection {
-        Inspection::Ready(details) if details.inspection_error.is_some() => {
-            Style::default().fg(BAD)
-        }
-        Inspection::Loading => Style::default().fg(MUTED),
-        Inspection::Ready(_) | Inspection::Unavailable => Style::default(),
-    }
-}
-
-fn draw_details(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<usize>) {
-    if app.selected_row().is_none() {
-        app.set_detail_scroll_limit(0);
-        frame.render_widget(
-            Paragraph::new("No home selected.").block(panel(detail_title(app))),
-            area,
-        );
-        return;
-    }
-    let lines = detail_lines(app, now, best);
-    let sizing_paragraph = Paragraph::new(lines.clone())
-        .block(panel(detail_title(app)))
-        .wrap(Wrap { trim: false });
-    let max_scroll = sizing_paragraph
-        .line_count(area.width.saturating_sub(2))
-        .saturating_sub(usize::from(area.height));
-    let max_scroll = u16::try_from(max_scroll).unwrap_or(u16::MAX);
-    app.set_detail_scroll_limit(max_scroll);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(panel(detail_title(app)))
-            .wrap(Wrap { trim: false })
-            .scroll((app.detail_scroll.min(max_scroll), 0)),
-        area,
-    );
-}
-
-fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> {
-    let Some(row) = app.selected_row() else {
-        return Vec::new();
-    };
-    let mut lines = vec![
-        key_value("Name", row.display_name()),
-        key_value("Path", row.display_path()),
-        key_value("Current", if row.is_current() { "yes" } else { "no" }),
-    ];
-    if app.selected.is_some()
-        && app.selected == best
-        && let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation()
-    {
-        lines.push(key_value("Recommendation", recommendation.label));
-    }
-    if let Some(details) = &row.configuration_details {
-        lines.push(Line::from(""));
-        lines.extend(details.iter().map(|(label, value)| key_value(label, value)));
-    }
-    if !app.static_configuration {
-        match row.inspection() {
-            Inspection::Loading => {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "Loading account and usage… You can launch now.",
-                    Style::default().fg(WARN),
-                )));
-            }
-            Inspection::Unavailable => {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "Inspection stopped before this home completed.",
-                    Style::default().fg(BAD),
-                )));
-            }
-            Inspection::Ready(details) => {
-                lines.extend([
-                    Line::from(""),
-                    key_value("Account", details.account_label()),
-                    key_value("Type", &details.account_type),
-                    key_value("Plan", &details.plan),
-                    key_value("Status", &details.status),
-                ]);
-                if let Some(sample_age) = details.usage_sample_age_label_at(now) {
-                    lines.push(key_value(
-                        "Usage sample",
-                        &format!("{sample_age} · reopen to refresh"),
-                    ));
-                }
-                for bucket in &details.buckets {
-                    lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled(
-                        format!("{} usage", bucket.label()),
-                        Style::default().fg(ACCENT).bold(),
-                    )));
-                    if bucket.plan != "-" {
-                        lines.push(key_value("Plan", &bucket.plan));
-                    }
-                    if bucket.reached != "-" {
-                        lines.push(key_value("Reached", &bucket.reached));
-                    }
-                    for (index, window) in bucket.windows.iter().enumerate() {
-                        let role = bucket.window_role(index);
-                        let assessment =
-                            details.window_usage_snapshot_assessment_at(bucket, index, now);
-                        let projection = assessment.projection();
-                        lines.push(Line::from(Span::styled(
-                            indented_snapshot_label(
-                                "  ",
-                                format!(
-                                    "{role}: {} · {}",
-                                    window.usage_detail(),
-                                    window.reset_label_at(now)
-                                ),
-                                assessment.quota_is_stale(),
-                            ),
-                            stale_usage_style(assessment.quota_is_stale()),
-                        )));
-                        lines.push(Line::from(Span::styled(
-                            indented_snapshot_label(
-                                "    ",
-                                format!("At current pace: {}", projection.outcome_label()),
-                                assessment.projection_is_stale(),
-                            ),
-                            stale_projection_style(projection, assessment.projection_is_stale()),
-                        )));
-                    }
-                }
-                if let Some(error) = &details.inspection_error {
-                    lines.push(error_line("Inspection", error));
-                }
-                if let Some(error) = &details.usage_error {
-                    lines.push(error_line("Usage", error));
-                }
-            }
-        }
-    }
-    if let Some(error) = &app.inspection_error {
-        lines.push(error_line("Worker", error));
-    }
-    for warning in &app.discovery_warnings {
-        lines.push(warning_line("Discovery", warning));
-    }
-    lines
-}
-
-fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let controls = if app.exit_state.is_some() && app.static_configuration {
-        "Restoring the terminal."
-    } else if app.exit_state.is_some() {
-        "Please wait while background inspection is stopped safely."
-    } else if app.searching {
-        "Type to filter  Backspace edit  Ctrl-U clear  Enter launch  Esc finish search"
-    } else if app.focus == Focus::Details {
-        "DETAILS  ↑/↓ or j/k scroll  PgUp/PgDn jump  Tab homes  Enter launch  q cancel"
+/// A bordered pane; the focused one gets an accent border and a bold title.
+fn panel(title: &str, focused: bool) -> Block<'_> {
+    let block = Block::default().title(title).borders(Borders::ALL);
+    if focused {
+        block
+            .border_style(Style::default().fg(ACCENT))
+            .title_style(Style::default().bold())
     } else {
-        "HOMES  ↑/↓ or j/k move  / search  Tab details  Enter launch  Esc/q cancel"
-    };
-    let mut lines = vec![Line::from(Span::styled(
-        controls,
-        Style::default().fg(MUTED),
-    ))];
-    if app.searching || !app.filter.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled("Search: ", Style::default().fg(ACCENT).bold()),
-            Span::raw(app.filter.clone()),
-            Span::styled(
-                if app.searching { "▌" } else { "" },
-                Style::default().fg(ACCENT),
-            ),
-        ]));
-    }
-    frame.render_widget(Paragraph::new(lines), area);
-    if app.searching && area.height > 1 {
-        let prompt_width = 8_u16;
-        let filter_width =
-            u16::try_from(Line::from(app.filter.as_str()).width()).unwrap_or(u16::MAX);
-        let cursor_x = area
-            .x
-            .saturating_add(prompt_width)
-            .saturating_add(filter_width)
-            .min(area.right().saturating_sub(1));
-        frame.set_cursor_position((cursor_x, area.y.saturating_add(1)));
-    }
-}
-
-fn detail_title(app: &App) -> &'static str {
-    if app.focus == Focus::Details {
-        "Selected home  [focused]"
-    } else {
-        "Selected home"
-    }
-}
-
-fn panel(title: &str) -> Block<'_> {
-    Block::default().title(title).borders(Borders::ALL)
-}
-
-fn key_value(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{label}: "), Style::default().fg(MUTED)),
-        Span::raw(value.to_owned()),
-    ])
-}
-
-fn error_line(label: &str, error: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        format!("{label} error: {error}"),
-        Style::default().fg(BAD),
-    ))
-}
-
-fn warning_line(label: &str, warning: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        format!("{label} warning: {warning}"),
-        Style::default().fg(WARN),
-    ))
-}
-
-fn row_marker(index: usize, current: bool, best: Option<usize>) -> &'static str {
-    match (best == Some(index), current) {
-        (true, true) => "+*",
-        (true, false) => "+ ",
-        (false, true) => " *",
-        (false, false) => "  ",
-    }
-}
-
-fn homes_panel_title(best: Option<usize>, compact: bool) -> &'static str {
-    match (best.is_some(), compact) {
-        (true, false) => "Homes  (+ best at current pace, * current)",
-        (true, true) => "Homes  (+ best pace, * current)",
-        (false, false) => "Homes  (* current; no rankable Codex projection)",
-        (false, true) => "Homes  (* current; no rankable projection)",
+        block
     }
 }
 
@@ -571,14 +189,6 @@ fn stale_snapshot_label(label: String, stale: bool) -> String {
         format!("stale · {label}")
     } else {
         label
-    }
-}
-
-fn indented_snapshot_label(indent: &str, label: String, stale: bool) -> String {
-    if stale {
-        format!("{indent}stale · {label}")
-    } else {
-        format!("{indent}{label}")
     }
 }
 

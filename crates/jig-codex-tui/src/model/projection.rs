@@ -261,23 +261,6 @@ impl Projection {
         }
     }
 
-    pub(crate) fn list_outcome_label(self) -> String {
-        match self {
-            Self::Remaining {
-                percent,
-                partial: true,
-                ..
-            } => format!("~{} left · partial", format_percent(percent)),
-            Self::ExhaustsEarly {
-                seconds,
-                partial: true,
-                ..
-            } => format!("{} early · partial", format_early(seconds)),
-            Self::Exhausted { partial: true, .. } => "exhausted · partial".into(),
-            projection => projection.outcome_label(),
-        }
-    }
-
     pub(super) fn recommendation(self) -> Option<Recommendation> {
         match self {
             Self::Remaining {

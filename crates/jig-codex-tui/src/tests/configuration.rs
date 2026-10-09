@@ -170,12 +170,7 @@ fn inspected_configurations_show_subscription_limits_and_preserve_mode_identity(
     }) }, now);
     assert_eq!(app.selected, Some(0));
     assert_eq!(app.rows[1].account(), "loading…");
-    assert!(
-        app.rows[0].usage().contains("5h 75% left"),
-        "{}",
-        app.rows[0].usage()
-    );
-    assert!(app.rows[0].usage().contains("weekly 60% left"));
+    assert_eq!(app.rows[0].usage(), "5h 75% · weekly 60% left");
     for width in [80, 120, 200] {
         let mut terminal = Terminal::new(TestBackend::new(width, 50)).unwrap();
         terminal

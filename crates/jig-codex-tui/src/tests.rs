@@ -126,7 +126,7 @@ fn duplicate_codex_window_durations_receive_the_same_role() {
 
     app.apply_update(update);
 
-    assert_eq!(app.rows[0].usage(), "5h 90% left, 5h 80% left");
+    assert_eq!(app.rows[0].usage(), "5h 90% · 5h 80% left");
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn unrecognized_codex_window_durations_remain_distinguishable() {
 
     app.apply_update(update);
 
-    assert_eq!(app.rows[0].usage(), "2h 90% left, 4h 80% left");
+    assert_eq!(app.rows[0].usage(), "2h 90% · 4h 80% left");
 }
 
 #[test]
@@ -529,10 +529,8 @@ fn generic_usage_fallback_keeps_bucket_window_context_without_ranking() {
         rendered.contains("At current pace: ~50% left at reset"),
         "{rendered}"
     );
-    assert!(
-        rendered.contains("no rankable Codex projection"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("no rankable projection"), "{rendered}");
+    assert!(!rendered.contains("Codex projection"), "{rendered}");
     assert!(!rendered.contains("Recommendation:"), "{rendered}");
 }
 

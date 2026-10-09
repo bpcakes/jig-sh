@@ -1,4 +1,17 @@
-use super::*;
+use ratatui::{
+    Frame,
+    layout::{Constraint, Rect},
+    style::{Style, Stylize},
+    text::{Line, Span},
+    widgets::{Cell, Row, Table},
+};
+
+use super::{
+    ACCENT, MUTED,
+    layout::STACKED_ROW_HEIGHT,
+    list::{draw_home_table, list_panel, row_marker},
+};
+use crate::model::App;
 
 pub(super) fn draw_list(frame: &mut Frame, area: Rect, app: &App, visible: &[usize]) {
     let rows = visible.iter().map(|index| {
@@ -17,6 +30,6 @@ pub(super) fn draw_list(frame: &mut Frame, area: Rect, app: &App, visible: &[usi
     });
     let table = Table::new(rows, [Constraint::Length(2), Constraint::Min(1)])
         .header(Row::new(["", "Home / Path"]).style(Style::default().fg(ACCENT).bold()))
-        .block(panel("Homes  (* current)"));
+        .block(list_panel(app, "Homes  (* current)"));
     draw_home_table(frame, area, app, visible, table);
 }

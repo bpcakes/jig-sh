@@ -102,10 +102,7 @@ fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
         "{rendered}"
     );
     assert!(!rendered.contains("+*"), "{rendered}");
-    assert!(
-        rendered.contains("no rankable Codex projection"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("no rankable projection"), "{rendered}");
 }
 
 #[test]
@@ -145,12 +142,13 @@ fn common_width_lists_keep_stale_state_visible() {
             .unwrap();
 
         let rendered = terminal.backend().to_string();
-        let account_row = rendered
-            .lines()
-            .find(|line| line.contains("stale · weekly"))
+        let mut lines = rendered.lines();
+        lines
+            .find(|line| line.contains("stale · weekly 75% left"))
             .expect("inspected account row should remain visible");
+        let projection_line = lines.next().unwrap();
         assert!(
-            account_row.matches("stale ·").count() >= 2,
+            projection_line.contains("stale · weekly: ~50% left at reset"),
             "{width}: {rendered}"
         );
     }
