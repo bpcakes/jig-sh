@@ -38,12 +38,6 @@ impl fmt::Display for WindowRole {
     }
 }
 
-/// Legacy Codex/Claude classification retained for same-release API compatibility.
-/// New provider integrations pass subscription identity explicitly to the picker.
-pub fn is_subscription_bucket(id: &str) -> bool {
-    matches!(id, "codex" | "claude")
-}
-
 /// Rejects missing, nonfinite, and negative usage; over-limit values remain valid.
 pub fn valid_used_percent(used: Option<f64>) -> Option<f64> {
     used.filter(|used| used.is_finite() && *used >= 0.0)

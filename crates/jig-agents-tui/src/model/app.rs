@@ -8,7 +8,7 @@ use crate::{Home, HomeUpdate};
 #[derive(Clone, Debug)]
 pub(crate) struct App {
     pub(crate) subscription_buckets: Vec<String>,
-    pub(crate) configuration_title: Option<String>,
+    pub(crate) title: String,
     pub(crate) static_configuration: bool,
     pub(crate) rows: Vec<HomeRow>,
     pub(crate) selected: Option<usize>,
@@ -28,14 +28,14 @@ pub(crate) struct App {
 }
 
 impl App {
-    pub(crate) fn new(homes: Vec<Home>, discovery_warnings: Vec<String>) -> Self {
+    pub(crate) fn new(title: &str, homes: Vec<Home>, discovery_warnings: Vec<String>) -> Self {
         let selected = homes
             .iter()
             .position(|home| home.current)
             .or((!homes.is_empty()).then_some(0));
         Self {
-            subscription_buckets: vec!["codex".into(), "claude".into()],
-            configuration_title: None,
+            subscription_buckets: Vec::new(),
+            title: sanitize_text(title),
             static_configuration: false,
             rows: homes.into_iter().map(HomeRow::new).collect(),
             selected,
@@ -56,6 +56,18 @@ impl App {
             tick: 0,
             exit_state: None,
         }
+    }
+
+    /// A Codex picker with background inspection, for tests.
+    #[cfg(test)]
+    pub(crate) fn codex(homes: Vec<Home>, discovery_warnings: Vec<String>) -> Self {
+        let mut app = Self::new("Codex Home Picker", homes, discovery_warnings);
+        app.subscription_buckets = vec!["codex".into()];
+        app
+    }
+
+    pub(crate) fn title(&self) -> &str {
+        &self.title
     }
 
     pub(crate) fn visible_indices(&self) -> Vec<usize> {

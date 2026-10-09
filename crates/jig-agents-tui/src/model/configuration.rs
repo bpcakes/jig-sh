@@ -29,8 +29,7 @@ impl App {
             .into_iter()
             .map(|entry| (entry.home, entry.details))
             .unzip();
-        let mut app = Self::new(homes, warnings);
-        app.configuration_title = Some(sanitize_text(title));
+        let mut app = Self::new(title, homes, warnings);
         app.static_configuration = true;
         app.inspection_finished = true;
         app.completed = app.rows.len();
@@ -55,11 +54,5 @@ impl App {
         app.inspection_finished = false;
         app.completed = 0;
         app
-    }
-
-    pub(crate) fn title(&self) -> &str {
-        self.configuration_title
-            .as_deref()
-            .unwrap_or("Codex Home Picker")
     }
 }

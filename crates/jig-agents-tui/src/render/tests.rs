@@ -29,7 +29,7 @@ fn filtered_selection_stays_visible_across_table_layout_changes() {
                 Vec::new(),
             )
         } else {
-            App::new(homes, Vec::new())
+            App::codex(homes, Vec::new())
         };
         for character in "keep".chars() {
             app.push_filter(character);
@@ -62,7 +62,7 @@ fn filtered_selection_stays_visible_across_table_layout_changes() {
 }
 
 fn example_app(count: usize) -> App {
-    App::new(
+    App::codex(
         (0..count)
             .map(|index| Home {
                 path: format!("/tmp/ExampleHome-{index}").into(),

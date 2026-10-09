@@ -157,7 +157,13 @@ fn inspected_configurations_show_subscription_limits_and_preserve_mode_identity(
             )],
         })
         .collect();
-    let mut app = App::inspected_configuration("Claude Home Picker", entries, Vec::new());
+    let mut app = App::provider(
+        "Claude Home Picker",
+        entries,
+        Vec::new(),
+        true,
+        Some("claude"),
+    );
     assert!(!app.inspection_finished);
     assert_eq!(
         handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),

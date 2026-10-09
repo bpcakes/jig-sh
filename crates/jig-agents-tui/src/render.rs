@@ -68,15 +68,11 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let (status, status_style) = if let Some(exit_state) = app.exit_state {
         match exit_state {
             ExitState::Launching => (
-                if app.configuration_title.is_some() {
-                    "Launching selected home…".to_owned()
-                } else {
-                    "Launching selected Codex home…".to_owned()
-                },
+                "Launching selected home…".to_owned(),
                 Style::default().fg(ACCENT),
             ),
             ExitState::Cancelling => (
-                if app.configuration_title.is_some() {
+                if app.static_configuration {
                     "Cancelling…".to_owned()
                 } else {
                     "Cancelling and cleaning up inspections…".to_owned()

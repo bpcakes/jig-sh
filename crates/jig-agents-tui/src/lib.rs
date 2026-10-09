@@ -45,44 +45,6 @@ pub struct ConfigurationHome {
     pub details: Vec<(String, String)>,
 }
 
-/// Uses the same layout and controls as the Codex picker for static configurations.
-///
-/// Returns the original entry index, preserving distinct modes with identical paths.
-///
-/// # Errors
-///
-/// Returns an error when terminal setup, input, or rendering fails.
-pub fn select_configuration_with_cancellation(
-    title: &str,
-    command: &str,
-    homes: Vec<ConfigurationHome>,
-    warnings: Vec<String>,
-    cancelled: impl Fn() -> bool + Send + Sync + 'static,
-) -> anyhow::Result<Option<usize>> {
-    runtime::run(
-        model::App::configuration(title, homes, warnings),
-        None,
-        command,
-        cancelled,
-    )
-}
-
-/// Opens a configuration picker with background account and usage inspection.
-/// Returns the original index, including when multiple modes share a path.
-///
-/// # Errors
-/// Returns an error when terminal setup, input, rendering, or cleanup fails.
-pub fn select_inspected_configuration_with_cancellation(
-    title: &str,
-    command: &str,
-    homes: Vec<ConfigurationHome>,
-    source: impl InspectionSource + 'static,
-    cancelled: impl Fn() -> bool + Send + Sync + 'static,
-) -> anyhow::Result<Option<usize>> {
-    let app = model::App::inspected_configuration(title, homes, source.discovery_warnings());
-    runtime::run(app, Some(Box::new(source)), command, cancelled)
-}
-
 /// Supplies account and usage updates without coupling this crate to Jig runtime code.
 pub trait InspectionSource: Send + Sync {
     /// Nonfatal discovery warnings known before background inspection starts.
@@ -100,37 +62,6 @@ pub trait InspectionSource: Send + Sync {
         emit: &mut dyn FnMut(HomeUpdate) -> Result<(), String>,
         cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Result<(), String>;
-}
-
-/// Opens the full-screen picker and returns the selected exact home path.
-///
-/// # Errors
-///
-/// Returns an error when terminal setup, input, rendering, or worker ownership fails.
-pub fn select(
-    homes: Vec<Home>,
-    source: impl InspectionSource + 'static,
-) -> anyhow::Result<Option<PathBuf>> {
-    select_with_cancellation(homes, source, || false)
-}
-
-/// Opens the picker while also observing process-level cancellation.
-///
-/// # Errors
-///
-/// Returns an error when terminal setup, input, rendering, or worker ownership fails.
-pub fn select_with_cancellation(
-    homes: Vec<Home>,
-    source: impl InspectionSource + 'static,
-    cancelled: impl Fn() -> bool + Send + Sync + 'static,
-) -> anyhow::Result<Option<PathBuf>> {
-    let paths = homes
-        .iter()
-        .map(|home| home.path.clone())
-        .collect::<Vec<_>>();
-    let app = model::App::new(homes, source.discovery_warnings());
-    runtime::run(app, Some(Box::new(source)), "jig codex launch", cancelled)
-        .map(|selected| selected.map(|index| paths[index].clone()))
 }
 
 /// Opens a provider's picker using explicit subscription semantics.
