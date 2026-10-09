@@ -107,6 +107,11 @@ Use the structure that fits the area. Preserve ownership, entrypoints, invariant
 - Check fixture and test names before running state-writing commands because repository paths can be captured in append-only state.
 - If an accidentally captured private identifier requires historical state redaction, treat the edit as an explicit privacy migration: preserve record IDs and every unaffected field, then record the affected record IDs and the reason for redaction in the commit message without repeating the removed text.
 
+## Splitting Oversized Rust Files
+
+- When a Rust file outgrows its file budget, split it into modules named for what they hold, with explicit imports and only the visibility callers need.
+- Never splice slices back with `include!` or name files by position (`part_NN.rs`, `tail.rs`, `*_parts/`): they share one namespace and escape `cargo fmt`. `scripts/check-rust-module-splits.py`, run by `scripts/check-rust-format.sh`, rejects both.
+
 ## Dogfooding This Harness
 
 This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, contract, and run-history paths that generated repos use.
