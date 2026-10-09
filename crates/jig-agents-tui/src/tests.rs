@@ -38,7 +38,7 @@ fn homes() -> Vec<Home> {
 }
 
 fn app(homes: Vec<Home>) -> App {
-    App::new(homes, Vec::new())
+    App::codex(homes, Vec::new())
 }
 
 fn ready_update(index: usize) -> HomeUpdate {
@@ -853,7 +853,7 @@ fn worker_failure_uses_an_error_header_instead_of_success() {
 fn discovery_warnings_remain_visible_after_successful_inspection() {
     let backend = TestBackend::new(120, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(
+    let mut app = App::codex(
         homes(),
         vec!["Failed to inspect one Codex home candidate".into()],
     );
@@ -914,7 +914,7 @@ fn unknown_update_diagnostics_accumulate_with_worker_failure() {
 #[test]
 fn exit_states_render_progress_during_worker_cleanup() {
     for (exit_state, expected) in [
-        (ExitState::Launching, "Launching selected Codex home"),
+        (ExitState::Launching, "Launching selected home"),
         (
             ExitState::Cancelling,
             "Cancelling and cleaning up inspections",

@@ -366,7 +366,7 @@ mod tests {
             name: "codex-work".into(),
             current: true,
         }];
-        let mut app = App::new(homes, Vec::new());
+        let mut app = App::codex(homes, Vec::new());
         for character in "person@example.com".chars() {
             app.push_filter(character);
         }
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn completed_inspection_still_redraws_when_the_refresh_deadline_arrives() {
-        let mut app = App::new(Vec::new(), Vec::new());
+        let mut app = App::codex(Vec::new(), Vec::new());
         app.finish_inspection(None);
         let (_sender, updates) = mpsc::channel();
         let mut worker = InspectionWorker {
