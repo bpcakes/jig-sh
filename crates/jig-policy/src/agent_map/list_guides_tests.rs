@@ -71,3 +71,55 @@ fn plain_directories_list_every_guide_outside_nested_repositories_and_build_outp
         ["AGENTS.md", "crates/api/AGENTS.md"]
     );
 }
+
+#[test]
+fn tracked_guides_stay_excluded_after_their_parent_becomes_a_repository() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-q"]);
+    write_guides(
+        root,
+        &["AGENTS.md", "vendor/deep/AGENTS.md", "kept/AGENTS.md"],
+    );
+    git(root, &["add", "."]);
+    fs::write(root.join(".gitignore"), "kept/\n").unwrap();
+    git(&root.join("vendor"), &["init", "-q"]);
+
+    assert_eq!(list_guides(root).unwrap(), ["AGENTS.md", "kept/AGENTS.md"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn tracked_guides_stay_excluded_after_an_ancestor_becomes_a_symlink() {
+    let temp = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-q"]);
+    write_guides(root, &["AGENTS.md", "component/deep/AGENTS.md"]);
+    git(root, &["add", "."]);
+    fs::remove_dir_all(root.join("component")).unwrap();
+    write_guides(outside.path(), &["deep/AGENTS.md"]);
+    std::os::unix::fs::symlink(outside.path(), root.join("component")).unwrap();
+
+    assert_eq!(list_guides(root).unwrap(), ["AGENTS.md"]);
+}
+
+#[test]
+fn git_file_markers_exclude_nested_guides_with_or_without_an_outer_repository() {
+    for tracked in [false, true] {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_guides(root, &["AGENTS.md", "vendor/deep/AGENTS.md"]);
+        if tracked {
+            git(root, &["init", "-q"]);
+            git(root, &["add", "."]);
+        }
+        fs::write(root.join("vendor/.git"), "gitdir: ../ExampleGitDir\n").unwrap();
+
+        assert_eq!(
+            list_guides(root).unwrap(),
+            ["AGENTS.md"],
+            "tracked={tracked}"
+        );
+    }
+}

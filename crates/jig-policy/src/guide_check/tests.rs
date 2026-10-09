@@ -373,6 +373,28 @@ fn guide_reads_are_bounded_and_reject_invalid_utf8() {
 }
 
 #[test]
+fn git_file_markers_keep_nested_guides_outside_discovery() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture(temp.path(), "rust", None);
+    fs::write(temp.path().join("AGENTS.md"), "# Guide\n").unwrap();
+    fs::create_dir_all(temp.path().join("vendor/deep")).unwrap();
+    fs::write(
+        temp.path().join("vendor/.git"),
+        "gitdir: ../ExampleGitDir\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("vendor/deep/AGENTS.md"),
+        "[broken](missing.md)\n",
+    )
+    .unwrap();
+
+    let result = check(&ctx).unwrap();
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(result["diagnostics"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn undefined_explicit_reference_links_fail_but_prose_and_code_do_not() {
     let text = "[owner][missing]\n`[code][missing]`\n\n[plain prose]\n";
     let references = markdown_references(text);

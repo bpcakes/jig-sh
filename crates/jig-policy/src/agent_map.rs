@@ -194,6 +194,7 @@ pub(super) fn list_guides(root: &Path) -> Result<Vec<String>> {
                     && !Path::new(&path)
                         .components()
                         .any(is_ignored_guide_component)
+                    && has_repository_owned_ancestors(root, Path::new(&path))?
                 {
                     guides.insert(path);
                 }
@@ -203,6 +204,30 @@ pub(super) fn list_guides(root: &Path) -> Result<Vec<String>> {
         collect_guides(root, root, &mut guides)?;
     }
     Ok(guides.into_iter().collect())
+}
+
+fn has_repository_owned_ancestors(root: &Path, guide: &Path) -> Result<bool> {
+    let mut directory = root.to_path_buf();
+    for component in guide.parent().unwrap_or_else(|| Path::new("")).components() {
+        directory.push(component);
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if !metadata.is_dir() => return Ok(false),
+            Ok(_) => {}
+            // Preserve listing of tracked deletions; preview seeding skips
+            // missing leaves. No deeper directory can exist in this case.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to inspect {}", directory.display()));
+            }
+        }
+        // Git index membership does not establish the current filesystem
+        // boundary: a tracked directory can become a nested checkout.
+        if is_nested_repository(&directory) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// A directory with a real `.git` entry: a gitdir with `HEAD`, or the file a

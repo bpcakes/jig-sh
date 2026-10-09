@@ -5,6 +5,50 @@ const VALID_POLICY: &str =
 const EXPIRED_POLICY: &str = "version=1\n[[rules]]\nid=\"source\"\ninclude=[\"**/*.rs\"]\nmax_lines=100000\n[[waivers]]\nid=\"legacy\"\nrule=\"source\"\npath=\"src/legacy.rs\"\nceiling_lines=200000\nreason=\"tracked\"\nexpires=2001-01-01\n";
 
 #[test]
+fn rendered_launcher_and_seed_policy_keep_exactly_one_terminal_newline() {
+    let _guard = lock_env();
+    let template = materialize_template_worktree();
+    let temp = tempdir().unwrap();
+    for (name, source) in [
+        ("filesystem", template.path().display().to_string()),
+        ("embedded", "embedded:jig-sh".to_owned()),
+    ] {
+        let destination = temp.path().join(name);
+        run_init(InitOpts {
+            path: destination.clone(),
+            scaffold: ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustLibrary),
+                ..ScaffoldOpts::default()
+            },
+            template: Some(source),
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            defaults: false,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("ExampleProject".into()),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap();
+
+        for path in ["scripts/jig", ".jig/file-budget.toml"] {
+            let rendered = fs::read(destination.join(path)).unwrap();
+            assert!(
+                rendered.ends_with(b"\n"),
+                "{name}: {path} must end with a newline"
+            );
+            assert!(
+                !rendered.ends_with(b"\n\n"),
+                "{name}: {path} has an extra terminal newline"
+            );
+        }
+    }
+}
+
+#[test]
 fn forced_init_guidance_uses_the_policy_preserved_in_the_destination() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

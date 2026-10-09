@@ -77,3 +77,49 @@ fn preview_workspace_skips_ignored_paths_and_nested_repositories() {
     assert!(!destination.path().join("scratch").exists());
     assert!(!destination.path().join("vendor").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn preview_workspace_rechecks_tracked_guide_directory_boundaries() {
+    let source = tempdir().unwrap();
+    let destination = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let git = |root: &Path, args: &[&str]| {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    git(source.path(), &["init", "-q"]);
+    for guide in [
+        "AGENTS.md",
+        "kept/AGENTS.md",
+        "component/deep/AGENTS.md",
+        "vendor/deep/AGENTS.md",
+    ] {
+        let path = source.path().join(guide);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "repository guide\n").unwrap();
+    }
+    git(source.path(), &["add", "."]);
+    fs::write(source.path().join(".gitignore"), "kept/\n").unwrap();
+    git(&source.path().join("vendor"), &["init", "-q"]);
+    fs::remove_dir_all(source.path().join("component")).unwrap();
+    fs::create_dir(outside.path().join("deep")).unwrap();
+    fs::write(outside.path().join("deep/AGENTS.md"), "outside guide\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), source.path().join("component")).unwrap();
+
+    seed_preview_workspace(source.path(), destination.path()).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(destination.path().join("kept/AGENTS.md")).unwrap(),
+        "repository guide\n"
+    );
+    assert!(destination.path().join("AGENTS.md").is_file());
+    assert!(!destination.path().join("component").exists());
+    assert!(!destination.path().join("vendor").exists());
+}
