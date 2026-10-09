@@ -38,19 +38,11 @@ marketplaces = []
             .unwrap()
             .contains("--template /tmp/template")
     );
-    // Next steps are relative to the repository root; the report's `root`
-    // field carries the absolute path.
-    assert!(
-        !command_by_name(&output, "sqlx")["next_step"]
-            .as_str()
-            .unwrap()
-            .contains(&temp.path().display().to_string())
-    );
     assert!(
         command_by_name(&output, "sqlx")["next_step"]
             .as_str()
             .unwrap()
-            .contains("`jig adopt . ")
+            .contains(&temp.path().display().to_string())
     );
     assert!(
         !command_by_name(&output, "sqlx")["next_step"]
@@ -58,6 +50,37 @@ marketplaces = []
             .unwrap()
             .contains("scripts/jig")
     );
+}
+
+#[cfg(feature = "dev-proxy")]
+#[test]
+fn remediation_is_relative_at_the_repository_root_and_anchored_elsewhere() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+sqlx_enabled = false
+
+[agent_tooling.codex]
+marketplaces = []
+"#,
+        )
+        .write();
+    write_full_launcher(temp.path());
+    let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+    let root = temp.path().display().to_string();
+
+    // At the root, next steps use the documented relative form.
+    assert_eq!(command_prefix_from(&ctx, true), "scripts/jig");
+    let at_root = adopt_command_from(&ctx, true);
+    assert!(at_root.starts_with("scripts/jig adopt ."), "{at_root}");
+    assert!(!at_root.contains(&root), "{at_root}");
+
+    // Elsewhere, they stay anchored to the discovered repository root.
+    assert!(command_prefix_from(&ctx, false).contains(&root));
+    let elsewhere = adopt_command_from(&ctx, false);
+    assert!(elsewhere.contains(&format!("adopt {root}")), "{elsewhere}");
+    assert!(!elsewhere.contains("adopt ."), "{elsewhere}");
 }
 
 pub(super) fn sqlx_command_inventory_config(schema_dump_enabled: bool) -> String {

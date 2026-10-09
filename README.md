@@ -337,7 +337,7 @@ evidence from every occurrence. See
 ### See what happened: `ui`, `status`, `state`
 
 ```sh
-scripts/jig ui              # terminal dashboard: Timeline, Status, and Health tabs
+scripts/jig ui              # terminal dashboard: Status, Timeline, and Health tabs
 scripts/jig status --tui    # same dashboard, starting on Status
 scripts/jig status --json   # one local status snapshot for scripts
 scripts/jig state summary   # runs and target results recorded locally

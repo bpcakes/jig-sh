@@ -56,9 +56,11 @@
   action input declarations, and Jig has recorded no target freshness since
   `jig work` was removed. `docs/target-freshness-integration.md` moves to
   `docs/action-input-declarations.md`.
-- Write `info --commands` next steps relative to the repository root, as
-  `scripts/jig ...` and `adopt .`, instead of embedding absolute launcher and
-  repository paths. The report's `root` field still carries the absolute path.
+- When invoked from the repository root, `info --commands` next steps use
+  `scripts/jig ...` and `adopt .` instead of embedding absolute launcher and
+  repository paths. From any other directory they stay anchored to the
+  discovered root, and the report's `root` field always carries the absolute
+  path.
 - Retire leftover work-era wording: the `info` help no longer mentions gates,
   and the generated `AGENTS.md` no longer says `file-budget audit` creates no
   receipts.
