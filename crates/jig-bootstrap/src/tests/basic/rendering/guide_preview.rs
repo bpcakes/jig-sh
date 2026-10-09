@@ -1,4 +1,5 @@
 use super::*;
+use crate::git::git_command;
 
 #[test]
 fn preview_workspace_only_copies_agent_guides() {
@@ -162,4 +163,82 @@ fn preview_workspace_ignores_ambient_git_repository_selectors() {
     seed_preview_workspace(source.path(), destination.path()).unwrap();
     assert!(destination.path().join("kept/AGENTS.md").is_file());
     assert!(!destination.path().join("foreign").exists());
+}
+
+#[test]
+fn update_keeps_ignored_dependency_and_cache_guides_out_of_the_agent_map() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let template = materialize_template_git_worktree();
+    write_test_crate_guide(&repo);
+    run_adopt(AdoptOpts {
+        components: Default::default(),
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: Some(TemplateMode::Committed),
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+    git(&repo, ["add", "."]).unwrap();
+    git(&repo, ["commit", "-q", "-m", "adopt"]).unwrap();
+
+    // Local guides that the rendered ignore rules keep out of every clean checkout.
+    let ignored_guides = [
+        "node_modules/example/AGENTS.md",
+        ".agent/.cache/adopt/backups/example/AGENTS.md",
+    ];
+    for guide in ignored_guides {
+        let path = repo.join(guide);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "local guide").unwrap();
+        let ignored = git_command(&repo, ["check-ignore", "-q", guide])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ignored, "{guide} should be ignored by the rendered rules");
+    }
+
+    run_update(update_opts(&repo, template.path(), true)).unwrap();
+
+    let agent_map = fs::read_to_string(repo.join("agent-map.md")).unwrap();
+    assert!(
+        agent_map.contains("[crates/api](./crates/api/AGENTS.md)"),
+        "{agent_map}"
+    );
+    for guide in ignored_guides {
+        assert!(!agent_map.contains(guide), "{agent_map}");
+    }
+    // Every linked guide is tracked, so the committed map resolves in a clean checkout.
+    let links: Vec<&str> = agent_map
+        .match_indices("](./")
+        .map(|(start, marker)| {
+            let rest = &agent_map[start + marker.len()..];
+            &rest[..rest.find(')').unwrap()]
+        })
+        .collect();
+    assert!(!links.is_empty(), "{agent_map}");
+    for link in links {
+        let tracked = git_command(&repo, ["ls-files", "--error-unmatch", link])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(
+            tracked,
+            "{link} is linked from agent-map.md but not tracked"
+        );
+    }
 }
