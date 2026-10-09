@@ -142,13 +142,17 @@ fn common_width_lists_keep_stale_state_visible() {
             .unwrap();
 
         let rendered = terminal.backend().to_string();
-        let mut lines = rendered.lines();
-        lines
-            .find(|line| line.contains("stale · weekly 75% left"))
+        let lines = rendered.lines().collect::<Vec<_>>();
+        let usage_line = lines
+            .iter()
+            .position(|line| line.contains("stale · weekly 75% left"))
             .expect("inspected account row should remain visible");
-        let projection_line = lines.next().unwrap();
+        // The one-line list keeps the projection beside the usage; the
+        // two-line list puts it on the row's second line.
         assert!(
-            projection_line.contains("stale · weekly: ~50% left at reset"),
+            lines[usage_line..=usage_line + 1]
+                .iter()
+                .any(|line| line.contains("stale · weekly: ~50% left at reset")),
             "{width}: {rendered}"
         );
     }
