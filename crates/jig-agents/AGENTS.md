@@ -15,7 +15,7 @@
 
 - Add an agent provider: implement `AgentProvider` (and optionally `SessionProvider`) beside the existing providers, then wire its CLI family in `crates/jig/src/cli/`. See [agent providers](../../docs/agent-providers.md).
 - Change shared Claude/Codex path primitives: `src/home_paths.rs`; keep discovery and default-home policy in the provider modules.
-- Change Claude credential lookup and subscription usage: `src/claude/usage/`.
+- Change Claude credential lookup and subscription usage: `src/claude/usage/`; the account email recorded in a home's `.claude.json` is read in `src/claude/usage/account.rs`.
 - Change Codex app-server inspection or session lookup: `src/codex/app_server.rs` or `src/codex/resume.rs`.
 
 ## Invariants

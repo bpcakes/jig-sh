@@ -55,6 +55,11 @@
   Batter supervises inside the public API process. Both default to `none`; the
   interactive wizard offers them while it guides the project shape, and the
   init report records `metrics` and `jobs`.
+- Claude usage inspection now names each home's signed-in account. The
+  `claude launch` picker and `claude homes --usage` show the email Claude
+  records in the home's `.claude.json` (`~/.claude.json` for the native
+  default) instead of a bare "Claude"; the file holds no credentials, and a
+  missing or unreadable one leaves the account unknown.
 
 ### Changed
 

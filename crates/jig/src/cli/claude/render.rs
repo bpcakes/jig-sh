@@ -22,6 +22,9 @@ pub(in crate::cli) fn homes_summary(value: &Value) -> String {
                 }
             ));
             if value["usage_included"] == true {
+                if let Some(email) = home["account"]["email"].as_str() {
+                    lines.push(format!("      Account: {}", sanitize_text(email)));
+                }
                 if let Some(plan) = home["account"]["plan_type"].as_str() {
                     lines.push(format!("      Plan: {}", sanitize_text(plan)));
                 }
@@ -80,4 +83,32 @@ pub(in crate::cli) fn launch_summary(value: &Value) -> String {
 
 fn text(value: &Value) -> String {
     sanitize_text(value.as_str().unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::homes_summary;
+
+    #[test]
+    fn usage_summary_names_the_signed_in_account_when_known() {
+        let summary = homes_summary(&json!({
+            "usage_included": true,
+            "homes": [
+                {"name": "claude-work", "path": "/tmp/ExampleHome/.claude-work", "current": true,
+                 "account": {"type": "Claude", "email": "person\u{202e}@example.com", "plan_type": "max"},
+                 "rate_limits": []},
+                {"name": "claude-team", "path": "/tmp/ExampleHome/.claude-team", "current": false,
+                 "account": {"type": "Claude", "email": null, "plan_type": "pro"},
+                 "rate_limits": []}
+            ]
+        }));
+        assert!(
+            summary.contains("      Account: person\u{fffd}@example.com"),
+            "{summary}"
+        );
+        assert_eq!(summary.matches("Account:").count(), 1, "{summary}");
+        assert!(summary.contains("      Plan: pro"), "{summary}");
+    }
 }
