@@ -7,6 +7,7 @@ use super::*;
 use crate::AnswerOpts;
 use crate::answers::AnswerResolution;
 
+mod frontend_affected;
 mod go_workflow;
 mod independent_checks;
 mod rust_file_loc;

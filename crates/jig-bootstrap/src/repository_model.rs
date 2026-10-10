@@ -464,7 +464,7 @@ impl<'a> ModelBuilder<'a> {
             self.add_frontend_contract_actions(&first_app)?;
         }
         for app in self.answers.frontend_apps() {
-            let component = frontend_component(app)?;
+            let component = frontend_component(app, self.answers.scaffolded_frontend_contracts())?;
             let component_name = component.id.to_string();
             self.insert_component(component)?;
             self.add_typescript_actions(&component_name, app)?;
