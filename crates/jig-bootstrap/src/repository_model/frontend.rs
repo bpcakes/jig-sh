@@ -26,6 +26,28 @@ pub(super) fn frontend_component(
     Ok(component)
 }
 
+/// Repositories scaffolded before frontends reached the backend only through
+/// contracts saved the generated backend dependency in `.jig.toml`. Drop it
+/// while the contract checks are present, but only in that generated shape so
+/// an authored dependency survives.
+pub(super) fn retire_saved_frontend_backend_dependencies(model: &mut RepositoryRenderModel) {
+    if !model.frontend_contracts_enabled() {
+        return;
+    }
+    for component in &mut model.components {
+        if component.tags.iter().any(|tag| tag == "frontend")
+            && matches!(
+                component.depends_on.as_slice(),
+                [dependency] if dependency.as_str() == BACKEND_COMPONENT
+            )
+            && component.provenance.get("depends_on") == Some(&FieldProvenance::Inferred)
+        {
+            component.depends_on.clear();
+            component.provenance.remove("depends_on");
+        }
+    }
+}
+
 pub fn frontend_component_id(name: &str) -> Result<ComponentId> {
     let normalized = name.to_ascii_lowercase();
     if matches!(normalized.as_str(), REPO_COMPONENT | BACKEND_COMPONENT) {
