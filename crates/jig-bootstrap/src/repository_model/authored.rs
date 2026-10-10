@@ -18,6 +18,10 @@ impl AuthoredRepositoryModel {
         !self.components.is_empty() && !self.actions.is_empty() && !self.profiles.is_empty()
     }
 
+    pub fn frontend_contracts_enabled(&self, commands: &BTreeMap<String, String>) -> bool {
+        super::frontend_migration::contracts_enabled(&self.actions, commands)
+    }
+
     pub fn has_adapter(&self, expected: &str) -> bool {
         self.components
             .iter()
@@ -45,6 +49,14 @@ impl RepositoryRenderModel {
         authored: &AuthoredRepositoryModel,
         authored_commands: &BTreeMap<String, String>,
     ) -> Result<Self> {
+        let upgraded = Self::from_generated_answers(answers).ok().map(|generated| {
+            super::frontend_migration::upgrade_saved_projection(
+                &generated,
+                authored,
+                authored_commands,
+            )
+        });
+        let authored = upgraded.as_ref().unwrap_or(authored);
         let mut commands = authored_commands.clone();
         refresh_managed_rust_file_loc_command(
             &authored.actions,

@@ -13,7 +13,10 @@
   or Go workspace files change. `jig update` removes the backend dependency
   from existing frontend components in `.jig.toml` while it is still the
   generated `depends_on = ["api"]` with inferred provenance; a dependency you
-  authored is kept. The refreshed `.agent/jig-contract.json` is reported as a
+  authored is kept. Existing generated contract actions also gain the new
+  lockfile and workspace inputs, while authored inputs and commands survive.
+  Unmodified saved scaffolds remain eligible for generated updates. The
+  refreshed `.agent/jig-contract.json` is reported as a
   conflict, so review it and accept it with `--force`.
 
 ## v0.8.0 - 2026-10-09

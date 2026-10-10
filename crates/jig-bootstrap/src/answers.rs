@@ -629,9 +629,13 @@ fn loaded_repository_model_is_custom(
 
     let mut generated_raw = raw.clone();
     generated_raw.repository = None;
-    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None) else {
+    let Ok(mut generated_answers) = generated_raw.resolve_with_authored_repository(None, None)
+    else {
         return true;
     };
+    if authored_repository.frontend_contracts_enabled(authored_repository_commands) {
+        generated_answers.enable_scaffolded_frontend_contracts();
+    }
     let Ok(generated) =
         crate::repository_model::RepositoryRenderModel::from_answers(&generated_answers)
     else {
@@ -646,6 +650,11 @@ fn resolve_render_answers(
     authored_repository_commands: Option<BTreeMap<String, String>>,
     preserve_repository_model: bool,
 ) -> Result<RenderAnswers> {
+    let scaffolded_frontend_contracts = raw.repository.as_ref().is_some_and(|repository| {
+        authored_repository_commands
+            .as_ref()
+            .is_some_and(|commands| repository.frontend_contracts_enabled(commands))
+    });
     let authored_repository = preserve_repository_model
         .then(|| raw.repository.take())
         .flatten()
@@ -653,6 +662,9 @@ fn resolve_render_answers(
         .filter(|_| authored_repository_commands.is_some());
     let mut answers =
         raw.resolve_with_authored_repository(default_repo_name, authored_repository)?;
+    if scaffolded_frontend_contracts {
+        answers.enable_scaffolded_frontend_contracts();
+    }
     if let Some(authored_repository_commands) = authored_repository_commands
         && answers.authored_repository.is_some()
     {

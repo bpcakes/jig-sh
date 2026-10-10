@@ -17,6 +17,7 @@ mod adoption;
 pub(super) mod adoption_refresh;
 mod file_budget;
 mod freshness;
+mod frontend_migration;
 mod runners;
 mod rust_file_loc;
 
@@ -145,6 +146,8 @@ impl RepositoryRenderModel {
         authored: &AuthoredRepositoryModel,
         authored_commands: &BTreeMap<String, String>,
     ) -> bool {
+        let authored =
+            frontend_migration::upgrade_saved_projection(self, authored, authored_commands);
         let current = self.affected_ignore == authored.affected_ignore
             && self.components == authored.components
             && freshness::matches_generated_actions(
@@ -158,7 +161,7 @@ impl RepositoryRenderModel {
                 .commands
                 .iter()
                 .all(|(key, value)| authored_commands.get(key) == Some(value));
-        current || file_budget::matches_legacy_projection(self, authored, authored_commands)
+        current || file_budget::matches_legacy_projection(self, &authored, authored_commands)
     }
 
     pub(super) fn authored_toml(&self) -> Result<String> {
@@ -274,28 +277,7 @@ impl RepositoryRenderModel {
     }
 
     pub(super) fn frontend_contracts_enabled(&self) -> bool {
-        [
-            (FRONTEND_CONTRACT_DRIFT_ACTION, "contracts-drift-check"),
-            (FRONTEND_PUBLIC_BOUNDARY_ACTION, "contracts-boundary-check"),
-        ]
-        .into_iter()
-        .all(|(action, mode)| {
-            self.actions.iter().any(|candidate| {
-                if candidate.target.component.as_str() != REPO_COMPONENT
-                    || candidate.target.action.as_str() != action
-                {
-                    return false;
-                }
-                let (ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. }) =
-                    &candidate.runner
-                else {
-                    return false;
-                };
-                self.commands
-                    .get(command.as_str())
-                    .is_some_and(|value| value.contains(mode))
-            })
-        })
+        frontend_migration::contracts_enabled(&self.actions, &self.commands)
     }
 
     pub(super) fn rust_workspace_guidance_enabled(&self) -> bool {
