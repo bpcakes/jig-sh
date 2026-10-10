@@ -102,7 +102,7 @@ impl RepositoryRenderModel {
             }
         }
 
-        Ok(Self {
+        let mut model = Self {
             affected_ignore: authored.affected_ignore.clone(),
             components: authored.components.clone(),
             actions: authored.actions.clone(),
@@ -111,6 +111,8 @@ impl RepositoryRenderModel {
             required_commands: required_commands.into_iter().collect(),
             tools: tools.into_values().collect(),
             commands,
-        })
+        };
+        retire_saved_frontend_backend_dependencies(&mut model);
+        Ok(model)
     }
 }

@@ -83,6 +83,70 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
     }
 }
 
+fn with_saved_backend_dependency(
+    mut model: RepositoryRenderModel,
+    source: FieldProvenance,
+) -> RepositoryRenderModel {
+    for component in &mut model.components {
+        if component.tags.iter().any(|tag| tag == "frontend") {
+            component.depends_on = vec![component_id(BACKEND_COMPONENT).unwrap()];
+            component.provenance.insert("depends_on".into(), source);
+        }
+    }
+    model
+}
+
+fn reload_saved(model: &RepositoryRenderModel) -> RepositoryRenderModel {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("answers.toml");
+    fs::write(
+        &path,
+        format!(
+            "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{FRONTEND_APPS}\n{}\n{}",
+            model.authored_toml().unwrap(),
+            model.commands_toml().unwrap()
+        ),
+    )
+    .unwrap();
+    RepositoryRenderModel::from_answers(&RenderAnswers::from_answers_file(&path).unwrap()).unwrap()
+}
+
+#[test]
+fn saved_generated_backend_dependency_is_retired_with_contract_checks() {
+    let current = RepositoryRenderModel::from_answers(&scaffold_answers(FRONTEND_APPS)).unwrap();
+    let saved = with_saved_backend_dependency(current.clone(), FieldProvenance::Inferred);
+
+    let upgraded = reload_saved(&saved);
+
+    assert_eq!(upgraded.components, current.components);
+    assert_eq!(upgraded.actions, current.actions);
+    assert_eq!(
+        upgraded.authored_toml().unwrap(),
+        current.authored_toml().unwrap()
+    );
+}
+
+#[test]
+fn saved_backend_dependency_is_kept_when_authored_or_without_contract_checks() {
+    for saved in [
+        with_saved_backend_dependency(
+            RepositoryRenderModel::from_answers(&scaffold_answers(FRONTEND_APPS)).unwrap(),
+            FieldProvenance::Declared,
+        ),
+        RepositoryRenderModel::from_answers(&answers(FRONTEND_APPS)).unwrap(),
+    ] {
+        let reloaded = reload_saved(&saved);
+
+        assert_eq!(reloaded.components, saved.components);
+        for frontend in ["web", "admin"] {
+            assert_eq!(
+                component(&reloaded, frontend).depends_on,
+                [component_id(BACKEND_COMPONENT).unwrap()]
+            );
+        }
+    }
+}
+
 #[test]
 fn frontends_without_contracts_keep_the_backend_dependency() {
     let model = RepositoryRenderModel::from_answers(&answers(FRONTEND_APPS)).unwrap();

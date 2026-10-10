@@ -10,12 +10,11 @@
   their checks run when `openapi/**` or the generated API clients change, and
   `repo:frontend-contract-drift` catches backend changes that alter the
   contracts. The drift check now also runs when only `Cargo.lock`, `go.sum`,
-  or Go workspace files change. Existing repositories keep their saved
-  component graph: to opt in, delete `depends_on = ["api"]` and its
-  `depends_on = "inferred"` provenance entry from each frontend component in
-  `.jig.toml`, then run `jig update --recopy` to refresh
-  `.agent/jig-contract.json`. The manifest is reported as a conflict; if it is
-  the only one listed, accept it with `--force`.
+  or Go workspace files change. `jig update` removes the backend dependency
+  from existing frontend components in `.jig.toml` while it is still the
+  generated `depends_on = ["api"]` with inferred provenance; a dependency you
+  authored is kept. The refreshed `.agent/jig-contract.json` is reported as a
+  conflict, so review it and accept it with `--force`.
 
 ## v0.8.0 - 2026-10-09
 
