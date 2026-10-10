@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Backend-only changes no longer select every frontend check under
+  `scripts/jig check --affected` in repositories scaffolded with API
+  contracts. Frontend components no longer depend on the backend component:
+  their checks run when `openapi/**` or the generated API clients change, and
+  `repo:frontend-contract-drift` catches backend changes that alter the
+  contracts. The drift check now also runs when only `Cargo.lock`, `go.sum`,
+  or Go workspace files change. Existing repositories keep their saved
+  component graph: to opt in, delete `depends_on = ["api"]` and its
+  `depends_on = "inferred"` provenance entry from each frontend component in
+  `.jig.toml`, then run `jig update --recopy` to refresh
+  `.agent/jig-contract.json`. The manifest is reported as a conflict; if it is
+  the only one listed, accept it with `--force`.
+
 ## v0.8.0 - 2026-10-09
 
 ### Added

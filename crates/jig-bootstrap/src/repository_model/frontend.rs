@@ -1,18 +1,28 @@
 use super::*;
 
-pub(super) fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
+pub(super) fn frontend_component(
+    app: &FrontendApp,
+    scaffolded_contracts: bool,
+) -> Result<ComponentSpec> {
     let id = frontend_component_id(&app.name)?;
     let mut component = ComponentSpec::new(id, &app.dir);
     component.description = Some(format!("Frontend application '{}'.", app.name));
     component.tags = vec!["frontend".into(), app.role.clone()];
-    component.depends_on = vec![component_id(BACKEND_COMPONENT)?];
     component.adapters = vec!["typescript".into()];
-    component.provenance = provenance(&[
+    let mut fields = vec![
         ("id", FieldProvenance::Inferred),
         ("root", FieldProvenance::Declared),
-        ("depends_on", FieldProvenance::Inferred),
         ("adapters", FieldProvenance::Inferred),
-    ]);
+    ];
+    // With scaffolded contracts, frontends see the backend only through
+    // `openapi/**` and the generated clients, which their actions read
+    // directly; `repo:frontend-contract-drift` covers backend changes.
+    // Without contracts, every backend change must reach the frontends.
+    if !scaffolded_contracts {
+        component.depends_on = vec![component_id(BACKEND_COMPONENT)?];
+        fields.push(("depends_on", FieldProvenance::Inferred));
+    }
+    component.provenance = provenance(&fields);
     Ok(component)
 }
 
@@ -90,13 +100,25 @@ pub(super) fn frontend_contract_inputs(
     let mut inputs = FRONTEND_SHARED_INPUTS
         .iter()
         .copied()
+        // Lockfiles and workspace files decide which generator versions
+        // produce the contracts, so they trigger drift checks like source.
         .chain([
             "Cargo.toml",
+            "Cargo.lock",
             "**/Cargo.toml",
+            "**/Cargo.lock",
             "**/*.rs",
             "go.mod",
+            "go.sum",
+            "go.work",
+            "go.work.sum",
             "**/go.mod",
+            "**/go.sum",
+            "**/go.work",
+            "**/go.work.sum",
             "**/*.go",
+            "vendor/modules.txt",
+            "**/vendor/modules.txt",
         ])
         .map(str::to_owned)
         .collect::<Vec<_>>();
