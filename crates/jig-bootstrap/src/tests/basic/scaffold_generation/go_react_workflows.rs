@@ -221,29 +221,8 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     }
 
     #[cfg(unix)]
-    if Command::new("node")
-        .arg("--version")
-        .status()
-        .is_ok_and(|status| status.success())
-    {
-        let fake_module = destination.join("node_modules/@hey-api/openapi-ts");
-        fs::create_dir_all(&fake_module).unwrap();
-        fs::write(
-            fake_module.join("package.json"),
-            r#"{"name":"@hey-api/openapi-ts","type":"module","exports":"./index.js"}"#,
-        )
-        .unwrap();
-        fs::write(
-            fake_module.join("index.js"),
-            r#"import { cp } from "node:fs/promises";
-
-export async function createClient({ output }) {
-  await cp("packages/public-api-client/src/generated", output, { recursive: true });
-}
-"#,
-        )
-        .unwrap();
-
+    if node_available() {
+        install_fake_openapi_ts(&destination);
         let fake_bin = destination.join(".fake-bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_executable_test_script(
@@ -251,23 +230,19 @@ export async function createClient({ output }) {
             "#!/bin/sh\n: > \"$JIG_TEST_GO_MARKER\"\nexit 91\n",
         );
         let backend_marker = destination.join(".backend-exporter-ran");
-        let path = std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        )))
-        .unwrap();
         let before = regular_file_tree_snapshot(&destination);
 
-        let output = Command::new("node")
-            .args(["scripts/contracts.mjs", "client-check"])
-            .current_dir(&destination)
-            .env("PATH", path)
-            .env("JIG_TEST_GO_MARKER", &backend_marker)
-            .output()
-            .unwrap();
+        let output = run_contracts_mode(
+            &destination,
+            "client-check",
+            &fake_bin,
+            &[("JIG_TEST_GO_MARKER", backend_marker.as_os_str())],
+        );
 
         assert_rust_only_command_output_success("client-check", &output);
         assert_paths_absent(&destination, &[".backend-exporter-ran"]);
         assert_eq!(regular_file_tree_snapshot(&destination), before);
+        assert_go_drift_check_reruns_the_document_test_uncached(&destination, &fake_bin);
     }
 
     let nested_module_dir = destination.join("services/api");
@@ -329,4 +304,45 @@ export async function createClient({ output }) {
     let go_tests = fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
     assert_contains_all(&go_tests, &["scripts/jig check api:sqlc"]);
     assert_contains_none(&go_tests, &["postgres-integration:"]);
+}
+
+/// drift-check never exports from the backend. It reruns the backend's
+/// document test uncached: Go ignores files outside the module when it reuses
+/// a cached pass, so a warmed cache must not hide a stale document.
+#[cfg(unix)]
+fn assert_go_drift_check_reruns_the_document_test_uncached(destination: &Path, fake_bin: &Path) {
+    // A warmed cache passes; only an uncached run sees the stale document.
+    write_executable_test_script(
+        &fake_bin.join("go"),
+        "#!/bin/sh\nprintf '%s|%s\\n' \"$(pwd -P)\" \"$*\" >> \"$JIG_TEST_GO_LOG\"\ncase \"$*\" in\n  run*) exit 91 ;;\n  *-count=1*) exit \"$JIG_TEST_GO_UNCACHED_STATUS\" ;;\nesac\nexit 0\n",
+    );
+    let log = destination.join(".go-invocations");
+    let root = fs::canonicalize(destination).unwrap();
+    let before = regular_file_tree_snapshot(destination);
+    for (status, passes) in [("1", false), ("0", true)] {
+        let output = run_contracts_mode(
+            destination,
+            "drift-check",
+            fake_bin,
+            &[
+                ("JIG_TEST_GO_LOG", log.as_os_str()),
+                ("JIG_TEST_GO_UNCACHED_STATUS", std::ffi::OsStr::new(status)),
+            ],
+        );
+        assert_eq!(
+            output.status.success(),
+            passes,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(&log).unwrap(),
+            format!(
+                "{}|test -count=1 -run ^TestOpenAPIIsCurrent$ ./internal/httpapi\n",
+                root.display()
+            )
+        );
+        fs::remove_file(&log).unwrap();
+    }
+    assert_eq!(regular_file_tree_snapshot(destination), before);
 }

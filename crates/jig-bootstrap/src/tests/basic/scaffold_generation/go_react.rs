@@ -444,6 +444,8 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
             r#"resolve(repoRoot, "services/api")"#,
             r#"join(backendRoot, "go.mod")"#,
             r#"run("go", ["run", "./cmd/openapi", "--output", document], backendRoot)"#,
+            r#"["test", "-count=1", "-run", "^TestOpenAPIIsCurrent$", "./internal/httpapi"],
+    backendRoot,"#,
         ],
     );
     assert_nested_go_defaults(&plan);
