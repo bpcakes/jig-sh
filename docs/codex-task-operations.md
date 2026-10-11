@@ -54,16 +54,21 @@ schedule semantics.
 | Checkout | Use it when | Result handling |
 | --- | --- | --- |
 | `worktree` | Results should remain isolated from the selected checkout. This is the default. | Jig removes a clean, unchanged worktree. Any file change or local commit causes Jig to retain the detached worktree for inspection; Jig does not merge it into the main checkout. |
-| `repo` | The task must update the selected checkout, such as recording Beads issues. | The checkout must be clean before the worker starts. The prompt must leave it clean, normally by committing the explicitly authorized files. A dirty or unverifiable result requires attention and blocks later occurrences. |
+| `repo` | The task must update files in the selected checkout. | The checkout must be clean before the worker starts. The prompt must leave it clean, normally by committing the explicitly authorized files. A dirty or unverifiable result requires attention and blocks later occurrences. |
 
 For a mutating repo-mode task, state its write and commit authority narrowly in
-the prompt. For example:
+the prompt. Beadroll tracker state is outside the checkout: tracker-only work
+needs no code commit, but the worker needs access to that external state and
+the coordination remote. A checkout-only sandbox does not grant those capabilities.
+For example, a tracker-only prompt can authorize journal publication explicitly:
 
 ```markdown
-Create only deduplicated, evidence-backed bug records with `br`. Run
-`br sync --flush-only`, confirm that only `.beads/` changed, and commit those
-changes. Do not change product code, push, publish, or deploy. If there are no
-new findings, create nothing and do not make an empty commit.
+Run `bead sync --json`, then create only deduplicated, evidence-backed bug
+records with `bead`. Tracker mutations are authorized to publish automatically
+to the configured `refs/beads/journal`. Before finishing, run `bead sync --json`
+and `bead info --json`; report any unpublished events, pending ownership, or
+integrity errors. Do not change or commit checkout files, push code branches,
+publish releases, or deploy. If there are no new findings, create nothing.
 ```
 
 Do not run state-writing Jig commands from inside a repo-mode task. For

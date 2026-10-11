@@ -23,7 +23,7 @@ on:
       - ".github/workflows/rust-tests.yml"
       - ".jig/file-budget.toml"
       - ".github/workflows/repo-policy.yml"
-      - ".beads/**"
+      - ".beadroll.json"
       - "AGENTS.md"
       - "**/AGENTS.md"
       - "agent-map.md"
@@ -51,7 +51,7 @@ on:
       - ".github/workflows/rust-tests.yml"
       - ".jig/file-budget.toml"
       - ".github/workflows/repo-policy.yml"
-      - ".beads/**"
+      - ".beadroll.json"
       - "AGENTS.md"
       - "**/AGENTS.md"
       - "agent-map.md"
@@ -117,12 +117,9 @@ jobs:
         run: |
           python3 scripts/check-vault-production-features.py
           python3 -m unittest discover -s scripts/tests -p 'test_vault_production_features.py'
-      - name: Test export guard
+      - name: Test tracker triage adapter
         if: ${{ !cancelled() && runner.os == 'Linux' }}
-        run: python3 -m unittest discover -s scripts/tests -p 'test_beads_sync.py'
-      - name: Check exported metadata
-        if: ${{ !cancelled() && runner.os == 'Linux' }}
-        run: python3 scripts/beads-sync.py --check
+        run: python3 -m unittest discover -s scripts/tests -p 'test_bead_triage.py'
       - name: Validate agent-map links and coverage
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.build.outcome == 'success' }}
         run: scripts/jig check agent-map

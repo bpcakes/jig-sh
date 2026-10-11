@@ -27,10 +27,10 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Notes and planning records that no test reads. Python bytecode caches are
-# skipped wherever they appear.
+# Tracker configuration, notes, and planning records that no test reads.
+# Python bytecode caches are skipped wherever they appear.
 IGNORED_PREFIXES = (
-    ".beads/",
+    ".beadroll.json",
     ".agent/notes/",
     ".agent/plans/",
     "docs/plans/",

@@ -67,3 +67,5 @@ temp/
 # neither writes nor reads.
 .agent/state/receipts.jsonl
 __pycache__/
+# Retired tracker stores must not re-enter code branches.
+/.beads/

@@ -133,17 +133,18 @@ For runtime, launcher, template, or build configuration changes, use `scripts/ji
 
 The managed Vault rules protect the operator's vault. Vault tests in this source tree create their own throwaway vault homes, rollback witness roots, and test-only passphrases. When a manual check of edited vault behavior needs a vault, use a throwaway `--home` directory in a scratch location outside the repository with a test-support build, `cargo run --locked -p jig-sh --features jig-vault/test-utils -- vault ...`, which keeps the rollback witness beside that home. `scripts/jig-dev` and release builds record every format 3 vault they open, including a throwaway one, in the per-user witness `~/.jig/vault-witness`. Never use the operator's vault, witness, or passphrase.
 
-<!-- bv-agent-instructions-v3 -->
+<!-- beadroll-agent-instructions-v1 -->
 
 ---
 
-## Beads Workflow Integration
+## Beadroll Workflow Integration
 
-Use the [Beads workflow reference](docs/beads-workflow.md) when selecting tracked work or updating an existing task. A direct request does not require creating an issue.
+Use the [tracker workflow reference](docs/beads-workflow.md) when selecting tracked work or updating an existing task. Beadroll (`bead`) is authoritative; `.beadroll.json` pins the shared workspace and coordination remote. A direct request does not require creating an issue.
 
-- Use `bv --robot-triage` for selection; never run bare `bv` (it starts an interactive TUI).
-- Verify candidates with `br show <id> --json` or `br ready --json` before claiming.
-- Use `br` for issue mutations, then run `python3 scripts/beads-sync.py` to export without machine-local paths. Do not bypass the helper with a direct flush.
-- Follow repository git policy; Beads commands never commit or push.
+- Use `python3 scripts/bead-triage.py` for graph-aware selection: it syncs, exports to a temporary file, and runs `bv --robot-triage`. Never run bare `bv` (it starts an interactive TUI) or execute its generated `br`/`bd` commands.
+- Verify candidates with `bead show <id> --json` and `bead ready --json`, then `bead claim <id> --json`. Claims belong to the agent thread; a new session needs an explicit, justified takeover.
+- Use `bead` for every issue mutation. Writes publish to `refs/beads/journal` automatically; they do not commit code branches. Run `bead sync --json` before reading current remote state and before handoff; resolve unpublished events and pending ownership first.
+- Never run `br`/`bd`, recreate `.beads/`, or import an old snapshot into the live tracker. Historical plans and notes that prescribe those commands are superseded by this workflow.
+- Follow repository git policy for code changes. Tracker publication is part of authorized tracker mutations; it does not authorize pushing code.
 
-<!-- end-bv-agent-instructions -->
+<!-- end-beadroll-agent-instructions -->
