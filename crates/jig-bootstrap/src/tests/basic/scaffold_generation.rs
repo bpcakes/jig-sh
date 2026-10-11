@@ -113,6 +113,32 @@ fn assert_drift_check_rejects_a_stale_client(destination: &Path, fake_bin: &Path
     assert_eq!(regular_file_tree_snapshot(destination), before);
 }
 
+/// drift-check scans the committed public document for privileged markers.
+#[cfg(unix)]
+fn assert_drift_check_scans_the_public_document(destination: &Path, fake_bin: &Path) {
+    let path = destination.join("openapi/public.json");
+    let document = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        document.replacen('{', "{\"x-private\": \"openapi/admin.json\",", 1),
+    )
+    .unwrap();
+
+    let output = run_contracts_mode(destination, "drift-check", fake_bin, &[]);
+    fs::write(&path, document).unwrap();
+
+    assert!(
+        !output.status.success(),
+        "drift-check accepted a private marker"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("committed public OpenAPI document contains privileged marker"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn assert_contains_none(contents: &str, forbidden: &[&str]) {
     for value in forbidden {
         assert!(!contents.contains(value), "found forbidden text: {value}");

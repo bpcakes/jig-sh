@@ -134,6 +134,7 @@ fn load_saved_beside(model: &RepositoryRenderModel, backend: &str, script: &str)
 #[test]
 fn only_a_client_drift_script_stops_reading_the_backend() {
     let root = TempDir::new().unwrap();
+    // Without a script, there is no drift check to run.
     assert!(!contract_drift_script_reads_backend(root.path()));
     fs::create_dir_all(root.path().join("scripts")).unwrap();
     for (script, reads_backend) in [
@@ -143,7 +144,10 @@ fn only_a_client_drift_script_stops_reading_the_backend() {
             "} else if (mode === \"drift-check\") {\n  await exportAndCompare();\n}\n",
             true,
         ),
-        ("if (mode === \"generate\") {\n}\n", false),
+        // Only a recognized client-only branch stops reading the backend.
+        (&EXPORTING_DRIFT_SCRIPT.replace('"', "'"), true),
+        (&CLIENT_DRIFT_SCRIPT.replace('"', "'"), true),
+        ("if (mode === \"generate\") {\n}\n", true),
     ] {
         fs::write(root.path().join("scripts/contracts.mjs"), script).unwrap();
         assert_eq!(
@@ -175,6 +179,37 @@ fn managed_update_keeps_drift_backend_inputs_beside_an_exporting_drift_script() 
         let answers = load_saved_beside(&saved, backend, EXPORTING_DRIFT_SCRIPT);
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
         assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(drift_reads_backend(&upgraded), "{backend}");
+    }
+}
+
+#[test]
+fn managed_update_keeps_a_document_check_removed_beside_an_exporting_drift_script() {
+    for backend in ["rust", "go"] {
+        // The first update adds the check; the drift check keeps reading the
+        // backend, so its inputs alone look like those of an older generator.
+        let answers = load_saved_beside(&legacy_model(backend), backend, EXPORTING_DRIFT_SCRIPT);
+        let mut migrated = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(find(&migrated, "api:openapi").is_some(), "{backend}");
+        migrated
+            .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+        migrated
+            .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+        // Its owner then removes the check.
+        let check = target_id("api", "openapi").unwrap();
+        migrated.actions.retain(|action| action.target != check);
+        for profile in &mut migrated.profiles {
+            profile.targets.retain(|target| *target != check);
+        }
+        migrated.commands.remove("api_openapi_command");
+
+        let answers = load_saved_beside(&migrated, backend, EXPORTING_DRIFT_SCRIPT);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
         assert!(drift_reads_backend(&upgraded), "{backend}");
     }
 }
@@ -452,43 +487,71 @@ fn workflows_run_the_document_check_only_as_a_read_only_check_of_their_backend()
     }
 }
 
-/// Quiet Cargo prints each passing test as a dot unless the format is pinned.
+/// Real Cargo: quiet Cargo prints each passing test as a dot unless the
+/// format is pinned, and a read-only check must not rewrite the lockfile.
 #[cfg(unix)]
 #[test]
-fn rust_document_check_reads_test_names_under_quiet_cargo() {
+fn rust_document_check_runs_quiet_cargo_without_rewriting_the_lockfile() {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("src")).unwrap();
     fs::create_dir_all(root.path().join("openapi")).unwrap();
-    fs::write(
-        root.path().join("Cargo.toml"),
-        "[package]\nname = \"example-openapi-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-    )
-    .unwrap();
+    let manifest = |version: &str| {
+        fs::write(
+            root.path().join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"example-openapi-fixture\"\nversion = \"{version}\"\nedition = \"2021\"\n"
+            ),
+        )
+        .unwrap();
+    };
+    manifest("0.1.0");
     fs::write(root.path().join("openapi/public.json"), "{}\n").unwrap();
-    for (test, passes) in [
-        ("committed_public_openapi_is_current", true),
-        ("committed_public_document_renamed", false),
-    ] {
+    fs::write(root.path().join("src/lib.rs"), "").unwrap();
+    let lockfile_written = std::process::Command::new("cargo")
+        .args(["generate-lockfile", "--offline"])
+        .current_dir(root.path())
+        .status()
+        .unwrap();
+    assert!(lockfile_written.success());
+    let lockfile = fs::read(root.path().join("Cargo.lock")).unwrap();
+    let check = |test: &str| {
         fs::write(
             root.path().join("src/lib.rs"),
             format!("#[test]\nfn {test}() {{}}\n"),
         )
         .unwrap();
-        let output = std::process::Command::new("bash")
+        std::process::Command::new("bash")
             .arg("-c")
             .arg(openapi_document_check_command(false))
             .current_dir(root.path())
             .env("CARGO_TERM_QUIET", "true")
             .env("CARGO_TARGET_DIR", root.path().join("target"))
             .output()
-            .unwrap();
+            .unwrap()
+    };
+    for (test, passes) in [
+        ("committed_public_openapi_is_current", true),
+        ("committed_public_document_renamed", false),
+    ] {
+        let output = check(test);
         assert_eq!(
             output.status.success(),
             passes,
             "{test}: {}",
             String::from_utf8_lossy(&output.stdout)
         );
+        assert_eq!(fs::read(root.path().join("Cargo.lock")).unwrap(), lockfile);
     }
+
+    // An outdated lockfile fails the check instead of being rewritten.
+    manifest("0.2.0");
+    let output = check("committed_public_openapi_is_current");
+    assert!(
+        !output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(fs::read(root.path().join("Cargo.lock")).unwrap(), lockfile);
 }
 
 #[cfg(unix)]
@@ -566,7 +629,7 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
         let expected = if go {
             "test -count=1 -run ^TestOpenAPIIsCurrent$ -v ./internal/httpapi\n"
         } else {
-            "test --workspace openapi_is_current -- --format pretty\n"
+            "test --workspace --locked openapi_is_current -- --format pretty\n"
         };
         assert_eq!(args, expected, "{label}");
         if status != "0" {

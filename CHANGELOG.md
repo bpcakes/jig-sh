@@ -43,27 +43,27 @@
 - In repositories scaffolded with API contracts, a new `api:openapi` check
   owns OpenAPI document freshness and `repo:frontend-contract-drift` owns
   client freshness. `api:openapi` runs only the scaffold's committed-document
-  tests, uncached (`cargo test --workspace openapi_is_current`, or `go test
-  -count=1 -run '^TestOpenAPIIsCurrent$'`, because Go replays a cached pass
-  when only a document outside the module changed), and fails unless each of
-  them passed, so customizing or caching the general backend tests, or
-  renaming a document test, cannot skip them. It reads the backend test
-  inputs and `openapi/**`, belongs to the default profile, and runs in the
-  generated Rust and Go workflows; an authored action of that name runs there
-  only as a read-only check. The drift check reads only the documents, the
-  generated clients, and the JavaScript toolchain, so backend changes no
-  longer select it. Newly scaffolded repositories also run it without
-  exporting from the backend: it regenerates the clients from the committed
-  documents and compares them. An existing `scripts/contracts.mjs` belongs to
-  its repository and keeps its behavior, so while its drift-check still
-  exports the documents from the backend, the drift check keeps reading the
-  backend. `jig update` adds `api:openapi` to a generated repository whose
-  drift check still reads the backend in a generated shape and whose
-  `api_openapi_command` key is free. It narrows the drift inputs once the
-  script regenerates the clients from the committed documents. Any other
-  repository model keeps its targets, and a drift check saved by an earlier
-  generator keeps reading the backend unless the model has the generated
-  `api:openapi` and every profile that runs the drift check also runs it.
+  tests, uncached and without rewriting the lockfile (`cargo test --workspace
+  --locked openapi_is_current`, or `go test -count=1 -run
+  '^TestOpenAPIIsCurrent$'`, because Go replays a cached pass when only a
+  document outside the module changed), and fails unless each of them passed,
+  so customizing or caching the general backend tests, or renaming a document
+  test, cannot skip them. It reads the backend test inputs and `openapi/**`,
+  belongs to the default profile, and runs in the generated Rust and Go
+  workflows; an authored action of that name runs there only as a read-only
+  check. The drift check reads only the documents, the generated clients, and
+  the JavaScript toolchain, so backend changes no longer select it. Newly
+  scaffolded repositories also run it without exporting from the backend: it
+  regenerates the clients from the committed documents and compares them. An
+  existing `scripts/contracts.mjs` belongs to its repository and keeps its
+  behavior, so unless its drift-check is recognizably that client-only one,
+  the drift check keeps reading the backend. `jig update` adds `api:openapi`
+  to a repository generated before this release unless its
+  `api_openapi_command` key is taken; a check its owner then removes stays
+  removed. Any other repository model keeps its targets, and a drift check
+  saved by an earlier generator keeps reading the backend unless the model
+  has the generated `api:openapi` and every profile that runs the drift check
+  also runs it.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the

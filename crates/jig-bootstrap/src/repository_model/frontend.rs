@@ -156,6 +156,11 @@ pub(super) const OPENAPI_INPUT: &str = "openapi/**";
 /// The backend check that the committed OpenAPI documents match the backend.
 pub(super) const OPENAPI_DOCUMENT_CHECK_ACTION: &str = "openapi";
 
+/// Generators that also wrote the document check describe the drift check
+/// as owning only client freshness.
+pub(super) const DRIFT_DESCRIPTION: &str =
+    "Check that the generated API clients match the committed OpenAPI documents.";
+
 /// Backend sources, manifests, lockfiles, and workspace files. The boundary
 /// check inspects the backend dependency graph, so it reads them, as does a
 /// drift check whose script exports from the backend.
@@ -211,8 +216,9 @@ pub(super) fn frontend_contract_inputs(
 /// unless each one passed: Go would otherwise replay a pass when only a
 /// document outside the module changed, and a filter that matches no test
 /// passes. A customized general test command therefore cannot skip them.
-/// Rust pins the per-test format, which quiet Cargo would print as dots, and
-/// always requires the public test, which every Rust scaffold has.
+/// Rust pins the per-test format, which quiet Cargo would print as dots,
+/// keeps the lockfile as a read-only check must, and always requires the
+/// public test, which every Rust scaffold has.
 pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
     if go {
         concat!(
@@ -223,7 +229,7 @@ pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
         )
     } else {
         concat!(
-            "output=$(cargo test --workspace openapi_is_current -- --format pretty 2>&1); ",
+            "output=$(cargo test --workspace --locked openapi_is_current -- --format pretty 2>&1); ",
             "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
             "for name in public admin; do ",
             "[ \"$name\" = public ] || [ -f \"openapi/$name.json\" ] || continue; ",

@@ -23,6 +23,10 @@ const CONTRACT_RESOLUTION_INPUTS: &[&str] = &[
     "**/vendor/modules.txt",
 ];
 
+// The drift check's description before generators wrote the document check.
+const HISTORICAL_DRIFT_DESCRIPTION: &str =
+    "Check repository-wide OpenAPI and generated-client drift.";
+
 // Backend inputs the drift check read while it exported the documents itself.
 const LEGACY_DRIFT_BACKEND_INPUTS: &[&str] = &[
     "Cargo.toml",
@@ -106,6 +110,9 @@ pub(super) fn upgrade_saved_projection(
         if !history.contains(&action.inputs) && !narrowed_beside_export {
             continue;
         }
+        if action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION) {
+            action.description.clone_from(&expected.description);
+        }
         action.inputs = if action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
             && !documents_checked
         {
@@ -120,7 +127,7 @@ pub(super) fn upgrade_saved_projection(
 /// Earlier generators had no document check. To decide whether a saved
 /// scaffold can be regenerated, count the generated one, its profile entries,
 /// and its command as saved. Only a model from before the check qualifies: its
-/// drift check still reads the backend in a generated shape, and the check's
+/// drift check keeps the description those generators wrote, and the check's
 /// command key is free. A model whose owner removed the check, or reused its
 /// command key, keeps its own targets.
 pub(super) fn with_generated_document_check(
@@ -138,7 +145,6 @@ pub(super) fn with_generated_document_check(
         action.target.component.as_str() == REPO_COMPONENT
             && action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
     })?;
-    let history = generated_input_history(FRONTEND_CONTRACT_DRIFT_ACTION, &drift.inputs);
     if saved
         .actions
         .iter()
@@ -146,10 +152,10 @@ pub(super) fn with_generated_document_check(
         || commands
             .get(key)
             .is_some_and(|value| value != generated_command)
-        || !saved
-            .actions
-            .iter()
-            .any(|action| action.target == drift.target && history.contains(&action.inputs))
+        || !saved.actions.iter().any(|action| {
+            action.target == drift.target
+                && action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION)
+        })
     {
         return None;
     }
@@ -178,20 +184,22 @@ fn insert_sorted<T>(items: &mut Vec<T>, item: T, target: impl Fn(&T) -> &TargetI
     items.insert(index, item);
 }
 
-/// Whether the repository's `scripts/contracts.mjs` exports the documents
+/// Whether the repository's `scripts/contracts.mjs` may export the documents
 /// from the backend in drift-check mode, as scripts written before the
-/// document check did. Only the current shape, which regenerates the clients
-/// from the committed documents, lets the drift check stop reading the
-/// backend; a missing script cannot run the drift check at all.
+/// document check did. Only a recognized client-only drift-check, which
+/// regenerates the clients from the committed documents, lets the drift check
+/// stop reading the backend; a missing script cannot run the drift check.
 pub(crate) fn contract_drift_script_reads_backend(root: &Path) -> bool {
     let Ok(script) = std::fs::read_to_string(root.join("scripts/contracts.mjs")) else {
         return false;
     };
-    let Some((_, branch)) = script.split_once("mode === \"drift-check\"") else {
-        return false;
-    };
-    let branch = branch.split("} else if (").next().unwrap_or(branch);
-    !branch.contains("withStagedClients(") || branch.contains("withStagedContracts(")
+    let client_only = script
+        .split_once("} else if (mode === \"drift-check\") {")
+        .map(|(_, branch)| branch.split("} else if (").next().unwrap_or(branch))
+        .is_some_and(|branch| {
+            branch.contains("withStagedClients(") && !branch.contains("withStagedContracts(")
+        });
+    !client_only
 }
 
 /// Inputs that earlier generators wrote for a contract check. Every drift

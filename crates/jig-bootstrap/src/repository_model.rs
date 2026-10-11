@@ -488,7 +488,7 @@ impl<'a> ModelBuilder<'a> {
         for (action_id, description, mode) in [
             (
                 FRONTEND_CONTRACT_DRIFT_ACTION,
-                "Check repository-wide OpenAPI and generated-client drift.",
+                DRIFT_DESCRIPTION,
                 "contracts-drift-check",
             ),
             (

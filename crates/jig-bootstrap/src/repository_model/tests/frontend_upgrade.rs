@@ -59,6 +59,12 @@ fn saved_model(backend: &str, backend_inputs: &[&str]) -> RepositoryRenderModel 
     }
     model.commands.remove("api_openapi_command");
     for action in &mut model.actions {
+        if action.target == drift {
+            action.description =
+                Some("Check repository-wide OpenAPI and generated-client drift.".into());
+        }
+    }
+    for action in &mut model.actions {
         if action.target.component.as_str() == "repo"
             && matches!(
                 action.target.action.as_str(),

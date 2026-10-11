@@ -353,6 +353,7 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             assert_eq!(regular_file_tree_snapshot(&destination), before);
         }
         assert_drift_check_rejects_a_stale_client(&destination, &fake_bin);
+        assert_drift_check_scans_the_public_document(&destination, &fake_bin);
     }
 
     // An update keeps the backend inputs of a drift check whose repository
