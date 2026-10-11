@@ -37,7 +37,8 @@ fn node_available() -> bool {
 
 /// Stands in for `@hey-api/openapi-ts`: regenerating a client copies the
 /// committed one for the same document, so only a changed document or a
-/// changed dispatch can show drift.
+/// changed dispatch can show drift. With `JIG_TEST_STALE_CLIENT` set, it adds
+/// a file, as a changed document would.
 #[cfg(unix)]
 fn install_fake_openapi_ts(destination: &Path) {
     let module = destination.join("node_modules/@hey-api/openapi-ts");
@@ -49,12 +50,15 @@ fn install_fake_openapi_ts(destination: &Path) {
     .unwrap();
     fs::write(
         module.join("index.js"),
-        r#"import { cp } from "node:fs/promises";
-import { basename } from "node:path";
+        r#"import { cp, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 
 export async function createClient({ input, output }) {
   const name = basename(input, ".json");
   await cp(`packages/${name}-api-client/src/generated`, output, { recursive: true });
+  if (process.env.JIG_TEST_STALE_CLIENT) {
+    await writeFile(join(output, "stale.ts"), "export {};\n");
+  }
 }
 "#,
     )
@@ -82,6 +86,31 @@ fn run_contracts_mode(
         command.env(key, value);
     }
     command.output().unwrap()
+}
+
+/// drift-check rejects a client that no longer matches its document and
+/// leaves the tree unchanged.
+#[cfg(unix)]
+fn assert_drift_check_rejects_a_stale_client(destination: &Path, fake_bin: &Path) {
+    let before = regular_file_tree_snapshot(destination);
+
+    let output = run_contracts_mode(
+        destination,
+        "drift-check",
+        fake_bin,
+        &[("JIG_TEST_STALE_CLIENT", std::ffi::OsStr::new("1"))],
+    );
+
+    assert!(
+        !output.status.success(),
+        "drift-check accepted a stale client"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("OpenAPI client is stale (stale.ts)"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(regular_file_tree_snapshot(destination), before);
 }
 
 fn assert_contains_none(contents: &str, forbidden: &[&str]) {

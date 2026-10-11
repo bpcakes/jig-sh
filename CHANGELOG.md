@@ -44,20 +44,23 @@
   owns OpenAPI document freshness and `repo:frontend-contract-drift` owns
   client freshness. `api:openapi` runs only the scaffold's committed-document
   tests, uncached (`cargo test --workspace openapi_is_current`, or `go test
-  -count=1 -run '^TestOpenAPIIsCurrent$' ./internal/httpapi`, because Go
-  replays a cached pass when only a document outside the module changed), so
-  customizing or caching the general backend tests cannot skip them; keep
-  those tests. It reads the backend test inputs and `openapi/**`, belongs to
-  the default profile, and runs in the generated Rust and Go workflows. The
-  drift check reads only the documents, the generated clients, and the
-  JavaScript toolchain, so backend changes no longer select it. Newly
-  scaffolded repositories also run it without exporting from the backend: it
-  regenerates the clients from the committed documents and compares them. An
-  existing `scripts/contracts.mjs` belongs to its repository and keeps its
-  behavior. `jig update` adds `api:openapi` to a generated repository and
-  narrows its drift inputs; a custom repository model gains no target, and its
-  drift check keeps reading the backend unless the model has the generated
-  `api:openapi`.
+  -count=1 -run '^TestOpenAPIIsCurrent$'`, because Go replays a cached pass
+  when only a document outside the module changed), and fails unless each of
+  them passed, so customizing or caching the general backend tests, or
+  renaming a document test, cannot skip them. It reads the backend test
+  inputs and `openapi/**`, belongs to the default profile, and runs in the
+  generated Rust and Go workflows; an authored action of that name runs there
+  only as a read-only check. The drift check reads only the documents, the
+  generated clients, and the JavaScript toolchain, so backend changes no
+  longer select it. Newly scaffolded repositories also run it without
+  exporting from the backend: it regenerates the clients from the committed
+  documents and compares them. An existing `scripts/contracts.mjs` belongs to
+  its repository and keeps its behavior. `jig update` adds `api:openapi` to a
+  generated repository whose drift check still reads the backend in a
+  generated shape and whose `api_openapi_command` key is free, and narrows its
+  drift inputs. Any other repository model keeps its targets, and its drift
+  check keeps reading the backend unless the model has the generated
+  `api:openapi` and every profile that runs the drift check also runs it.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the

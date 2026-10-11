@@ -602,6 +602,7 @@ fn assert_rust_drift_check_skips_the_backend(destination: &Path) {
     );
     assert!(!marker.exists(), "drift-check invoked cargo");
     assert_eq!(regular_file_tree_snapshot(destination), before);
+    assert_drift_check_rejects_a_stale_client(destination, &fake_bin);
 }
 
 #[cfg(unix)]

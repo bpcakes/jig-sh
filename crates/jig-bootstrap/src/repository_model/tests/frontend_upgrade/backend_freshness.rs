@@ -57,8 +57,8 @@ fn drift_reads_backend(model: &RepositoryRenderModel) -> bool {
         .all(|input| drift.iter().any(|item| item == input))
 }
 
-/// A legacy model whose owner already added the generated document check.
-fn legacy_model_with_document_check(backend: &str) -> RepositoryRenderModel {
+/// A current scaffold as `jig init` saves it.
+fn saved_current_model(backend: &str) -> RepositoryRenderModel {
     let mut current = generated_model(backend, "");
     current
         .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
@@ -66,6 +66,20 @@ fn legacy_model_with_document_check(backend: &str) -> RepositoryRenderModel {
     current
         .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
         .unwrap();
+    current
+}
+
+fn document_check_mut(model: &mut RepositoryRenderModel) -> &mut ActionSpec {
+    model
+        .actions
+        .iter_mut()
+        .find(|item| item.target.to_string() == "api:openapi")
+        .unwrap()
+}
+
+/// A legacy model whose owner already added the generated document check.
+fn legacy_model_with_document_check(backend: &str) -> RepositoryRenderModel {
+    let current = saved_current_model(backend);
     let mut saved = legacy_model(backend);
     let check = find(&current, "api:openapi").unwrap().clone();
     let index = saved
@@ -94,13 +108,8 @@ fn customize_frontend(model: &mut RepositoryRenderModel) {
 
 #[test]
 fn generation_adds_a_document_check_that_test_commands_cannot_skip() {
-    for (backend, command) in [
-        ("rust", "cargo test --workspace openapi_is_current"),
-        (
-            "go",
-            "go test -count=1 -run '^TestOpenAPIIsCurrent$' ./internal/httpapi",
-        ),
-    ] {
+    for backend in ["rust", "go"] {
+        let command = openapi_document_check_command(backend == "go");
         let customized = custom_test_commands(backend).map(|(_, answer, custom)| {
             generated_model(backend, &format!("{answer} = {custom:?}\n"))
         });
@@ -155,56 +164,85 @@ fn managed_update_adds_the_document_check_beside_customized_test_commands() {
 
 #[test]
 fn managed_update_narrows_the_drift_check_of_a_custom_model_behind_its_document_check() {
+    type Customize = fn(&mut RepositoryRenderModel);
+    let cases: [(&str, Customize); 2] = [
+        ("in the profile", customize_frontend),
+        // The profile runs the document check through the drift check.
+        ("through a dependency", |saved| {
+            let check = target_id("api", "openapi").unwrap();
+            for profile in &mut saved.profiles {
+                profile.targets.retain(|target| *target != check);
+            }
+            saved
+                .actions
+                .iter_mut()
+                .find(|item| item.target.to_string() == "repo:frontend-contract-drift")
+                .unwrap()
+                .depends_on
+                .push(check);
+        }),
+    ];
     for backend in ["rust", "go"] {
-        let mut saved = legacy_model_with_document_check(backend);
-        customize_frontend(&mut saved);
+        for (label, customize) in cases {
+            let label = format!("{backend} {label}");
+            let mut saved = legacy_model_with_document_check(backend);
+            customize(&mut saved);
 
-        let answers = load_saved(&saved, backend);
-        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+            let answers = load_saved(&saved, backend);
+            let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
 
-        assert!(answers.authored_repository().is_some(), "{backend}");
-        assert_eq!(
-            find(&upgraded, "repo:frontend-contract-drift")
+            assert!(answers.authored_repository().is_some(), "{label}");
+            assert_eq!(
+                find(&upgraded, "repo:frontend-contract-drift")
+                    .unwrap()
+                    .inputs,
+                find(
+                    &generated_model(backend, ""),
+                    "repo:frontend-contract-drift"
+                )
                 .unwrap()
                 .inputs,
-            find(
-                &generated_model(backend, ""),
-                "repo:frontend-contract-drift"
-            )
-            .unwrap()
-            .inputs,
-            "{backend}"
-        );
+                "{label}"
+            );
+        }
     }
 }
 
 #[test]
 fn managed_update_keeps_drift_backend_inputs_without_the_generated_document_check() {
-    type Customize = fn(&mut ActionSpec, &mut BTreeMap<String, String>);
-    let cases: [(&str, Customize); 3] = [
-        ("documents only", |check, _| {
+    type Customize = fn(&mut RepositoryRenderModel);
+    let cases: [(&str, Customize); 4] = [
+        ("documents only", |saved| {
+            let check = document_check_mut(saved);
             check.inputs = vec!["openapi/**".into()];
             check
                 .provenance
                 .insert("inputs".into(), FieldProvenance::Declared);
         }),
-        ("custom command", |_, commands| {
-            commands.insert(
+        ("custom command", |saved| {
+            saved.commands.insert(
                 "api_openapi_command".into(),
                 "scripts/check-openapi.sh".into(),
             );
         }),
-        ("elsewhere", |check, _| {
+        ("elsewhere", |saved| {
             let (ActionRunner::Command {
                 working_directory, ..
             }
             | ActionRunner::Shell {
                 working_directory, ..
-            }) = &mut check.runner
+            }) = &mut document_check_mut(saved).runner
             else {
                 panic!("the generated document check runs a command");
             };
             *working_directory = Some("cmd".into());
+        }),
+        // The profile that runs the drift check never runs the document check.
+        ("outside the profile", |saved| {
+            let check = target_id("api", "openapi").unwrap();
+            for profile in &mut saved.profiles {
+                profile.targets.retain(|target| *target != check);
+            }
         }),
     ];
     for backend in ["rust", "go"] {
@@ -220,15 +258,8 @@ fn managed_update_keeps_drift_backend_inputs_without_the_generated_document_chec
         for (label, customize) in cases {
             let label = format!("{backend} {label}");
             let mut saved = legacy_model_with_document_check(backend);
-            let mut check = find(&saved, "api:openapi").unwrap().clone();
-            customize(&mut check, &mut saved.commands);
-            let authored = check.inputs.clone();
-            let index = saved
-                .actions
-                .iter()
-                .position(|action| action.target == check.target)
-                .unwrap();
-            saved.actions[index] = check;
+            customize(&mut saved);
+            let authored = find(&saved, "api:openapi").unwrap().inputs.clone();
 
             let answers = load_saved(&saved, backend);
             let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
@@ -240,6 +271,150 @@ fn managed_update_keeps_drift_backend_inputs_without_the_generated_document_chec
                 authored,
                 "{label}"
             );
+        }
+    }
+}
+
+#[test]
+fn managed_update_keeps_a_model_custom_when_the_check_command_key_is_taken() {
+    for backend in ["rust", "go"] {
+        let mut saved = legacy_model(backend);
+        saved.commands.insert(
+            "api_openapi_command".into(),
+            "printf skip-openapi-check".into(),
+        );
+
+        let answers = load_saved(&saved, backend);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
+        assert!(drift_reads_backend(&upgraded), "{backend}");
+    }
+}
+
+#[test]
+fn managed_update_keeps_a_removed_document_check_removed() {
+    for backend in ["rust", "go"] {
+        let mut saved = saved_current_model(backend);
+        let check = target_id("api", "openapi").unwrap();
+        saved.actions.retain(|action| action.target != check);
+        for profile in &mut saved.profiles {
+            profile.targets.retain(|target| *target != check);
+        }
+        saved.commands.remove("api_openapi_command");
+
+        let answers = load_saved(&saved, backend);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
+        assert_eq!(
+            find(&upgraded, "repo:frontend-contract-drift")
+                .unwrap()
+                .inputs,
+            find(&saved, "repo:frontend-contract-drift").unwrap().inputs,
+            "{backend}"
+        );
+    }
+}
+
+#[test]
+fn workflows_run_the_document_check_only_as_a_read_only_check_of_their_backend() {
+    for (backend, other) in [("rust", "go"), ("go", "rust")] {
+        let mut model = generated_model(backend, "");
+        assert_eq!(
+            model.openapi_document_check_target(backend).as_deref(),
+            Some("api:openapi")
+        );
+        assert_eq!(model.openapi_document_check_target(other), None);
+
+        // An authored action of the same name may generate the documents.
+        let check = document_check_mut(&mut model);
+        check.intent = ActionIntent::Generate;
+        check.effects = vec![ActionEffect::Worktree];
+        assert_eq!(model.openapi_document_check_target(backend), None);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn document_check_commands_fail_unless_each_document_test_passed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let run = |go: bool, documents: &[&str], output: &str, status: &str| {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("openapi")).unwrap();
+        for document in documents {
+            fs::write(root.path().join(format!("openapi/{document}.json")), "{}\n").unwrap();
+        }
+        let bin = root.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let tool = bin.join(if go { "go" } else { "cargo" });
+        fs::write(
+            &tool,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_ARGS\"\nprintf '%s\\n' \"$FAKE_OUTPUT\"\nexit \"$FAKE_STATUS\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let args = root.path().join("args");
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let result = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(openapi_document_check_command(go))
+            .current_dir(root.path())
+            .env("PATH", path)
+            .env("FAKE_ARGS", &args)
+            .env("FAKE_OUTPUT", output)
+            .env("FAKE_STATUS", status)
+            .output()
+            .unwrap();
+        (result, fs::read_to_string(args).unwrap())
+    };
+    let public = "test tests::committed_public_openapi_is_current ... ok";
+    let admin = "test tests::committed_admin_openapi_is_current ... ok";
+    let both = format!("{public}\n{admin}");
+    let go_pass = "--- PASS: TestOpenAPIIsCurrent (0.00s)";
+    for (go, documents, output, status, passes) in [
+        (false, &["public", "admin"][..], both.as_str(), "0", true),
+        (false, &["public", "admin"], public, "0", false),
+        (false, &["public"], public, "0", true),
+        (false, &["public"], "running 0 tests", "0", false),
+        (false, &["public"], public, "101", false),
+        (true, &["public"], go_pass, "0", true),
+        (
+            true,
+            &["public"],
+            "testing: warning: no tests to run",
+            "0",
+            false,
+        ),
+        (
+            true,
+            &["public"],
+            "--- FAIL: TestOpenAPIIsCurrent (0.00s)",
+            "1",
+            false,
+        ),
+    ] {
+        let label = format!("{go} {documents:?} {output:?} {status}");
+        let (result, args) = run(go, documents, output, status);
+        assert_eq!(result.status.success(), passes, "{label}");
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains(output),
+            "{label}"
+        );
+        let expected = if go {
+            "test -count=1 -run ^TestOpenAPIIsCurrent$ -v ./internal/httpapi\n"
+        } else {
+            "test --workspace openapi_is_current\n"
+        };
+        assert_eq!(args, expected, "{label}");
+        if status != "0" {
+            assert_eq!(result.status.code(), status.parse().ok(), "{label}");
         }
     }
 }

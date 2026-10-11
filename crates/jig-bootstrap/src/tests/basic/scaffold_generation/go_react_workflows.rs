@@ -252,6 +252,7 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             assert_paths_absent(&destination, &[".backend-ran"]);
             assert_eq!(regular_file_tree_snapshot(&destination), before);
         }
+        assert_drift_check_rejects_a_stale_client(&destination, &fake_bin);
     }
 
     let nested_module_dir = destination.join("services/api");

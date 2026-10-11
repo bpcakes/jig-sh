@@ -202,14 +202,27 @@ pub(super) fn frontend_contract_inputs(
     inputs
 }
 
-/// Runs only the scaffold's committed-document tests, uncached: Go would
-/// otherwise replay a pass when only a document outside the module changed.
-/// A customized general test command therefore cannot skip them.
+/// Runs only the scaffold's committed-document tests, uncached, and fails
+/// unless each one passed: Go would otherwise replay a pass when only a
+/// document outside the module changed, and a filter that matches no test
+/// passes. A customized general test command therefore cannot skip them.
 pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
     if go {
-        "go test -count=1 -run '^TestOpenAPIIsCurrent$' ./internal/httpapi"
+        concat!(
+            "output=$(go test -count=1 -run '^TestOpenAPIIsCurrent$' -v ./internal/httpapi 2>&1); ",
+            "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
+            "case \"$output\" in *'--- PASS: TestOpenAPIIsCurrent '*) ;; ",
+            "*) printf 'TestOpenAPIIsCurrent did not pass.\\n' >&2; exit 1 ;; esac",
+        )
     } else {
-        "cargo test --workspace openapi_is_current"
+        concat!(
+            "output=$(cargo test --workspace openapi_is_current 2>&1); ",
+            "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
+            "for name in public admin; do [ -f \"openapi/$name.json\" ] || continue; ",
+            "case \"$output\" in *\"committed_${name}_openapi_is_current ... ok\"*) ;; ",
+            "*) printf 'committed_%s_openapi_is_current did not pass.\\n' \"$name\" >&2; exit 1 ;; ",
+            "esac; done",
+        )
     }
 }
 
@@ -254,18 +267,26 @@ impl ModelBuilder<'_> {
 
 impl RepositoryRenderModel {
     /// The document check, for the backend workflow whose toolchain runs it.
+    /// An authored action of that name joins CI only as a read-only check.
     pub(crate) fn openapi_document_check_target(&self, adapter: &str) -> Option<String> {
         let check = self.actions.iter().find(|action| {
             action.target.component.as_str() == BACKEND_COMPONENT
                 && action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
         })?;
-        self.components
+        let owned = self
+            .components
             .iter()
             .find(|component| component.id == check.target.component)?
             .adapters
             .iter()
-            .any(|item| item == adapter)
-            .then(|| check.target.to_string())
+            .any(|item| item == adapter);
+        (owned
+            && jig_repository::validate_read_only_check_closure(
+                &self.actions,
+                std::iter::once(&check.target),
+            )
+            .is_ok())
+        .then(|| check.target.to_string())
     }
 }
 
