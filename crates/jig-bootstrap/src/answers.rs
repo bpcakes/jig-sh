@@ -27,6 +27,14 @@ use super::{
     ScaffoldPreset, generated_package_manager_spec, generated_package_manager_version,
 };
 
+/// Generated backend test commands. Each runs every test, including a
+/// scaffold's committed-document tests.
+pub(crate) const DEFAULT_RUST_TEST_COMMAND: &str = "cargo test --workspace";
+pub(crate) const DEFAULT_RUST_TEST_LOCKED_COMMAND: &str = "cargo test --workspace --locked";
+pub(crate) const DEFAULT_GO_TEST_COMMAND: &str = "go test ./...";
+pub(crate) const DEFAULT_GO_TEST_LOCKED_COMMAND: &str =
+    "go mod verify && go test -mod=readonly ./...";
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HarnessFootprint {

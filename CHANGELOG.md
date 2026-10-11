@@ -55,7 +55,7 @@
   `scripts/contracts.mjs` belongs to its repository and keeps its behavior.
   `jig update` upgrades the generated backend test and drift inputs, and
   leaves the drift inputs unchanged while a backend test does not read
-  `openapi/**`.
+  `openapi/**` or no longer runs its generated command and runner.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the
