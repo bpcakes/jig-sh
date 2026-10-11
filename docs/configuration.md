@@ -571,6 +571,8 @@ Codex `--profile` selects a configuration profile inside the chosen home; it doe
 
 Both the picker and `codex homes --usage` human output show quota remaining. Jig labels Codex windows whose reported durations are five hours and one week as `5h` and `weekly`, whether returned alone or together; unexpected durations show their duration without receiving a contradictory role. Other rate-limit buckets show their server-reported durations without imposing Codex-specific labels.
 
+The selected Codex account details and `codex homes --usage` also show **Banked resets**: the available reset count reported by Codex. Zero means none are available; `unknown` means Codex did not provide a valid count. Refresh the picker with `r` to fetch the latest count. Banked resets are informational: Jig does not redeem them or add them to quota headroom when recommending or automatically selecting a home.
+
 ## Claude Homes
 
 After upgrading Jig in an existing repository, run `scripts/jig update --recopy` to refresh its generated launcher. Upgrading only the runtime leaves older launchers changing to the repository root before starting Claude; this also changes how relative HOME paths resolve. The refreshed launcher preserves the directory where you invoked it.

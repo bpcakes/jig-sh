@@ -7,7 +7,7 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 ## Key entrypoints
 
 - `src/lib.rs`: `select_provider_with_cancellation` is the only entrypoint; callers supply the title, an explicit primary subscription bucket, and an optional inspection source. This is a same-release boundary supplied by `jig-sh`; configuration selection returns the original entry index so modes sharing a path remain distinct.
-- `src/model.rs`: home rows and additive inspection decoding; `src/model/app.rs` owns filtering and selection, and `src/model/configuration.rs` prepares static or inspected configuration entries.
+- `src/model.rs`: home rows; `src/model/inspection.rs` decodes additive inspection data, `src/model/app.rs` owns filtering and selection, and `src/model/configuration.rs` prepares static or inspected configuration entries.
 - `src/render.rs`: frame entrypoint, header, and shared pane and status styles. `src/render/layout.rs` owns every breakpoint and decides which panes are visible and which list style fits; `src/render/list.rs` composes the list rows, `src/render/details.rs` builds the selected-home pane, `src/render/wrap.rs` wraps its lines, `src/render/meter.rs` draws usage meters, `src/render/theme.rs` owns the palette and its color-depth fallbacks, and `src/render/footer.rs` fits key hints to the width.
 - `src/model/gauge.rs`: per-window meter data (used, elapsed, projected) derived from the same sample as the projection.
 - `examples/picker_preview.rs`: the real picker with example homes and simulated inspection, for presentation work (`cargo run -p jig-agents-tui --example picker_preview`).

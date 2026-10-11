@@ -35,8 +35,8 @@ if [ "${1:-}" = app-server ]; then
   read -r usage
   printf '%s\n' '{"id":1,"result":{"account":{"type":"chatgpt","planType":"pro"}}}'
   case "$CODEX_HOME" in
-    */.codex-example) short=45; weekly=40 ;;
-    *) short=10; weekly=90 ;;
+    */.codex-example) short=45; weekly=40; banked=1 ;;
+    *) short=10; weekly=90; banked=3 ;;
   esac
   if [ "${JIG_TEST_EXHAUSTED:-}" = 1 ]; then weekly=100; fi
   now=$(date +%s)
@@ -45,7 +45,7 @@ if [ "${1:-}" = app-server ]; then
   if [ "${JIG_TEST_NULL_TIMING:-}" = 1 ]; then
     short_duration=null; weekly_duration=null; short_reset=null; weekly_reset=null
   fi
-  printf '{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":%s,"windowDurationMins":%s,"resetsAt":%s},"secondary":{"usedPercent":%s,"windowDurationMins":%s,"resetsAt":%s}}}}\n' "$short" "$short_duration" "$short_reset" "$weekly" "$weekly_duration" "$weekly_reset"
+  printf '{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":%s,"windowDurationMins":%s,"resetsAt":%s},"secondary":{"usedPercent":%s,"windowDurationMins":%s,"resetsAt":%s}},"rateLimitResetCredits":{"availableCount":%s,"credits":[]}}}\n' "$short" "$short_duration" "$short_reset" "$weekly" "$weekly_duration" "$weekly_reset" "$banked"
   sleep 30
   exit 0
 fi
@@ -60,6 +60,31 @@ exit 37
     let mut command = jig(root);
     command.env("JIG_CODEX_BIN", stub);
     command
+}
+
+#[test]
+fn codex_usage_reports_each_accounts_banked_resets() {
+    let root = support::tempdir().unwrap();
+    let output = codex_fixture(root.path())
+        .args(["codex", "homes", "--usage", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let homes = report["homes"].as_array().unwrap();
+    assert_eq!(homes.len(), 2);
+    for home in homes {
+        let expected = if home["home"].as_str().unwrap().ends_with(".codex-example") {
+            1
+        } else {
+            3
+        };
+        assert_eq!(home["banked_resets"], expected, "{home}");
+    }
 }
 
 #[test]
