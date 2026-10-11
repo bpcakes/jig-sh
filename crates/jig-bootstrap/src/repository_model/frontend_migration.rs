@@ -1,8 +1,8 @@
 use super::{
-    ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BTreeMap,
-    FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance,
-    OPENAPI_INPUT, REPO_COMPONENT, RepositoryRenderModel, TargetId,
-    retire_saved_frontend_dependencies,
+    ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BOUNDARY_DESCRIPTION,
+    BTreeMap, CommandScope, FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION,
+    FieldProvenance, OPENAPI_INPUT, PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel,
+    TargetId, contract_check_action, retire_saved_frontend_dependencies,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -20,8 +20,8 @@ const CONTRACT_RESOLUTION_INPUTS: &[&str] = &[
     "**/vendor/modules.txt",
 ];
 
-// Backend inputs the drift check read while it exported the documents itself.
-const LEGACY_DRIFT_BACKEND_INPUTS: &[&str] = &[
+// Backend inputs the contract checks read while drift exported the documents.
+const LEGACY_BACKEND_INPUTS: &[&str] = &[
     "Cargo.toml",
     "**/Cargo.toml",
     "**/*.rs",
@@ -30,23 +30,49 @@ const LEGACY_DRIFT_BACKEND_INPUTS: &[&str] = &[
     "**/*.go",
 ];
 
+// Go scaffolds once generated an artifact-only boundary check.
+const LEGACY_GO_BOUNDARY_DESCRIPTION: &str =
+    "Check public frontend manifests and artifacts for privileged markers.";
+
+/// The drift check marks a scaffold with frontend contracts; the boundary
+/// check exists only alongside an admin API.
 pub(super) fn contracts_enabled(
     actions: &[ActionSpec],
     commands: &BTreeMap<String, String>,
 ) -> bool {
-    [
-        (FRONTEND_CONTRACT_DRIFT_ACTION, "contracts-drift-check"),
-        (FRONTEND_PUBLIC_BOUNDARY_ACTION, "contracts-boundary-check"),
-    ]
-    .into_iter()
-    .all(|(action, mode)| {
-        actions.iter().any(|candidate| {
-            candidate.target.component.as_str() == REPO_COMPONENT
-                && candidate.target.action.as_str() == action
-                && command(&candidate.runner)
-                    .and_then(|key| commands.get(key))
-                    .is_some_and(|value| value.contains(mode))
-        })
+    declares_contract_check(
+        actions,
+        commands,
+        FRONTEND_CONTRACT_DRIFT_ACTION,
+        "contracts-drift-check",
+    )
+}
+
+/// A saved boundary check keeps guarding a Rust admin API that its
+/// repository may still have without an admin frontend app.
+pub(super) fn public_boundary_enabled(
+    actions: &[ActionSpec],
+    commands: &BTreeMap<String, String>,
+) -> bool {
+    declares_contract_check(
+        actions,
+        commands,
+        FRONTEND_PUBLIC_BOUNDARY_ACTION,
+        "contracts-boundary-check",
+    )
+}
+
+fn declares_contract_check(
+    actions: &[ActionSpec],
+    commands: &BTreeMap<String, String>,
+    action: &str,
+    mode: &str,
+) -> bool {
+    actions.iter().any(|candidate| {
+        is_repo_target(&candidate.target, action)
+            && command(&candidate.runner)
+                .and_then(|key| commands.get(key))
+                .is_some_and(|value| value.contains(mode))
     })
 }
 
@@ -62,19 +88,26 @@ pub(super) fn upgrade_saved_projection(
     if !current.frontend_contracts_enabled() || !saved.frontend_contracts_enabled(commands) {
         return upgraded;
     }
+    let Some(drift) = current
+        .actions
+        .iter()
+        .find(|action| is_repo_target(&action.target, FRONTEND_CONTRACT_DRIFT_ACTION))
+    else {
+        return upgraded;
+    };
     upgrade_backend_contract_tests(current, &mut upgraded.actions);
     // Narrowing the drift check is safe only while the backend tests, which
     // prove the documents match the backend, run on document edits.
     let tests_read_documents = backend_contract_tests_read_documents(&upgraded.actions);
     for action in &mut upgraded.actions {
+        let id = action.target.action.as_str();
         if action.target.component.as_str() != REPO_COMPONENT
             || !matches!(
-                action.target.action.as_str(),
+                id,
                 FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
             )
             || action.provenance.get("inputs") != Some(&FieldProvenance::Inferred)
-            || (action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
-                && !tests_read_documents)
+            || (id == FRONTEND_CONTRACT_DRIFT_ACTION && !tests_read_documents)
         {
             continue;
         }
@@ -95,19 +128,25 @@ pub(super) fn upgrade_saved_projection(
         {
             continue;
         }
-        if generated_input_history(action.target.action.as_str(), &expected.inputs)
-            .contains(&action.inputs)
-        {
+        if generated_input_history(id, &drift.inputs).contains(&action.inputs) {
             action.inputs.clone_from(&expected.inputs);
         }
+    }
+    if !current
+        .actions
+        .iter()
+        .any(|action| is_repo_target(&action.target, FRONTEND_PUBLIC_BOUNDARY_ACTION))
+    {
+        retire_generated_boundary(current, drift, &mut upgraded, commands);
     }
     upgraded
 }
 
-/// Inputs that earlier generators wrote for a contract check.
-fn generated_input_history(action: &str, expected: &[String]) -> Vec<Vec<String>> {
+/// Inputs that earlier generators wrote for a contract check. Every shape is
+/// the current drift inputs plus the backend inputs of its time.
+fn generated_input_history(action: &str, drift_inputs: &[String]) -> Vec<Vec<String>> {
     let with = |extra: &[&[&str]]| {
-        let mut inputs = expected
+        let mut inputs = drift_inputs
             .iter()
             .cloned()
             .chain(
@@ -120,19 +159,92 @@ fn generated_input_history(action: &str, expected: &[String]) -> Vec<Vec<String>
         inputs.dedup();
         inputs
     };
-    match action {
-        FRONTEND_CONTRACT_DRIFT_ACTION => vec![
-            with(&[LEGACY_DRIFT_BACKEND_INPUTS]),
-            with(&[LEGACY_DRIFT_BACKEND_INPUTS, CONTRACT_RESOLUTION_INPUTS]),
-        ],
-        _ => vec![
-            expected
-                .iter()
-                .filter(|input| !CONTRACT_RESOLUTION_INPUTS.contains(&input.as_str()))
-                .cloned()
-                .collect(),
-        ],
+    let documents: &[&str] = if action == FRONTEND_PUBLIC_BOUNDARY_ACTION {
+        PUBLIC_DOCUMENT_INPUTS
+    } else {
+        &[]
+    };
+    vec![
+        with(&[LEGACY_BACKEND_INPUTS, documents]),
+        with(&[LEGACY_BACKEND_INPUTS, CONTRACT_RESOLUTION_INPUTS, documents]),
+    ]
+}
+
+/// Go scaffolds have no admin API, so their boundary check guarded nothing.
+/// Drop an unmodified generated one with its profile entries, unless another
+/// target still depends on it.
+fn retire_generated_boundary(
+    current: &RepositoryRenderModel,
+    drift: &ActionSpec,
+    upgraded: &mut AuthoredRepositoryModel,
+    commands: &BTreeMap<String, String>,
+) {
+    let Some(index) = upgraded
+        .actions
+        .iter()
+        .position(|action| is_repo_target(&action.target, FRONTEND_PUBLIC_BOUNDARY_ACTION))
+    else {
+        return;
+    };
+    let saved = &upgraded.actions[index];
+    let expected_command = command(&drift.runner)
+        .and_then(|key| current.commands.get(key))
+        .map(|value| value.replacen("contracts-drift-check", "contracts-boundary-check", 1));
+    let generated = [BOUNDARY_DESCRIPTION, LEGACY_GO_BOUNDARY_DESCRIPTION]
+        .into_iter()
+        .flat_map(|description| {
+            generated_input_history(FRONTEND_PUBLIC_BOUNDARY_ACTION, &drift.inputs)
+                .into_iter()
+                .filter_map(move |inputs| {
+                    contract_check_action(FRONTEND_PUBLIC_BOUNDARY_ACTION, description, inputs).ok()
+                })
+        })
+        .any(|candidate| {
+            super::freshness::matches_generated_actions(
+                std::slice::from_ref(&candidate),
+                std::slice::from_ref(saved),
+                commands,
+            )
+        });
+    let depended_on = upgraded
+        .actions
+        .iter()
+        .any(|action| action.depends_on.contains(&saved.target));
+    if !generated
+        || depended_on
+        || command(&saved.runner).and_then(|key| commands.get(key)) != expected_command.as_ref()
+    {
+        return;
     }
+    let target = upgraded.actions.remove(index).target;
+    for profile in &mut upgraded.profiles {
+        profile.targets.retain(|candidate| candidate != &target);
+    }
+}
+
+/// Removes the command of a retired generated boundary check.
+pub(super) fn drop_retired_contract_commands(
+    actions: &[ActionSpec],
+    commands: &mut BTreeMap<String, String>,
+) {
+    let Ok(key) =
+        CommandScope::Component.command_key(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION)
+    else {
+        return;
+    };
+    if !actions
+        .iter()
+        .any(|action| command(&action.runner) == Some(key.as_str()))
+        && commands
+            .get(&key)
+            .is_some_and(|value| value.contains("contracts-boundary-check"))
+    {
+        commands.remove(&key);
+    }
+}
+
+fn is_repo_target(target: &TargetId, action: &str) -> bool {
+    target.component.as_str() == REPO_COMPONENT && target.action.as_str() == action
 }
 
 fn is_backend_contract_test(target: &TargetId) -> bool {

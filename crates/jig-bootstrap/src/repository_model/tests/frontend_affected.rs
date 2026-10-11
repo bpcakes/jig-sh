@@ -91,16 +91,71 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
                 "contract drift must not read {input}"
             );
         }
-        assert!(
-            model
-                .profiles
-                .iter()
-                .find(|profile| profile.id.as_str() == DEFAULT_PROFILE)
-                .unwrap()
-                .targets
-                .contains(&drift.target)
-        );
+        let verify = model
+            .profiles
+            .iter()
+            .find(|profile| profile.id.as_str() == DEFAULT_PROFILE)
+            .unwrap();
+        assert!(verify.targets.contains(&drift.target));
+        assert_boundary_guards_only_the_rust_admin_api(&model, backend.is_empty());
     }
+}
+
+/// Only the Rust admin API has a privileged surface to guard; the boundary
+/// reads its dependency graph, not its sources.
+fn assert_boundary_guards_only_the_rust_admin_api(model: &RepositoryRenderModel, rust: bool) {
+    let boundary = model
+        .actions
+        .iter()
+        .find(|item| item.target.to_string() == "repo:frontend-public-boundary");
+    let Some(boundary) = boundary.filter(|_| rust) else {
+        assert_eq!(boundary.is_some(), rust);
+        return;
+    };
+    assert!(
+        model
+            .profiles
+            .iter()
+            .find(|profile| profile.id.as_str() == DEFAULT_PROFILE)
+            .unwrap()
+            .targets
+            .contains(&boundary.target)
+    );
+    for input in ["Cargo.toml", "Cargo.lock", "docs/public/**", "openapi/**"] {
+        assert!(boundary.inputs.contains(&input.into()), "{input}");
+    }
+    for input in ["**/*.rs", "**/*.go", "go.mod"] {
+        assert!(!boundary.inputs.contains(&input.into()), "{input}");
+    }
+}
+
+#[test]
+fn rust_scaffolds_without_an_admin_frontend_have_no_boundary_check() {
+    let model = RepositoryRenderModel::from_answers(&scaffold_answers(
+        r#"
+[[frontend_apps]]
+name = "web"
+dir = "frontend/web"
+coverage_threshold = 80
+kind = "vite"
+role = "spa"
+"#,
+    ))
+    .unwrap();
+
+    assert!(model.frontend_contracts_enabled());
+    assert!(
+        !model
+            .actions
+            .iter()
+            .any(|item| item.target.action.as_str() == "frontend-public-boundary")
+    );
+    assert!(
+        !model
+            .commands
+            .values()
+            .any(|value| value.contains("contracts-boundary-check"))
+    );
 }
 
 fn with_saved_backend_dependency(

@@ -456,52 +456,32 @@ impl<'a> ModelBuilder<'a> {
     }
 
     fn add_frontend_contract_actions(&mut self, dependency_anchor: &FrontendApp) -> Result<()> {
-        let public_boundary_description = if self.answers.backend_language().is_go() {
-            // The go-react preset intentionally has no privileged backend/API
-            // surface yet. Do not claim that its artifact-only boundary check
-            // proves a backend dependency property that the preset does not
-            // model.
-            "Check public frontend manifests and artifacts for privileged markers."
-        } else {
-            "Check the repository-wide public/private dependency boundary."
-        };
-        for (action_id, description, mode) in [
-            (
-                FRONTEND_CONTRACT_DRIFT_ACTION,
-                "Check repository-wide OpenAPI and generated-client drift.",
-                "contracts-drift-check",
-            ),
-            (
+        let mut checks = vec![(
+            FRONTEND_CONTRACT_DRIFT_ACTION,
+            DRIFT_DESCRIPTION,
+            "contracts-drift-check",
+        )];
+        if generates_public_boundary(self.answers) {
+            checks.push((
                 FRONTEND_PUBLIC_BOUNDARY_ACTION,
-                public_boundary_description,
+                BOUNDARY_DESCRIPTION,
                 "contracts-boundary-check",
-            ),
-        ] {
-            let command_key = CommandScope::Component.command_key(REPO_COMPONENT, action_id)?;
+            ));
+        }
+        for (action_id, description, mode) in checks {
             let command = format!(
                 "scripts/check-webapps.sh {mode} {}",
                 jig_repository::shell::quote(&dependency_anchor.dir)
             );
-            self.insert_command(&command_key, &command)?;
-            let mut action = ActionSpec::new(
-                target_id(REPO_COMPONENT, action_id)?,
-                ActionIntent::Check,
-                ActionRunner::command(command_key),
-            );
-            action.description = Some(description.into());
-            action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-            action.inputs = frontend_contract_inputs(
+            self.insert_command(
+                &CommandScope::Component.command_key(REPO_COMPONENT, action_id)?,
+                &command,
+            )?;
+            let inputs = frontend_contract_inputs(
                 action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION,
                 self.answers.frontend_workspace_roots(),
             );
-            action.provenance = provenance(&[
-                ("target", FieldProvenance::Inferred),
-                ("intent", FieldProvenance::Inherited),
-                ("effects", FieldProvenance::Inherited),
-                ("runner", FieldProvenance::Inferred),
-                ("inputs", FieldProvenance::Inferred),
-            ]);
-            self.insert_action(action)?;
+            self.insert_action(contract_check_action(action_id, description, inputs)?)?;
         }
         add_backend_contract_test_inputs(&mut self.actions)
     }

@@ -646,6 +646,7 @@ impl RawAnswers {
             authored_repository,
             authored_repository_commands: BTreeMap::new(),
             scaffolded_frontend_contracts: false,
+            scaffolded_public_boundary: false,
             go_postgres_integration_script: false,
             repository_projection_hint: self.repository_projection_hint,
             repo_name,

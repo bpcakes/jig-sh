@@ -107,38 +107,28 @@ fn assert_frontend_targets(model: &RepositoryRenderModel) {
 fn assert_independent_frontend_contract_targets(model: &RepositoryRenderModel) {
     let drift_target = target_id(REPO_COMPONENT, FRONTEND_CONTRACT_DRIFT_ACTION).unwrap();
     let boundary_target = target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION).unwrap();
-    assert_eq!(
+    let count = |target: &TargetId| {
         model
             .actions
             .iter()
-            .filter(|action| action.target == drift_target)
-            .count(),
-        1
-    );
-    assert_eq!(
-        model
-            .actions
+            .filter(|action| &action.target == target)
+            .count()
+    };
+    assert_eq!(count(&drift_target), 1);
+    // Go scaffolds have no admin API, so no boundary check guards one.
+    assert_eq!(count(&boundary_target), 0);
+    assert!(
+        !model
+            .profiles
             .iter()
-            .filter(|action| action.target == boundary_target)
-            .count(),
-        1
+            .any(|profile| profile.targets.contains(&boundary_target))
     );
     let drift = model
         .actions
         .iter()
         .find(|action| action.target == drift_target)
         .unwrap();
-    let boundary = model
-        .actions
-        .iter()
-        .find(|action| action.target == boundary_target)
-        .unwrap();
-    assert_eq!(
-        boundary.description.as_deref(),
-        Some("Check public frontend manifests and artifacts for privileged markers.")
-    );
     for artifact in ["docs/public/**", "public-docs/**"] {
-        assert!(boundary.inputs.iter().any(|input| input == artifact));
         assert!(!drift.inputs.iter().any(|input| input == artifact));
     }
     // Contract checks run on their own inputs; no frontend check pulls them in.

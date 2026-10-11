@@ -142,30 +142,17 @@ pub(super) fn aggregate_frontend_inputs(
 /// The backend tests compare the committed OpenAPI documents with the backend.
 pub(super) const OPENAPI_INPUT: &str = "openapi/**";
 
-/// Backend sources, manifests, lockfiles, and workspace files. The boundary
-/// check inspects the backend dependency graph, so it reads them.
-pub(super) const BACKEND_CONTRACT_INPUTS: &[&str] = &[
-    "Cargo.toml",
-    "Cargo.lock",
-    "**/Cargo.toml",
-    "**/Cargo.lock",
-    "**/*.rs",
-    "go.mod",
-    "go.sum",
-    "go.work",
-    "go.work.sum",
-    "**/go.mod",
-    "**/go.sum",
-    "**/go.work",
-    "**/go.work.sum",
-    "**/*.go",
-    "vendor/modules.txt",
-    "**/vendor/modules.txt",
-];
+/// Committed public documentation that the boundary check scans.
+pub(super) const PUBLIC_DOCUMENT_INPUTS: &[&str] = &["docs/public/**", "public-docs/**"];
+
+/// The boundary check reads the Cargo dependency graph, not backend sources.
+const BOUNDARY_MANIFEST_INPUTS: &[&str] =
+    &["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock"];
 
 /// The drift check regenerates the clients from the committed documents, so
 /// it reads only the contract surface; the backend tests own document
-/// freshness. The boundary check also reads the backend.
+/// freshness. The boundary check also reads the Cargo dependency graph and
+/// committed public documentation.
 pub(super) fn frontend_contract_inputs(
     public_boundary: bool,
     workspace_roots: &[String],
@@ -180,12 +167,57 @@ pub(super) fn frontend_contract_inputs(
             .map(|root| component_root_input(root)),
     );
     if public_boundary {
-        inputs.extend(BACKEND_CONTRACT_INPUTS.iter().map(|input| (*input).into()));
-        inputs.extend(["docs/public/**".into(), "public-docs/**".into()]);
+        inputs.extend(
+            BOUNDARY_MANIFEST_INPUTS
+                .iter()
+                .chain(PUBLIC_DOCUMENT_INPUTS)
+                .map(|input| (*input).into()),
+        );
     }
     inputs.sort();
     inputs.dedup();
     inputs
+}
+
+pub(super) const DRIFT_DESCRIPTION: &str =
+    "Check repository-wide OpenAPI and generated-client drift.";
+pub(super) const BOUNDARY_DESCRIPTION: &str =
+    "Check the repository-wide public/private dependency boundary.";
+
+/// A generated contract check; its runner names the component command key.
+pub(super) fn contract_check_action(
+    action_id: &str,
+    description: &str,
+    inputs: Vec<String>,
+) -> Result<ActionSpec> {
+    let mut action = ActionSpec::new(
+        target_id(REPO_COMPONENT, action_id)?,
+        ActionIntent::Check,
+        ActionRunner::command(CommandScope::Component.command_key(REPO_COMPONENT, action_id)?),
+    );
+    action.description = Some(description.into());
+    action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+    action.inputs = inputs;
+    action.provenance = provenance(&[
+        ("target", FieldProvenance::Inferred),
+        ("intent", FieldProvenance::Inherited),
+        ("effects", FieldProvenance::Inherited),
+        ("runner", FieldProvenance::Inferred),
+        ("inputs", FieldProvenance::Inferred),
+    ]);
+    Ok(action)
+}
+
+/// The public boundary check guards a Rust admin API. A Rust scaffold gets
+/// one with an admin frontend, and keeps a saved one: its repository may
+/// still have the admin API after the admin app moved elsewhere.
+pub(super) fn generates_public_boundary(answers: &RenderAnswers) -> bool {
+    !answers.backend_language().is_go()
+        && (answers.scaffolded_public_boundary()
+            || answers
+                .frontend_apps()
+                .iter()
+                .any(|app| app.role == "admin"))
 }
 
 /// Backend tests assert that the committed OpenAPI documents match the

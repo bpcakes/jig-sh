@@ -38,6 +38,21 @@
   its repository and keeps its behavior. `jig update` upgrades the generated
   backend test and drift inputs, and leaves the drift inputs unchanged while a
   backend test does not read `openapi/**`.
+- `repo:frontend-public-boundary` is generated only where it can guard an
+  admin API: for a Rust scaffold with an admin frontend, and in a Rust
+  repository whose saved model already declares it, because the admin API
+  can outlive its admin app. Go scaffolds, which cannot have an admin API,
+  and new Rust scaffolds without an admin frontend no longer get it. The
+  check now reads the Cargo manifests and lockfiles instead of every backend
+  source, and a newly scaffolded `scripts/contracts.mjs` no longer scans
+  `dist/` and `target/` before the build, which only saw whatever an earlier
+  build left behind; the artifact checks that run right after a build still
+  scan its output. Repositories count as scaffolded with contracts when the
+  drift check exists, so the generated frontend workflow keeps its
+  `client-check` step without a boundary check. `jig update` narrows the
+  inputs of a generated boundary check, removes an unmodified Go one with its
+  profile entry and command unless another target depends on it, and names
+  each removed target.
 - The generated `webapp-checks.yml` of a Go repository no longer runs on Go
   changes, or on every change when the backend sits at the repository root.
   Its job never runs Go. In other repositories with frontends the workflow

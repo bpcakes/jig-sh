@@ -190,14 +190,15 @@ pub(super) fn assert_go_repository_contract(destination: &Path) {
             "api_test_command = \"go test ./...\"",
             "web_test_command = \"scripts/check-webapps.sh check-one",
             "action = \"frontend-contract-drift\"",
-            "action = \"frontend-public-boundary\"",
             "contracts-drift-check",
-            "contracts-boundary-check",
         ],
     );
+    // Go scaffolds have no admin API for a boundary check to guard.
     assert_contains_none(
         &config,
         &[
+            "action = \"frontend-public-boundary\"",
+            "contracts-boundary-check",
             "rust_migration_dir =",
             "backend_language =",
             "go_database =",
@@ -249,14 +250,19 @@ pub(super) fn assert_go_repository_contract(destination: &Path) {
                     && action["target"]["action"] == "test")
         );
     }
-    for action in ["frontend-contract-drift", "frontend-public-boundary"] {
-        assert!(
+    for (action, expected) in [
+        ("frontend-contract-drift", true),
+        ("frontend-public-boundary", false),
+    ] {
+        assert_eq!(
             contract_value["actions"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|candidate| candidate["target"]["component"] == "repo"
-                    && candidate["target"]["action"] == action)
+                    && candidate["target"]["action"] == action),
+            expected,
+            "{action}"
         );
     }
 }

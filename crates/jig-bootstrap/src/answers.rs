@@ -53,6 +53,8 @@ pub(super) struct RenderAnswers {
     #[serde(skip)]
     scaffolded_frontend_contracts: bool,
     #[serde(skip)]
+    scaffolded_public_boundary: bool,
+    #[serde(skip)]
     go_postgres_integration_script: bool,
     #[serde(skip)]
     repository_projection_hint: RepositoryProjectionHint,
@@ -517,6 +519,14 @@ impl RenderAnswers {
         self.scaffolded_frontend_contracts = true;
     }
 
+    pub(super) const fn scaffolded_public_boundary(&self) -> bool {
+        self.scaffolded_public_boundary
+    }
+
+    pub(super) fn enable_scaffolded_public_boundary(&mut self) {
+        self.scaffolded_public_boundary = true;
+    }
+
     pub(super) fn enable_go_postgres_integration_script(&mut self) {
         self.go_postgres_integration_script = true;
     }
@@ -636,6 +646,9 @@ fn loaded_repository_model_is_custom(
     if authored_repository.frontend_contracts_enabled(authored_repository_commands) {
         generated_answers.enable_scaffolded_frontend_contracts();
     }
+    if authored_repository.public_boundary_enabled(authored_repository_commands) {
+        generated_answers.enable_scaffolded_public_boundary();
+    }
     let Ok(generated) =
         crate::repository_model::RepositoryRenderModel::from_answers(&generated_answers)
     else {
@@ -650,11 +663,15 @@ fn resolve_render_answers(
     authored_repository_commands: Option<BTreeMap<String, String>>,
     preserve_repository_model: bool,
 ) -> Result<RenderAnswers> {
-    let scaffolded_frontend_contracts = raw.repository.as_ref().is_some_and(|repository| {
-        authored_repository_commands
-            .as_ref()
-            .is_some_and(|commands| repository.frontend_contracts_enabled(commands))
-    });
+    let saved = |declared: fn(&AuthoredRepositoryModel, &BTreeMap<String, String>) -> bool| {
+        raw.repository.as_ref().is_some_and(|repository| {
+            authored_repository_commands
+                .as_ref()
+                .is_some_and(|commands| declared(repository, commands))
+        })
+    };
+    let scaffolded_frontend_contracts = saved(AuthoredRepositoryModel::frontend_contracts_enabled);
+    let scaffolded_public_boundary = saved(AuthoredRepositoryModel::public_boundary_enabled);
     let authored_repository = preserve_repository_model
         .then(|| raw.repository.take())
         .flatten()
@@ -664,6 +681,9 @@ fn resolve_render_answers(
         raw.resolve_with_authored_repository(default_repo_name, authored_repository)?;
     if scaffolded_frontend_contracts {
         answers.enable_scaffolded_frontend_contracts();
+    }
+    if scaffolded_public_boundary {
+        answers.enable_scaffolded_public_boundary();
     }
     if let Some(authored_repository_commands) = authored_repository_commands
         && answers.authored_repository.is_some()
