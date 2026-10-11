@@ -52,7 +52,7 @@ class AffectedPackagesTests(unittest.TestCase):
     def test_notes_that_no_test_reads_are_ignored(self):
         packages = affected.affected_packages(
             [
-                ".beads/issues.jsonl",
+                ".beadroll.json",
                 ".agent/plans/example.md",
                 "docs/plans/example.md",
                 "scripts/__pycache__/example.cpython-314.pyc",

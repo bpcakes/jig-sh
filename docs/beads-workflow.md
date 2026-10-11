@@ -17,8 +17,11 @@ reconcile a second writer.
 Use a compatible `bead` installation; the cutover was verified with Python
 beadroll 0.1.0, `br` 0.5.7, and `bv` 0.25.0. Version 0.1.0 alone does not identify
 the exact Python source. The migration archive retains the installed package
-and its per-file hashes. Re-run import/export and coordination checks before
-replacing that installation with a newer build or the Rust port.
+and its per-file hashes. The native beadroll 0.2.0 build was re-verified on
+2026-10-11: a store recovered from the remote alone pulled all 657 events and
+exported the same 275 records as the retired JSONL, with the same 43 ready and
+26 blocked issues. Re-run import/export and coordination checks before
+replacing that installation with a newer build.
 
 ```sh
 bead sync --json

@@ -28,9 +28,9 @@ selects its own tests and those of every package that depends on it, through
 nextest's `rdeps()`. Packages whose tests read another package's files without
 depending on it are listed in the script's `EXTRA_CONSUMERS` table; a guard test
 in `scripts/tests/test_jig_rust_affected.py` fails when a crate names another
-crate's directory without such an edge. Notes that no test reads (`.beads/`,
-`.agent/plans/`, `.agent/notes/`, `docs/plans/`) and Python `__pycache__`
-directories are ignored. Any other change outside a crate, such as `Cargo.lock`,
+crate's directory without such an edge. Tracker configuration and notes that
+no test reads (`.beadroll.json`, `.agent/plans/`, `.agent/notes/`, `docs/plans/`)
+and Python `__pycache__` directories are ignored. Any other change outside a crate, such as `Cargo.lock`,
 `templates/`, `scripts/`, or `.config/nextest.toml`, runs the whole suite.
 `jig-sh` depends on every crate, so its tests run for any Rust change.
 
