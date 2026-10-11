@@ -10,9 +10,6 @@ on:
       - <<[ (migration_dir ~ "/**") | tojson ]>>
       - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
 [% endif %]
-[% if rust_openapi_check_target and "openapi/**" not in rust_ci_input_paths %]
-      - "openapi/**"
-[% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
@@ -29,9 +26,6 @@ on:
 [% if sqlx_enabled %]
       - <<[ (migration_dir ~ "/**") | tojson ]>>
       - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
-[% endif %]
-[% if rust_openapi_check_target and "openapi/**" not in rust_ci_input_paths %]
-      - "openapi/**"
 [% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"

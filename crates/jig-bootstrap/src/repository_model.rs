@@ -193,6 +193,7 @@ impl RepositoryRenderModel {
 
     pub(super) fn go_ci_input_paths(&self) -> Vec<String> {
         self.backend_ci_input_paths(
+            "go",
             &["go", "go-postgres"],
             &[
                 tool::FMT_CHECK,
@@ -205,6 +206,7 @@ impl RepositoryRenderModel {
 
     pub(super) fn rust_ci_input_paths(&self) -> Vec<String> {
         self.backend_ci_input_paths(
+            "rust",
             &["rust", "sqlx"],
             &[tool::FMT_CHECK, tool::CLIPPY, tool::TEST_LOCKED],
         )
@@ -229,7 +231,14 @@ impl RepositoryRenderModel {
         file_budget::render_seed_policy(self)
     }
 
-    fn backend_ci_input_paths(&self, adapters: &[&str], aliases: &[&str]) -> Vec<String> {
+    /// The paths that select a backend workflow: what its checks, including
+    /// the document check, and their dependencies read.
+    fn backend_ci_input_paths(
+        &self,
+        language: &str,
+        adapters: &[&str],
+        aliases: &[&str],
+    ) -> Vec<String> {
         let owning_components = self
             .components
             .iter()
@@ -261,6 +270,10 @@ impl RepositoryRenderModel {
                         .any(|alias| aliases.contains(&alias.as_str()))
             })
             .map(|action| action.target.clone())
+            .chain(
+                self.openapi_document_check(language)
+                    .map(|check| check.target.clone()),
+            )
             .collect::<Vec<_>>();
         let mut visited = BTreeSet::new();
         while let Some(target) = pending.pop() {

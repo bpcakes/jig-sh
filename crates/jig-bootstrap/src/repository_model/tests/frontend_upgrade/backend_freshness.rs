@@ -211,7 +211,7 @@ fn managed_update_narrows_the_drift_check_of_a_custom_model_behind_its_document_
 #[test]
 fn managed_update_keeps_drift_backend_inputs_without_the_generated_document_check() {
     type Customize = fn(&mut RepositoryRenderModel);
-    let cases: [(&str, Customize); 4] = [
+    let cases: [(&str, Customize); 6] = [
         ("documents only", |saved| {
             let check = document_check_mut(saved);
             check.inputs = vec!["openapi/**".into()];
@@ -243,6 +243,28 @@ fn managed_update_keeps_drift_backend_inputs_without_the_generated_document_chec
             for profile in &mut saved.profiles {
                 profile.targets.retain(|target| *target != check);
             }
+        }),
+        // The profile runs the drift check only through a dependency.
+        ("drift through a dependency", |saved| {
+            let check = target_id("api", "openapi").unwrap();
+            let drift = target_id("repo", "frontend-contract-drift").unwrap();
+            for profile in &mut saved.profiles {
+                profile
+                    .targets
+                    .retain(|target| *target != check && *target != drift);
+            }
+            saved
+                .actions
+                .iter_mut()
+                .find(|item| item.target.to_string() == "web:lint")
+                .unwrap()
+                .depends_on
+                .push(drift);
+        }),
+        ("not a check", |saved| {
+            let check = document_check_mut(saved);
+            check.intent = ActionIntent::Generate;
+            check.effects = vec![ActionEffect::Worktree];
         }),
     ];
     for backend in ["rust", "go"] {
@@ -323,17 +345,76 @@ fn managed_update_keeps_a_removed_document_check_removed() {
 fn workflows_run_the_document_check_only_as_a_read_only_check_of_their_backend() {
     for (backend, other) in [("rust", "go"), ("go", "rust")] {
         let mut model = generated_model(backend, "");
+        // An authored check may read more than the backend root, such as a
+        // schema directory beside a nested backend.
+        document_check_mut(&mut model)
+            .inputs
+            .push("schemas/**".into());
+        let ci_inputs = |model: &RepositoryRenderModel| {
+            if backend == "go" {
+                model.go_ci_input_paths()
+            } else {
+                model.rust_ci_input_paths()
+            }
+        };
         assert_eq!(
             model.openapi_document_check_target(backend).as_deref(),
             Some("api:openapi")
         );
         assert_eq!(model.openapi_document_check_target(other), None);
+        assert!(
+            ci_inputs(&model).contains(&"schemas/**".into()),
+            "{backend}"
+        );
 
         // An authored action of the same name may generate the documents.
         let check = document_check_mut(&mut model);
         check.intent = ActionIntent::Generate;
         check.effects = vec![ActionEffect::Worktree];
         assert_eq!(model.openapi_document_check_target(backend), None);
+        assert!(
+            !ci_inputs(&model).contains(&"schemas/**".into()),
+            "{backend}"
+        );
+    }
+}
+
+/// Quiet Cargo prints each passing test as a dot unless the format is pinned.
+#[cfg(unix)]
+#[test]
+fn rust_document_check_reads_test_names_under_quiet_cargo() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::create_dir_all(root.path().join("openapi")).unwrap();
+    fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"example-openapi-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("openapi/public.json"), "{}\n").unwrap();
+    for (test, passes) in [
+        ("committed_public_openapi_is_current", true),
+        ("committed_public_document_renamed", false),
+    ] {
+        fs::write(
+            root.path().join("src/lib.rs"),
+            format!("#[test]\nfn {test}() {{}}\n"),
+        )
+        .unwrap();
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(openapi_document_check_command(false))
+            .current_dir(root.path())
+            .env("CARGO_TERM_QUIET", "true")
+            .env("CARGO_TARGET_DIR", root.path().join("target"))
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            passes,
+            "{test}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 }
 
@@ -410,7 +491,7 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
         let expected = if go {
             "test -count=1 -run ^TestOpenAPIIsCurrent$ -v ./internal/httpapi\n"
         } else {
-            "test --workspace openapi_is_current\n"
+            "test --workspace openapi_is_current -- --format pretty\n"
         };
         assert_eq!(args, expected, "{label}");
         if status != "0" {

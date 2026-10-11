@@ -207,9 +207,10 @@ fn is_document_check(target: &TargetId) -> bool {
         && target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
 }
 
-/// Whether the saved model has the generated document check (its runner and
-/// command, reading at least the generated inputs) and every profile that
-/// runs the drift check also runs it.
+/// Whether the saved model has the generated document check (a read-only
+/// check with its runner and command, reading at least the generated inputs)
+/// and every profile that runs the drift check, directly or through
+/// dependencies, also runs it.
 fn generated_document_check(
     current: &RepositoryRenderModel,
     saved: &AuthoredRepositoryModel,
@@ -220,6 +221,12 @@ fn generated_document_check(
         .iter()
         .find(|action| is_document_check(&action.target))
     else {
+        return false;
+    };
+    let Some(drift) = current.actions.iter().find(|action| {
+        action.target.component.as_str() == REPO_COMPONENT
+            && action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
+    }) else {
         return false;
     };
     let generated = saved.actions.iter().any(|action| {
@@ -237,15 +244,15 @@ fn generated_document_check(
                 .all(|input| action.inputs.contains(input))
     });
     generated
+        && jig_repository::validate_read_only_check_closure(
+            &saved.actions,
+            std::iter::once(&expected.target),
+        )
+        .is_ok()
         && saved
             .profiles
             .iter()
-            .filter(|profile| {
-                profile.targets.iter().any(|target| {
-                    target.component.as_str() == REPO_COMPONENT
-                        && target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
-                })
-            })
+            .filter(|profile| reaches(&saved.actions, &profile.targets, &drift.target))
             .all(|profile| reaches(&saved.actions, &profile.targets, &expected.target))
 }
 

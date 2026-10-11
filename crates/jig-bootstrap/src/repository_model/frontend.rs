@@ -206,6 +206,7 @@ pub(super) fn frontend_contract_inputs(
 /// unless each one passed: Go would otherwise replay a pass when only a
 /// document outside the module changed, and a filter that matches no test
 /// passes. A customized general test command therefore cannot skip them.
+/// Rust pins the per-test format, which quiet Cargo would print as dots.
 pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
     if go {
         concat!(
@@ -216,7 +217,7 @@ pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
         )
     } else {
         concat!(
-            "output=$(cargo test --workspace openapi_is_current 2>&1); ",
+            "output=$(cargo test --workspace openapi_is_current -- --format pretty 2>&1); ",
             "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
             "for name in public admin; do [ -f \"openapi/$name.json\" ] || continue; ",
             "case \"$output\" in *\"committed_${name}_openapi_is_current ... ok\"*) ;; ",
@@ -266,9 +267,10 @@ impl ModelBuilder<'_> {
 }
 
 impl RepositoryRenderModel {
-    /// The document check, for the backend workflow whose toolchain runs it.
-    /// An authored action of that name joins CI only as a read-only check.
-    pub(crate) fn openapi_document_check_target(&self, adapter: &str) -> Option<String> {
+    /// The document check that the backend workflow for `adapter` runs: a
+    /// read-only check owned by a component with that adapter, so an authored
+    /// action of that name joins CI only as a check.
+    pub(super) fn openapi_document_check(&self, adapter: &str) -> Option<&ActionSpec> {
         let check = self.actions.iter().find(|action| {
             action.target.component.as_str() == BACKEND_COMPONENT
                 && action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
@@ -286,7 +288,12 @@ impl RepositoryRenderModel {
                 std::iter::once(&check.target),
             )
             .is_ok())
-        .then(|| check.target.to_string())
+        .then_some(check)
+    }
+
+    pub(crate) fn openapi_document_check_target(&self, adapter: &str) -> Option<String> {
+        self.openapi_document_check(adapter)
+            .map(|check| check.target.to_string())
     }
 }
 
