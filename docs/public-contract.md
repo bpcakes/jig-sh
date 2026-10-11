@@ -36,6 +36,36 @@ Every `doctor --json` check carries a stable boolean `operator_only`. Operator-o
 
 `scripts/jig codex homes --json` returns a runtime-owned `schema_version: 1` report of local Codex home paths, account identity, plan type, and per-home errors. A home's `status` records stable account state such as `not logged in` or `unknown`; `inspection_error` records account/app-server inspection failure, while `usage_error` records a rate-limit failure after a logged-in account was observed. Both are mirrored in the top-level `errors` array with distinct `kind` values. A logged-out home is a complete observation even when usage was requested: rate-limit usage is not applicable, so an app-server usage failure is not surfaced as `usage_error` and does not change `outcome` to `partial`. Add `--usage` to include every rate-limit bucket and the server-reported durations and reset times. If account inspection succeeds for a logged-in account but usage inspection fails, the report retains the account and records the usage failure. Account and usage data come from the Codex app-server API; Jig does not parse `auth.json`. This output contains local paths and account email addresses and should be handled as user data. Its top-level `representation_lossy` boolean reports whether any non-UTF-8 home path or Codex executable value had to be replaced for JSON display. `scripts/jig codex launch HOME --dry-run --json` and `scripts/jig codex resume SESSION_ID --dry-run --json` are `schema_version: 1` structured launch previews; the latter reports `command: "codex resume"` and includes the injected `resume` and normalized session-ID arguments before caller-supplied arguments. Their `representation_lossy` boolean additionally covers forwarded arguments. Human terminal previews replace control characters before display and explicitly warn when the shown shell command is therefore not launch-equivalent; JSON retains the original string values except for reported non-UTF-8 conversion. A real launch or resume replaces the Jig process on Unix and therefore rejects `--json`; forwarded Codex arguments begin after `--` and retain their original boundaries. On platforms without process replacement, Jig waits for Codex and exits with Codex's shell-compatible status.
 
+`jig codex launch --auto --dry-run --json` and the equivalent Claude command
+extend the existing launch preview with `selection`. Its `strategy` is
+`"headroom"`, `scope` is `"all_reported_windows"`, and `reason` is `"selected"`
+or `"no_eligible_home"`. `selected_index` indexes `candidates` or is null.
+`assessed_at` and per-candidate `observed_at` are Unix seconds; an unobserved
+candidate has a null timestamp. `partial`, `timed_out`, and `warnings` describe
+inspection coverage. Candidate entries contain `index`, `name`, display `path`,
+`representation_lossy`, `current`, provider `details`, and `assessment`.
+The assessment contains `reason`, nullable `remaining_percent`, and nullable
+`limiting_window` (`bucket`, nullable `bucket_name`, `window`,
+nullable `duration_minutes`, nullable `resets_at`). Known utilization is scored
+when duration or reset time is missing or null. Supplied reset times still enforce
+expiry independently of duration; the window-start sanity check applies only when
+both fields are known. Present malformed durations or resets still disqualify the
+home. Claude usage windows with malformed
+fields carry `invalid: true` without echoing raw response data. Valid neighboring
+windows remain available to display; `homes --usage` marks the report `partial`,
+and automatic selection rejects the malformed capacity.
+Candidate reasons are `eligible`, `inspection_unavailable`, `inspection_error`,
+`signed_out`, `usage_unavailable`, `invalid_usage`, `stale_usage`, or `exhausted`.
+These fields do not contain credentials or raw provider responses. Paths remain
+display data; launch uses the retained provider-owned configuration identity.
+
+When inspection completes without any eligible home, the automatic JSON dry run
+emits one `schema_version: 1` document with `ok: false`, the launch `command`,
+`selection`, `error.kind: "no_eligible_home"`, an actionable `error.message`, and
+`exit_status: 1`, then exits with status 1. Earlier discovery or supervision
+failures use the usual structured CLI error protocol. Real launches still reject
+Jig's `--json`; child flags after `--` are passed through unchanged.
+
 `scripts/jig status --json` returns a runtime-owned local aggregate with `schema_version: 4`. Its top-level sections are `repository`, `loops`, and `errors`. Top-level `ok: true` means inspection completed, while `outcome` is `complete` or `partial`. Dirty repositories are observed facts rather than collection errors. Schema version 4 replaced each scheduled occurrence's `worker_receipt_id` with the boolean `worker_invoked`. Schema version 3 removed the `work` section, which reported work plans, sessions, decisions, and gates. The aggregate schema version is independent of generated `contract_version`.
 
 `scripts/jig info --commands --json` returns the runtime-owned command-availability inventory with `command: "info commands"` and `schema_version: 4`. Its `commands` array follows the visible root-command order and each entry contains `name`, `category`, `status`, `reason_code`, `reason`, and `next_step`. Schema version 4 adds foreground `run` availability and upgrade guidance; schema version 3 added the backend-neutral `migration` command family; schema version 2 grouped migration authoring under `sqlx`, and schema version 1 described the legacy flattened roots. The stable status values are `ready`, `not_configured`, `needs_setup`, and `unavailable`; reason codes are stable within a schema version, while human-facing reason and remediation text may improve without a schema-version change. Status describes whether the root command's primary workflow can dispatch, not whether every argument combination or command-specific preflight will succeed. Setup, status, stop, and diagnostic subcommands or flags can therefore remain usable when the root entry is not ready. Ready entries have null `reason_code`, `reason`, and `next_step` fields.

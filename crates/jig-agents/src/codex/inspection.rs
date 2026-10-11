@@ -148,7 +148,7 @@ pub(super) fn normalized_bucket(id: &str, bucket: &JsonValue) -> JsonValue {
 }
 
 pub(super) fn normalized_window(window: Option<&JsonValue>) -> JsonValue {
-    let Some(window) = window.and_then(JsonValue::as_object) else {
+    let Some(window) = window.filter(|window| !window.is_null()) else {
         return JsonValue::Null;
     };
     let mut normalized = JsonMap::new();
@@ -171,4 +171,20 @@ pub(super) fn normalized_window(window: Option<&JsonValue>) -> JsonValue {
         window.get("resetsAt").cloned().unwrap_or(JsonValue::Null),
     );
     JsonValue::Object(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_present_windows_stay_unknown_instead_of_disappearing() {
+        for value in [json!("invalid"), json!(7), json!({"usedPercent":"10"})] {
+            let normalized = normalized_window(Some(&value));
+            assert!(normalized.is_object());
+            assert!(normalized["used_percent"].as_f64().is_none());
+        }
+        assert!(normalized_window(None).is_null());
+        assert!(normalized_window(Some(&JsonValue::Null)).is_null());
+    }
 }
