@@ -3,6 +3,8 @@ use ratatui::{Terminal, backend::TestBackend};
 use super::*;
 use crate::{ConfigurationHome, Home};
 
+mod banked_resets;
+
 #[test]
 fn filtered_selection_stays_visible_across_table_layout_changes() {
     for configuration in [false, true] {

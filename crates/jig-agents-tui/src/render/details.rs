@@ -117,6 +117,10 @@ fn detail_lines(view: &View<'_>, width: usize) -> Vec<Detail> {
                     ("Type".to_owned(), details.account_type.clone()),
                     ("Status".to_owned(), details.status.clone()),
                 ]);
+                if let Some(count) = &details.banked_resets {
+                    account_facts += 1;
+                    facts.push(("Banked resets".to_owned(), count.clone()));
+                }
                 if let Some(sample_age) = details.usage_sample_age_label_at(view.now) {
                     account_facts += 1;
                     let next = refresh_hint(app, row.refreshing);
