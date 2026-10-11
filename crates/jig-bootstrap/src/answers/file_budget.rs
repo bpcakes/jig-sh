@@ -18,6 +18,9 @@ impl RenderAnswers {
         answers.go_postgres_integration_script = path
             .parent()
             .is_some_and(has_go_postgres_integration_script);
+        answers.contract_drift_reads_backend = path
+            .parent()
+            .is_some_and(crate::repository_model::contract_drift_script_reads_backend);
         Ok((answers, warnings))
     }
 

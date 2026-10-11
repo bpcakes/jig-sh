@@ -106,6 +106,79 @@ fn customize_frontend(model: &mut RepositoryRenderModel) {
         .description = Some("Authored web frontend.".into());
 }
 
+/// `scripts/contracts.mjs` drift-check branches from before and after the
+/// document check; the later branch shows that only drift-check counts.
+const EXPORTING_DRIFT_SCRIPT: &str = "if (mode === \"generate\") {\n} else if (mode === \"drift-check\") {\n  await withStagedContracts(\"check\");\n} else if (mode === \"boundary-check\") {\n}\n";
+const CLIENT_DRIFT_SCRIPT: &str = "if (mode === \"generate\") {\n} else if (mode === \"drift-check\") {\n  await withStagedClients();\n} else if (mode === \"generate-again\") {\n  await withStagedContracts(\"generate\");\n}\n";
+
+/// Loads `model` from a repository whose contract script is `script`.
+fn load_saved_beside(model: &RepositoryRenderModel, backend: &str, script: &str) -> RenderAnswers {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join("scripts")).unwrap();
+    fs::write(temp.path().join("scripts/contracts.mjs"), script).unwrap();
+    let path = temp.path().join(".jig.toml");
+    fs::write(
+        &path,
+        format!(
+            "repo_name = \"ExampleProject\"\nbackend_language = {backend:?}\nsqlx_enabled = false\nschema_dump_enabled = false\n{APP}\n{}\n{}",
+            model.authored_toml().unwrap(),
+            model.commands_toml().unwrap()
+        ),
+    )
+    .unwrap();
+    RenderAnswers::from_managed_answers_file(&path, temp.path())
+        .unwrap()
+        .0
+}
+
+#[test]
+fn only_a_client_drift_script_stops_reading_the_backend() {
+    let root = TempDir::new().unwrap();
+    assert!(!contract_drift_script_reads_backend(root.path()));
+    fs::create_dir_all(root.path().join("scripts")).unwrap();
+    for (script, reads_backend) in [
+        (EXPORTING_DRIFT_SCRIPT, true),
+        (CLIENT_DRIFT_SCRIPT, false),
+        (
+            "} else if (mode === \"drift-check\") {\n  await exportAndCompare();\n}\n",
+            true,
+        ),
+        ("if (mode === \"generate\") {\n}\n", false),
+    ] {
+        fs::write(root.path().join("scripts/contracts.mjs"), script).unwrap();
+        assert_eq!(
+            contract_drift_script_reads_backend(root.path()),
+            reads_backend,
+            "{script}"
+        );
+    }
+}
+
+#[test]
+fn managed_update_keeps_drift_backend_inputs_beside_an_exporting_drift_script() {
+    for backend in ["rust", "go"] {
+        for (script, reads_backend) in
+            [(EXPORTING_DRIFT_SCRIPT, true), (CLIENT_DRIFT_SCRIPT, false)]
+        {
+            let label = format!("{backend} {reads_backend}");
+            let answers = load_saved_beside(&legacy_model(backend), backend, script);
+            let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+            assert!(answers.authored_repository().is_none(), "{label}");
+            assert!(find(&upgraded, "api:openapi").is_some(), "{label}");
+            assert_eq!(drift_reads_backend(&upgraded), reads_backend, "{label}");
+        }
+
+        // So does a custom model that already has the generated check.
+        let mut saved = legacy_model_with_document_check(backend);
+        customize_frontend(&mut saved);
+        let answers = load_saved_beside(&saved, backend, EXPORTING_DRIFT_SCRIPT);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(drift_reads_backend(&upgraded), "{backend}");
+    }
+}
+
 #[test]
 fn generation_adds_a_document_check_that_test_commands_cannot_skip() {
     for backend in ["rust", "go"] {

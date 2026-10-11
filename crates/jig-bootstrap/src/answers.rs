@@ -55,6 +55,8 @@ pub(super) struct RenderAnswers {
     #[serde(skip)]
     go_postgres_integration_script: bool,
     #[serde(skip)]
+    contract_drift_reads_backend: bool,
+    #[serde(skip)]
     repository_projection_hint: RepositoryProjectionHint,
     repo_name: String,
     default_branch: String,
@@ -519,6 +521,15 @@ impl RenderAnswers {
 
     pub(super) fn enable_go_postgres_integration_script(&mut self) {
         self.go_postgres_integration_script = true;
+    }
+
+    /// The repository's own drift script still exports from the backend.
+    pub(super) const fn contract_drift_reads_backend(&self) -> bool {
+        self.contract_drift_reads_backend
+    }
+
+    pub(super) fn enable_contract_drift_reads_backend(&mut self) {
+        self.contract_drift_reads_backend = true;
     }
 
     pub(super) fn dev_apps_configured(&self) -> bool {

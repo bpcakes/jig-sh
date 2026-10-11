@@ -20,6 +20,7 @@ use super::answers::{
 use super::file_budget_lifecycle::prepare_legacy_migration;
 use super::gate_preview::generated_gates;
 use super::renderer::{RenderStageRequest, stage_render};
+use super::repository_model::contract_drift_script_reads_backend;
 use super::sync::ApplyRenderReport;
 use super::sync::{ApplyRenderConflictPolicy, ApplyRenderOptions, apply_staged_render};
 use super::template_source::PreparedTemplateSource;
@@ -115,6 +116,12 @@ pub(super) fn render_and_copy_bootstrap_template(
         .is_some_and(has_go_postgres_integration_script)
     {
         answers.enable_go_postgres_integration_script();
+    }
+    if request
+        .seed_repo_path
+        .is_some_and(contract_drift_script_reads_backend)
+    {
+        answers.enable_contract_drift_reads_backend();
     }
     let full_to_minimal_transition = request.prior_harness_footprint
         == Some(HarnessFootprint::Full)

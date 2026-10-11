@@ -512,6 +512,7 @@ impl<'a> ModelBuilder<'a> {
             action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
             action.inputs = frontend_contract_inputs(
                 action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION,
+                self.answers.contract_drift_reads_backend(),
                 self.answers.frontend_workspace_roots(),
             );
             action.provenance = provenance(&[
@@ -777,6 +778,7 @@ mod frontend;
 use self::ids::{component_id, target_id};
 pub(super) use frontend::frontend_component_id;
 use frontend::*;
+pub(super) use frontend_migration::contract_drift_script_reads_backend;
 
 mod ids;
 

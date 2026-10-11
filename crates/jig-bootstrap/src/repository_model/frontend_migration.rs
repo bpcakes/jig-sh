@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use super::{
     ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BACKEND_CONTRACT_INPUTS,
@@ -95,7 +96,14 @@ pub(super) fn upgrade_saved_projection(
             continue;
         }
         let history = generated_input_history(action.target.action.as_str(), &expected.inputs);
-        if !history.contains(&action.inputs) {
+        // A drift check narrowed beside a script that still exports from the
+        // backend regains the backend inputs.
+        let surface = contract_surface(&expected.inputs);
+        let narrowed_beside_export = action.target.action.as_str()
+            == FRONTEND_CONTRACT_DRIFT_ACTION
+            && action.inputs == surface
+            && surface != expected.inputs;
+        if !history.contains(&action.inputs) && !narrowed_beside_export {
             continue;
         }
         action.inputs = if action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
@@ -170,12 +178,30 @@ fn insert_sorted<T>(items: &mut Vec<T>, item: T, target: impl Fn(&T) -> &TargetI
     items.insert(index, item);
 }
 
-/// Inputs that earlier generators wrote for a contract check.
+/// Whether the repository's `scripts/contracts.mjs` exports the documents
+/// from the backend in drift-check mode, as scripts written before the
+/// document check did. Only the current shape, which regenerates the clients
+/// from the committed documents, lets the drift check stop reading the
+/// backend; a missing script cannot run the drift check at all.
+pub(crate) fn contract_drift_script_reads_backend(root: &Path) -> bool {
+    let Ok(script) = std::fs::read_to_string(root.join("scripts/contracts.mjs")) else {
+        return false;
+    };
+    let Some((_, branch)) = script.split_once("mode === \"drift-check\"") else {
+        return false;
+    };
+    let branch = branch.split("} else if (").next().unwrap_or(branch);
+    !branch.contains("withStagedClients(") || branch.contains("withStagedContracts(")
+}
+
+/// Inputs that earlier generators wrote for a contract check. Every drift
+/// shape is the contract surface plus the backend inputs of its time.
 fn generated_input_history(action: &str, expected: &[String]) -> Vec<Vec<String>> {
+    let surface = contract_surface(expected);
     match action {
         FRONTEND_CONTRACT_DRIFT_ACTION => vec![
-            with_inputs(expected, &[LEGACY_DRIFT_BACKEND_INPUTS]),
-            with_inputs(expected, &[BACKEND_CONTRACT_INPUTS]),
+            with_inputs(&surface, &[LEGACY_DRIFT_BACKEND_INPUTS]),
+            with_inputs(&surface, &[BACKEND_CONTRACT_INPUTS]),
         ],
         _ => vec![
             expected
@@ -185,6 +211,15 @@ fn generated_input_history(action: &str, expected: &[String]) -> Vec<Vec<String>
                 .collect(),
         ],
     }
+}
+
+/// The contract inputs of a drift check, without the backend.
+fn contract_surface(inputs: &[String]) -> Vec<String> {
+    inputs
+        .iter()
+        .filter(|input| !BACKEND_CONTRACT_INPUTS.contains(&input.as_str()))
+        .cloned()
+        .collect()
 }
 
 fn with_inputs(inputs: &[String], extra: &[&[&str]]) -> Vec<String> {

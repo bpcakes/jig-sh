@@ -55,13 +55,15 @@
   longer select it. Newly scaffolded repositories also run it without
   exporting from the backend: it regenerates the clients from the committed
   documents and compares them. An existing `scripts/contracts.mjs` belongs to
-  its repository and keeps its behavior. `jig update` adds `api:openapi` to a
-  generated repository whose drift check still reads the backend in a
-  generated shape and whose `api_openapi_command` key is free, and narrows its
-  drift inputs. Any other repository model keeps its targets, and a drift
-  check saved by an earlier generator keeps reading the backend unless the
-  model has the generated `api:openapi` and every profile that runs the drift
-  check also runs it.
+  its repository and keeps its behavior, so while its drift-check still
+  exports the documents from the backend, the drift check keeps reading the
+  backend. `jig update` adds `api:openapi` to a generated repository whose
+  drift check still reads the backend in a generated shape and whose
+  `api_openapi_command` key is free. It narrows the drift inputs once the
+  script regenerates the clients from the committed documents. Any other
+  repository model keeps its targets, and a drift check saved by an earlier
+  generator keeps reading the backend unless the model has the generated
+  `api:openapi` and every profile that runs the drift check also runs it.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the
