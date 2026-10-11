@@ -139,46 +139,69 @@ pub(super) fn aggregate_frontend_inputs(
         .collect()
 }
 
+/// The backend tests compare the committed OpenAPI documents with the backend.
+pub(super) const OPENAPI_INPUT: &str = "openapi/**";
+
+/// Backend sources, manifests, lockfiles, and workspace files. The boundary
+/// check inspects the backend dependency graph, so it reads them.
+pub(super) const BACKEND_CONTRACT_INPUTS: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "**/Cargo.toml",
+    "**/Cargo.lock",
+    "**/*.rs",
+    "go.mod",
+    "go.sum",
+    "go.work",
+    "go.work.sum",
+    "**/go.mod",
+    "**/go.sum",
+    "**/go.work",
+    "**/go.work.sum",
+    "**/*.go",
+    "vendor/modules.txt",
+    "**/vendor/modules.txt",
+];
+
+/// The drift check regenerates the clients from the committed documents, so
+/// it reads only the contract surface; the backend tests own document
+/// freshness. The boundary check also reads the backend.
 pub(super) fn frontend_contract_inputs(
-    include_public_artifacts: bool,
+    public_boundary: bool,
     workspace_roots: &[String],
 ) -> Vec<String> {
     let mut inputs = FRONTEND_SHARED_INPUTS
         .iter()
-        .copied()
-        // Lockfiles and workspace files decide which generator versions
-        // produce the contracts, so they trigger drift checks like source.
-        .chain([
-            "Cargo.toml",
-            "Cargo.lock",
-            "**/Cargo.toml",
-            "**/Cargo.lock",
-            "**/*.rs",
-            "go.mod",
-            "go.sum",
-            "go.work",
-            "go.work.sum",
-            "**/go.mod",
-            "**/go.sum",
-            "**/go.work",
-            "**/go.work.sum",
-            "**/*.go",
-            "vendor/modules.txt",
-            "**/vendor/modules.txt",
-        ])
-        .map(str::to_owned)
+        .map(|input| (*input).to_owned())
         .collect::<Vec<_>>();
     inputs.extend(
         workspace_roots
             .iter()
             .map(|root| component_root_input(root)),
     );
-    if include_public_artifacts {
+    if public_boundary {
+        inputs.extend(BACKEND_CONTRACT_INPUTS.iter().map(|input| (*input).into()));
         inputs.extend(["docs/public/**".into(), "public-docs/**".into()]);
     }
     inputs.sort();
     inputs.dedup();
     inputs
+}
+
+/// Backend tests assert that the committed OpenAPI documents match the
+/// backend, so a document edit must select them.
+pub(super) fn add_backend_contract_test_inputs(
+    actions: &mut BTreeMap<TargetId, ActionSpec>,
+) -> Result<()> {
+    for id in ["test", "test-locked"] {
+        if let Some(action) = actions.get_mut(&target_id(BACKEND_COMPONENT, id)?) {
+            action.inputs.push(OPENAPI_INPUT.into());
+            action
+                .provenance
+                .insert("inputs".into(), FieldProvenance::Inferred);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn provenance(entries: &[(&str, FieldProvenance)]) -> BTreeMap<String, FieldProvenance> {

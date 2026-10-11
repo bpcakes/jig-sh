@@ -1,10 +1,12 @@
 use super::{
-    ActionRunner, ActionSpec, AuthoredRepositoryModel, BTreeMap, FRONTEND_CONTRACT_DRIFT_ACTION,
-    FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance, REPO_COMPONENT, RepositoryRenderModel,
+    ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BTreeMap,
+    FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance,
+    OPENAPI_INPUT, REPO_COMPONENT, RepositoryRenderModel, TargetId,
     retire_saved_frontend_dependencies,
 };
 
-// Inputs added when backend propagation was replaced by contract-only checking.
+// Lockfile and workspace inputs the contract checks gained when frontends
+// stopped depending on the backend.
 const CONTRACT_RESOLUTION_INPUTS: &[&str] = &[
     "Cargo.lock",
     "**/Cargo.lock",
@@ -16,6 +18,16 @@ const CONTRACT_RESOLUTION_INPUTS: &[&str] = &[
     "**/go.work.sum",
     "vendor/modules.txt",
     "**/vendor/modules.txt",
+];
+
+// Backend inputs the drift check read while it exported the documents itself.
+const LEGACY_DRIFT_BACKEND_INPUTS: &[&str] = &[
+    "Cargo.toml",
+    "**/Cargo.toml",
+    "**/*.rs",
+    "go.mod",
+    "**/go.mod",
+    "**/*.go",
 ];
 
 pub(super) fn contracts_enabled(
@@ -50,6 +62,10 @@ pub(super) fn upgrade_saved_projection(
     if !current.frontend_contracts_enabled() || !saved.frontend_contracts_enabled(commands) {
         return upgraded;
     }
+    upgrade_backend_contract_tests(current, &mut upgraded.actions);
+    // Narrowing the drift check is safe only while the backend tests, which
+    // prove the documents match the backend, run on document edits.
+    let tests_read_documents = backend_contract_tests_read_documents(&upgraded.actions);
     for action in &mut upgraded.actions {
         if action.target.component.as_str() != REPO_COMPONENT
             || !matches!(
@@ -57,6 +73,8 @@ pub(super) fn upgrade_saved_projection(
                 FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
             )
             || action.provenance.get("inputs") != Some(&FieldProvenance::Inferred)
+            || (action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
+                && !tests_read_documents)
         {
             continue;
         }
@@ -77,17 +95,90 @@ pub(super) fn upgrade_saved_projection(
         {
             continue;
         }
-        let legacy_inputs = expected
-            .inputs
-            .iter()
-            .filter(|input| !CONTRACT_RESOLUTION_INPUTS.contains(&input.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if action.inputs == legacy_inputs {
+        if generated_input_history(action.target.action.as_str(), &expected.inputs)
+            .contains(&action.inputs)
+        {
             action.inputs.clone_from(&expected.inputs);
         }
     }
     upgraded
+}
+
+/// Inputs that earlier generators wrote for a contract check.
+fn generated_input_history(action: &str, expected: &[String]) -> Vec<Vec<String>> {
+    let with = |extra: &[&[&str]]| {
+        let mut inputs = expected
+            .iter()
+            .cloned()
+            .chain(
+                extra
+                    .iter()
+                    .flat_map(|set| set.iter().map(|input| (*input).to_owned())),
+            )
+            .collect::<Vec<_>>();
+        inputs.sort();
+        inputs.dedup();
+        inputs
+    };
+    match action {
+        FRONTEND_CONTRACT_DRIFT_ACTION => vec![
+            with(&[LEGACY_DRIFT_BACKEND_INPUTS]),
+            with(&[LEGACY_DRIFT_BACKEND_INPUTS, CONTRACT_RESOLUTION_INPUTS]),
+        ],
+        _ => vec![
+            expected
+                .iter()
+                .filter(|input| !CONTRACT_RESOLUTION_INPUTS.contains(&input.as_str()))
+                .cloned()
+                .collect(),
+        ],
+    }
+}
+
+fn is_backend_contract_test(target: &TargetId) -> bool {
+    target.component.as_str() == BACKEND_COMPONENT
+        && matches!(target.action.as_str(), "test" | "test-locked")
+}
+
+/// Add the document input to backend tests that still read the adapter's
+/// generated inputs.
+fn upgrade_backend_contract_tests(current: &RepositoryRenderModel, actions: &mut [ActionSpec]) {
+    for action in actions
+        .iter_mut()
+        .filter(|action| is_backend_contract_test(&action.target))
+    {
+        let Some(expected) = current
+            .actions
+            .iter()
+            .find(|item| item.target == action.target)
+        else {
+            continue;
+        };
+        let legacy = expected
+            .inputs
+            .iter()
+            .filter(|input| input.as_str() != OPENAPI_INPUT)
+            .cloned()
+            .collect::<Vec<_>>();
+        if action.provenance.get("inputs") == Some(&FieldProvenance::Inherited)
+            && action.inputs == legacy
+            && legacy.len() < expected.inputs.len()
+        {
+            action.inputs.clone_from(&expected.inputs);
+            action
+                .provenance
+                .insert("inputs".into(), FieldProvenance::Inferred);
+        }
+    }
+}
+
+fn backend_contract_tests_read_documents(actions: &[ActionSpec]) -> bool {
+    let mut tests = actions
+        .iter()
+        .filter(|action| is_backend_contract_test(&action.target))
+        .peekable();
+    tests.peek().is_some()
+        && tests.all(|action| action.inputs.iter().any(|input| input == OPENAPI_INPUT))
 }
 
 fn command(runner: &ActionRunner) -> Option<&str> {

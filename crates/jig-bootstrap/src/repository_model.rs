@@ -503,7 +503,7 @@ impl<'a> ModelBuilder<'a> {
             ]);
             self.insert_action(action)?;
         }
-        Ok(())
+        add_backend_contract_test_inputs(&mut self.actions)
     }
 
     fn add_adapter_actions(

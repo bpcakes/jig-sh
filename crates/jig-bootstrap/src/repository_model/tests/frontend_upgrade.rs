@@ -9,7 +9,23 @@ kind = "vite"
 role = "spa"
 "#;
 
+// Backend inputs the contract checks read before the lockfile cutover.
+const LEGACY_BACKEND_INPUTS: &[&str] = &[
+    "Cargo.toml",
+    "**/Cargo.toml",
+    "**/*.rs",
+    "go.mod",
+    "**/go.mod",
+    "**/*.go",
+];
+
 fn legacy_model(backend: &str) -> RepositoryRenderModel {
+    saved_model(backend, LEGACY_BACKEND_INPUTS)
+}
+
+/// A model saved by an earlier generator whose contract checks read
+/// `backend_inputs` and whose backend tests did not read the documents.
+fn saved_model(backend: &str, backend_inputs: &[&str]) -> RepositoryRenderModel {
     let mut model = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
         "backend_language = {backend:?}\n{APP}"
     )))
@@ -32,7 +48,17 @@ fn legacy_model(backend: &str) -> RepositoryRenderModel {
             _ => {}
         }
     }
-    // The actual generated input shape before the contract-only cutover.
+    for action in &mut model.actions {
+        if matches!(
+            action.target.to_string().as_str(),
+            "api:test" | "api:test-locked"
+        ) {
+            action.inputs.retain(|input| input != "openapi/**");
+            action
+                .provenance
+                .insert("inputs".into(), FieldProvenance::Inherited);
+        }
+    }
     for action in &mut model.actions {
         if action.target.component.as_str() == "repo"
             && matches!(
@@ -42,16 +68,8 @@ fn legacy_model(backend: &str) -> RepositoryRenderModel {
         {
             action.inputs = FRONTEND_SHARED_INPUTS
                 .iter()
-                .copied()
-                .chain([
-                    "Cargo.toml",
-                    "**/Cargo.toml",
-                    "**/*.rs",
-                    "go.mod",
-                    "**/go.mod",
-                    "**/*.go",
-                ])
-                .map(str::to_owned)
+                .chain(backend_inputs)
+                .map(|input| (*input).to_owned())
                 .collect();
             if action.target.action.as_str() == "frontend-public-boundary" {
                 action
@@ -90,8 +108,13 @@ fn load_saved(model: &RepositoryRenderModel, backend: &str) -> RenderAnswers {
 
 #[test]
 fn managed_update_upgrades_legacy_contract_models_and_keeps_them_generated() {
-    for backend in ["rust", "go"] {
-        let saved = legacy_model(backend);
+    for (backend, backend_inputs) in ["rust", "go"].into_iter().flat_map(|backend| {
+        [
+            (backend, LEGACY_BACKEND_INPUTS),
+            (backend, BACKEND_CONTRACT_INPUTS),
+        ]
+    }) {
+        let saved = saved_model(backend, backend_inputs);
         let answers = load_saved(&saved, backend);
         assert!(answers.authored_repository().is_none());
         assert!(answers.scaffolded_frontend_contracts());
@@ -199,25 +222,70 @@ fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
         Some("Custom frontend description")
     );
     assert!(frontend.depends_on.is_empty());
-    for action in upgraded.actions.iter().filter(|action| {
-        matches!(
-            action.target.action.as_str(),
-            "frontend-contract-drift" | "frontend-public-boundary"
-        )
-    }) {
-        for input in [
-            "Cargo.lock",
-            "go.sum",
-            "go.work",
-            "go.work.sum",
-            "vendor/modules.txt",
-        ] {
-            assert!(
-                action.inputs.contains(&input.into()),
-                "{} must read {input}",
-                action.target
-            );
-        }
+    let current = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
+        "backend_language = \"rust\"\n{APP}"
+    )))
+    .unwrap();
+    let find = |model: &RepositoryRenderModel, target: &str| {
+        model
+            .actions
+            .iter()
+            .find(|item| item.target.to_string() == target)
+            .unwrap()
+            .clone()
+    };
+    for target in [
+        "api:test",
+        "api:test-locked",
+        "repo:frontend-contract-drift",
+        "repo:frontend-public-boundary",
+    ] {
+        assert_eq!(
+            find(&upgraded, target).inputs,
+            find(&current, target).inputs,
+            "{target}"
+        );
+    }
+    let boundary = find(&upgraded, "repo:frontend-public-boundary");
+    for input in ["Cargo.lock", "go.sum", "go.work", "vendor/modules.txt"] {
+        assert!(boundary.inputs.contains(&input.into()), "{input}");
+    }
+}
+
+#[test]
+fn managed_update_keeps_drift_backend_inputs_while_backend_tests_skip_documents() {
+    let mut saved = legacy_model("rust");
+    let test = saved
+        .actions
+        .iter_mut()
+        .find(|item| item.target.to_string() == "api:test")
+        .unwrap();
+    test.provenance
+        .insert("inputs".into(), FieldProvenance::Declared);
+    let expected_test = test.clone();
+    let expected_drift = saved
+        .actions
+        .iter()
+        .find(|item| item.target.to_string() == "repo:frontend-contract-drift")
+        .unwrap()
+        .clone();
+
+    let answers = load_saved(&saved, "rust");
+    let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(answers.authored_repository().is_some());
+    for expected in [expected_test, expected_drift] {
+        assert_eq!(
+            upgraded
+                .actions
+                .iter()
+                .find(|item| item.target == expected.target)
+                .unwrap()
+                .inputs,
+            expected.inputs,
+            "{}",
+            expected.target
+        );
     }
 }
 
@@ -279,7 +347,7 @@ fn managed_update_preserves_authored_contract_inputs_commands_and_dependencies()
 }
 
 #[test]
-fn upgraded_contracts_select_lockfile_and_workspace_changes_without_frontend_fanout() {
+fn upgraded_contracts_split_backend_and_client_freshness_without_frontend_fanout() {
     use jig_context::RepoContext;
     use jig_repository::{PlanRunRequest, RepositoryCatalog, plan_run_with_cancellation};
 
@@ -363,6 +431,7 @@ fn upgraded_contracts_select_lockfile_and_workspace_changes_without_frontend_fan
                 &catalog,
                 PlanRunRequest {
                     selectors: [
+                        "api:test",
                         "repo:frontend-contract-drift",
                         "web:lint",
                         "web:typecheck",
@@ -383,28 +452,32 @@ fn upgraded_contracts_select_lockfile_and_workspace_changes_without_frontend_fan
                 .map(|item| item.target.to_string())
                 .collect::<Vec<_>>()
         };
-        // A frontend-only change runs its checks without the contract checks.
-        let selected = selected_after("frontend/web/src/main.ts");
-        assert!(selected.contains(&"web:typecheck".into()), "{selected:?}");
-        assert!(
-            !selected.contains(&"repo:frontend-contract-drift".into()),
-            "{backend}: {selected:?}"
-        );
-        for path in backend_paths
+        // Backend tests own document freshness and the drift check owns
+        // client freshness; neither change fans out to the frontend checks.
+        let expectations = backend_paths
             .iter()
-            .copied()
-            .chain(["openapi/public.json", "packages/web-api-client/index.ts"])
-        {
+            .map(|path| (*path, true, false, false))
+            .chain([
+                ("openapi/public.json", true, true, true),
+                ("packages/web-api-client/index.ts", false, true, true),
+                ("frontend/web/src/main.ts", false, false, true),
+            ]);
+        for (path, backend_tests, drift, frontend) in expectations {
             let selected = selected_after(path);
-            assert!(
-                selected.contains(&"repo:frontend-contract-drift".into()),
+            assert_eq!(
+                selected.contains(&"api:test".into()),
+                backend_tests,
                 "{backend} {path}: {selected:?}"
             );
-            let frontend_expected = !backend_paths.contains(&path);
+            assert_eq!(
+                selected.contains(&"repo:frontend-contract-drift".into()),
+                drift,
+                "{backend} {path}: {selected:?}"
+            );
             for check in ["lint", "typecheck", "build", "test"] {
                 assert_eq!(
                     selected.contains(&format!("web:{check}")),
-                    frontend_expected,
+                    frontend,
                     "{backend} {path}: {selected:?}"
                 );
             }

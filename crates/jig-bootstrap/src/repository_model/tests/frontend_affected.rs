@@ -38,7 +38,7 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
         ("", ["**/*.rs", "Cargo.toml", "Cargo.lock", "**/Cargo.lock"]),
         (
             "backend_language = \"go\"\n",
-            ["**/*.go", "go.mod", "go.sum", "**/go.sum"],
+            ["**/*.go", "go.mod", "go.sum", "go.work"],
         ),
     ] {
         let model = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
@@ -64,11 +64,31 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
                 }
             }
         }
+        // Backend tests prove the documents match the backend; the drift
+        // check proves the clients match the documents.
         let drift = action(&model, "repo:frontend-contract-drift");
+        for contract in ["openapi/**", "packages/*-api-client/**"] {
+            assert!(drift.inputs.iter().any(|input| input == contract));
+        }
+        for test in ["api:test", "api:test-locked"] {
+            let test = action(&model, test);
+            assert!(test.inputs.iter().any(|input| input == "openapi/**"));
+            assert_eq!(
+                test.provenance.get("inputs"),
+                Some(&FieldProvenance::Inferred)
+            );
+        }
         for input in backend_inputs {
             assert!(
-                drift.inputs.iter().any(|candidate| candidate == input),
-                "contract drift must read {input}"
+                action(&model, "api:test")
+                    .inputs
+                    .iter()
+                    .any(|candidate| candidate == input),
+                "backend tests must read {input}"
+            );
+            assert!(
+                !drift.inputs.iter().any(|candidate| candidate == input),
+                "contract drift must not read {input}"
             );
         }
         assert!(

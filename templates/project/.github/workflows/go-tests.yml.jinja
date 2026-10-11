@@ -9,7 +9,9 @@ on:
 [% if go_sqlc_ci_enabled %]
       - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
+[% if "openapi/**" not in go_ci_input_paths %]
       - "openapi/**"
+[% endif %]
 [% if go_postgres_integration_ci_enabled %]
       - "scripts/test-postgres.sh"
 [% endif %]
@@ -29,7 +31,9 @@ on:
 [% if go_sqlc_ci_enabled %]
       - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
+[% if "openapi/**" not in go_ci_input_paths %]
       - "openapi/**"
+[% endif %]
 [% if go_postgres_integration_ci_enabled %]
       - "scripts/test-postgres.sh"
 [% endif %]
