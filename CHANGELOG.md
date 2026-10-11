@@ -34,9 +34,11 @@
   on Go source changes, or on every change when the backend sits at the
   repository root; its job never runs Go. Every workflow now also runs when
   the shared ESLint config or `scripts/web-node.cjs` changes, and, with API
-  contracts, when `docs/public/**`, `public-docs/**`, or a Go backend's
-  `go.mod` changes, which `client-check` scans. `jig update` reports the
-  refreshed workflow as a conflict.
+  contracts, when `docs/public/**`, `public-docs/**`, the Go backend's
+  `go.mod`, or the Rust public API and HTTP crate manifests change, which
+  `client-check` scans. A frontend app at the repository root now triggers
+  the workflow on any change; its filter was `./**`, which matched nothing.
+  `jig update` reports the refreshed workflow as a conflict.
 
 ## v0.8.0 - 2026-10-09
 
