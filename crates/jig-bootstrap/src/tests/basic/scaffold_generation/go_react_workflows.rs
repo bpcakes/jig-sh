@@ -143,11 +143,12 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     assert_contains_count(
         &workflow,
         &[
-            (r#"- "**""#, 2),
             (r#"- "openapi/**""#, 2),
             (r#"- "packages/public-api-client/**""#, 2),
         ],
     );
+    // The frontend job never runs Go, so Go changes do not trigger it.
+    assert_contains_none(&workflow, &[r#"- "**""#, r#"- "**/*.go""#, r#"- "go.mod""#]);
     assert_contains_all(&workflow, &["node scripts/contracts.mjs client-check"]);
     assert_contains_none(&workflow, &["if [ -f scripts/contracts.mjs ]"]);
     assert_text_before(

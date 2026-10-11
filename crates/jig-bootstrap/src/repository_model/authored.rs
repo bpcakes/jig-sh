@@ -124,7 +124,7 @@ impl RepositoryRenderModel {
             tools: tools.into_values().collect(),
             commands,
         };
-        retire_saved_frontend_backend_dependencies(&mut model);
+        retire_saved_frontend_backend_dependencies(&mut model.components);
         Ok(model)
     }
 }

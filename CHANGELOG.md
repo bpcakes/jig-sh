@@ -5,19 +5,27 @@
 ### Fixed
 
 - Backend-only changes no longer select every frontend check under
-  `scripts/jig check --affected` in repositories scaffolded with API
-  contracts. Frontend components no longer depend on the backend component:
-  their checks run when `openapi/**` or the generated API clients change, and
-  `repo:frontend-contract-drift` catches backend changes that alter the
-  contracts. The drift check now also runs when only `Cargo.lock`, `go.sum`,
-  or Go workspace files change. `jig update` removes the backend dependency
-  from existing frontend components in `.jig.toml` while it is still the
-  generated `depends_on = ["api"]` with inferred provenance; a dependency you
-  authored is kept. Existing generated contract actions also gain the new
-  lockfile and workspace inputs, while authored inputs and commands survive.
-  Unmodified saved scaffolds remain eligible for generated updates. The
-  refreshed `.agent/jig-contract.json` is reported as a
-  conflict, so review it and accept it with `--force`.
+  `scripts/jig check --affected`, with or without API contracts. Frontend
+  components no longer depend on the backend component: their checks read
+  their own inputs, including `openapi/**` and the generated API clients, so a
+  backend change cannot change their results. A frontend whose package
+  scripts compile or run backend code must declare those files as inputs. In
+  repositories scaffolded with API contracts, `repo:frontend-contract-drift`
+  catches backend changes that alter the contracts, and now also runs when
+  only `Cargo.lock`, `go.sum`, or Go workspace files change. `jig update`
+  removes the backend dependency from existing frontend components in
+  `.jig.toml` while it is still the generated single dependency on the
+  repository-root backend with inferred provenance, including under an
+  adopted backend id such as `workspace`, and names each dependency it
+  removes; a dependency with declared provenance is kept. Existing generated
+  contract actions also gain the new lockfile and workspace inputs, while
+  authored inputs and commands survive. Unmodified saved models remain
+  eligible for generated updates. The refreshed `.agent/jig-contract.json` is
+  reported as a conflict, so review it and accept it with `--force`.
+- The generated `webapp-checks.yml` of a Go repository no longer runs on Go
+  changes, or on every change when the backend sits at the repository root.
+  Its job never runs Go. In other repositories with frontends the workflow
+  loses a blank line, so `jig update` also reports it as a conflict.
 
 ## v0.8.0 - 2026-10-09
 

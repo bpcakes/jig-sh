@@ -102,6 +102,44 @@ fn managed_update_upgrades_legacy_contract_models_and_keeps_them_generated() {
 }
 
 #[test]
+fn managed_update_retires_the_dependency_of_uncontracted_frontends_and_keeps_them_generated() {
+    for backend in ["rust", "go"] {
+        let current = RepositoryRenderModel::from_answers(&answers(&format!(
+            "backend_language = {backend:?}\n{APP}"
+        )))
+        .unwrap();
+        let mut saved = current.clone();
+        let web = saved
+            .components
+            .iter_mut()
+            .find(|item| item.id.as_str() == "web")
+            .unwrap();
+        web.depends_on = vec![component_id("api").unwrap()];
+        web.provenance
+            .insert("depends_on".into(), FieldProvenance::Inferred);
+        saved
+            .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+        saved
+            .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+
+        let answers = load_saved(&saved, backend);
+
+        assert!(
+            answers.authored_repository().is_none(),
+            "{backend}: an unmodified saved model must stay generated"
+        );
+        assert!(!answers.scaffolded_frontend_contracts());
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert_eq!(
+            upgraded.authored_toml().unwrap(),
+            current.authored_toml().unwrap()
+        );
+    }
+}
+
+#[test]
 fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
     let mut saved = legacy_model("rust");
     saved

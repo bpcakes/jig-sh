@@ -46,6 +46,7 @@ pub(super) fn upgrade_saved_projection(
     commands: &BTreeMap<String, String>,
 ) -> AuthoredRepositoryModel {
     let mut upgraded = saved.clone();
+    retire_saved_frontend_backend_dependencies(&mut upgraded.components);
     if !current.frontend_contracts_enabled() || !saved.frontend_contracts_enabled(commands) {
         return upgraded;
     }
@@ -86,13 +87,6 @@ pub(super) fn upgrade_saved_projection(
             action.inputs.clone_from(&expected.inputs);
         }
     }
-    // Reuse the dependency migration's provenance and contract guards.
-    let mut model = current.clone();
-    model.components.clone_from(&upgraded.components);
-    model.actions.clone_from(&upgraded.actions);
-    model.commands.clone_from(commands);
-    retire_saved_frontend_backend_dependencies(&mut model);
-    upgraded.components = model.components;
     upgraded
 }
 
