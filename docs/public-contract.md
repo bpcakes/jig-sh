@@ -41,16 +41,22 @@ app-server's `rateLimitResetCredits.availableCount` when usage is requested.
 An unsigned integer is the available count, including zero; null means it is
 unavailable, invalid, or usage was not requested. The count does not depend on
 the optional, potentially truncated credit details, which Jig does not expose.
-Banked resets do not affect recommendation or automatic selection scores.
+Banked resets break automatic selection ties in current headroom; they do not
+change available quota, eligibility, or the picker's pace-based recommendation.
 
 `jig codex launch --auto --dry-run --json` and the equivalent Claude command
 extend the existing launch preview with `selection`. Its `strategy` is
-`"headroom"`, `scope` is `"all_reported_windows"`, and `reason` is `"selected"`
+`"headroom"`, `tie_breakers` is `["banked_resets", "discovery_order"]`,
+`scope` is `"all_reported_windows"`, and `reason` is `"selected"`
 or `"no_eligible_home"`. `selected_index` indexes `candidates` or is null.
 `assessed_at` and per-candidate `observed_at` are Unix seconds; an unobserved
 candidate has a null timestamp. `partial`, `timed_out`, and `warnings` describe
 inspection coverage. Candidate entries contain `index`, `name`, display `path`,
-`representation_lossy`, `current`, provider `details`, and `assessment`.
+`representation_lossy`, `current`, provider `details`, nullable `banked_resets`,
+and `assessment`. Equal remaining percentages favor the highest known reset
+count, then discovery order. Missing or invalid counts remain null in JSON and
+earn no ranking bonus, tying with zero; they do not make valid usage ineligible
+or the inspection partial. Jig does not redeem resets.
 The assessment contains `reason`, nullable `remaining_percent`, and nullable
 `limiting_window` (`bucket`, nullable `bucket_name`, `window`,
 nullable `duration_minutes`, nullable `resets_at`). Known utilization is scored

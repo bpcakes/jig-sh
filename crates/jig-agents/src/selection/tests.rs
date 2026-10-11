@@ -4,6 +4,7 @@ use std::path::Path;
 use super::*;
 use crate::agent_provider::{Choice, HomeInspection, Metadata, PreparedLaunch};
 
+mod banked_resets;
 mod claude_usage;
 mod timing;
 

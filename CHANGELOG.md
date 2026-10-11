@@ -6,6 +6,8 @@
 
 - Show Codex banked reset counts in the picker's account details and
   `codex homes --usage`, including JSON. Missing counts remain unknown.
+  Automatic selection favors more banked resets when current headroom ties;
+  dry runs report the counts. Resets do not make exhausted accounts eligible.
 
 - `jig codex launch --auto` and `jig claude launch --auto` select a home without
   a picker or credential prompts, using the most constrained remaining quota

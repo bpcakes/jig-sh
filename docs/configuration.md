@@ -571,7 +571,7 @@ Codex `--profile` selects a configuration profile inside the chosen home; it doe
 
 Both the picker and `codex homes --usage` human output show quota remaining. Jig labels Codex windows whose reported durations are five hours and one week as `5h` and `weekly`, whether returned alone or together; unexpected durations show their duration without receiving a contradictory role. Other rate-limit buckets show their server-reported durations without imposing Codex-specific labels.
 
-The selected Codex account details and `codex homes --usage` also show **Banked resets**: the available reset count reported by Codex. Zero means none are available; `unknown` means Codex did not provide a valid count. Refresh the picker with `r` to fetch the latest count. Banked resets are informational: Jig does not redeem them or add them to quota headroom when recommending or automatically selecting a home.
+The selected Codex account details and `codex homes --usage` also show **Banked resets**: the available reset count reported by Codex. Zero means none are available; `unknown` means Codex did not provide a valid count. Refresh the picker with `r` to fetch the latest count. Automatic selection uses banked resets to break ties in current headroom. Jig does not redeem them, add them to available quota, or change the picker's pace-based recommendation.
 
 ## Claude Homes
 
@@ -618,8 +618,13 @@ jig claude launch --auto --dry-run --json
 The `headroom` strategy scores each home by its lowest remaining percentage
 across **all returned quota windows**, then chooses the highest score. For
 example, a home with 90% five-hour and 10% weekly remaining loses to one with
-55% five-hour and 60% weekly remaining. Ties use discovery order, independently
-of inspection completion order. Percentages compare relative quota, not token
+55% five-hour and 60% weekly remaining. Equal headroom favors the home with more
+banked resets; unknown counts earn no bonus and tie with zero. Remaining ties
+use discovery order, independently of inspection completion order. A home with
+more resets still loses to one with higher current headroom, and banked resets
+never make an exhausted or otherwise ineligible home eligible. Claude does not
+report banked resets, so its ties continue to use discovery order.
+Percentages compare relative quota, not token
 capacity across different plans. This differs from the picker's recommendation,
 which projects past consumption through the reset time.
 
@@ -646,7 +651,7 @@ candidate fails with exit status 1 instead of falling back or prompting.
 Automatic dry runs fetch usage (Codex starts inspection app-servers) but never
 start an agent session. `--dry-run --json` adds a `selection` decision to the
 usual launch preview, including candidate reason codes, timestamps, remaining
-quota, limiting windows, coverage, and the selected index. See the
+quota, banked reset counts, tie-breaker order, limiting windows, coverage, and the selected index. See the
 [public contract](public-contract.md) for details. Explicit-home dry runs and
 launches retain their existing behavior and do not inspect usage.
 

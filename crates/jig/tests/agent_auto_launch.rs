@@ -35,9 +35,10 @@ if [ "${1:-}" = app-server ]; then
   read -r usage
   printf '%s\n' '{"id":1,"result":{"account":{"type":"chatgpt","planType":"pro"}}}'
   case "$CODEX_HOME" in
-    */.codex-example) short=45; weekly=40; banked=1 ;;
+    */.codex-example) short=45; weekly=40; banked=${JIG_TEST_EXAMPLE_BANKED:-1} ;;
     *) short=10; weekly=90; banked=3 ;;
   esac
+  if [ "${JIG_TEST_TIED_HEADROOM:-}" = 1 ]; then short=20; weekly=20; fi
   if [ "${JIG_TEST_EXHAUSTED:-}" = 1 ]; then weekly=100; fi
   now=$(date +%s)
   short_duration=300; weekly_duration=10080
@@ -85,6 +86,54 @@ fn codex_usage_reports_each_accounts_banked_resets() {
         };
         assert_eq!(home["banked_resets"], expected, "{home}");
     }
+}
+
+#[test]
+fn codex_auto_breaks_headroom_ties_with_banked_resets() {
+    let root = support::tempdir().unwrap();
+    let mut command = codex_fixture(root.path());
+    command
+        .env("JIG_TEST_TIED_HEADROOM", "1")
+        .env("JIG_TEST_EXAMPLE_BANKED", "5");
+    let output = command
+        .args(["codex", "launch", "--auto", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["home"],
+        root.path()
+            .join(".codex-example")
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    let decision = &report["selection"];
+    let index = decision["selected_index"].as_u64().unwrap() as usize;
+    assert_eq!(decision["candidates"][index]["banked_resets"], 5);
+    assert_eq!(
+        decision["candidates"][index]["assessment"]["remaining_percent"],
+        80.0
+    );
+    let output = jig(root.path())
+        .env("JIG_CODEX_BIN", root.path().join("codex-stub"))
+        .env("JIG_TEST_TIED_HEADROOM", "1")
+        .env("JIG_TEST_EXAMPLE_BANKED", "5")
+        .args(["codex", "launch", "--auto", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("banked resets: 5")
+    );
 }
 
 #[test]

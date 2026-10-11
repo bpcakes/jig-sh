@@ -70,7 +70,7 @@ fn select_with_timeout<P: AgentProvider>(
     }
     let timed_out = started.elapsed() >= timeout;
     let now = chrono::Utc::now().timestamp();
-    let mut best: Option<(usize, f64)> = None;
+    let mut best: Option<(usize, f64, u64)> = None;
     let mut candidates = Vec::with_capacity(choices.len());
     let mut partial = timed_out || !warnings.is_empty();
     for (index, (choice, sample)) in choices.iter().zip(&samples).enumerate() {
@@ -78,6 +78,9 @@ fn select_with_timeout<P: AgentProvider>(
             Some((details, _)) => assessment::assess(details, bucket, now),
             None => Assessment::unavailable(Reason::InspectionUnavailable),
         };
+        let banked_resets = sample
+            .as_ref()
+            .and_then(|(details, _)| details["banked_resets"].as_u64());
         partial |= !matches!(
             assessment.reason,
             Reason::Eligible | Reason::Exhausted | Reason::SignedOut
@@ -85,9 +88,13 @@ fn select_with_timeout<P: AgentProvider>(
         if assessment.reason == Reason::Eligible
             && let Some(score) = assessment.remaining_percent
         {
-            // Discovery order is stable; ties never depend on worker completion.
-            if best.is_none_or(|(_, best_score)| score > best_score) {
-                best = Some((index, score));
+            // Unknown reserves earn no bonus. Discovery order breaks remaining
+            // ties, independently of worker completion order.
+            let resets = banked_resets.unwrap_or(0);
+            if best.is_none_or(|(_, best_score, best_resets)| {
+                (score, resets) > (best_score, best_resets)
+            }) {
+                best = Some((index, score, resets));
             }
         }
         candidates.push(json!({
@@ -98,10 +105,11 @@ fn select_with_timeout<P: AgentProvider>(
             "details": choice.details,
             "current": choice.current,
             "observed_at": sample.as_ref().map(|(_, at)| at),
+            "banked_resets": banked_resets,
             "assessment": assessment,
         }));
     }
-    let selected_index = best.map(|(index, _)| index);
+    let selected_index = best.map(|(index, _, _)| index);
     let home = selected_index
         .map(|index| provider.revalidate(&choices[index].selection))
         .transpose()?;
@@ -109,6 +117,7 @@ fn select_with_timeout<P: AgentProvider>(
         home,
         report: json!({
             "strategy": "headroom",
+            "tie_breakers": ["banked_resets", "discovery_order"],
             "scope": "all_reported_windows",
             "reason": if selected_index.is_some() { "selected" } else { "no_eligible_home" },
             "selected_index": selected_index,
