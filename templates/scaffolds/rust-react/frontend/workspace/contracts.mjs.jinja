@@ -65,20 +65,11 @@ if (mode === "generate" || mode === "check") {
   await assertPublicBoundary([], true);
   await withStagedContracts(mode);
 } else if (mode === "drift-check") {
-  // Backend tests prove that each committed document matches the backend;
-  // this proves that the generated clients match the committed documents.
+  // The backend document check proves that each committed document matches
+  // the backend; this proves that the generated clients match the documents.
   for (const contract of contracts.filter(({ name }) => name === "public")) {
     await scanArtifact(resolve(contract.document), "committed public OpenAPI document");
   }
-[% if backend_language == "go" %]
-  // Go caches test results and does not track files outside the module, so
-  // a document edit alone can leave the backend test's cached pass in place.
-  await run(
-    "go",
-    ["test", "-count=1", "-run", "^TestOpenAPIIsCurrent$", "./internal/httpapi"],
-    backendRoot,
-  );
-[% endif %]
   await withStagedClients();
 } else if (mode === "boundary-check") {
   await assertPublicBoundary([], true);

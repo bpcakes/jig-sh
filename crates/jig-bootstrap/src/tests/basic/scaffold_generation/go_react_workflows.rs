@@ -70,21 +70,14 @@ fn assert_go_test_workflow(destination: &Path) {
             ("actions-rust-lang/setup-rust-toolchain@v1", 2),
         ],
     );
-    for target in ["api:fmt", "api:lint", "api:test-locked", "api:sqlc"] {
+    for target in [
+        "api:fmt",
+        "api:lint",
+        "api:test-locked",
+        "api:openapi",
+        "api:sqlc",
+    ] {
         assert_contains_all(&go_tests, &[&format!("scripts/jig check {target}")]);
-    }
-    // The backend tests run uncached, so a restored Go cache cannot replay a
-    // pass over a stale committed document; the other checks keep the cache.
-    for step in parsed["jobs"]["checks"]["steps"].as_array().unwrap() {
-        let Some(run) = step["run"].as_str() else {
-            continue;
-        };
-        let expected = if run == "scripts/jig check api:test-locked" {
-            serde_json::json!({ "GOFLAGS": "-count=1" })
-        } else {
-            serde_json::Value::Null
-        };
-        assert_eq!(step["env"], expected, "{run}");
     }
     assert_quoted_workflow_path_counts(
         &go_tests,
@@ -242,20 +235,23 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             &fake_bin.join("go"),
             "#!/bin/sh\n: > \"$JIG_TEST_GO_MARKER\"\nexit 91\n",
         );
-        let backend_marker = destination.join(".backend-exporter-ran");
+        let backend_marker = destination.join(".backend-ran");
         let before = regular_file_tree_snapshot(&destination);
 
-        let output = run_contracts_mode(
-            &destination,
-            "client-check",
-            &fake_bin,
-            &[("JIG_TEST_GO_MARKER", backend_marker.as_os_str())],
-        );
+        // The backend document check owns document freshness, so neither
+        // client check runs Go.
+        for mode in ["client-check", "drift-check"] {
+            let output = run_contracts_mode(
+                &destination,
+                mode,
+                &fake_bin,
+                &[("JIG_TEST_GO_MARKER", backend_marker.as_os_str())],
+            );
 
-        assert_rust_only_command_output_success("client-check", &output);
-        assert_paths_absent(&destination, &[".backend-exporter-ran"]);
-        assert_eq!(regular_file_tree_snapshot(&destination), before);
-        assert_go_drift_check_reruns_the_document_test_uncached(&destination, &fake_bin);
+            assert_rust_only_command_output_success(mode, &output);
+            assert_paths_absent(&destination, &[".backend-ran"]);
+            assert_eq!(regular_file_tree_snapshot(&destination), before);
+        }
     }
 
     let nested_module_dir = destination.join("services/api");
@@ -317,45 +313,4 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     let go_tests = fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
     assert_contains_all(&go_tests, &["scripts/jig check api:sqlc"]);
     assert_contains_none(&go_tests, &["postgres-integration:"]);
-}
-
-/// drift-check never exports from the backend. It reruns the backend's
-/// document test uncached: Go ignores files outside the module when it reuses
-/// a cached pass, so a warmed cache must not hide a stale document.
-#[cfg(unix)]
-fn assert_go_drift_check_reruns_the_document_test_uncached(destination: &Path, fake_bin: &Path) {
-    // A warmed cache passes; only an uncached run sees the stale document.
-    write_executable_test_script(
-        &fake_bin.join("go"),
-        "#!/bin/sh\nprintf '%s|%s\\n' \"$(pwd -P)\" \"$*\" >> \"$JIG_TEST_GO_LOG\"\ncase \"$*\" in\n  run*) exit 91 ;;\n  *-count=1*) exit \"$JIG_TEST_GO_UNCACHED_STATUS\" ;;\nesac\nexit 0\n",
-    );
-    let log = destination.join(".go-invocations");
-    let root = fs::canonicalize(destination).unwrap();
-    let before = regular_file_tree_snapshot(destination);
-    for (status, passes) in [("1", false), ("0", true)] {
-        let output = run_contracts_mode(
-            destination,
-            "drift-check",
-            fake_bin,
-            &[
-                ("JIG_TEST_GO_LOG", log.as_os_str()),
-                ("JIG_TEST_GO_UNCACHED_STATUS", std::ffi::OsStr::new(status)),
-            ],
-        );
-        assert_eq!(
-            output.status.success(),
-            passes,
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(
-            fs::read_to_string(&log).unwrap(),
-            format!(
-                "{}|test -count=1 -run ^TestOpenAPIIsCurrent$ ./internal/httpapi\n",
-                root.display()
-            )
-        );
-        fs::remove_file(&log).unwrap();
-    }
-    assert_eq!(regular_file_tree_snapshot(destination), before);
 }

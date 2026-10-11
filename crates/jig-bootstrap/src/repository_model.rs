@@ -146,6 +146,13 @@ impl RepositoryRenderModel {
         authored: &AuthoredRepositoryModel,
         authored_commands: &BTreeMap<String, String>,
     ) -> bool {
+        let adopted =
+            frontend_migration::with_generated_document_check(self, authored, authored_commands);
+        let (authored, authored_commands) = adopted
+            .as_ref()
+            .map_or((authored, authored_commands), |(authored, commands)| {
+                (authored, commands)
+            });
         let authored =
             frontend_migration::upgrade_saved_projection(self, authored, authored_commands);
         let current = self.affected_ignore == authored.affected_ignore
@@ -465,11 +472,6 @@ impl<'a> ModelBuilder<'a> {
         } else {
             "Check the repository-wide public/private dependency boundary."
         };
-        let backend_tests_own_freshness = frontend_migration::backend_tests_run_generated_commands(
-            self.actions.values(),
-            &self.commands,
-            self.answers.backend_language().is_go(),
-        );
         for (action_id, description, mode) in [
             (
                 FRONTEND_CONTRACT_DRIFT_ACTION,
@@ -497,7 +499,6 @@ impl<'a> ModelBuilder<'a> {
             action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
             action.inputs = frontend_contract_inputs(
                 action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION,
-                backend_tests_own_freshness,
                 self.answers.frontend_workspace_roots(),
             );
             action.provenance = provenance(&[
@@ -509,7 +510,7 @@ impl<'a> ModelBuilder<'a> {
             ]);
             self.insert_action(action)?;
         }
-        add_backend_contract_test_inputs(&mut self.actions)
+        self.add_openapi_document_check()
     }
 
     fn add_adapter_actions(

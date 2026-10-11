@@ -26,7 +26,7 @@ fn legacy_model(backend: &str) -> RepositoryRenderModel {
 }
 
 /// A model saved by an earlier generator whose contract checks read
-/// `backend_inputs` and whose backend tests did not read the documents.
+/// `backend_inputs` and which had no document check.
 fn saved_model(backend: &str, backend_inputs: &[&str]) -> RepositoryRenderModel {
     let mut model = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
         "backend_language = {backend:?}\n{APP}"
@@ -50,17 +50,14 @@ fn saved_model(backend: &str, backend_inputs: &[&str]) -> RepositoryRenderModel 
             _ => {}
         }
     }
-    for action in &mut model.actions {
-        if matches!(
-            action.target.to_string().as_str(),
-            "api:test" | "api:test-locked"
-        ) {
-            action.inputs.retain(|input| input != "openapi/**");
-            action
-                .provenance
-                .insert("inputs".into(), FieldProvenance::Inherited);
-        }
+    let document_check = target_id("api", "openapi").unwrap();
+    model
+        .actions
+        .retain(|action| action.target != document_check);
+    for profile in &mut model.profiles {
+        profile.targets.retain(|target| *target != document_check);
     }
+    model.commands.remove("api_openapi_command");
     for action in &mut model.actions {
         if action.target.component.as_str() == "repo"
             && matches!(
@@ -277,7 +274,6 @@ fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
     for target in [
         "api:test",
         "api:test-locked",
-        "repo:frontend-contract-drift",
         "repo:frontend-public-boundary",
     ] {
         assert_eq!(
@@ -286,6 +282,19 @@ fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
             "{target}"
         );
     }
+    // Without a document check, the drift check keeps reading the backend.
+    let mut drift = find(&current, "repo:frontend-contract-drift").inputs;
+    drift.extend(
+        BACKEND_CONTRACT_INPUTS
+            .iter()
+            .map(|input| (*input).to_owned()),
+    );
+    drift.sort();
+    drift.dedup();
+    assert_eq!(
+        find(&upgraded, "repo:frontend-contract-drift").inputs,
+        drift
+    );
     let boundary = find(&upgraded, "repo:frontend-public-boundary");
     for input in ["Cargo.lock", "go.sum", "go.work", "vendor/modules.txt"] {
         assert!(boundary.inputs.contains(&input.into()), "{input}");
@@ -435,6 +444,7 @@ fn upgraded_contracts_split_backend_and_client_freshness_without_frontend_fanout
                 PlanRunRequest {
                     selectors: [
                         "api:test",
+                        "api:openapi",
                         "repo:frontend-contract-drift",
                         "web:lint",
                         "web:typecheck",
@@ -455,21 +465,27 @@ fn upgraded_contracts_split_backend_and_client_freshness_without_frontend_fanout
                 .map(|item| item.target.to_string())
                 .collect::<Vec<_>>()
         };
-        // Backend tests own document freshness and the drift check owns
-        // client freshness; neither change fans out to the frontend checks.
+        // The document check owns document freshness and the drift check
+        // owns client freshness; neither change fans out to the frontend
+        // checks, and a document change does not rerun every backend test.
         let expectations = backend_paths
             .iter()
-            .map(|path| (*path, true, false, false))
+            .map(|path| (*path, true, true, false, false))
             .chain([
-                ("openapi/public.json", true, true, true),
-                ("packages/web-api-client/index.ts", false, true, true),
-                ("frontend/web/src/main.ts", false, false, true),
+                ("openapi/public.json", false, true, true, true),
+                ("packages/web-api-client/index.ts", false, false, true, true),
+                ("frontend/web/src/main.ts", false, false, false, true),
             ]);
-        for (path, backend_tests, drift, frontend) in expectations {
+        for (path, backend_tests, documents, drift, frontend) in expectations {
             let selected = selected_after(path);
             assert_eq!(
                 selected.contains(&"api:test".into()),
                 backend_tests,
+                "{backend} {path}: {selected:?}"
+            );
+            assert_eq!(
+                selected.contains(&"api:openapi".into()),
+                documents,
                 "{backend} {path}: {selected:?}"
             );
             assert_eq!(

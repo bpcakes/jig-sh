@@ -213,7 +213,16 @@ fn assert_generated_ci_workflows(destination: &Path) {
         );
         assert!(paths.iter().any(|path| path == "migrations/**"));
         assert!(paths.iter().any(|path| path == ".sqlx/**"));
+        assert!(paths.iter().any(|path| path == "openapi/**"));
     }
+    // The test job also proves that the committed documents match the backend.
+    assert!(
+        rust_workflow_yaml["jobs"]["test"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["run"] == "scripts/jig check api:openapi")
+    );
     assert_eq!(
         rust_workflow_yaml["jobs"]["clippy"]["env"]["SQLX_OFFLINE_DIR"],
         "${{ github.workspace }}/.sqlx"

@@ -1,5 +1,6 @@
-//! The drift check drops its backend inputs only while the backend tests
-//! prove that the committed documents match the backend.
+//! The backend document check proves that the committed documents match the
+//! backend, whatever the general backend test commands run; without it, the
+//! drift check keeps reading the backend.
 
 use super::*;
 
@@ -42,146 +43,203 @@ fn generated_model(backend: &str, answers: &str) -> RepositoryRenderModel {
     .unwrap()
 }
 
-fn inputs<'a>(model: &'a RepositoryRenderModel, target: &str) -> &'a [String] {
-    &model
+fn find<'a>(model: &'a RepositoryRenderModel, target: &str) -> Option<&'a ActionSpec> {
+    model
         .actions
         .iter()
         .find(|item| item.target.to_string() == target)
-        .unwrap()
-        .inputs
 }
 
 fn drift_reads_backend(model: &RepositoryRenderModel) -> bool {
-    let drift = inputs(model, "repo:frontend-contract-drift");
+    let drift = &find(model, "repo:frontend-contract-drift").unwrap().inputs;
     BACKEND_CONTRACT_INPUTS
         .iter()
         .all(|input| drift.iter().any(|item| item == input))
 }
 
-/// Loads `saved` and asserts that the drift check keeps its saved inputs.
-fn assert_saved_drift_inputs_kept(
-    saved: &RepositoryRenderModel,
-    backend: &str,
-    label: &str,
-) -> RepositoryRenderModel {
-    let answers = load_saved(saved, backend);
-    let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
-    assert!(answers.authored_repository().is_some(), "{label}");
-    assert_eq!(
-        inputs(&upgraded, "repo:frontend-contract-drift"),
-        inputs(saved, "repo:frontend-contract-drift"),
-        "{label}"
+/// A legacy model whose owner already added the generated document check.
+fn legacy_model_with_document_check(backend: &str) -> RepositoryRenderModel {
+    let mut current = generated_model(backend, "");
+    current
+        .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    current
+        .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    let mut saved = legacy_model(backend);
+    let check = find(&current, "api:openapi").unwrap().clone();
+    let index = saved
+        .actions
+        .iter()
+        .position(|action| action.target > check.target)
+        .unwrap();
+    saved.actions.insert(index, check);
+    saved.profiles.clone_from(&current.profiles);
+    saved.commands.insert(
+        "api_openapi_command".into(),
+        current.commands["api_openapi_command"].clone(),
     );
-    upgraded
-}
-
-#[test]
-fn generation_narrows_the_drift_check_only_behind_generated_backend_test_commands() {
-    for backend in ["rust", "go"] {
-        let generated = generated_model(backend, "");
-        assert!(
-            inputs(&generated, "repo:frontend-contract-drift")
-                .iter()
-                .all(|input| !BACKEND_CONTRACT_INPUTS.contains(&input.as_str())),
-            "{backend}"
-        );
-        for (_, answer, custom) in custom_test_commands(backend) {
-            let generated = generated_model(backend, &format!("{answer} = {custom:?}\n"));
-            assert!(drift_reads_backend(&generated), "{backend} {answer}");
-        }
-    }
-}
-
-#[test]
-fn managed_update_keeps_answer_configured_test_commands_generated() {
-    for backend in ["rust", "go"] {
-        for (key, answer, custom) in custom_test_commands(backend) {
-            let mut narrowed = generated_model(backend, "");
-            narrowed
-                .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
-                .unwrap();
-            narrowed
-                .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
-                .unwrap();
-            let current = generated_model(backend, &format!("{answer} = {custom:?}\n"));
-            for (shape, mut saved) in [("legacy", legacy_model(backend)), ("narrowed", narrowed)] {
-                let label = format!("{backend} {key} {shape}");
-                saved.commands.insert(key.into(), custom.into());
-
-                let answers = load_saved(&saved, backend);
-                let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
-
-                assert!(answers.authored_repository().is_none(), "{label}");
-                assert_eq!(
-                    upgraded.authored_toml().unwrap(),
-                    current.authored_toml().unwrap(),
-                    "{label}"
-                );
-                assert_eq!(upgraded.commands[key], custom, "{label}");
-                assert!(drift_reads_backend(&upgraded), "{label}");
-            }
-        }
-    }
-}
-
-#[test]
-fn managed_update_keeps_drift_backend_inputs_while_backend_tests_skip_generated_inputs() {
-    for backend in ["rust", "go"] {
-        // Authored inputs without the documents, and with only the documents.
-        for documents_only in [false, true] {
-            let mut saved = legacy_model(backend);
-            let test = saved
-                .actions
-                .iter_mut()
-                .find(|item| item.target.to_string() == "api:test")
-                .unwrap();
-            if documents_only {
-                test.inputs = vec!["openapi/**".into()];
-            }
-            test.provenance
-                .insert("inputs".into(), FieldProvenance::Declared);
-            let authored = test.inputs.clone();
-            let label = format!("{backend} documents only: {documents_only}");
-
-            let upgraded = assert_saved_drift_inputs_kept(&saved, backend, &label);
-
-            assert_eq!(inputs(&upgraded, "api:test"), authored, "{label}");
-        }
-    }
-}
-
-#[test]
-fn managed_update_keeps_drift_backend_inputs_while_backend_tests_differ_from_generation() {
-    // The answers replace this hand-written command with the generated
-    // default, but a custom model keeps running its own command.
-    let mut saved = legacy_model("rust");
     saved
-        .commands
-        .insert("api_test_command".into(), "cargo test --workspace".into());
-    saved
+}
+
+/// Marks `model` custom without touching its contract or backend checks.
+fn customize_frontend(model: &mut RepositoryRenderModel) {
+    model
         .components
         .iter_mut()
         .find(|component| component.id.as_str() == "web")
         .unwrap()
         .description = Some("Authored web frontend.".into());
-    assert_saved_drift_inputs_kept(&saved, "rust", "hand-written cargo test");
+}
 
-    // The generated Go command skips the document test outside the module root.
-    let mut saved = legacy_model("go");
-    let test = saved
-        .actions
-        .iter_mut()
-        .find(|item| item.target.to_string() == "api:test-locked")
-        .unwrap();
-    let (ActionRunner::Command {
-        working_directory, ..
+#[test]
+fn generation_adds_a_document_check_that_test_commands_cannot_skip() {
+    for (backend, command) in [
+        ("rust", "cargo test --workspace openapi_is_current"),
+        (
+            "go",
+            "go test -count=1 -run '^TestOpenAPIIsCurrent$' ./internal/httpapi",
+        ),
+    ] {
+        let customized = custom_test_commands(backend).map(|(_, answer, custom)| {
+            generated_model(backend, &format!("{answer} = {custom:?}\n"))
+        });
+        for model in std::iter::once(generated_model(backend, "")).chain(customized) {
+            let check = find(&model, "api:openapi").unwrap();
+            assert_eq!(model.commands["api_openapi_command"], command, "{backend}");
+            let mut inputs = find(&model, "api:test").unwrap().inputs.clone();
+            inputs.push("openapi/**".into());
+            inputs.sort();
+            assert_eq!(check.inputs, inputs, "{backend}");
+            assert!(
+                model.profiles[0].targets.contains(&check.target),
+                "{backend}"
+            );
+            for test in ["api:test", "api:test-locked"] {
+                assert!(
+                    !find(&model, test)
+                        .unwrap()
+                        .inputs
+                        .contains(&"openapi/**".into()),
+                    "{backend} {test}"
+                );
+            }
+            assert!(!drift_reads_backend(&model), "{backend}");
+        }
     }
-    | ActionRunner::Shell {
-        working_directory, ..
-    }) = &mut test.runner
-    else {
-        panic!("generated backend tests run a command");
-    };
-    *working_directory = Some("cmd".into());
-    assert_saved_drift_inputs_kept(&saved, "go", "go working directory");
+}
+
+#[test]
+fn managed_update_adds_the_document_check_beside_customized_test_commands() {
+    for backend in ["rust", "go"] {
+        for (key, answer, custom) in custom_test_commands(backend) {
+            let label = format!("{backend} {key}");
+            let mut saved = legacy_model(backend);
+            saved.commands.insert(key.into(), custom.into());
+
+            let answers = load_saved(&saved, backend);
+            let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+            let current = generated_model(backend, &format!("{answer} = {custom:?}\n"));
+            assert!(answers.authored_repository().is_none(), "{label}");
+            assert_eq!(
+                upgraded.authored_toml().unwrap(),
+                current.authored_toml().unwrap(),
+                "{label}"
+            );
+            assert_eq!(upgraded.commands, current.commands, "{label}");
+            assert!(find(&upgraded, "api:openapi").is_some(), "{label}");
+        }
+    }
+}
+
+#[test]
+fn managed_update_narrows_the_drift_check_of_a_custom_model_behind_its_document_check() {
+    for backend in ["rust", "go"] {
+        let mut saved = legacy_model_with_document_check(backend);
+        customize_frontend(&mut saved);
+
+        let answers = load_saved(&saved, backend);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert_eq!(
+            find(&upgraded, "repo:frontend-contract-drift")
+                .unwrap()
+                .inputs,
+            find(
+                &generated_model(backend, ""),
+                "repo:frontend-contract-drift"
+            )
+            .unwrap()
+            .inputs,
+            "{backend}"
+        );
+    }
+}
+
+#[test]
+fn managed_update_keeps_drift_backend_inputs_without_the_generated_document_check() {
+    type Customize = fn(&mut ActionSpec, &mut BTreeMap<String, String>);
+    let cases: [(&str, Customize); 3] = [
+        ("documents only", |check, _| {
+            check.inputs = vec!["openapi/**".into()];
+            check
+                .provenance
+                .insert("inputs".into(), FieldProvenance::Declared);
+        }),
+        ("custom command", |_, commands| {
+            commands.insert(
+                "api_openapi_command".into(),
+                "scripts/check-openapi.sh".into(),
+            );
+        }),
+        ("elsewhere", |check, _| {
+            let (ActionRunner::Command {
+                working_directory, ..
+            }
+            | ActionRunner::Shell {
+                working_directory, ..
+            }) = &mut check.runner
+            else {
+                panic!("the generated document check runs a command");
+            };
+            *working_directory = Some("cmd".into());
+        }),
+    ];
+    for backend in ["rust", "go"] {
+        // A custom model without the check does not gain one.
+        let mut saved = legacy_model(backend);
+        customize_frontend(&mut saved);
+        let answers = load_saved(&saved, backend);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
+        assert!(drift_reads_backend(&upgraded), "{backend}");
+
+        for (label, customize) in cases {
+            let label = format!("{backend} {label}");
+            let mut saved = legacy_model_with_document_check(backend);
+            let mut check = find(&saved, "api:openapi").unwrap().clone();
+            customize(&mut check, &mut saved.commands);
+            let authored = check.inputs.clone();
+            let index = saved
+                .actions
+                .iter()
+                .position(|action| action.target == check.target)
+                .unwrap();
+            saved.actions[index] = check;
+
+            let answers = load_saved(&saved, backend);
+            let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+            assert!(answers.authored_repository().is_some(), "{label}");
+            assert!(drift_reads_backend(&upgraded), "{label}");
+            assert_eq!(
+                find(&upgraded, "api:openapi").unwrap().inputs,
+                authored,
+                "{label}"
+            );
+        }
+    }
 }

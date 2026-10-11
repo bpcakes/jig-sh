@@ -64,42 +64,31 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
                 }
             }
         }
-        // Backend tests prove the documents match the backend; the drift
-        // check proves the clients match the documents.
+        // The document check proves the documents match the backend; the
+        // drift check proves the clients match the documents.
         let drift = action(&model, "repo:frontend-contract-drift");
+        let documents = action(&model, "api:openapi");
         for contract in ["openapi/**", "packages/*-api-client/**"] {
             assert!(drift.inputs.iter().any(|input| input == contract));
         }
-        for test in ["api:test", "api:test-locked"] {
-            let test = action(&model, test);
-            assert!(test.inputs.iter().any(|input| input == "openapi/**"));
-            assert_eq!(
-                test.provenance.get("inputs"),
-                Some(&FieldProvenance::Inferred)
-            );
-        }
+        assert!(documents.inputs.iter().any(|input| input == "openapi/**"));
         for input in backend_inputs {
             assert!(
-                action(&model, "api:test")
-                    .inputs
-                    .iter()
-                    .any(|candidate| candidate == input),
-                "backend tests must read {input}"
+                documents.inputs.iter().any(|candidate| candidate == input),
+                "the document check must read {input}"
             );
             assert!(
                 !drift.inputs.iter().any(|candidate| candidate == input),
                 "contract drift must not read {input}"
             );
         }
-        assert!(
-            model
-                .profiles
-                .iter()
-                .find(|profile| profile.id.as_str() == DEFAULT_PROFILE)
-                .unwrap()
-                .targets
-                .contains(&drift.target)
-        );
+        let profile = model
+            .profiles
+            .iter()
+            .find(|profile| profile.id.as_str() == DEFAULT_PROFILE)
+            .unwrap();
+        assert!(profile.targets.contains(&drift.target));
+        assert!(profile.targets.contains(&documents.target));
     }
 }
 

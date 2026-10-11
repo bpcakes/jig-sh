@@ -1,14 +1,8 @@
-use jig_repository::shell::optional_cargo_command;
-
 use super::{
     ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BACKEND_CONTRACT_INPUTS,
     BTreeMap, FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance,
-    OPENAPI_INPUT, REPO_COMPONENT, RepositoryRenderModel, TargetId,
+    OPENAPI_DOCUMENT_CHECK_ACTION, REPO_COMPONENT, RepositoryRenderModel, TargetId,
     retire_saved_frontend_dependencies,
-};
-use crate::answers::{
-    DEFAULT_GO_TEST_COMMAND, DEFAULT_GO_TEST_LOCKED_COMMAND, DEFAULT_RUST_TEST_COMMAND,
-    DEFAULT_RUST_TEST_LOCKED_COMMAND,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -68,9 +62,9 @@ pub(super) fn upgrade_saved_projection(
     if !current.frontend_contracts_enabled() || !saved.frontend_contracts_enabled(commands) {
         return upgraded;
     }
-    upgrade_backend_contract_tests(current, &mut upgraded.actions);
-    let tests_check_documents =
-        backend_contract_tests_check_documents(current, &upgraded.actions, commands);
+    // The drift check stops reading the backend only behind the generated
+    // document check, which proves that the documents match the backend.
+    let documents_checked = generated_document_check(current, &upgraded.actions, commands);
     for action in &mut upgraded.actions {
         if action.target.component.as_str() != REPO_COMPONENT
             || !matches!(
@@ -98,54 +92,70 @@ pub(super) fn upgrade_saved_projection(
         {
             continue;
         }
-        // Dropping backend inputs from the drift check is safe only while the
-        // saved backend tests prove the documents match the backend on every
-        // backend and document change.
-        if action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
-            && !tests_check_documents
-            && action
-                .inputs
-                .iter()
-                .any(|input| !expected.inputs.contains(input))
-        {
+        let history = generated_input_history(action.target.action.as_str(), &expected.inputs);
+        if !history.contains(&action.inputs) {
             continue;
         }
-        if generated_input_history(action.target.action.as_str(), &expected.inputs)
-            .contains(&action.inputs)
+        action.inputs = if action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
+            && !documents_checked
         {
-            action.inputs.clone_from(&expected.inputs);
-        }
+            with_inputs(&expected.inputs, &[BACKEND_CONTRACT_INPUTS])
+        } else {
+            expected.inputs.clone()
+        };
     }
     upgraded
 }
 
-/// Inputs that generators wrote for a contract check. Every drift shape is
-/// the contract surface plus the backend inputs it read at the time.
-fn generated_input_history(action: &str, expected: &[String]) -> Vec<Vec<String>> {
-    let surface = expected
+/// Earlier generators had no document check. To decide whether a saved
+/// scaffold can be regenerated, count the generated one, its profile entries,
+/// and its command as saved; a custom model keeps its own targets.
+pub(super) fn with_generated_document_check(
+    current: &RepositoryRenderModel,
+    saved: &AuthoredRepositoryModel,
+    commands: &BTreeMap<String, String>,
+) -> Option<(AuthoredRepositoryModel, BTreeMap<String, String>)> {
+    let check = current
+        .actions
         .iter()
-        .filter(|input| !BACKEND_CONTRACT_INPUTS.contains(&input.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    let with = |extra: &[&[&str]]| {
-        let mut inputs = surface
-            .iter()
-            .cloned()
-            .chain(
-                extra
-                    .iter()
-                    .flat_map(|set| set.iter().map(|input| (*input).to_owned())),
-            )
-            .collect::<Vec<_>>();
-        inputs.sort();
-        inputs.dedup();
-        inputs
-    };
+        .find(|action| is_document_check(&action.target))?;
+    if saved
+        .actions
+        .iter()
+        .any(|action| action.target == check.target)
+    {
+        return None;
+    }
+    let key = command(&check.runner)?;
+    let mut adopted = saved.clone();
+    let index = adopted
+        .actions
+        .iter()
+        .position(|action| action.target > check.target)
+        .unwrap_or(adopted.actions.len());
+    adopted.actions.insert(index, check.clone());
+    for profile in &mut adopted.profiles {
+        if let Some(generated) = current.profiles.iter().find(|item| item.id == profile.id)
+            && generated
+                .targets
+                .iter()
+                .filter(|target| **target != check.target)
+                .eq(&profile.targets)
+        {
+            profile.targets.clone_from(&generated.targets);
+        }
+    }
+    let mut adopted_commands = commands.clone();
+    adopted_commands.insert(key.into(), current.commands.get(key)?.clone());
+    Some((adopted, adopted_commands))
+}
+
+/// Inputs that earlier generators wrote for a contract check.
+fn generated_input_history(action: &str, expected: &[String]) -> Vec<Vec<String>> {
     match action {
         FRONTEND_CONTRACT_DRIFT_ACTION => vec![
-            with(&[]),
-            with(&[LEGACY_DRIFT_BACKEND_INPUTS]),
-            with(&[LEGACY_DRIFT_BACKEND_INPUTS, CONTRACT_RESOLUTION_INPUTS]),
+            with_inputs(expected, &[LEGACY_DRIFT_BACKEND_INPUTS]),
+            with_inputs(expected, &[BACKEND_CONTRACT_INPUTS]),
         ],
         _ => vec![
             expected
@@ -157,110 +167,54 @@ fn generated_input_history(action: &str, expected: &[String]) -> Vec<Vec<String>
     }
 }
 
-fn is_backend_contract_test(target: &TargetId) -> bool {
+fn with_inputs(inputs: &[String], extra: &[&[&str]]) -> Vec<String> {
+    let mut inputs = inputs
+        .iter()
+        .cloned()
+        .chain(
+            extra
+                .iter()
+                .flat_map(|set| set.iter().map(|input| (*input).to_owned())),
+        )
+        .collect::<Vec<_>>();
+    inputs.sort();
+    inputs.dedup();
+    inputs
+}
+
+fn is_document_check(target: &TargetId) -> bool {
     target.component.as_str() == BACKEND_COMPONENT
-        && matches!(target.action.as_str(), "test" | "test-locked")
+        && target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
 }
 
-/// Add the document input to backend tests that still read the adapter's
-/// generated inputs.
-fn upgrade_backend_contract_tests(current: &RepositoryRenderModel, actions: &mut [ActionSpec]) {
-    for action in actions
-        .iter_mut()
-        .filter(|action| is_backend_contract_test(&action.target))
-    {
-        let Some(expected) = current
-            .actions
-            .iter()
-            .find(|item| item.target == action.target)
-        else {
-            continue;
-        };
-        let legacy = expected
-            .inputs
-            .iter()
-            .filter(|input| input.as_str() != OPENAPI_INPUT)
-            .cloned()
-            .collect::<Vec<_>>();
-        if action.provenance.get("inputs") == Some(&FieldProvenance::Inherited)
-            && action.inputs == legacy
-            && legacy.len() < expected.inputs.len()
-        {
-            action.inputs.clone_from(&expected.inputs);
-            action
-                .provenance
-                .insert("inputs".into(), FieldProvenance::Inferred);
-        }
-    }
-}
-
-/// Whether every backend test runs the generator's default command, which
-/// includes the committed-document tests, so that the backend tests own
-/// document freshness. Generation and the saved-model upgrade share this rule.
-pub(super) fn backend_tests_run_generated_commands<'a>(
-    actions: impl IntoIterator<Item = &'a ActionSpec>,
-    commands: &BTreeMap<String, String>,
-    go: bool,
-) -> bool {
-    let mut tests = actions
-        .into_iter()
-        .filter(|action| is_backend_contract_test(&action.target))
-        .peekable();
-    tests.peek().is_some()
-        && tests.all(|action| {
-            command(&action.runner).and_then(|key| commands.get(key))
-                == generated_backend_test_command(go, action.target.action.as_str()).as_ref()
-        })
-}
-
-/// Whether the saved backend tests prove the documents fresh: each runs its
-/// generated runner and command and reads every generated input, which
-/// covers the backend and the documents.
-fn backend_contract_tests_check_documents(
+/// Whether the saved model has the generated document check: its runner and
+/// command, reading at least the generated inputs.
+fn generated_document_check(
     current: &RepositoryRenderModel,
     actions: &[ActionSpec],
     commands: &BTreeMap<String, String>,
 ) -> bool {
-    let go = current.components.iter().any(|component| {
-        component.id.as_str() == BACKEND_COMPONENT
-            && component.adapters.iter().any(|adapter| adapter == "go")
-    });
-    backend_tests_run_generated_commands(actions, commands, go)
-        && actions
-            .iter()
-            .filter(|action| is_backend_contract_test(&action.target))
-            .all(|action| {
-                let Some(expected) = current
-                    .actions
-                    .iter()
-                    .find(|item| item.target == action.target)
-                else {
-                    return false;
-                };
-                let mut runner = action.runner.clone();
-                let mut expected_runner = expected.runner.clone();
-                super::runners::make_shell_explicit(&mut runner);
-                super::runners::make_shell_explicit(&mut expected_runner);
-                runner == expected_runner
-                    && expected
-                        .inputs
-                        .iter()
-                        .all(|input| action.inputs.contains(input))
-            })
-}
-
-/// The command the generator writes for a backend test.
-fn generated_backend_test_command(go: bool, action: &str) -> Option<String> {
-    match (go, action) {
-        (false, "test") => Some(optional_cargo_command(DEFAULT_RUST_TEST_COMMAND, "test")),
-        (false, "test-locked") => Some(optional_cargo_command(
-            DEFAULT_RUST_TEST_LOCKED_COMMAND,
-            "test-locked",
-        )),
-        (true, "test") => Some(DEFAULT_GO_TEST_COMMAND.into()),
-        (true, "test-locked") => Some(DEFAULT_GO_TEST_LOCKED_COMMAND.into()),
-        _ => None,
-    }
+    let Some(expected) = current
+        .actions
+        .iter()
+        .find(|action| is_document_check(&action.target))
+    else {
+        return false;
+    };
+    actions.iter().any(|action| {
+        let mut runner = action.runner.clone();
+        let mut expected_runner = expected.runner.clone();
+        super::runners::make_shell_explicit(&mut runner);
+        super::runners::make_shell_explicit(&mut expected_runner);
+        action.target == expected.target
+            && runner == expected_runner
+            && command(&runner).and_then(|key| commands.get(key))
+                == command(&expected_runner).and_then(|key| current.commands.get(key))
+            && expected
+                .inputs
+                .iter()
+                .all(|input| action.inputs.contains(input))
+    })
 }
 
 fn command(runner: &ActionRunner) -> Option<&str> {

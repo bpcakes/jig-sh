@@ -686,9 +686,9 @@ impl RawAnswers {
             }),
             rust_test_command: self
                 .rust_test_command
-                .unwrap_or_else(|| optional_cargo_command(DEFAULT_RUST_TEST_COMMAND, "test")),
+                .unwrap_or_else(|| optional_cargo_command("cargo test --workspace", "test")),
             rust_test_locked_command: self.rust_test_locked_command.unwrap_or_else(|| {
-                optional_cargo_command(DEFAULT_RUST_TEST_LOCKED_COMMAND, "test-locked")
+                optional_cargo_command("cargo test --workspace --locked", "test-locked")
             }),
             go_fmt_check_command: self.go_fmt_check_command.unwrap_or_else(|| "set -o pipefail; files=$(git ls-files --cached --others --exclude-standard -z -- '*.go' | while IFS= read -r -d '' file; do if [ -f \"$file\" ]; then printf '%s\\0' \"$file\"; fi; done | xargs -0 gofmt -l --) || exit $?; test -z \"$files\" || { printf '%s\\n' \"$files\"; exit 1; }".into()),
             go_lint_command: self
@@ -696,9 +696,9 @@ impl RawAnswers {
                 .unwrap_or_else(|| "go vet ./...".into()),
             go_test_command: self
                 .go_test_command
-                .unwrap_or_else(|| DEFAULT_GO_TEST_COMMAND.into()),
+                .unwrap_or_else(|| "go test ./...".into()),
             go_test_locked_command: self.go_test_locked_command.unwrap_or_else(|| {
-                DEFAULT_GO_TEST_LOCKED_COMMAND.into()
+                "go mod verify && go test -mod=readonly ./...".into()
             }),
             sqlc_check_command: self
                 .sqlc_check_command
