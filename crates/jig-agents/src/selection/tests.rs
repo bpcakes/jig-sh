@@ -5,6 +5,7 @@ use super::*;
 use crate::agent_provider::{Choice, HomeInspection, Metadata, PreparedLaunch};
 
 mod claude_usage;
+mod timing;
 
 struct ExampleProvider {
     samples: Vec<(usize, Value)>,

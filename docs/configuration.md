@@ -629,8 +629,10 @@ not restrict quota scoring to the requested model. An exhausted Fable allowance
 can therefore exclude a home even for a Sonnet request.
 
 A candidate needs an observed account, a primary subscription bucket, and valid
-usage for every returned window. Missing or null reset times retain the reported
-usage; when a reset time is present it must be valid and in the future. Signed-out,
+usage for every returned window. Missing or null durations and reset times retain
+the reported usage. A supplied duration must be valid; a supplied reset must be
+valid and in the future. When both are known, the implied window start must not
+be in the future. Signed-out,
 exhausted, unavailable, malformed, and reset-expired samples are ineligible.
 Malformed Claude windows retain an invalid marker alongside valid quotas, so
 usage remains visible even when a home cannot be selected automatically. Inspection

@@ -19,7 +19,7 @@ pub(super) struct Window {
     pub bucket: String,
     pub bucket_name: Option<String>,
     pub window: &'static str,
-    pub duration_minutes: u64,
+    pub duration_minutes: Option<u64>,
     pub resets_at: Option<i64>,
 }
 
@@ -101,14 +101,24 @@ fn assess_windows(
                 .as_f64()
                 .filter(|used| used.is_finite() && *used >= 0.0)
                 .ok_or(Reason::InvalidUsage)?;
-            let duration = window["duration_minutes"]
-                .as_u64()
-                .filter(|duration| *duration > 0)
-                .ok_or(Reason::InvalidUsage)?;
-            let seconds = i64::try_from(duration)
-                .ok()
-                .and_then(|duration| duration.checked_mul(60))
-                .ok_or(Reason::InvalidUsage)?;
+            let duration = if window["duration_minutes"].is_null() {
+                None
+            } else {
+                Some(
+                    window["duration_minutes"]
+                        .as_u64()
+                        .filter(|duration| *duration > 0)
+                        .ok_or(Reason::InvalidUsage)?,
+                )
+            };
+            let seconds = duration
+                .map(|duration| {
+                    i64::try_from(duration)
+                        .ok()
+                        .and_then(|duration| duration.checked_mul(60))
+                        .ok_or(Reason::InvalidUsage)
+                })
+                .transpose()?;
             let reset = if window["resets_at"].is_null() {
                 None
             } else {
@@ -116,7 +126,9 @@ fn assess_windows(
                 if reset <= now {
                     return Err(Reason::StaleUsage);
                 }
-                if reset.checked_sub(seconds).is_none_or(|start| start > now) {
+                if seconds.is_some_and(|seconds| {
+                    reset.checked_sub(seconds).is_none_or(|start| start > now)
+                }) {
                     return Err(Reason::InvalidUsage);
                 }
                 Some(reset)
