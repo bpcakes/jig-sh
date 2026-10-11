@@ -32,8 +32,7 @@ frontend_apps = []
 
 
 [repository]
-# .beads/ holds issue-tracker state only; see docs/beads-workflow.md.
-tracker = "beads"
+# Tracker state is external to the checkout; see docs/beads-workflow.md.
 default_check_profile = "verify"
 affected_ignore = [".env", ".env.*", "**/.env", "**/.env.*", "README.md", "**/README.md", "AGENTS.md", "**/AGENTS.md", "agent-map.md", "CHANGELOG.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "docs/**", "LICENSE", "LICENSE.*", ".github/**"]
 

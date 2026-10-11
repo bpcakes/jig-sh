@@ -25,7 +25,7 @@ def needs_rust(event_name, event, repo="."):
     except (OSError, subprocess.CalledProcessError, UnicodeError):
         return True
     return not changed or any(
-        not (path.startswith(".beads/") or path == "agent-map.md" or PurePosixPath(path).name == "AGENTS.md")
+        not (path in (".beadroll.json", "agent-map.md") or PurePosixPath(path).name == "AGENTS.md")
         for path in changed
     )
 

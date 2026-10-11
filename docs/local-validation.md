@@ -95,8 +95,8 @@ no-default-features Clippy and the serial dev-proxy test harness; Linux retains
 the standalone dev-proxy Clippy command. These checks share one cache containing
 their distinct Cargo configurations. Both the serial proxy harness and the full
 workspace Nextest coverage are retained. The Linux job also validates the
-agent map and Beads export. Its path filters include Rust, policy, and agent-guide
-inputs. When every changed path is Beads metadata, an `AGENTS.md`, or
+agent map and tracker triage adapter. Its path filters include Rust, policy, and agent-guide
+inputs. When every changed path is `.beadroll.json`, an `AGENTS.md`, or
 `agent-map.md`, only Linux repository policy checks run; the macOS job stops
 after checkout and classification, and both platforms skip Clippy and proxy
 tests. Unknown paths, unavailable comparison trees, manual runs, and merge
