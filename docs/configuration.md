@@ -629,8 +629,11 @@ not restrict quota scoring to the requested model. An exhausted Fable allowance
 can therefore exclude a home even for a Sonnet request.
 
 A candidate needs an observed account, a primary subscription bucket, and valid
-usage and future reset times for every returned window. Signed-out, exhausted,
-unavailable, malformed, and reset-expired samples are ineligible. Inspection
+usage for every returned window. Missing or null reset times retain the reported
+usage; when a reset time is present it must be valid and in the future. Signed-out,
+exhausted, unavailable, malformed, and reset-expired samples are ineligible.
+Malformed Claude windows retain an invalid marker alongside valid quotas, so
+usage remains visible even when a home cannot be selected automatically. Inspection
 uses a 10-second cooperative deadline; owned subprocess cleanup completes before
 handoff. A successful candidate may still be selected when other inspections
 fail or time out. Dry-run output marks that decision `partial`. No eligible

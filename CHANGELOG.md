@@ -9,6 +9,8 @@
   across reported windows. Automatic dry runs explain the decision in JSON;
   unknown or exhausted usage never becomes available capacity. Claude usage
   reports now include model-scoped weekly limits such as Fable.
+  Known utilization remains selectable when no reset time is supplied; malformed
+  windows stay ineligible while valid neighboring Claude usage remains visible.
 
 ### Fixed
 

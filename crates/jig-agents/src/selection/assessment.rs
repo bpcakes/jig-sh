@@ -20,7 +20,7 @@ pub(super) struct Window {
     pub bucket_name: Option<String>,
     pub window: &'static str,
     pub duration_minutes: u64,
-    pub resets_at: i64,
+    pub resets_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +94,9 @@ fn assess_windows(
             if window.is_null() {
                 continue;
             }
+            if window["invalid"] == true {
+                return Err(Reason::InvalidUsage);
+            }
             let used = window["used_percent"]
                 .as_f64()
                 .filter(|used| used.is_finite() && *used >= 0.0)
@@ -102,17 +105,22 @@ fn assess_windows(
                 .as_u64()
                 .filter(|duration| *duration > 0)
                 .ok_or(Reason::InvalidUsage)?;
-            let reset = window["resets_at"].as_i64().ok_or(Reason::InvalidUsage)?;
-            if reset <= now {
-                return Err(Reason::StaleUsage);
-            }
             let seconds = i64::try_from(duration)
                 .ok()
                 .and_then(|duration| duration.checked_mul(60))
                 .ok_or(Reason::InvalidUsage)?;
-            if reset.checked_sub(seconds).is_none_or(|start| start > now) {
-                return Err(Reason::InvalidUsage);
-            }
+            let reset = if window["resets_at"].is_null() {
+                None
+            } else {
+                let reset = window["resets_at"].as_i64().ok_or(Reason::InvalidUsage)?;
+                if reset <= now {
+                    return Err(Reason::StaleUsage);
+                }
+                if reset.checked_sub(seconds).is_none_or(|start| start > now) {
+                    return Err(Reason::InvalidUsage);
+                }
+                Some(reset)
+            };
             let remaining = (100.0 - used).max(0.0);
             if worst.as_ref().is_none_or(|(score, _)| remaining < *score) {
                 worst = Some((

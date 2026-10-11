@@ -1,18 +1,7 @@
 use chrono::DateTime;
 use serde_json::{Value, json};
 
-pub(super) fn limits(value: &Value) -> Result<Vec<Value>, String> {
-    for key in [
-        "five_hour",
-        "seven_day",
-        "seven_day_sonnet",
-        "seven_day_opus",
-        "seven_day_oauth_apps",
-    ] {
-        if !value[key].is_null() && window(&value[key], 1).is_null() {
-            return Err("Claude returned a malformed subscription usage window".into());
-        }
-    }
+pub(crate) fn limits(value: &Value) -> Result<Vec<Value>, String> {
     let mut buckets = Vec::new();
     let primary = window(&value["five_hour"], 300);
     let secondary = window(&value["seven_day"], 10_080);
@@ -35,26 +24,25 @@ pub(super) fn limits(value: &Value) -> Result<Vec<Value>, String> {
     // Fable) as weekly_scoped rows. The model ID may be null; neither that nor
     // is_active=false means the quota can be omitted from account selection.
     if !value["limits"].is_null() {
+        // Preserve an unknown window for malformed containers or rows so display
+        // keeps the valid quotas, while selection cannot mistake them for absent.
+        let unknown_rows = [Value::Null];
         let rows = value["limits"]
             .as_array()
-            .ok_or("Claude returned malformed scoped usage limits")?;
+            .map(Vec::as_slice)
+            .unwrap_or(&unknown_rows);
         for (index, row) in rows.iter().enumerate() {
-            let kind = row["kind"]
-                .as_str()
-                .ok_or("Claude returned a malformed usage row")?;
-            if kind != "weekly_scoped" {
+            let kind = row["kind"].as_str();
+            if kind.is_some_and(|kind| kind != "weekly_scoped") {
                 continue;
             }
             let normalized = window(
                 &json!({
-                    "utilization": row["percent"],
+                    "utilization": if kind.is_some() { &row["percent"] } else { &Value::Null },
                     "resets_at": row["resets_at"],
                 }),
                 10_080,
             );
-            if normalized.is_null() {
-                return Err("Claude returned a malformed scoped usage window".into());
-            }
             let name = row["scope"]["model"]["display_name"]
                 .as_str()
                 .or_else(|| row["scope"]["surface"]["display_name"].as_str())
@@ -74,15 +62,30 @@ pub(super) fn limits(value: &Value) -> Result<Vec<Value>, String> {
 }
 
 fn window(value: &Value, duration: u64) -> Value {
-    let Some(used) = value["utilization"]
-        .as_f64()
-        .filter(|n| n.is_finite() && *n >= 0.0)
-    else {
+    if value.is_null() {
         return Value::Null;
-    };
+    }
+    let used = value["utilization"]
+        .as_f64()
+        .filter(|n| n.is_finite() && *n >= 0.0);
     let resets_at = value["resets_at"]
         .as_str()
         .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
         .map(|time| time.timestamp());
-    json!({"used_percent":used, "duration_minutes":duration, "resets_at":resets_at})
+    let mut normalized =
+        json!({"used_percent":used, "duration_minutes":duration, "resets_at":resets_at});
+    if used.is_none() || (!value["resets_at"].is_null() && resets_at.is_none()) {
+        normalized["invalid"] = json!(true);
+    }
+    normalized
+}
+
+pub(super) fn is_partial(limits: &Value) -> bool {
+    limits.as_array().is_some_and(|buckets| {
+        buckets.iter().any(|bucket| {
+            ["primary", "secondary"]
+                .iter()
+                .any(|key| bucket[key]["invalid"] == true)
+        })
+    })
 }

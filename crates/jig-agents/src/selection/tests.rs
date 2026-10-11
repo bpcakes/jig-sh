@@ -4,6 +4,8 @@ use std::path::Path;
 use super::*;
 use crate::agent_provider::{Choice, HomeInspection, Metadata, PreparedLaunch};
 
+mod claude_usage;
+
 struct ExampleProvider {
     samples: Vec<(usize, Value)>,
     wait_for_cancel: bool,
@@ -139,7 +141,7 @@ fn unknown_exhausted_or_invalid_usage_never_becomes_free_capacity() {
         ("used_percent", json!(100), Reason::Exhausted),
         ("used_percent", json!(105), Reason::Exhausted),
         ("resets_at", json!(now), Reason::StaleUsage),
-        ("resets_at", json!(null), Reason::InvalidUsage),
+        ("resets_at", json!("invalid"), Reason::InvalidUsage),
         ("resets_at", json!(now + 700000), Reason::InvalidUsage),
         ("duration_minutes", json!(0), Reason::InvalidUsage),
     ] {
@@ -151,6 +153,36 @@ fn unknown_exhausted_or_invalid_usage_never_becomes_free_capacity() {
             assessment.remaining_percent,
             (expected == Reason::Exhausted).then_some(0.0)
         );
+    }
+}
+
+#[test]
+fn missing_reset_times_keep_known_usage_and_nullable_limiting_window() {
+    let now = chrono::Utc::now().timestamp();
+    for used in [0.0, 40.0, 100.0] {
+        for omit in [false, true] {
+            let mut details = usage(used, used);
+            for key in ["primary", "secondary"] {
+                let window = &mut details["rate_limits"][0][key];
+                window["resets_at"] = Value::Null;
+                if omit {
+                    window.as_object_mut().unwrap().remove("resets_at");
+                }
+            }
+            let result = assessment::assess(&details, "example", now);
+            assert_eq!(result.remaining_percent, Some(100.0 - used));
+            assert_eq!(
+                result.reason,
+                if used < 100.0 {
+                    Reason::Eligible
+                } else {
+                    Reason::Exhausted
+                }
+            );
+            assert!(
+                serde_json::to_value(result).unwrap()["limiting_window"]["resets_at"].is_null()
+            );
+        }
     }
 }
 

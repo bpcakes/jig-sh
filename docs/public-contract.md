@@ -46,7 +46,13 @@ inspection coverage. Candidate entries contain `index`, `name`, display `path`,
 `representation_lossy`, `current`, provider `details`, and `assessment`.
 The assessment contains `reason`, nullable `remaining_percent`, and nullable
 `limiting_window` (`bucket`, nullable `bucket_name`, `window`,
-`duration_minutes`, `resets_at`). Candidate reasons are `eligible`, `inspection_unavailable`, `inspection_error`,
+`duration_minutes`, nullable `resets_at`). Known utilization with a missing or null
+reset time is scored without reset-based freshness checks; a present malformed or
+expired reset still disqualifies the home. Claude usage windows with malformed
+fields carry `invalid: true` without echoing raw response data. Valid neighboring
+windows remain available to display; `homes --usage` marks the report `partial`,
+and automatic selection rejects the malformed capacity.
+Candidate reasons are `eligible`, `inspection_unavailable`, `inspection_error`,
 `signed_out`, `usage_unavailable`, `invalid_usage`, `stale_usage`, or `exhausted`.
 These fields do not contain credentials or raw provider responses. Paths remain
 display data; launch uses the retained provider-owned configuration identity.
