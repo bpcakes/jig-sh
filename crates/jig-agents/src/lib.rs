@@ -6,6 +6,7 @@ pub mod agent_provider;
 pub mod claude;
 pub mod codex;
 pub mod home_paths;
+pub mod selection;
 
 #[cfg(test)]
 use jig_context::test_support as test_env;

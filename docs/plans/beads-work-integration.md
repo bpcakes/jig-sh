@@ -1,5 +1,9 @@
 # Beads-compatible task integration
 
+> Historical design, superseded for this repository by the beadroll cutover.
+> The authoritative tracker and writer rules are in [the current workflow](../beads-workflow.md).
+> The JSONL-first writer and `br` handoff proposals below are not current instructions.
+
 This is the long-term delivery plan for linking Jig execution evidence to Beads-compatible tasks. It is a living design document. The architectural decision is JSONL-first: Beads-compatible JSONL is Jig's task-data contract, while `br` is an optional interoperable client during migration.
 
 ## Purpose

@@ -42,6 +42,12 @@ pub struct Discovery<H> {
     pub inspection: Option<Box<dyn HomeInspection>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InspectionMode {
+    Interactive,
+    Headless,
+}
+
 /// Emits normalized, secret-free reports keyed by original discovery index.
 /// Implementations must observe cancellation and retire their children before returning.
 pub trait HomeInspection: Send + Sync {
@@ -63,7 +69,7 @@ pub trait AgentProvider {
     const METADATA: Metadata;
 
     fn resolve(&self, input: &Path) -> Result<Self::Home>;
-    fn discover(&self) -> Result<Discovery<Self::Home>>;
+    fn discover(&self, mode: InspectionMode) -> Result<Discovery<Self::Home>>;
     /// Recheck a choice after the interactive wait, retaining provider-specific modes.
     fn revalidate(&self, home: &Self::Home) -> Result<Self::Home>;
     /// Prepare exact argv/environment and a display-only report without spawning or reading auth.

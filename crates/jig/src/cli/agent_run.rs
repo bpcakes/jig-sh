@@ -2,10 +2,14 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use jig_agents::agent_provider::{AgentProvider, Discovery, HomeInspection, PreparedLaunch};
+use jig_agents::agent_provider::{
+    AgentProvider, Discovery, HomeInspection, InspectionMode, PreparedLaunch,
+};
 use jig_agents_tui::{ConfigurationHome, Home, HomeUpdate, InspectionSource};
 
 use super::output::{Render, emit};
+
+mod automatic;
 
 pub(super) fn homes<P: AgentProvider>(
     provider: &P,
@@ -43,15 +47,22 @@ pub(super) fn launch<P: AgentProvider>(
     provider: &P,
     home: Option<&Path>,
     args: &[OsString],
+    auto_select: bool,
     dry_run: bool,
     json: bool,
     output: Render,
 ) -> Result<()> {
     validate_launch::<P>(dry_run, json)?;
+    if auto_select {
+        if home.is_some() {
+            bail!("--auto cannot be combined with HOME");
+        }
+        return automatic::launch(provider, args, dry_run, json, output);
+    }
     let home = match home {
         Some(path) => provider.resolve(path)?,
         None if json => bail!(
-            "Pass a {} HOME when using --json; use `jig {} homes --json` to list homes",
+            "Pass a {} HOME or --auto when using --json; use `jig {} homes --json` to list homes",
             P::METADATA.name,
             P::METADATA.command
         ),
@@ -94,7 +105,7 @@ fn select<P: AgentProvider>(provider: &P) -> Result<Option<P::Home>> {
     jig_tui::require_terminal(
         &command,
         &format!(
-            "pass HOME explicitly (see `jig {} homes`)",
+            "pass HOME explicitly or use --auto (see `jig {} homes`)",
             P::METADATA.command
         ),
     )?;
@@ -125,7 +136,7 @@ fn select_with<P: AgentProvider>(
         choices,
         warnings,
         inspection,
-    } = provider.discover()?;
+    } = provider.discover(InspectionMode::Interactive)?;
     let (selections, entries): (Vec<_>, Vec<_>) = choices
         .into_iter()
         .map(|choice| {

@@ -2,7 +2,21 @@
 
 ## Unreleased
 
+### Added
+
+- `jig codex launch --auto` and `jig claude launch --auto` select a home without
+  a picker or credential prompts, using the most constrained remaining quota
+  across reported windows. Automatic dry runs explain the decision in JSON;
+  unknown or exhausted usage never becomes available capacity. Claude usage
+  reports now include model-scoped weekly limits such as Fable.
+  Known utilization remains selectable when no reset time is supplied; malformed
+  windows stay ineligible while valid neighboring Claude usage remains visible.
+
 ### Fixed
+
+- Automatic agent selection accepts known utilization when a quota window omits
+  its duration, as permitted by the Codex protocol. Supplied reset times still
+  enforce expiry, and malformed duration values remain ineligible.
 
 - Backend-only changes no longer select every frontend check under
   `scripts/jig check --affected`, with or without API contracts. Frontend
@@ -22,9 +36,10 @@
   checks. Those checks produce nothing a frontend check reads, so a
   frontend-only change, or `scripts/jig check web:typecheck`, no longer runs
   `repo:frontend-contract-drift`, which builds the backend. Each contract
-  check runs when its own inputs change. `jig update` removes these generated
-  dependencies from existing targets and names each one; a dependency with
-  declared provenance is kept.
+  check runs when its own inputs change. `jig update` removes exactly these
+  generated dependencies, `typecheck` on both contract checks and `build` on
+  the boundary check, and names each one; any other dependency, or one with
+  declared provenance, is kept.
 - In repositories scaffolded with API contracts, the backend tests own
   OpenAPI document freshness and `repo:frontend-contract-drift` owns client
   freshness. `api:test` and `api:test-locked` now read `openapi/**`, so they

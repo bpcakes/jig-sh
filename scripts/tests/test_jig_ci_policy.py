@@ -38,8 +38,7 @@ class PolicyScopeTests(unittest.TestCase):
 
     def test_metadata_only_pull_request_and_push_skip_rust(self):
         (self.repo / "AGENTS.md").write_text("new guidance\n")
-        (self.repo / ".beads").mkdir()
-        (self.repo / ".beads" / "issues.jsonl").write_text("{}\n")
+        (self.repo / ".beadroll.json").write_text('{"workspace":"example"}\n')
         self.commit()
         self.assertFalse(self.required())
         self.assertFalse(self.required("push"))

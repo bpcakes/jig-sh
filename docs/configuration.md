@@ -552,7 +552,7 @@ Use `scripts/jig codex launch [HOME]` to launch Codex with the selected director
 
 Use `scripts/jig codex resume SESSION_ID` when the session's home is unknown. Jig validates the UUID, queries every discovered home concurrently with Codex app-server `thread/read` without loading turns, reports lookup progress on an interactive terminal, and launches `codex resume SESSION_ID` with the single matching directory as `CODEX_HOME`. A missing session reports every checked home and any inspection or discovery failures. A session found in multiple homes—possible after copying a home—is ambiguous and requires `--home HOME`. Jig also requires `--home` when one home matches but another discovered home could not be inspected or home enumeration was incomplete, because automatic lookup cannot prove the match is unique. A candidate that disappeared or was already a dangling symlink cannot contain the session and therefore remains a warning without blocking a unique match. The `--home` option bypasses app-server lookup for a non-conventional home or one whose app-server is currently unavailable; the directory itself must exist. Arguments after `--` are forwarded to `codex resume` without shell parsing. Add `--dry-run` to inspect the resolved launch; `--json` is accepted only with `--dry-run` and suppresses terminal progress.
 
-With no home, Jig opens a full-screen picker immediately after directory discovery. Every home is usable at once while account and usage details load through `codex app-server` in a four-worker background pool. Use arrows or `j`/`k` to move, `/` to search names, paths, account emails, plans, and states, Ctrl-U to clear the search, Home/End or Page Up/Page Down for larger lists, and Enter to launch the highlighted exact path—even if its usage is still loading. Search results prioritize home-name matches before account metadata and shared absolute-path prefixes. Tab focuses the selected-home pane so the same movement and page keys scroll long, wrapped usage details; Tab returns to the home list. Click a home to select it, double-click to launch it, and use the wheel to move through the homes or scroll the details under the pointer. Once inspection finishes, `r` inspects every home again without reopening the picker; each home keeps its previous sample, marked with a spinner, until the new one arrives. The list sits above the selected-home pane, sized to its rows, whenever that leaves the pane room to show a home without scrolling. Terminals too short for that sit the two panes side by side from 120 columns, and terminals too short for both show one pane at a time, with Tab switching between them. Escape leaves search first and cancels on the next press; `q` or Ctrl-C also cancels. The detail pane shows the exact display path, account, plan, all returned usage buckets and windows, reset timing, and inspection errors. Codex usage windows are labeled from their reported duration, including `5h` and `weekly` for the known limits. Non-interactive callers must provide a home. Use `--dry-run` to inspect the resolved launch, and place Codex arguments after `--` so Jig forwards them without shell parsing. Human dry-run output replaces terminal-control characters and warns when that makes its displayed shell command differ from the exact launch; use `--json` when exact values are required:
+With no home, Jig opens a full-screen picker immediately after directory discovery. Every home is usable at once while account and usage details load through `codex app-server` in a four-worker background pool. Use arrows or `j`/`k` to move, `/` to search names, paths, account emails, plans, and states, Ctrl-U to clear the search, Home/End or Page Up/Page Down for larger lists, and Enter to launch the highlighted exact path—even if its usage is still loading. Search results prioritize home-name matches before account metadata and shared absolute-path prefixes. Tab focuses the selected-home pane so the same movement and page keys scroll long, wrapped usage details; Tab returns to the home list. Click a home to select it, double-click to launch it, and use the wheel to move through the homes or scroll the details under the pointer. Once inspection finishes, `r` inspects every home again without reopening the picker; each home keeps its previous sample, marked with a spinner, until the new one arrives. The list sits above the selected-home pane, sized to its rows, whenever that leaves the pane room to show a home without scrolling. Terminals too short for that sit the two panes side by side from 120 columns, and terminals too short for both show one pane at a time, with Tab switching between them. Escape leaves search first and cancels on the next press; `q` or Ctrl-C also cancels. The detail pane shows the exact display path, account, plan, all returned usage buckets and windows, reset timing, and inspection errors. Codex usage windows are labeled from their reported duration, including `5h` and `weekly` for the known limits. Non-interactive callers must provide a home or use `--auto` (see [Automatic home selection](#automatic-home-selection)). Use `--dry-run` to inspect the resolved launch, and place Codex arguments after `--` so Jig forwards them without shell parsing. Human dry-run output replaces terminal-control characters and warns when that makes its displayed shell command differ from the exact launch; use `--json` when exact values are required:
 
 ```sh
 scripts/jig codex homes --usage
@@ -577,7 +577,7 @@ After upgrading Jig in an existing repository, run `scripts/jig update --recopy`
 
 Use `scripts/jig claude homes` to list `~/.claude`, `~/.claude-*`, and the directory selected by `CLAUDE_CONFIG_DIR`, including a current directory outside those conventional locations. Symlink aliases are deduplicated within directory discovery. Discovery reads directory metadata only; it does not launch Claude, read credentials, or fetch account or usage data. Missing explicit overrides and unreadable candidates appear as warnings. An unset or empty `CLAUDE_CONFIG_DIR` selects `~/.claude` as current.
 
-Use `scripts/jig claude launch [HOME]` to run Claude with a selected configuration home. Named alternate homes and explicit paths must already exist and set `CLAUDE_CONFIG_DIR`. `work` and `claude-work` resolve to `~/.claude-work`; `claude` and `default` select the native default by unsetting `CLAUDE_CONFIG_DIR`. Claude stores its global app configuration at `~/.claude.json` in that mode; setting the variable explicitly instead selects a `.claude.json` inside the chosen directory. Therefore an explicit `~/.claude` path sets the override, while the aliases preserve the native default. When the current override points to the default directory, listing and the picker show both modes; `[default config]` identifies the native mode. Exact discovered names are also accepted. Absolute paths, `~/...`, and explicit relative paths such as `./work` resolve directly without discovery. Bare names never select a same-named directory in the working directory. The native default is always listed and available in the picker, even before `~/.claude` exists; Claude creates its own configuration as needed on launch. Without HOME, an interactive terminal opens the same full-screen home picker as Codex: arrows or `j`/`k` move, `/` searches, Tab switches to the details pane, `r` refreshes usage, Enter launches, and Esc or `q` cancels; the mouse works as in the Codex picker. The Claude details pane shows the selected configuration mode and `CLAUDE_CONFIG_DIR`, then loads subscription limits in the background. The same quota and projection display as Codex shows five-hour and weekly remaining percentages and reset countdowns; available Sonnet/Opus windows appear in the details pane. Enter can launch while inspection is loading or unavailable. Noninteractive and JSON callers must specify HOME.
+Use `scripts/jig claude launch [HOME]` to run Claude with a selected configuration home. Named alternate homes and explicit paths must already exist and set `CLAUDE_CONFIG_DIR`. `work` and `claude-work` resolve to `~/.claude-work`; `claude` and `default` select the native default by unsetting `CLAUDE_CONFIG_DIR`. Claude stores its global app configuration at `~/.claude.json` in that mode; setting the variable explicitly instead selects a `.claude.json` inside the chosen directory. Therefore an explicit `~/.claude` path sets the override, while the aliases preserve the native default. When the current override points to the default directory, listing and the picker show both modes; `[default config]` identifies the native mode. Exact discovered names are also accepted. Absolute paths, `~/...`, and explicit relative paths such as `./work` resolve directly without discovery. Bare names never select a same-named directory in the working directory. The native default is always listed and available in the picker, even before `~/.claude` exists; Claude creates its own configuration as needed on launch. Without HOME, an interactive terminal opens the same full-screen home picker as Codex: arrows or `j`/`k` move, `/` searches, Tab switches to the details pane, `r` refreshes usage, Enter launches, and Esc or `q` cancels; the mouse works as in the Codex picker. The Claude details pane shows the selected configuration mode and `CLAUDE_CONFIG_DIR`, then loads subscription limits in the background. The same quota and projection display as Codex shows five-hour and weekly remaining percentages and reset countdowns; available Sonnet/Opus windows and model-scoped weekly allowances such as Fable appear in the details pane. Enter can launch while inspection is loading or unavailable. Noninteractive and JSON callers must specify HOME or use `--auto` (see [Automatic home selection](#automatic-home-selection)).
 
 ```sh
 mkdir -p ~/.claude-work
@@ -597,6 +597,80 @@ On macOS, the interactive picker first tries noninteractive Keychain access with
 Credentials stay in memory and are not included in reports, logs, or receipts; Jig never refreshes tokens, starts a Claude session, or rewrites authentication or settings. An expired login must be refreshed by Claude. Ambient authentication or credential-storage overrides produce an unavailable result rather than attributing another login to a home. Requests have a five-second timeout, do not follow redirects, and do not retry on rate limiting. A failed home remains launchable and makes the report `partial`, with unknown usage instead of a zero estimate. Reopen the picker to fetch a new snapshot.
 
 Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars) as its configuration-directory override. This launcher provides home selection; use Claude's forwarded `--resume` option within the selected home to resume a conversation.
+
+## Automatic home selection
+
+Use `jig codex launch --auto` or `jig claude launch --auto` to select a home
+without a picker, login, or Keychain prompt. `--auto` conflicts with an explicit
+HOME. Choose only among homes you are willing to use for the task: this first
+version considers every discovered home, including the current override.
+
+```sh
+jig codex launch --auto
+jig codex launch --auto -- exec --json "Review the changes"
+jig claude launch --auto -- -p "Review the changes" --output-format json
+jig codex launch --auto --dry-run --json
+jig claude launch --auto --dry-run --json
+```
+
+The `headroom` strategy scores each home by its lowest remaining percentage
+across **all returned quota windows**, then chooses the highest score. For
+example, a home with 90% five-hour and 10% weekly remaining loses to one with
+55% five-hour and 60% weekly remaining. Ties use discovery order, independently
+of inspection completion order. Percentages compare relative quota, not token
+capacity across different plans. This differs from the picker's recommendation,
+which projects past consumption through the reset time.
+
+Jig conservatively includes additional model-specific buckets. Claude's
+`limits[]` rows with `kind: "weekly_scoped"`, including Fable, appear in usage
+reports and participate even when the model ID is absent or `is_active` is false.
+Forwarded model/profile/configuration arguments remain opaque; this version does
+not restrict quota scoring to the requested model. An exhausted Fable allowance
+can therefore exclude a home even for a Sonnet request.
+
+A candidate needs an observed account, a primary subscription bucket, and valid
+usage for every returned window. Missing or null durations and reset times retain
+the reported usage. A supplied duration must be valid; a supplied reset must be
+valid and in the future. When both are known, the implied window start must not
+be in the future. Signed-out,
+exhausted, unavailable, malformed, and reset-expired samples are ineligible.
+Malformed Claude windows retain an invalid marker alongside valid quotas, so
+usage remains visible even when a home cannot be selected automatically. Inspection
+uses a 10-second cooperative deadline; owned subprocess cleanup completes before
+handoff. A successful candidate may still be selected when other inspections
+fail or time out. Dry-run output marks that decision `partial`. No eligible
+candidate fails with exit status 1 instead of falling back or prompting.
+
+Automatic dry runs fetch usage (Codex starts inspection app-servers) but never
+start an agent session. `--dry-run --json` adds a `selection` decision to the
+usual launch preview, including candidate reason codes, timestamps, remaining
+quota, limiting windows, coverage, and the selected index. See the
+[public contract](public-contract.md) for details. Explicit-home dry runs and
+launches retain their existing behavior and do not inspect usage.
+
+During a real launch, stdin, stdout, stderr, working directory, native argument
+boundaries, and child status retain their normal launcher behavior. Jig prints
+no selection preamble into the child's output. Use provider arguments after
+`--` for unattended execution; `--auto` only makes Jig's selection prompt-free.
+Known ambient authentication overrides prevent per-home subscription selection;
+pass HOME explicitly when deliberately using those overrides. Forwarded options
+that change authentication/provider configuration are not evaluated by selection.
+
+For new sessions, an interactive shell alias can be convenient:
+
+```sh
+alias codex='jig codex launch --auto --'
+alias claude='jig claude launch --auto --'
+```
+
+Use a globally installed `jig` on PATH. Agent subprocesses should invoke Jig
+explicitly because they generally do not inherit shell aliases. This is not a
+complete replacement for every native subcommand: use a fixed home for login,
+logout, configuration changes, and continue/resume, or `jig codex resume ID` for
+session-home lookup. A wrapper executable must set `JIG_CODEX_BIN` or
+`JIG_CLAUDE_BIN` to the real binary to prevent recursion. Automatic selection
+does not retry a started session, reserve capacity for concurrent launches, or
+cache usage between invocations.
 
 ## `work` Shape
 

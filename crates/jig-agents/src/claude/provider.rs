@@ -6,7 +6,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::agent_provider::{
-    AgentProvider, Choice, Discovery, HomeInspection, Metadata, PreparedLaunch,
+    AgentProvider, Choice, Discovery, HomeInspection, InspectionMode, Metadata, PreparedLaunch,
 };
 
 pub struct Claude;
@@ -28,7 +28,7 @@ impl AgentProvider for Claude {
         super::resolve_home(input)
     }
 
-    fn discover(&self) -> Result<Discovery<Self::Home>> {
+    fn discover(&self, mode: InspectionMode) -> Result<Discovery<Self::Home>> {
         let homes = super::discover_homes()?;
         let selections = homes.selections();
         let choices = selections
@@ -69,7 +69,10 @@ impl AgentProvider for Claude {
         Ok(Discovery {
             choices,
             warnings: homes.warnings,
-            inspection: Some(Box::new(super::usage::Inspection::new(selections, true))),
+            inspection: Some(Box::new(super::usage::Inspection::new(
+                selections,
+                mode == InspectionMode::Interactive,
+            ))),
         })
     }
 

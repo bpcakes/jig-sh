@@ -7,6 +7,7 @@
 ## Key entrypoints
 
 - `src/agent_provider.rs`: the `AgentProvider`, `SessionProvider`, and `HomeInspection` contract.
+- `src/selection.rs`: prompt-free selection by remaining subscription headroom; retains provider-owned home identities and emits diagnostic decisions.
 - `src/codex.rs` and `src/codex/`: Codex homes, app-server inspection, session resume lookup, and `codex/provider.rs`.
 - `src/claude.rs` and `src/claude/`: Claude homes, `claude/provider.rs`, and read-only subscription usage under `claude/usage/`.
 - `src/home_paths.rs`: path primitives shared by both providers.

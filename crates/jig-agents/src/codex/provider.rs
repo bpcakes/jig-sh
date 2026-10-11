@@ -2,11 +2,12 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 
 use crate::agent_provider::{
-    AgentProvider, Choice, Discovery, HomeInspection, Metadata, PreparedLaunch, SessionProvider,
+    AgentProvider, Choice, Discovery, HomeInspection, InspectionMode, Metadata, PreparedLaunch,
+    SessionProvider,
 };
 
 pub struct Codex;
@@ -31,7 +32,18 @@ impl AgentProvider for Codex {
         self.resolve(home)
     }
 
-    fn discover(&self) -> Result<Discovery<Self::Home>> {
+    fn discover(&self, mode: InspectionMode) -> Result<Discovery<Self::Home>> {
+        if mode == InspectionMode::Headless {
+            // These can override saved authentication for exec independently of
+            // the account reported by an app-server launched for a home.
+            for key in ["CODEX_API_KEY", "OPENAI_API_KEY", "CODEX_ACCESS_TOKEN"] {
+                if std::env::var_os(key).is_some_and(|value| !value.is_empty()) {
+                    bail!(
+                        "Automatic subscription selection is unavailable while {key} is set; pass HOME explicitly"
+                    );
+                }
+            }
+        }
         let inspection = super::discover_home_inspection()?;
         let warnings = inspection.discovery_warnings();
         let choices = inspection
