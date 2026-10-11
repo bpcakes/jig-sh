@@ -1,7 +1,7 @@
 use super::{
     ActionRunner, ActionSpec, AuthoredRepositoryModel, BTreeMap, FRONTEND_CONTRACT_DRIFT_ACTION,
     FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance, REPO_COMPONENT, RepositoryRenderModel,
-    retire_saved_frontend_backend_dependencies,
+    retire_saved_frontend_dependencies,
 };
 
 // Inputs added when backend propagation was replaced by contract-only checking.
@@ -46,7 +46,7 @@ pub(super) fn upgrade_saved_projection(
     commands: &BTreeMap<String, String>,
 ) -> AuthoredRepositoryModel {
     let mut upgraded = saved.clone();
-    retire_saved_frontend_backend_dependencies(&mut upgraded.components);
+    retire_saved_frontend_dependencies(&mut upgraded.components, &mut upgraded.actions);
     if !current.frontend_contracts_enabled() || !saved.frontend_contracts_enabled(commands) {
         return upgraded;
     }

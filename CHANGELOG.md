@@ -36,6 +36,14 @@
   authored inputs and commands survive. Unmodified saved models remain
   eligible for generated updates. The refreshed `.agent/jig-contract.json` is
   reported as a conflict, so review it and accept it with `--force`.
+- Frontend `typecheck` and `build` checks no longer depend on the contract
+  checks. Those checks produce nothing a frontend check reads, so a
+  frontend-only change, or `scripts/jig check web:typecheck`, no longer runs
+  `repo:frontend-contract-drift`, which builds the backend. Each contract
+  check runs when its own inputs change. `jig update` removes exactly these
+  generated dependencies, `typecheck` on both contract checks and `build` on
+  the boundary check, and names each one; any other dependency, or one with
+  declared provenance, is kept.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the

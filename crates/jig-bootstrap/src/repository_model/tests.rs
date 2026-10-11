@@ -104,7 +104,7 @@ fn assert_frontend_targets(model: &RepositoryRenderModel) {
     );
 }
 
-fn assert_frontend_contract_dependencies(model: &RepositoryRenderModel) {
+fn assert_independent_frontend_contract_targets(model: &RepositoryRenderModel) {
     let drift_target = target_id(REPO_COMPONENT, FRONTEND_CONTRACT_DRIFT_ACTION).unwrap();
     let boundary_target = target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION).unwrap();
     assert_eq!(
@@ -141,20 +141,16 @@ fn assert_frontend_contract_dependencies(model: &RepositoryRenderModel) {
         assert!(boundary.inputs.iter().any(|input| input == artifact));
         assert!(!drift.inputs.iter().any(|input| input == artifact));
     }
+    // Contract checks run on their own inputs; no frontend check pulls them in.
     for component in ["web", "admin"] {
-        let typecheck = model
-            .actions
-            .iter()
-            .find(|action| action.target.to_string() == format!("{component}:typecheck"))
-            .unwrap();
-        assert!(typecheck.depends_on.contains(&drift_target));
-        assert!(typecheck.depends_on.contains(&boundary_target));
-        let build = model
-            .actions
-            .iter()
-            .find(|action| action.target.to_string() == format!("{component}:build"))
-            .unwrap();
-        assert_eq!(build.depends_on, std::slice::from_ref(&boundary_target));
+        for check in ["lint", "typecheck", "build", "test"] {
+            let action = model
+                .actions
+                .iter()
+                .find(|action| action.target.to_string() == format!("{component}:{check}"))
+                .unwrap();
+            assert!(action.depends_on.is_empty(), "{component}:{check}");
+        }
     }
 }
 
@@ -214,7 +210,7 @@ role = "admin"
     assert_go_backend_targets(&model);
     assert_go_database_inputs(&model);
     assert_frontend_targets(&model);
-    assert_frontend_contract_dependencies(&model);
+    assert_independent_frontend_contract_targets(&model);
 }
 
 #[test]
