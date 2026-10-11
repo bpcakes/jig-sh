@@ -70,6 +70,15 @@ if (mode === "generate" || mode === "check") {
   for (const contract of contracts.filter(({ name }) => name === "public")) {
     await scanArtifact(resolve(contract.document), "committed public OpenAPI document");
   }
+[% if backend_language == "go" %]
+  // Go caches test results and does not track files outside the module, so
+  // a document edit alone can leave the backend test's cached pass in place.
+  await run(
+    "go",
+    ["test", "-count=1", "-run", "^TestOpenAPIIsCurrent$", "./internal/httpapi"],
+    backendRoot,
+  );
+[% endif %]
   await withStagedClients();
 } else if (mode === "boundary-check") {
   // Build output is scanned right after it is built; whatever an earlier

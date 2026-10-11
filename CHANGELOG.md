@@ -48,11 +48,14 @@
   change that alters the contract, so keep it. The drift check reads only the
   documents, the generated clients, and the JavaScript toolchain, so backend
   changes no longer select it. Newly scaffolded repositories also run it
-  without building the backend: it regenerates the clients from the committed
-  documents and compares them. An existing `scripts/contracts.mjs` belongs to
-  its repository and keeps its behavior. `jig update` upgrades the generated
-  backend test and drift inputs, and leaves the drift inputs unchanged while a
-  backend test does not read `openapi/**`.
+  without exporting from the backend: it regenerates the clients from the
+  committed documents and compares them. In a Go scaffold it also reruns the
+  backend's document test with `-count=1`, because Go reuses a cached pass
+  when only a document outside the module changed. An existing
+  `scripts/contracts.mjs` belongs to its repository and keeps its behavior.
+  `jig update` upgrades the generated backend test and drift inputs, and
+  leaves the drift inputs unchanged while a backend test does not read
+  `openapi/**`.
 - `repo:frontend-public-boundary` is generated only where it can guard an
   admin API: for a Rust scaffold with an admin frontend, and in a Rust
   repository whose saved model already declares it, because the admin API

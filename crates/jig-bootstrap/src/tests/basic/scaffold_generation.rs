@@ -27,6 +27,63 @@ fn assert_contains_all(contents: &str, expected: &[&str]) {
     }
 }
 
+#[cfg(unix)]
+fn node_available() -> bool {
+    Command::new("node")
+        .arg("--version")
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Stands in for `@hey-api/openapi-ts`: regenerating a client copies the
+/// committed one for the same document, so only a changed document or a
+/// changed dispatch can show drift.
+#[cfg(unix)]
+fn install_fake_openapi_ts(destination: &Path) {
+    let module = destination.join("node_modules/@hey-api/openapi-ts");
+    fs::create_dir_all(&module).unwrap();
+    fs::write(
+        module.join("package.json"),
+        r#"{"name":"@hey-api/openapi-ts","type":"module","exports":"./index.js"}"#,
+    )
+    .unwrap();
+    fs::write(
+        module.join("index.js"),
+        r#"import { cp } from "node:fs/promises";
+import { basename } from "node:path";
+
+export async function createClient({ input, output }) {
+  const name = basename(input, ".json");
+  await cp(`packages/${name}-api-client/src/generated`, output, { recursive: true });
+}
+"#,
+    )
+    .unwrap();
+}
+
+/// Runs a `scripts/contracts.mjs` mode with `fake_bin` first on PATH.
+#[cfg(unix)]
+fn run_contracts_mode(
+    destination: &Path,
+    mode: &str,
+    fake_bin: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> std::process::Output {
+    let path = std::env::join_paths(std::iter::once(fake_bin.to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let mut command = Command::new("node");
+    command
+        .args(["scripts/contracts.mjs", mode])
+        .current_dir(destination)
+        .env("PATH", path);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output().unwrap()
+}
+
 fn assert_contains_none(contents: &str, forbidden: &[&str]) {
     for value in forbidden {
         assert!(!contents.contains(value), "found forbidden text: {value}");
