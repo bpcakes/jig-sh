@@ -11,7 +11,7 @@ on:
       - "packages/public-api-client/**"
       - "packages/admin-api-client/**"
 [% for app in frontend_apps %]
-      - <<[ (app.dir ~ "/**") | tojson ]>>
+      - <<[ ("**" if app.dir == "." else app.dir ~ "/**") | tojson ]>>
 [% endfor %]
 [% for root in frontend_workspace_roots %]
       - <<[ ("**" if root == "." else root ~ "/**") | tojson ]>>
@@ -28,6 +28,9 @@ on:
 [% if go_backend_enabled %]
       - "go.mod"
       - "**/go.mod"
+[% else %]
+      - "apps/*-api/Cargo.toml"
+      - "crates/*-http/Cargo.toml"
 [% endif %]
 [% endif %]
       - "package.json"
@@ -80,7 +83,7 @@ on:
       - "packages/public-api-client/**"
       - "packages/admin-api-client/**"
 [% for app in frontend_apps %]
-      - <<[ (app.dir ~ "/**") | tojson ]>>
+      - <<[ ("**" if app.dir == "." else app.dir ~ "/**") | tojson ]>>
 [% endfor %]
 [% for root in frontend_workspace_roots %]
       - <<[ ("**" if root == "." else root ~ "/**") | tojson ]>>
@@ -97,6 +100,9 @@ on:
 [% if go_backend_enabled %]
       - "go.mod"
       - "**/go.mod"
+[% else %]
+      - "apps/*-api/Cargo.toml"
+      - "crates/*-http/Cargo.toml"
 [% endif %]
 [% endif %]
       - "package.json"
