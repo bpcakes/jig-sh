@@ -199,7 +199,7 @@ pub(super) fn print_json(value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-fn print_text(text: &str) -> Result<()> {
+pub(super) fn print_text(text: &str) -> Result<()> {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     handle.write_all(text.as_bytes())?;
