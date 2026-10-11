@@ -1,8 +1,14 @@
+use jig_repository::shell::optional_cargo_command;
+
 use super::{
     ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BOUNDARY_DESCRIPTION,
     BTreeMap, CommandScope, FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION,
     FieldProvenance, OPENAPI_INPUT, PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel,
     TargetId, contract_check_action, retire_saved_frontend_dependencies,
+};
+use crate::answers::{
+    DEFAULT_GO_TEST_COMMAND, DEFAULT_GO_TEST_LOCKED_COMMAND, DEFAULT_RUST_TEST_COMMAND,
+    DEFAULT_RUST_TEST_LOCKED_COMMAND,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -96,9 +102,11 @@ pub(super) fn upgrade_saved_projection(
         return upgraded;
     };
     upgrade_backend_contract_tests(current, &mut upgraded.actions);
-    // Narrowing the drift check is safe only while the backend tests, which
-    // prove the documents match the backend, run on document edits.
-    let tests_read_documents = backend_contract_tests_read_documents(&upgraded.actions);
+    // Narrowing the drift check is safe only while the generated backend
+    // tests, which prove the documents match the backend, run on document
+    // edits.
+    let tests_check_documents =
+        backend_contract_tests_check_documents(current, &upgraded.actions, commands);
     for action in &mut upgraded.actions {
         let id = action.target.action.as_str();
         if action.target.component.as_str() != REPO_COMPONENT
@@ -107,7 +115,7 @@ pub(super) fn upgrade_saved_projection(
                 FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
             )
             || action.provenance.get("inputs") != Some(&FieldProvenance::Inferred)
-            || (id == FRONTEND_CONTRACT_DRIFT_ACTION && !tests_read_documents)
+            || (id == FRONTEND_CONTRACT_DRIFT_ACTION && !tests_check_documents)
         {
             continue;
         }
@@ -284,13 +292,53 @@ fn upgrade_backend_contract_tests(current: &RepositoryRenderModel, actions: &mut
     }
 }
 
-fn backend_contract_tests_read_documents(actions: &[ActionSpec]) -> bool {
+/// Whether every backend test reads the documents and still runs the
+/// generated command, which includes the committed-document tests.
+fn backend_contract_tests_check_documents(
+    current: &RepositoryRenderModel,
+    actions: &[ActionSpec],
+    commands: &BTreeMap<String, String>,
+) -> bool {
+    let go = current.components.iter().any(|component| {
+        component.id.as_str() == BACKEND_COMPONENT
+            && component.adapters.iter().any(|adapter| adapter == "go")
+    });
     let mut tests = actions
         .iter()
         .filter(|action| is_backend_contract_test(&action.target))
         .peekable();
     tests.peek().is_some()
-        && tests.all(|action| action.inputs.iter().any(|input| input == OPENAPI_INPUT))
+        && tests.all(|action| {
+            let Some(expected) = current
+                .actions
+                .iter()
+                .find(|item| item.target == action.target)
+            else {
+                return false;
+            };
+            let mut runner = action.runner.clone();
+            let mut expected_runner = expected.runner.clone();
+            super::runners::make_shell_explicit(&mut runner);
+            super::runners::make_shell_explicit(&mut expected_runner);
+            action.inputs.iter().any(|input| input == OPENAPI_INPUT)
+                && runner == expected_runner
+                && command(&runner).and_then(|key| commands.get(key))
+                    == generated_backend_test_command(go, action.target.action.as_str()).as_ref()
+        })
+}
+
+/// The command the generator writes for a backend test.
+fn generated_backend_test_command(go: bool, action: &str) -> Option<String> {
+    match (go, action) {
+        (false, "test") => Some(optional_cargo_command(DEFAULT_RUST_TEST_COMMAND, "test")),
+        (false, "test-locked") => Some(optional_cargo_command(
+            DEFAULT_RUST_TEST_LOCKED_COMMAND,
+            "test-locked",
+        )),
+        (true, "test") => Some(DEFAULT_GO_TEST_COMMAND.into()),
+        (true, "test-locked") => Some(DEFAULT_GO_TEST_LOCKED_COMMAND.into()),
+        _ => None,
+    }
 }
 
 fn command(runner: &ActionRunner) -> Option<&str> {

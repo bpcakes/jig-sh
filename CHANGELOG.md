@@ -55,7 +55,7 @@
   `scripts/contracts.mjs` belongs to its repository and keeps its behavior.
   `jig update` upgrades the generated backend test and drift inputs, and
   leaves the drift inputs unchanged while a backend test does not read
-  `openapi/**`.
+  `openapi/**` or no longer runs its generated command and runner.
 - `repo:frontend-public-boundary` is generated only where it can guard an
   admin API: for a Rust scaffold with an admin frontend, and in a Rust
   repository whose saved model already declares it, because the admin API
