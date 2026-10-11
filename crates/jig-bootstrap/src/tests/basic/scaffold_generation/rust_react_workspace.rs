@@ -558,6 +558,41 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert_http_contract_and_test_support(&destination);
     assert_database_support_and_docs(&destination);
     assert_rendered_jig_answers(&destination);
+    #[cfg(unix)]
+    assert_rust_drift_check_skips_the_backend(&destination);
+}
+
+/// drift-check regenerates the clients from the committed documents and
+/// never builds or runs the backend.
+#[cfg(unix)]
+fn assert_rust_drift_check_skips_the_backend(destination: &Path) {
+    if !node_available() {
+        return;
+    }
+    install_fake_openapi_ts(destination);
+    let fake_bin = destination.join(".fake-bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    write_executable_test_script(
+        &fake_bin.join("cargo"),
+        "#!/bin/sh\n: > \"$JIG_TEST_CARGO_MARKER\"\nexit 91\n",
+    );
+    let marker = destination.join(".backend-build-ran");
+    let before = regular_file_tree_snapshot(destination);
+
+    let output = run_contracts_mode(
+        destination,
+        "drift-check",
+        &fake_bin,
+        &[("JIG_TEST_CARGO_MARKER", marker.as_os_str())],
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!marker.exists(), "drift-check invoked cargo");
+    assert_eq!(regular_file_tree_snapshot(destination), before);
 }
 
 #[cfg(unix)]
