@@ -150,7 +150,14 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     // The frontend job never runs Go, so Go sources do not trigger it. It lints
     // with the shared config, installs through the web-node helper, and its
     // client-check scans public docs and the module manifest.
-    assert_contains_none(&workflow, &[r#"- "**""#, r#"- "**/*.go""#]);
+    assert_contains_none(
+        &workflow,
+        &[
+            r#"- "**""#,
+            r#"- "**/*.go""#,
+            r#"- "apps/*-api/Cargo.toml""#,
+        ],
+    );
     assert_workflow_triggered_by(
         &workflow,
         &[

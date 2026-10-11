@@ -86,6 +86,7 @@ fn generated_frontend_inputs_never_mask_nested_owned_scopes() {
             ("\"eslint.config.shared.mjs\"", 2),
             ("\"scripts/web-node.cjs\"", 2),
             ("\"docs/public/**\"", 0),
+            ("\"apps/*-api/Cargo.toml\"", 0),
         ],
     );
 }
