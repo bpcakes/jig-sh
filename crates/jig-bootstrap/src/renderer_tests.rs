@@ -162,6 +162,8 @@ fn rendered_jig_workflows_cache_the_installer_runtime_profile() {
             )
             .unwrap();
             checked_jobs += assert_jig_jobs_cache_release_runtime(&workflow, workflow_name);
+            // Without document contracts, the Go tests keep the test cache.
+            assert!(!workflow.contains("GOFLAGS"), "{workflow_name}");
         }
     }
 

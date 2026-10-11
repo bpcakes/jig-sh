@@ -456,6 +456,11 @@ impl<'a> ModelBuilder<'a> {
     }
 
     fn add_frontend_contract_actions(&mut self, dependency_anchor: &FrontendApp) -> Result<()> {
+        let backend_tests_own_freshness = frontend_migration::backend_tests_run_generated_commands(
+            self.actions.values(),
+            &self.commands,
+            self.answers.backend_language().is_go(),
+        );
         let mut checks = vec![(
             FRONTEND_CONTRACT_DRIFT_ACTION,
             DRIFT_DESCRIPTION,
@@ -479,6 +484,7 @@ impl<'a> ModelBuilder<'a> {
             )?;
             let inputs = frontend_contract_inputs(
                 action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION,
+                backend_tests_own_freshness,
                 self.answers.frontend_workspace_roots(),
             );
             self.insert_action(contract_check_action(action_id, description, inputs)?)?;

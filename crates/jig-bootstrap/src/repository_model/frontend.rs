@@ -160,12 +160,34 @@ pub(super) const PUBLIC_DOCUMENT_INPUTS: &[&str] = &["docs/public/**", "public-d
 const BOUNDARY_MANIFEST_INPUTS: &[&str] =
     &["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock"];
 
+/// Backend sources, manifests, lockfiles, and workspace files, which the
+/// drift check reads while the backend tests do not own document freshness.
+pub(super) const BACKEND_CONTRACT_INPUTS: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "**/Cargo.toml",
+    "**/Cargo.lock",
+    "**/*.rs",
+    "go.mod",
+    "go.sum",
+    "go.work",
+    "go.work.sum",
+    "**/go.mod",
+    "**/go.sum",
+    "**/go.work",
+    "**/go.work.sum",
+    "**/*.go",
+    "vendor/modules.txt",
+    "**/vendor/modules.txt",
+];
+
 /// The drift check regenerates the clients from the committed documents, so
-/// it reads only the contract surface; the backend tests own document
-/// freshness. The boundary check also reads the Cargo dependency graph and
-/// committed public documentation.
+/// it reads only the contract surface while the generated backend tests own
+/// document freshness, and otherwise also reads the backend. The boundary
+/// check reads the Cargo dependency graph and committed public documentation.
 pub(super) fn frontend_contract_inputs(
     public_boundary: bool,
+    backend_tests_own_freshness: bool,
     workspace_roots: &[String],
 ) -> Vec<String> {
     let mut inputs = FRONTEND_SHARED_INPUTS
@@ -184,6 +206,8 @@ pub(super) fn frontend_contract_inputs(
                 .chain(PUBLIC_DOCUMENT_INPUTS)
                 .map(|input| (*input).into()),
         );
+    } else if !backend_tests_own_freshness {
+        inputs.extend(BACKEND_CONTRACT_INPUTS.iter().map(|input| (*input).into()));
     }
     inputs.sort();
     inputs.dedup();

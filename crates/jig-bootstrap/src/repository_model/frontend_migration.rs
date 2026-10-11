@@ -1,10 +1,11 @@
 use jig_repository::shell::optional_cargo_command;
 
 use super::{
-    ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BOUNDARY_DESCRIPTION,
-    BTreeMap, CommandScope, FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION,
-    FieldProvenance, OPENAPI_INPUT, PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel,
-    TargetId, contract_check_action, retire_saved_frontend_dependencies,
+    ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BACKEND_CONTRACT_INPUTS,
+    BOUNDARY_DESCRIPTION, BTreeMap, CommandScope, FRONTEND_CONTRACT_DRIFT_ACTION,
+    FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance, OPENAPI_INPUT, PUBLIC_DOCUMENT_INPUTS,
+    REPO_COMPONENT, RepositoryRenderModel, TargetId, contract_check_action,
+    retire_saved_frontend_dependencies,
 };
 use crate::answers::{
     DEFAULT_GO_TEST_COMMAND, DEFAULT_GO_TEST_LOCKED_COMMAND, DEFAULT_RUST_TEST_COMMAND,
@@ -102,9 +103,6 @@ pub(super) fn upgrade_saved_projection(
         return upgraded;
     };
     upgrade_backend_contract_tests(current, &mut upgraded.actions);
-    // Narrowing the drift check is safe only while the generated backend
-    // tests, which prove the documents match the backend, run on document
-    // edits.
     let tests_check_documents =
         backend_contract_tests_check_documents(current, &upgraded.actions, commands);
     for action in &mut upgraded.actions {
@@ -115,7 +113,6 @@ pub(super) fn upgrade_saved_projection(
                 FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
             )
             || action.provenance.get("inputs") != Some(&FieldProvenance::Inferred)
-            || (id == FRONTEND_CONTRACT_DRIFT_ACTION && !tests_check_documents)
         {
             continue;
         }
@@ -136,6 +133,18 @@ pub(super) fn upgrade_saved_projection(
         {
             continue;
         }
+        // Dropping backend inputs from the drift check is safe only while the
+        // saved backend tests prove the documents match the backend on every
+        // backend and document change.
+        if id == FRONTEND_CONTRACT_DRIFT_ACTION
+            && !tests_check_documents
+            && action
+                .inputs
+                .iter()
+                .any(|input| !expected.inputs.contains(input))
+        {
+            continue;
+        }
         if generated_input_history(id, &drift.inputs).contains(&action.inputs) {
             action.inputs.clone_from(&expected.inputs);
         }
@@ -150,11 +159,17 @@ pub(super) fn upgrade_saved_projection(
     upgraded
 }
 
-/// Inputs that earlier generators wrote for a contract check. Every shape is
-/// the current drift inputs plus the backend inputs of its time.
+/// Inputs that generators wrote for a contract check: the contract surface
+/// plus the backend inputs of their time, and for the boundary check the
+/// public documents. A drift check may already read only the surface.
 fn generated_input_history(action: &str, drift_inputs: &[String]) -> Vec<Vec<String>> {
+    let surface = drift_inputs
+        .iter()
+        .filter(|input| !BACKEND_CONTRACT_INPUTS.contains(&input.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
     let with = |extra: &[&[&str]]| {
-        let mut inputs = drift_inputs
+        let mut inputs = surface
             .iter()
             .cloned()
             .chain(
@@ -167,14 +182,20 @@ fn generated_input_history(action: &str, drift_inputs: &[String]) -> Vec<Vec<Str
         inputs.dedup();
         inputs
     };
-    let documents: &[&str] = if action == FRONTEND_PUBLIC_BOUNDARY_ACTION {
-        PUBLIC_DOCUMENT_INPUTS
-    } else {
-        &[]
-    };
+    if action == FRONTEND_PUBLIC_BOUNDARY_ACTION {
+        return vec![
+            with(&[LEGACY_BACKEND_INPUTS, PUBLIC_DOCUMENT_INPUTS]),
+            with(&[
+                LEGACY_BACKEND_INPUTS,
+                CONTRACT_RESOLUTION_INPUTS,
+                PUBLIC_DOCUMENT_INPUTS,
+            ]),
+        ];
+    }
     vec![
-        with(&[LEGACY_BACKEND_INPUTS, documents]),
-        with(&[LEGACY_BACKEND_INPUTS, CONTRACT_RESOLUTION_INPUTS, documents]),
+        with(&[]),
+        with(&[LEGACY_BACKEND_INPUTS]),
+        with(&[LEGACY_BACKEND_INPUTS, CONTRACT_RESOLUTION_INPUTS]),
     ]
 }
 
@@ -292,8 +313,28 @@ fn upgrade_backend_contract_tests(current: &RepositoryRenderModel, actions: &mut
     }
 }
 
-/// Whether every backend test reads the documents and still runs the
-/// generated command, which includes the committed-document tests.
+/// Whether every backend test runs the generator's default command, which
+/// includes the committed-document tests, so that the backend tests own
+/// document freshness. Generation and the saved-model upgrade share this rule.
+pub(super) fn backend_tests_run_generated_commands<'a>(
+    actions: impl IntoIterator<Item = &'a ActionSpec>,
+    commands: &BTreeMap<String, String>,
+    go: bool,
+) -> bool {
+    let mut tests = actions
+        .into_iter()
+        .filter(|action| is_backend_contract_test(&action.target))
+        .peekable();
+    tests.peek().is_some()
+        && tests.all(|action| {
+            command(&action.runner).and_then(|key| commands.get(key))
+                == generated_backend_test_command(go, action.target.action.as_str()).as_ref()
+        })
+}
+
+/// Whether the saved backend tests prove the documents fresh: each runs its
+/// generated runner and command and reads every generated input, which
+/// covers the backend and the documents.
 fn backend_contract_tests_check_documents(
     current: &RepositoryRenderModel,
     actions: &[ActionSpec],
@@ -303,28 +344,28 @@ fn backend_contract_tests_check_documents(
         component.id.as_str() == BACKEND_COMPONENT
             && component.adapters.iter().any(|adapter| adapter == "go")
     });
-    let mut tests = actions
-        .iter()
-        .filter(|action| is_backend_contract_test(&action.target))
-        .peekable();
-    tests.peek().is_some()
-        && tests.all(|action| {
-            let Some(expected) = current
-                .actions
-                .iter()
-                .find(|item| item.target == action.target)
-            else {
-                return false;
-            };
-            let mut runner = action.runner.clone();
-            let mut expected_runner = expected.runner.clone();
-            super::runners::make_shell_explicit(&mut runner);
-            super::runners::make_shell_explicit(&mut expected_runner);
-            action.inputs.iter().any(|input| input == OPENAPI_INPUT)
-                && runner == expected_runner
-                && command(&runner).and_then(|key| commands.get(key))
-                    == generated_backend_test_command(go, action.target.action.as_str()).as_ref()
-        })
+    backend_tests_run_generated_commands(actions, commands, go)
+        && actions
+            .iter()
+            .filter(|action| is_backend_contract_test(&action.target))
+            .all(|action| {
+                let Some(expected) = current
+                    .actions
+                    .iter()
+                    .find(|item| item.target == action.target)
+                else {
+                    return false;
+                };
+                let mut runner = action.runner.clone();
+                let mut expected_runner = expected.runner.clone();
+                super::runners::make_shell_explicit(&mut runner);
+                super::runners::make_shell_explicit(&mut expected_runner);
+                runner == expected_runner
+                    && expected
+                        .inputs
+                        .iter()
+                        .all(|input| action.inputs.contains(input))
+            })
 }
 
 /// The command the generator writes for a backend test.
