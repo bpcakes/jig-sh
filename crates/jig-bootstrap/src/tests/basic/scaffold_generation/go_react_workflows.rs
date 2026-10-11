@@ -147,8 +147,20 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             (r#"- "packages/public-api-client/**""#, 2),
         ],
     );
-    // The frontend job never runs Go, so Go changes do not trigger it.
-    assert_contains_none(&workflow, &[r#"- "**""#, r#"- "**/*.go""#, r#"- "go.mod""#]);
+    // The frontend job never runs Go, so Go sources do not trigger it. It lints
+    // with the shared config, installs through the web-node helper, and its
+    // client-check scans public docs and the module manifest.
+    assert_contains_none(&workflow, &[r#"- "**""#, r#"- "**/*.go""#]);
+    assert_workflow_triggered_by(
+        &workflow,
+        &[
+            "eslint.config.shared.mjs",
+            "scripts/web-node.cjs",
+            "docs/public/guide.md",
+            "public-docs/index.html",
+            "go.mod",
+        ],
+    );
     assert_contains_all(&workflow, &["node scripts/contracts.mjs client-check"]);
     assert_contains_none(&workflow, &["if [ -f scripts/contracts.mjs ]"]);
     assert_text_before(
@@ -293,6 +305,9 @@ export async function createClient({ output }) {
             ],
         );
     }
+    let webapp =
+        fs::read_to_string(destination.join(".github/workflows/webapp-checks.yml")).unwrap();
+    assert_workflow_triggered_by(&webapp, &["services/api/go.mod"]);
     let context = jig_context::RepoContext::load_from(&destination).unwrap();
     assert_go_module_authority_declares(&context, "1.26.0");
     let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
