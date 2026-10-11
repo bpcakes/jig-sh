@@ -20,6 +20,16 @@ on:
       - "scripts/check-webapp-scripts.mjs"
       - "scripts/contracts.mjs"
       - "scripts/enforce-coverage.cjs"
+      - "scripts/web-node.cjs"
+      - "eslint.config.shared.mjs"
+[% if frontend_contracts_enabled %]
+      - "docs/public/**"
+      - "public-docs/**"
+[% if go_backend_enabled %]
+      - "go.mod"
+      - "**/go.mod"
+[% endif %]
+[% endif %]
       - "package.json"
       - "**/package.json"
       - "**/package.json5"
@@ -79,6 +89,16 @@ on:
       - "scripts/check-webapp-scripts.mjs"
       - "scripts/contracts.mjs"
       - "scripts/enforce-coverage.cjs"
+      - "scripts/web-node.cjs"
+      - "eslint.config.shared.mjs"
+[% if frontend_contracts_enabled %]
+      - "docs/public/**"
+      - "public-docs/**"
+[% if go_backend_enabled %]
+      - "go.mod"
+      - "**/go.mod"
+[% endif %]
+[% endif %]
       - "package.json"
       - "**/package.json"
       - "**/package.json5"

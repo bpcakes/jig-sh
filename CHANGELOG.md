@@ -29,10 +29,14 @@
   check runs when its own inputs change. `jig update` removes these generated
   dependencies from existing targets and names each one; a dependency with
   declared provenance is kept.
-- The generated `webapp-checks.yml` of a Go repository no longer runs on Go
-  changes, or on every change when the backend sits at the repository root.
-  Its job never runs Go. In other repositories with frontends the workflow
-  loses a blank line, so `jig update` also reports it as a conflict.
+- The generated `webapp-checks.yml` triggers on the files its job reads
+  instead of a Go backend's paths. A Go repository's workflow no longer runs
+  on Go source changes, or on every change when the backend sits at the
+  repository root; its job never runs Go. Every workflow now also runs when
+  the shared ESLint config or `scripts/web-node.cjs` changes, and, with API
+  contracts, when `docs/public/**`, `public-docs/**`, or a Go backend's
+  `go.mod` changes, which `client-check` scans. `jig update` reports the
+  refreshed workflow as a conflict.
 
 ## v0.8.0 - 2026-10-09
 

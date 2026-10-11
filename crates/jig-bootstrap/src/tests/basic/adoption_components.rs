@@ -512,3 +512,69 @@ fn adopt_components_explicit_future_rust_root_remains_supported() {
     let ctx = jig_context::RepoContext::load_from(&repo).unwrap();
     jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
 }
+
+#[test]
+fn update_names_the_retired_frontend_backend_dependency() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("ExampleProject");
+    fs::create_dir_all(repo.join("apps/web")).unwrap();
+    let template = materialize_template_worktree();
+    manifest(&repo, ".", "example-api");
+    fs::write(
+        repo.join("package.json"),
+        r#"{"private":true,"workspaces":["apps/*"]}"#,
+    )
+    .unwrap();
+    fs::write(repo.join("package-lock.json"), "{}\n").unwrap();
+    fs::write(repo.join("apps/web/package.json"), r#"{"name":"web","scripts":{"dev":"vite","lint":"eslint .","typecheck":"tsc","build:bundle":"vite build","test:coverage":"vitest run --coverage"}}"#).unwrap();
+    let mut opts = options(&repo, template.path());
+    opts.write = true;
+    run_adopt(opts).unwrap();
+
+    // Earlier releases saved a generated dependency from each frontend on the
+    // repository-root backend.
+    let config_path = repo.join(".jig.toml");
+    let mut config: toml::Value =
+        toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let components = config["repository"]["components"].as_array_mut().unwrap();
+    let backend = components
+        .iter()
+        .find(|component| component["root"].as_str() == Some("."))
+        .and_then(|component| component["id"].as_str())
+        .unwrap()
+        .to_owned();
+    let frontend = components
+        .iter_mut()
+        .find(|component| component["root"].as_str() == Some("apps/web"))
+        .unwrap();
+    let frontend_id = frontend["id"].as_str().unwrap().to_owned();
+    let frontend = frontend.as_table_mut().unwrap();
+    frontend.insert(
+        "depends_on".into(),
+        toml::Value::Array(vec![toml::Value::String(backend.clone())]),
+    );
+    frontend["provenance"]
+        .as_table_mut()
+        .unwrap()
+        .insert("depends_on".into(), toml::Value::String("inferred".into()));
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+
+    let output = run_update(update_opts(&repo, template.path(), true)).unwrap();
+
+    let expected = format!("Component `{frontend_id}` no longer depends on `{backend}`.");
+    let warnings = output["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().starts_with(&expected)),
+        "{warnings:#?}"
+    );
+    assert!(
+        saved_components(&repo)
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|component| component.get("depends_on").is_none())
+    );
+}
