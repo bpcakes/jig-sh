@@ -189,7 +189,7 @@ fn retirement_follows_an_adopted_backend_id_and_keeps_other_dependencies() {
     shared_package.adapters = vec!["typescript".into()];
     components.push(shared_package);
 
-    retire_saved_frontend_backend_dependencies(&mut components);
+    retire_saved_frontend_dependencies(&mut components, &mut []);
 
     let find = |id: &str| {
         components

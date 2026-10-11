@@ -623,17 +623,8 @@ impl<'a> ModelBuilder<'a> {
                 descriptor.inputs,
                 self.answers.frontend_workspace_roots(),
             );
-            action.depends_on = match (self.answers.scaffolded_frontend_contracts(), descriptor.id)
-            {
-                (true, "typecheck") => vec![
-                    target_id(REPO_COMPONENT, FRONTEND_CONTRACT_DRIFT_ACTION)?,
-                    target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION)?,
-                ],
-                (true, "build") => {
-                    vec![target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION)?]
-                }
-                _ => Vec::new(),
-            };
+            // Contract checks produce nothing a frontend check reads, so each
+            // runs on its own inputs instead of being pulled in as a dependency.
             action.provenance = provenance(&[
                 ("target", FieldProvenance::Declared),
                 ("intent", FieldProvenance::Inherited),

@@ -22,6 +22,16 @@ fn legacy_model(backend: &str) -> RepositoryRenderModel {
                 .insert("depends_on".into(), FieldProvenance::Inferred);
         }
     }
+    // Frontend checks used to pull in the contract checks.
+    let drift = target_id("repo", "frontend-contract-drift").unwrap();
+    let boundary = target_id("repo", "frontend-public-boundary").unwrap();
+    for action in &mut model.actions {
+        match action.target.to_string().as_str() {
+            "web:typecheck" => action.depends_on = vec![drift.clone(), boundary.clone()],
+            "web:build" => action.depends_on = vec![boundary.clone()],
+            _ => {}
+        }
+    }
     // The actual generated input shape before the contract-only cutover.
     for action in &mut model.actions {
         if action.target.component.as_str() == "repo"
@@ -137,6 +147,34 @@ fn managed_update_retires_the_dependency_of_uncontracted_frontends_and_keeps_the
             current.authored_toml().unwrap()
         );
     }
+}
+
+#[test]
+fn managed_update_keeps_a_declared_contract_check_dependency() {
+    let mut saved = legacy_model("rust");
+    let typecheck = saved
+        .actions
+        .iter_mut()
+        .find(|item| item.target.to_string() == "web:typecheck")
+        .unwrap();
+    typecheck
+        .provenance
+        .insert("depends_on".into(), FieldProvenance::Declared);
+    let expected = typecheck.depends_on.clone();
+
+    let answers = load_saved(&saved, "rust");
+    let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(answers.authored_repository().is_some());
+    let find = |target: &str| {
+        upgraded
+            .actions
+            .iter()
+            .find(|item| item.target.to_string() == target)
+            .unwrap()
+    };
+    assert_eq!(find("web:typecheck").depends_on, expected);
+    assert!(find("web:build").depends_on.is_empty());
 }
 
 #[test]
@@ -258,7 +296,7 @@ fn upgraded_contracts_select_lockfile_and_workspace_changes_without_frontend_fan
         let root = temp.path();
         for dir in [
             ".agent",
-            "frontend/web",
+            "frontend/web/src",
             "src",
             "internal",
             "vendor",
@@ -318,11 +356,7 @@ fn upgraded_contracts_select_lockfile_and_workspace_changes_without_frontend_fan
                 "internal/service.go",
             ]
         };
-        for path in backend_paths
-            .iter()
-            .copied()
-            .chain(["openapi/public.json", "packages/web-api-client/index.ts"])
-        {
+        let selected_after = |path: &str| {
             fs::write(root.join(path), "changed\n").unwrap();
             let plan = plan_run_with_cancellation(
                 &context,
@@ -343,11 +377,25 @@ fn upgraded_contracts_select_lockfile_and_workspace_changes_without_frontend_fan
                 &|| false,
             )
             .unwrap();
-            let selected = plan
-                .targets
+            fs::remove_file(root.join(path)).unwrap();
+            plan.targets
                 .iter()
                 .map(|item| item.target.to_string())
-                .collect::<Vec<_>>();
+                .collect::<Vec<_>>()
+        };
+        // A frontend-only change runs its checks without the contract checks.
+        let selected = selected_after("frontend/web/src/main.ts");
+        assert!(selected.contains(&"web:typecheck".into()), "{selected:?}");
+        assert!(
+            !selected.contains(&"repo:frontend-contract-drift".into()),
+            "{backend}: {selected:?}"
+        );
+        for path in backend_paths
+            .iter()
+            .copied()
+            .chain(["openapi/public.json", "packages/web-api-client/index.ts"])
+        {
+            let selected = selected_after(path);
             assert!(
                 selected.contains(&"repo:frontend-contract-drift".into()),
                 "{backend} {path}: {selected:?}"
@@ -360,7 +408,6 @@ fn upgraded_contracts_select_lockfile_and_workspace_changes_without_frontend_fan
                     "{backend} {path}: {selected:?}"
                 );
             }
-            fs::remove_file(root.join(path)).unwrap();
         }
     }
 }

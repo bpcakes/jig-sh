@@ -19,10 +19,19 @@ pub(super) fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
 }
 
 /// Earlier generators made every frontend depend on the backend, so any
-/// backend change selected every frontend check. Drop that saved dependency,
-/// including under an adopted backend id, but only in its generated shape so
-/// an authored dependency survives.
-pub(super) fn retire_saved_frontend_backend_dependencies(components: &mut [ComponentSpec]) {
+/// backend change selected every frontend check, and made frontend typecheck
+/// and build depend on the contract checks, so any frontend change ran them.
+/// Drop those saved dependencies, including under an adopted backend id, but
+/// only in their generated shape so an authored dependency survives.
+pub(super) fn retire_saved_frontend_dependencies(
+    components: &mut [ComponentSpec],
+    actions: &mut [ActionSpec],
+) {
+    let frontends = components
+        .iter()
+        .filter(|component| component.tags.iter().any(|tag| tag == "frontend"))
+        .map(|component| component.id.clone())
+        .collect::<BTreeSet<_>>();
     let backends = components
         .iter()
         .filter(|component| {
@@ -35,7 +44,7 @@ pub(super) fn retire_saved_frontend_backend_dependencies(components: &mut [Compo
         .map(|component| component.id.clone())
         .collect::<BTreeSet<_>>();
     for component in components {
-        if component.tags.iter().any(|tag| tag == "frontend")
+        if frontends.contains(&component.id)
             && matches!(
                 component.depends_on.as_slice(),
                 [dependency] if backends.contains(dependency)
@@ -44,6 +53,21 @@ pub(super) fn retire_saved_frontend_backend_dependencies(components: &mut [Compo
         {
             component.depends_on.clear();
             component.provenance.remove("depends_on");
+        }
+    }
+    for action in actions {
+        if frontends.contains(&action.target.component)
+            && !action.depends_on.is_empty()
+            && action.depends_on.iter().all(|dependency| {
+                dependency.component.as_str() == REPO_COMPONENT
+                    && matches!(
+                        dependency.action.as_str(),
+                        FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
+                    )
+            })
+            && action.provenance.get("depends_on") == Some(&FieldProvenance::Inferred)
+        {
+            action.depends_on.clear();
         }
     }
 }
