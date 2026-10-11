@@ -98,6 +98,11 @@ jobs:
       - run: scripts/jig check <<[ go_fmt_ci_target ]>>
       - run: scripts/jig check <<[ go_lint_ci_target ]>>
       - run: scripts/jig check <<[ go_test_locked_ci_target ]>>
+[% if frontend_contracts_enabled %]        # A restored Go cache replays a test pass when only a file outside the
+        # module changed, such as a committed OpenAPI document.
+        env:
+          GOFLAGS: "-count=1"
+[% endif -%]
 [% if go_sqlc_ci_enabled %]      - run: scripts/jig check <<[ go_sqlc_ci_target ]>>
 [% endif -%]
 [% if go_postgres_integration_ci_enabled %]

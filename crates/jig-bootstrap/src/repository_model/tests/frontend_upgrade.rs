@@ -1,5 +1,7 @@
 use super::*;
 
+mod backend_freshness;
+
 const APP: &str = r#"
 [[frontend_apps]]
 name = "web"
@@ -288,115 +290,6 @@ fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
     for input in ["Cargo.lock", "go.sum", "go.work", "vendor/modules.txt"] {
         assert!(boundary.inputs.contains(&input.into()), "{input}");
     }
-}
-
-#[test]
-fn managed_update_keeps_drift_backend_inputs_while_backend_tests_skip_documents() {
-    let mut saved = legacy_model("rust");
-    let test = saved
-        .actions
-        .iter_mut()
-        .find(|item| item.target.to_string() == "api:test")
-        .unwrap();
-    test.provenance
-        .insert("inputs".into(), FieldProvenance::Declared);
-    let expected_test = test.clone();
-    let expected_drift = saved
-        .actions
-        .iter()
-        .find(|item| item.target.to_string() == "repo:frontend-contract-drift")
-        .unwrap()
-        .clone();
-
-    let answers = load_saved(&saved, "rust");
-    let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
-
-    assert!(answers.authored_repository().is_some());
-    for expected in [expected_test, expected_drift] {
-        assert_eq!(
-            upgraded
-                .actions
-                .iter()
-                .find(|item| item.target == expected.target)
-                .unwrap()
-                .inputs,
-            expected.inputs,
-            "{}",
-            expected.target
-        );
-    }
-}
-
-fn drift_inputs(model: &RepositoryRenderModel) -> &[String] {
-    &model
-        .actions
-        .iter()
-        .find(|item| item.target.to_string() == "repo:frontend-contract-drift")
-        .unwrap()
-        .inputs
-}
-
-/// Loads `saved` and asserts that the drift check keeps its saved inputs.
-fn assert_saved_drift_inputs_kept(
-    saved: &RepositoryRenderModel,
-    backend: &str,
-    label: &str,
-) -> RepositoryRenderModel {
-    let answers = load_saved(saved, backend);
-    let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
-    assert!(answers.authored_repository().is_some(), "{label}");
-    assert_eq!(drift_inputs(&upgraded), drift_inputs(saved), "{label}");
-    upgraded
-}
-
-#[test]
-fn managed_update_keeps_drift_backend_inputs_while_backend_tests_run_custom_commands() {
-    for (backend, key, custom) in [
-        (
-            "rust",
-            "api_test_command",
-            "cargo test --workspace -- --skip committed_",
-        ),
-        (
-            "rust",
-            "api_test_locked_command",
-            "cargo test --workspace --locked -- --skip committed_",
-        ),
-        (
-            "go",
-            "api_test_command",
-            "go test -skip TestOpenAPIIsCurrent ./...",
-        ),
-        (
-            "go",
-            "api_test_locked_command",
-            "go mod verify && go test -mod=readonly -skip TestOpenAPIIsCurrent ./...",
-        ),
-    ] {
-        let mut saved = legacy_model(backend);
-        saved.commands.insert(key.into(), custom.into());
-        let upgraded = assert_saved_drift_inputs_kept(&saved, backend, &format!("{backend} {key}"));
-        assert_eq!(upgraded.commands[key], custom);
-    }
-
-    // The generated Go command skips the document test outside the module root.
-    let mut saved = legacy_model("go");
-    let test = saved
-        .actions
-        .iter_mut()
-        .find(|item| item.target.to_string() == "api:test-locked")
-        .unwrap();
-    let (ActionRunner::Command {
-        working_directory, ..
-    }
-    | ActionRunner::Shell {
-        working_directory, ..
-    }) = &mut test.runner
-    else {
-        panic!("generated backend tests run a command");
-    };
-    *working_directory = Some("cmd".into());
-    assert_saved_drift_inputs_kept(&saved, "go", "go working directory");
 }
 
 #[test]

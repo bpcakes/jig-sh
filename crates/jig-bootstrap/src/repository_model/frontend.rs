@@ -154,7 +154,8 @@ pub(super) fn aggregate_frontend_inputs(
 pub(super) const OPENAPI_INPUT: &str = "openapi/**";
 
 /// Backend sources, manifests, lockfiles, and workspace files. The boundary
-/// check inspects the backend dependency graph, so it reads them.
+/// check inspects the backend dependency graph, so it reads them, as does the
+/// drift check while the backend tests do not own document freshness.
 pub(super) const BACKEND_CONTRACT_INPUTS: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
@@ -175,10 +176,12 @@ pub(super) const BACKEND_CONTRACT_INPUTS: &[&str] = &[
 ];
 
 /// The drift check regenerates the clients from the committed documents, so
-/// it reads only the contract surface; the backend tests own document
-/// freshness. The boundary check also reads the backend.
+/// it reads only the contract surface while the generated backend tests own
+/// document freshness. Otherwise it also reads the backend, as the boundary
+/// check always does.
 pub(super) fn frontend_contract_inputs(
     public_boundary: bool,
+    backend_tests_own_freshness: bool,
     workspace_roots: &[String],
 ) -> Vec<String> {
     let mut inputs = FRONTEND_SHARED_INPUTS
@@ -190,8 +193,10 @@ pub(super) fn frontend_contract_inputs(
             .iter()
             .map(|root| component_root_input(root)),
     );
-    if public_boundary {
+    if public_boundary || !backend_tests_own_freshness {
         inputs.extend(BACKEND_CONTRACT_INPUTS.iter().map(|input| (*input).into()));
+    }
+    if public_boundary {
         inputs.extend(["docs/public/**".into(), "public-docs/**".into()]);
     }
     inputs.sort();

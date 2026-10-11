@@ -73,6 +73,19 @@ fn assert_go_test_workflow(destination: &Path) {
     for target in ["api:fmt", "api:lint", "api:test-locked", "api:sqlc"] {
         assert_contains_all(&go_tests, &[&format!("scripts/jig check {target}")]);
     }
+    // The backend tests run uncached, so a restored Go cache cannot replay a
+    // pass over a stale committed document; the other checks keep the cache.
+    for step in parsed["jobs"]["checks"]["steps"].as_array().unwrap() {
+        let Some(run) = step["run"].as_str() else {
+            continue;
+        };
+        let expected = if run == "scripts/jig check api:test-locked" {
+            serde_json::json!({ "GOFLAGS": "-count=1" })
+        } else {
+            serde_json::Value::Null
+        };
+        assert_eq!(step["env"], expected, "{run}");
+    }
     assert_quoted_workflow_path_counts(
         &go_tests,
         &[

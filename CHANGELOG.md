@@ -45,17 +45,21 @@
   freshness. `api:test` and `api:test-locked` now read `openapi/**`, so they
   run when a document changes as well as on backend source, lockfile, and
   workspace changes; their committed-document test is what catches a backend
-  change that alters the contract, so keep it. The drift check reads only the
-  documents, the generated clients, and the JavaScript toolchain, so backend
-  changes no longer select it. Newly scaffolded repositories also run it
-  without exporting from the backend: it regenerates the clients from the
-  committed documents and compares them. In a Go scaffold it also reruns the
-  backend's document test with `-count=1`, because Go reuses a cached pass
-  when only a document outside the module changed. An existing
+  change that alters the contract, so keep it. While both backend tests run
+  their generated commands, the drift check reads only the documents, the
+  generated clients, and the JavaScript toolchain, so backend changes no
+  longer select it; with a customized backend test command it keeps reading
+  the backend sources, manifests, and lockfiles. Newly scaffolded
+  repositories also run it without exporting from the backend: it
+  regenerates the clients from the committed documents and compares them. In
+  a Go scaffold it also reruns the backend's document test with `-count=1`,
+  because Go reuses a cached pass when only a document outside the module
+  changed, and the generated Go workflow runs the backend tests with
+  `GOFLAGS=-count=1` so a restored cache cannot replay one in CI. An existing
   `scripts/contracts.mjs` belongs to its repository and keeps its behavior.
   `jig update` upgrades the generated backend test and drift inputs, and
-  leaves the drift inputs unchanged while a backend test does not read
-  `openapi/**` or no longer runs its generated command and runner.
+  drops the drift check's backend inputs only while each backend test keeps
+  its generated runner and command and reads every generated input.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the

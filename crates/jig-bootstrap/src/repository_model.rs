@@ -465,6 +465,11 @@ impl<'a> ModelBuilder<'a> {
         } else {
             "Check the repository-wide public/private dependency boundary."
         };
+        let backend_tests_own_freshness = frontend_migration::backend_tests_run_generated_commands(
+            self.actions.values(),
+            &self.commands,
+            self.answers.backend_language().is_go(),
+        );
         for (action_id, description, mode) in [
             (
                 FRONTEND_CONTRACT_DRIFT_ACTION,
@@ -492,6 +497,7 @@ impl<'a> ModelBuilder<'a> {
             action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
             action.inputs = frontend_contract_inputs(
                 action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION,
+                backend_tests_own_freshness,
                 self.answers.frontend_workspace_roots(),
             );
             action.provenance = provenance(&[
