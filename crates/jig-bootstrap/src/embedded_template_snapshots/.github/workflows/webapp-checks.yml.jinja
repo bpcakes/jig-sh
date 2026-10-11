@@ -7,16 +7,11 @@ on:
   # otherwise remove pull_request.paths before making its job a required check.
   pull_request:
     paths:
-[% if go_backend_enabled %]
-[% for path in go_ci_input_paths %]
-      - <<[ path | tojson ]>>
-[% endfor %]
-[% endif %]
       - "openapi/**"
       - "packages/public-api-client/**"
       - "packages/admin-api-client/**"
 [% for app in frontend_apps %]
-      - <<[ (app.dir ~ "/**") | tojson ]>>
+      - <<[ ("**" if app.dir == "." else app.dir ~ "/**") | tojson ]>>
 [% endfor %]
 [% for root in frontend_workspace_roots %]
       - <<[ ("**" if root == "." else root ~ "/**") | tojson ]>>
@@ -25,6 +20,19 @@ on:
       - "scripts/check-webapp-scripts.mjs"
       - "scripts/contracts.mjs"
       - "scripts/enforce-coverage.cjs"
+      - "scripts/web-node.cjs"
+      - "eslint.config.shared.mjs"
+[% if frontend_contracts_enabled %]
+      - "docs/public/**"
+      - "public-docs/**"
+[% if go_backend_enabled %]
+      - "go.mod"
+      - "**/go.mod"
+[% else %]
+      - "apps/*-api/Cargo.toml"
+      - "crates/*-http/Cargo.toml"
+[% endif %]
+[% endif %]
       - "package.json"
       - "**/package.json"
       - "**/package.json5"
@@ -71,16 +79,11 @@ on:
     branches:
       - <<[ default_branch | tojson ]>>
     paths:
-[% if go_backend_enabled %]
-[% for path in go_ci_input_paths %]
-      - <<[ path | tojson ]>>
-[% endfor %]
-[% endif %]
       - "openapi/**"
       - "packages/public-api-client/**"
       - "packages/admin-api-client/**"
 [% for app in frontend_apps %]
-      - <<[ (app.dir ~ "/**") | tojson ]>>
+      - <<[ ("**" if app.dir == "." else app.dir ~ "/**") | tojson ]>>
 [% endfor %]
 [% for root in frontend_workspace_roots %]
       - <<[ ("**" if root == "." else root ~ "/**") | tojson ]>>
@@ -89,6 +92,19 @@ on:
       - "scripts/check-webapp-scripts.mjs"
       - "scripts/contracts.mjs"
       - "scripts/enforce-coverage.cjs"
+      - "scripts/web-node.cjs"
+      - "eslint.config.shared.mjs"
+[% if frontend_contracts_enabled %]
+      - "docs/public/**"
+      - "public-docs/**"
+[% if go_backend_enabled %]
+      - "go.mod"
+      - "**/go.mod"
+[% else %]
+      - "apps/*-api/Cargo.toml"
+      - "crates/*-http/Cargo.toml"
+[% endif %]
+[% endif %]
       - "package.json"
       - "**/package.json"
       - "**/package.json5"

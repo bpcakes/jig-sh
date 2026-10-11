@@ -343,6 +343,9 @@ fn adopt_infers_root_frontend_app() {
     assert!(answers.contains("name = \"root-web\""));
     assert!(answers.contains("dir = \".\""));
     assert!(answers.contains("kind = \"vite\""));
+    // A root app owns every path, so any change to it runs its frontend checks.
+    let workflow = fs::read_to_string(repo.join(".github/workflows/webapp-checks.yml")).unwrap();
+    assert_workflow_triggered_by(&workflow, &["src/App.tsx", "vite.config.ts"]);
     assert!(answers.contains(
         "argv = [\"npm\", \"--prefix=.\", \"--workspace=.\", \"--workspaces=true\", \"--include-workspace-root=true\", \"--global=false\", \"--location=project\", \"--if-present=false\", \"--include=dev\", \"--include=optional\", \"--include=peer\", \"run\", \"dev\"]"
     ));

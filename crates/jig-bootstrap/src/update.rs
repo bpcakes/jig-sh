@@ -305,6 +305,9 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
             &staged.destination,
         ))?,
     );
+    warnings.extend(progress.log_blocked_on_err(
+        super::runtime_config::retired_dependency_notes(Some(&destination), &staged.destination),
+    )?);
     progress.step("plan lifecycle", "legacy file-budget migration");
     let lifecycle = progress.log_blocked_on_err(prepare_legacy_migration(
         &destination,

@@ -112,29 +112,30 @@ fn reload_saved(model: &RepositoryRenderModel) -> RepositoryRenderModel {
 }
 
 #[test]
-fn saved_generated_backend_dependency_is_retired_with_contract_checks() {
-    let current = RepositoryRenderModel::from_answers(&scaffold_answers(FRONTEND_APPS)).unwrap();
-    let saved = with_saved_backend_dependency(current.clone(), FieldProvenance::Inferred);
+fn saved_generated_backend_dependency_is_retired_with_or_without_contract_checks() {
+    for answers in [scaffold_answers(FRONTEND_APPS), answers(FRONTEND_APPS)] {
+        let current = RepositoryRenderModel::from_answers(&answers).unwrap();
+        let saved = with_saved_backend_dependency(current.clone(), FieldProvenance::Inferred);
 
-    let upgraded = reload_saved(&saved);
+        let upgraded = reload_saved(&saved);
 
-    assert_eq!(upgraded.components, current.components);
-    assert_eq!(upgraded.actions, current.actions);
-    assert_eq!(
-        upgraded.authored_toml().unwrap(),
-        current.authored_toml().unwrap()
-    );
+        assert_eq!(upgraded.components, current.components);
+        assert_eq!(upgraded.actions, current.actions);
+        assert_eq!(
+            upgraded.authored_toml().unwrap(),
+            current.authored_toml().unwrap()
+        );
+    }
 }
 
 #[test]
-fn saved_backend_dependency_is_kept_when_authored_or_without_contract_checks() {
-    for saved in [
-        with_saved_backend_dependency(
-            RepositoryRenderModel::from_answers(&scaffold_answers(FRONTEND_APPS)).unwrap(),
+fn saved_backend_dependency_is_kept_when_authored() {
+    for answers in [scaffold_answers(FRONTEND_APPS), answers(FRONTEND_APPS)] {
+        let saved = with_saved_backend_dependency(
+            RepositoryRenderModel::from_answers(&answers).unwrap(),
             FieldProvenance::Declared,
-        ),
-        RepositoryRenderModel::from_answers(&answers(FRONTEND_APPS)).unwrap(),
-    ] {
+        );
+
         let reloaded = reload_saved(&saved);
 
         assert_eq!(reloaded.components, saved.components);
@@ -148,15 +149,55 @@ fn saved_backend_dependency_is_kept_when_authored_or_without_contract_checks() {
 }
 
 #[test]
-fn frontends_without_contracts_keep_the_backend_dependency() {
+fn frontends_without_contracts_do_not_depend_on_the_backend() {
     let model = RepositoryRenderModel::from_answers(&answers(FRONTEND_APPS)).unwrap();
 
+    assert!(component(&model, "api").propagate_affected_to_dependents);
     for frontend in ["web", "admin"] {
         let spec = component(&model, frontend);
-        assert_eq!(spec.depends_on, [component_id(BACKEND_COMPONENT).unwrap()]);
-        assert_eq!(
-            spec.provenance.get("depends_on"),
-            Some(&FieldProvenance::Inferred)
-        );
+        assert!(spec.depends_on.is_empty(), "{frontend}");
+        assert!(!spec.provenance.contains_key("depends_on"));
     }
+}
+
+#[test]
+fn retirement_follows_an_adopted_backend_id_and_keeps_other_dependencies() {
+    let mut components = RepositoryRenderModel::from_answers(&answers(FRONTEND_APPS))
+        .unwrap()
+        .components;
+    let workspace = component_id("workspace").unwrap();
+    let shared = component_id("shared").unwrap();
+    for component in &mut components {
+        let dependency = match component.id.as_str() {
+            // Adoption renames the generated backend after its candidate.
+            "api" => {
+                component.id = workspace.clone();
+                component.tags = vec!["workspace".into()];
+                continue;
+            }
+            "web" => workspace.clone(),
+            "admin" => shared.clone(),
+            _ => continue,
+        };
+        component.depends_on = vec![dependency];
+        component
+            .provenance
+            .insert("depends_on".into(), FieldProvenance::Inferred);
+    }
+    let mut shared_package = ComponentSpec::new(shared.clone(), "packages/shared");
+    shared_package.tags = vec!["frontend".into(), "shared".into()];
+    shared_package.adapters = vec!["typescript".into()];
+    components.push(shared_package);
+
+    retire_saved_frontend_backend_dependencies(&mut components);
+
+    let find = |id: &str| {
+        components
+            .iter()
+            .find(|component| component.id.as_str() == id)
+            .unwrap()
+    };
+    assert!(find("web").depends_on.is_empty());
+    assert!(!find("web").provenance.contains_key("depends_on"));
+    assert_eq!(find("admin").depends_on, [shared]);
 }

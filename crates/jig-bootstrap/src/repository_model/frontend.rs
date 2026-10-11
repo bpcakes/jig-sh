@@ -1,44 +1,44 @@
 use super::*;
 
-pub(super) fn frontend_component(
-    app: &FrontendApp,
-    scaffolded_contracts: bool,
-) -> Result<ComponentSpec> {
+/// Frontend checks read their declared inputs, which include the API contract
+/// and generated clients but not backend sources, so a frontend never depends
+/// on the backend component. A frontend whose scripts compile or run backend
+/// code must declare those files as inputs.
+pub(super) fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
     let id = frontend_component_id(&app.name)?;
     let mut component = ComponentSpec::new(id, &app.dir);
     component.description = Some(format!("Frontend application '{}'.", app.name));
     component.tags = vec!["frontend".into(), app.role.clone()];
     component.adapters = vec!["typescript".into()];
-    let mut fields = vec![
+    component.provenance = provenance(&[
         ("id", FieldProvenance::Inferred),
         ("root", FieldProvenance::Declared),
         ("adapters", FieldProvenance::Inferred),
-    ];
-    // With scaffolded contracts, frontends see the backend only through
-    // `openapi/**` and the generated clients, which their actions read
-    // directly; `repo:frontend-contract-drift` covers backend changes.
-    // Without contracts, every backend change must reach the frontends.
-    if !scaffolded_contracts {
-        component.depends_on = vec![component_id(BACKEND_COMPONENT)?];
-        fields.push(("depends_on", FieldProvenance::Inferred));
-    }
-    component.provenance = provenance(&fields);
+    ]);
     Ok(component)
 }
 
-/// Repositories scaffolded before frontends reached the backend only through
-/// contracts saved the generated backend dependency in `.jig.toml`. Drop it
-/// while the contract checks are present, but only in that generated shape so
+/// Earlier generators made every frontend depend on the backend, so any
+/// backend change selected every frontend check. Drop that saved dependency,
+/// including under an adopted backend id, but only in its generated shape so
 /// an authored dependency survives.
-pub(super) fn retire_saved_frontend_backend_dependencies(model: &mut RepositoryRenderModel) {
-    if !model.frontend_contracts_enabled() {
-        return;
-    }
-    for component in &mut model.components {
+pub(super) fn retire_saved_frontend_backend_dependencies(components: &mut [ComponentSpec]) {
+    let backends = components
+        .iter()
+        .filter(|component| {
+            component.root == "."
+                && component
+                    .adapters
+                    .iter()
+                    .any(|adapter| matches!(adapter.as_str(), "rust" | "go"))
+        })
+        .map(|component| component.id.clone())
+        .collect::<BTreeSet<_>>();
+    for component in components {
         if component.tags.iter().any(|tag| tag == "frontend")
             && matches!(
                 component.depends_on.as_slice(),
-                [dependency] if dependency.as_str() == BACKEND_COMPONENT
+                [dependency] if backends.contains(dependency)
             )
             && component.provenance.get("depends_on") == Some(&FieldProvenance::Inferred)
         {

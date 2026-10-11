@@ -345,6 +345,27 @@ fn assert_project_sentinels(repo: &Path, paths: &[&str]) {
     }
 }
 
+/// Asserts that a change to each path triggers the workflow on pull requests
+/// and pushes, matching path filters the way GitHub does.
+fn assert_workflow_triggered_by(workflow: &str, paths: &[&str]) {
+    let workflow = serde_yaml_ng::from_str::<serde_json::Value>(workflow).unwrap();
+    for event in ["pull_request", "push"] {
+        let mut filters = globset::GlobSetBuilder::new();
+        for filter in workflow["on"][event]["paths"].as_array().unwrap() {
+            filters.add(
+                globset::GlobBuilder::new(filter.as_str().unwrap())
+                    .literal_separator(true)
+                    .build()
+                    .unwrap(),
+            );
+        }
+        let filters = filters.build().unwrap();
+        for path in paths {
+            assert!(filters.is_match(path), "{event} paths do not match {path}");
+        }
+    }
+}
+
 fn update_opts(repo: &Path, template: &Path, force: bool) -> UpdateOpts {
     UpdateOpts {
         path: repo.to_path_buf(),

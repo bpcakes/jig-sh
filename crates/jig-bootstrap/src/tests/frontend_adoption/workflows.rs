@@ -78,6 +78,17 @@ fn generated_frontend_inputs_never_mask_nested_owned_scopes() {
 
     let workflow = fs::read_to_string(repo.join(".github/workflows/webapp-checks.yml")).unwrap();
     assert_eq!(workflow.matches("\"apps/suite/shared/**\"").count(), 2);
+    // Every frontend job lints with the shared config and installs through the
+    // web-node helper; only client-check, absent without contracts, reads docs.
+    assert_text_occurrences(
+        &workflow,
+        &[
+            ("\"eslint.config.shared.mjs\"", 2),
+            ("\"scripts/web-node.cjs\"", 2),
+            ("\"docs/public/**\"", 0),
+            ("\"apps/*-api/Cargo.toml\"", 0),
+        ],
+    );
 }
 
 #[cfg(unix)]

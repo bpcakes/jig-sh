@@ -31,7 +31,9 @@ const GENERATED_FRONTEND_COMMAND_DEFAULTS: &[(&str, &str)] = &[
     ),
 ];
 
+mod retired_dependencies;
 mod retired_work;
+pub(super) use retired_dependencies::retired_dependency_notes;
 pub(super) use retired_work::retired_work_notes;
 
 /// Carries tracker ownership into the refreshed configuration using the

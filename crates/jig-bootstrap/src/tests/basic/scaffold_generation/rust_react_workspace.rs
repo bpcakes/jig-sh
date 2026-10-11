@@ -223,6 +223,23 @@ fn assert_generated_ci_workflows(destination: &Path) {
         "${{ github.workspace }}/.sqlx"
     );
     assert!(rust_workflow_yaml["jobs"]["fmt"]["env"].is_null());
+    // The frontend job lints with the shared config, installs through the
+    // web-node helper, and its client-check scans public docs and the public
+    // API and HTTP crate manifests.
+    let webapp =
+        fs::read_to_string(destination.join(".github/workflows/webapp-checks.yml")).unwrap();
+    assert_workflow_triggered_by(
+        &webapp,
+        &[
+            "eslint.config.shared.mjs",
+            "scripts/web-node.cjs",
+            "docs/public/guide.md",
+            "public-docs/index.html",
+            "apps/my-app-api/Cargo.toml",
+            "crates/my-app-http/Cargo.toml",
+        ],
+    );
+    assert_contains_none(&webapp, &[r#"- "go.mod""#]);
     for (workflow_name, jobs) in [
         ("agent-map-check.yml", &["agent-map-check"][..]),
         (
