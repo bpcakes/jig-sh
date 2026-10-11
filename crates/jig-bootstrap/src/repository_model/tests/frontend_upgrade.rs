@@ -178,6 +178,44 @@ fn managed_update_keeps_a_declared_contract_check_dependency() {
 }
 
 #[test]
+fn managed_update_keeps_contract_check_dependencies_outside_the_generated_shapes() {
+    let mut saved = legacy_model("rust");
+    let drift = target_id("repo", "frontend-contract-drift").unwrap();
+    let boundary = target_id("repo", "frontend-public-boundary").unwrap();
+    // Added by hand without marking the provenance declared; no generator
+    // ever wrote these shapes.
+    let kept = [
+        ("web:test", vec![boundary.clone()]),
+        ("web:lint", vec![drift, boundary]),
+    ];
+    for (target, dependencies) in &kept {
+        saved
+            .actions
+            .iter_mut()
+            .find(|item| item.target.to_string() == *target)
+            .unwrap()
+            .depends_on
+            .clone_from(dependencies);
+    }
+
+    let answers = load_saved(&saved, "rust");
+    let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    let find = |target: &str| {
+        upgraded
+            .actions
+            .iter()
+            .find(|item| item.target.to_string() == target)
+            .unwrap()
+    };
+    for (target, dependencies) in &kept {
+        assert_eq!(&find(target).depends_on, dependencies, "{target}");
+    }
+    assert!(find("web:typecheck").depends_on.is_empty());
+    assert!(find("web:build").depends_on.is_empty());
+}
+
+#[test]
 fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
     let mut saved = legacy_model("rust");
     saved

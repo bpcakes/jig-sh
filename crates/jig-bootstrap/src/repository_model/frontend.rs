@@ -56,15 +56,26 @@ pub(super) fn retire_saved_frontend_dependencies(
         }
     }
     for action in actions {
+        // The only shapes generators wrote: typecheck on both contract checks
+        // in this order, and build on the boundary check.
+        let generated: &[&str] = match action.target.action.as_str() {
+            "typecheck" => &[
+                FRONTEND_CONTRACT_DRIFT_ACTION,
+                FRONTEND_PUBLIC_BOUNDARY_ACTION,
+            ],
+            "build" => &[FRONTEND_PUBLIC_BOUNDARY_ACTION],
+            _ => continue,
+        };
         if frontends.contains(&action.target.component)
-            && !action.depends_on.is_empty()
-            && action.depends_on.iter().all(|dependency| {
-                dependency.component.as_str() == REPO_COMPONENT
-                    && matches!(
-                        dependency.action.as_str(),
-                        FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
-                    )
-            })
+            && action.depends_on.len() == generated.len()
+            && action
+                .depends_on
+                .iter()
+                .zip(generated)
+                .all(|(dependency, expected)| {
+                    dependency.component.as_str() == REPO_COMPONENT
+                        && dependency.action.as_str() == *expected
+                })
             && action.provenance.get("depends_on") == Some(&FieldProvenance::Inferred)
         {
             action.depends_on.clear();
