@@ -464,6 +464,8 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
         (false, &["public", "admin"], public, "0", false),
         (false, &["public"], public, "0", true),
         (false, &["public"], "running 0 tests", "0", false),
+        // Removing the public document does not remove its test.
+        (false, &[], "running 0 tests", "0", false),
         (false, &["public"], public, "101", false),
         (true, &["public"], go_pass, "0", true),
         (
