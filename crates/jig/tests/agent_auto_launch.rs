@@ -40,7 +40,12 @@ if [ "${1:-}" = app-server ]; then
   esac
   if [ "${JIG_TEST_EXHAUSTED:-}" = 1 ]; then weekly=100; fi
   now=$(date +%s)
-  printf '{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":%s,"windowDurationMins":300,"resetsAt":%s},"secondary":{"usedPercent":%s,"windowDurationMins":10080,"resetsAt":%s}}}}\n' "$short" "$((now+9000))" "$weekly" "$((now+300000))"
+  short_duration=300; weekly_duration=10080
+  short_reset=$((now+9000)); weekly_reset=$((now+300000))
+  if [ "${JIG_TEST_NULL_TIMING:-}" = 1 ]; then
+    short_duration=null; weekly_duration=null; short_reset=null; weekly_reset=null
+  fi
+  printf '{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":%s,"windowDurationMins":%s,"resetsAt":%s},"secondary":{"usedPercent":%s,"windowDurationMins":%s,"resetsAt":%s}}}}\n' "$short" "$short_duration" "$short_reset" "$weekly" "$weekly_duration" "$weekly_reset"
   sleep 30
   exit 0
 fi
@@ -102,6 +107,38 @@ fn auto_dry_run_selects_by_limiting_window_and_explains_the_decision() {
         decision["candidates"][index]["assessment"]["remaining_percent"],
         55.0
     );
+}
+
+#[test]
+fn codex_auto_selects_known_usage_with_nullable_protocol_timing() {
+    let root = support::tempdir().unwrap();
+    let output = codex_fixture(root.path())
+        .env("JIG_TEST_NULL_TIMING", "1")
+        .args(["codex", "launch", "--auto", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["home"],
+        root.path()
+            .join(".codex-example")
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    let decision = &report["selection"];
+    assert_eq!(decision["partial"], false);
+    let index = decision["selected_index"].as_u64().unwrap() as usize;
+    let assessment = &decision["candidates"][index]["assessment"];
+    assert_eq!(assessment["remaining_percent"], 55.0);
+    assert!(assessment["limiting_window"]["duration_minutes"].is_null());
+    assert!(assessment["limiting_window"]["resets_at"].is_null());
 }
 
 #[test]

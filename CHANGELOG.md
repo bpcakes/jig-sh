@@ -14,6 +14,10 @@
 
 ### Fixed
 
+- Automatic agent selection accepts known utilization when a quota window omits
+  its duration, as permitted by the Codex protocol. Supplied reset times still
+  enforce expiry, and malformed duration values remain ineligible.
+
 - Backend-only changes no longer select every frontend check under
   `scripts/jig check --affected` in repositories scaffolded with API
   contracts. Frontend components no longer depend on the backend component:

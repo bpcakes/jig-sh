@@ -46,9 +46,11 @@ inspection coverage. Candidate entries contain `index`, `name`, display `path`,
 `representation_lossy`, `current`, provider `details`, and `assessment`.
 The assessment contains `reason`, nullable `remaining_percent`, and nullable
 `limiting_window` (`bucket`, nullable `bucket_name`, `window`,
-`duration_minutes`, nullable `resets_at`). Known utilization with a missing or null
-reset time is scored without reset-based freshness checks; a present malformed or
-expired reset still disqualifies the home. Claude usage windows with malformed
+nullable `duration_minutes`, nullable `resets_at`). Known utilization is scored
+when duration or reset time is missing or null. Supplied reset times still enforce
+expiry independently of duration; the window-start sanity check applies only when
+both fields are known. Present malformed durations or resets still disqualify the
+home. Claude usage windows with malformed
 fields carry `invalid: true` without echoing raw response data. Valid neighboring
 windows remain available to display; `homes --usage` marks the report `partial`,
 and automatic selection rejects the malformed capacity.
