@@ -14,7 +14,8 @@ variable, usage support, plain-list inspection policy, and primary subscription
 bucket), a provider-owned `Home` type, and implementations of these operations:
 
 - `resolve`: interpret an explicit CLI home argument.
-- `discover`: return choices with display metadata and an optional inspection source.
+- `discover`: return choices with display metadata and an optional inspection source;
+  `InspectionMode` explicitly chooses interactive or headless credential policy.
 - `revalidate`: check the chosen configuration after an interactive wait.
 - `prepare`: build exact native argv/environment and the existing dry-run JSON report,
   without launching, reading credentials, or inspecting usage.
@@ -80,3 +81,20 @@ Validate changes with the affected provider/picker tests, the Claude and Codex
 launcher integration tests, and the repository test check using a newly built
 `JIG_DEV_BIN=target/debug/jig`. Preserve the existing JSON schemas, forwarded native
 arguments, invocation directory, child exit status, and signal cleanup behavior.
+
+## Automatic selection
+
+`jig-agents::selection` owns headless quota assessment and selection, independently
+of the TUI. It discovers with `InspectionMode::Headless`, collects indexed
+inspection updates with a cooperative deadline, scores each candidate's most
+constrained returned window, and revalidates the original provider-owned choice.
+Missing or invalid quota is ineligible. Additional model-specific windows are
+included conservatively; forwarded agent arguments are not parsed for model or
+configuration selection. Claude normalizes `weekly_scoped` rows from `limits[]`
+without requiring a model ID, so Fable allowances survive into assessment.
+
+The CLI's `agent_run/automatic.rs` supplies signal supervision and emits decisions
+only for dry runs. Actual launches use the existing transparent handoff. The
+selection report is diagnostic data; its paths, names, and indices must never be
+resolved into a second launch identity. No cache or persistent selection state is
+written, and there is no retry after the child starts.

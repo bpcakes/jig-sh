@@ -21,7 +21,7 @@ Examples:
   jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20";
 
 pub(super) const CODEX_LAUNCH_AFTER_HELP: &str = "\
-With no HOME, open a searchable terminal picker immediately. Account and usage
+With no HOME or --auto, open a searchable terminal picker immediately. Account and usage
 details load in the background as usage meters with at-current-pace
 projections; ◆ marks the best projected outcome (most headroom or least overrun).
 Arrows or j/k move, / searches, r refreshes usage, Enter launches, and Esc or q cancels.
@@ -29,10 +29,16 @@ Click a home to select it, double-click to launch it, and scroll with the wheel.
 A bare name such as work resolves as ~/.codex-work; use ./work to select a relative directory.
 The aliases codex and default both select ~/.codex.
 Arguments after -- are forwarded to Codex without shell parsing.
+Use --auto for prompt-free selection by remaining subscription headroom across
+all reported quota windows. Inspection has a 10-second cooperative deadline.
+Unknown or exhausted usage is ineligible. If no home is eligible, launch fails.
+--auto --dry-run --json explains the selection (and still inspects usage).
+Use automatic selection for new sessions; resume and account setup need a fixed home.
 
 Examples:
   jig codex launch
   jig codex launch codex-1
+  jig codex launch --auto -- exec --json \"Review the changes\"
   jig codex launch ~/.codex-work -- --profile deep-review
   jig codex launch codex-1 --dry-run -- --search";
 
@@ -53,7 +59,7 @@ pub(crate) enum CodexCommand {
     /// List discovered Codex homes and their authenticated accounts.
     #[command(name = tool_defs::cli_command::CODEX_HOMES)]
     Homes(CodexHomesOpts),
-    /// Select a Codex home and launch the interactive Codex CLI.
+    /// Select a Codex home and launch the Codex CLI.
     #[command(
         name = tool_defs::cli_command::CODEX_LAUNCH,
         after_help = CODEX_LAUNCH_AFTER_HELP
@@ -83,6 +89,9 @@ pub(crate) struct CodexLaunchOpts {
         help = "Codex home name or path; omit to choose interactively"
     )]
     pub(crate) home: Option<PathBuf>,
+    /// Select the home with most remaining subscription headroom without prompts.
+    #[arg(long = "auto", conflicts_with = "home")]
+    pub(crate) auto_select: bool,
     #[arg(
         long,
         help = "Print the selected home and Codex command without launching"

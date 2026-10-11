@@ -38,18 +38,81 @@ fn subscription_windows_are_normalized_without_forwarding_unrelated_fields() {
 
 #[test]
 fn missing_and_malformed_limits_are_unavailable_instead_of_zero() {
+    for value in [json!(null), json!({})] {
+        assert!(normalize::limits(&value).is_err());
+    }
     for value in [
-        json!(null),
-        json!({}),
         json!({"five_hour":{"utilization":-1}}),
         json!({"seven_day":{"utilization":"10"}}),
+        json!({"five_hour":{"utilization":10},"seven_day":{"utilization":"10"}}),
     ] {
-        assert!(normalize::limits(&value).is_err());
+        let limits = json!(normalize::limits(&value).unwrap());
+        assert!(normalize::is_partial(&limits));
+        let window = if limits[0]["secondary"].is_null() {
+            &limits[0]["primary"]
+        } else {
+            &limits[0]["secondary"]
+        };
+        assert!(window["used_percent"].is_null());
+        assert_eq!(window["invalid"], true);
     }
     let limits =
         normalize::limits(&json!({"five_hour":{"utilization":0,"resets_at":"invalid"}})).unwrap();
     assert_eq!(limits[0]["primary"]["used_percent"], 0.0);
     assert!(limits[0]["primary"]["resets_at"].is_null());
+    assert_eq!(limits[0]["primary"]["invalid"], true);
+}
+
+#[test]
+fn fable_scoped_weekly_limits_survive_missing_model_ids_and_inactive_markers() {
+    let limits = normalize::limits(&json!({
+        "five_hour":{"utilization":5,"resets_at":"2026-10-11T12:00:00Z"},
+        "limits":[
+            {"kind":"weekly_scoped","group":"weekly","percent":95,
+             "resets_at":"2026-10-15T12:00:00Z","is_active":false,
+             "scope":{"model":{"id":null,"display_name":"Fable"}},
+             "unknown":"example-private-field"},
+            {"kind":"weekly_scoped","percent":20,"resets_at":null,
+             "scope":{"surface":{"display_name":"Example surface"}}}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(limits.len(), 3);
+    assert_eq!(limits[1]["name"], "Fable");
+    assert_eq!(limits[1]["primary"]["used_percent"], 95.0);
+    assert_eq!(limits[1]["primary"]["duration_minutes"], 10_080);
+    assert_eq!(limits[2]["name"], "Example surface");
+    assert_ne!(limits[1]["id"], limits[2]["id"]);
+    assert!(
+        !serde_json::to_string(&limits)
+            .unwrap()
+            .contains("example-private-field")
+    );
+}
+
+#[test]
+fn malformed_scoped_limits_preserve_valid_usage_and_mark_unknown_capacity() {
+    let credential =
+        credentials::parse(br#"{"claudeAiOauth":{"accessToken":"example-token"}}"#).unwrap();
+    for scoped in [
+        json!({}),
+        json!(null),
+        json!({"kind":"weekly_scoped","percent":null}),
+    ] {
+        let limits = json!(
+            normalize::limits(&json!({
+                "five_hour":{"utilization":25}, "limits":[scoped],
+            }))
+            .unwrap()
+        );
+        assert_eq!(limits[0]["primary"]["used_percent"], 25.0);
+        assert_eq!(limits[1]["primary"]["invalid"], true);
+        assert!(limits[1]["primary"]["used_percent"].is_null());
+        assert!(normalize::is_partial(&limits));
+        let report = inspected(&credential, None, Ok(limits.as_array().unwrap().clone()));
+        assert_eq!(report["rate_limits"][0]["primary"]["used_percent"], 25.0);
+        assert!(report["usage_error"].is_null());
+    }
 }
 
 #[test]

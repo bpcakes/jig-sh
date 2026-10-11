@@ -81,6 +81,7 @@ fn run_codex_launch(opts: CodexLaunchOpts, json_output: bool) -> Result<()> {
         &Codex,
         opts.home.as_deref(),
         &opts.codex_args,
+        opts.auto_select,
         opts.dry_run,
         json_output,
         render::format_codex_launch_summary,
@@ -96,6 +97,7 @@ mod tests {
         let error = run_codex_launch(
             CodexLaunchOpts {
                 home: Some(PathBuf::from("does-not-need-to-exist")),
+                auto_select: false,
                 dry_run: false,
                 codex_args: Vec::new(),
             },

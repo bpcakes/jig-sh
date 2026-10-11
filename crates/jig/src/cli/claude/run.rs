@@ -13,6 +13,7 @@ pub(in crate::cli) fn run_claude_command(command: ClaudeCommand, json_output: bo
             &Claude,
             opts.home.as_deref(),
             &opts.claude_args,
+            opts.auto_select,
             opts.dry_run,
             json_output,
             render::launch_summary,

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- `jig codex launch --auto` and `jig claude launch --auto` select a home without
+  a picker or credential prompts, using the most constrained remaining quota
+  across reported windows. Automatic dry runs explain the decision in JSON;
+  unknown or exhausted usage never becomes available capacity. Claude usage
+  reports now include model-scoped weekly limits such as Fable.
+  Known utilization remains selectable when no reset time is supplied; malformed
+  windows stay ineligible while valid neighboring Claude usage remains visible.
+
 ### Fixed
 
 - Backend-only changes no longer select every frontend check under

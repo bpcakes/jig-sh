@@ -10,6 +10,8 @@ mod http;
 mod keychain;
 mod normalize;
 #[cfg(test)]
+pub(crate) use normalize::limits as normalize_limits;
+#[cfg(test)]
 mod tests;
 
 pub struct Inspection {
@@ -93,7 +95,10 @@ pub fn report(homes: Homes, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Val
     inspection
         .inspect(
             &mut |index, details| {
-                if !details["inspection_error"].is_null() || !details["usage_error"].is_null() {
+                if !details["inspection_error"].is_null()
+                    || !details["usage_error"].is_null()
+                    || normalize::is_partial(&details["rate_limits"])
+                {
                     report["outcome"] = json!("partial");
                 }
                 if let (Some(home), Some(details)) =
