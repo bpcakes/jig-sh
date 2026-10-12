@@ -1,11 +1,8 @@
-use std::collections::BTreeSet;
-use std::path::Path;
-
 use super::{
     ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BACKEND_CONTRACT_INPUTS,
-    BTreeMap, FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance,
-    OPENAPI_DOCUMENT_CHECK_ACTION, REPO_COMPONENT, RepositoryRenderModel, TargetId,
-    retire_saved_frontend_dependencies,
+    BTreeMap, CLIENT_DRIFT_DESCRIPTION, FRONTEND_CONTRACT_DRIFT_ACTION,
+    FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance, OPENAPI_DOCUMENT_CHECK_ACTION,
+    REPO_COMPONENT, RepositoryRenderModel, TargetId, retire_saved_frontend_dependencies,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -57,6 +54,14 @@ pub(super) fn contracts_enabled(
     })
 }
 
+/// Whether the saved drift check was generated beside the client-only
+/// contract script, which never reads the backend.
+pub(super) fn client_only_drift(actions: &[ActionSpec]) -> bool {
+    actions.iter().any(|action| {
+        is_drift(&action.target) && action.description.as_deref() == Some(CLIENT_DRIFT_DESCRIPTION)
+    })
+}
+
 /// Normalize only generated legacy fields, both for custom-model preservation
 /// and for deciding whether a saved scaffold can be regenerated on update.
 pub(super) fn upgrade_saved_projection(
@@ -69,9 +74,6 @@ pub(super) fn upgrade_saved_projection(
     if !current.frontend_contracts_enabled() || !saved.frontend_contracts_enabled(commands) {
         return upgraded;
     }
-    // The drift check stops reading the backend only behind the generated
-    // document check, which proves that the documents match the backend.
-    let documents_checked = generated_document_check(current, &upgraded, commands);
     for action in &mut upgraded.actions {
         if action.target.component.as_str() != REPO_COMPONENT
             || !matches!(
@@ -96,30 +98,15 @@ pub(super) fn upgrade_saved_projection(
         if runner != expected_runner
             || command(&runner).and_then(|key| commands.get(key))
                 != command(&expected_runner).and_then(|key| current.commands.get(key))
+            || !generated_input_history(action.target.action.as_str(), &expected.inputs)
+                .contains(&action.inputs)
         {
-            continue;
-        }
-        let history = generated_input_history(action.target.action.as_str(), &expected.inputs);
-        // A drift check narrowed beside a script that still exports from the
-        // backend regains the backend inputs.
-        let surface = contract_surface(&expected.inputs);
-        let narrowed_beside_export = action.target.action.as_str()
-            == FRONTEND_CONTRACT_DRIFT_ACTION
-            && action.inputs == surface
-            && surface != expected.inputs;
-        if !history.contains(&action.inputs) && !narrowed_beside_export {
             continue;
         }
         if action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION) {
             action.description.clone_from(&expected.description);
         }
-        action.inputs = if action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
-            && !documents_checked
-        {
-            with_inputs(&expected.inputs, &[BACKEND_CONTRACT_INPUTS])
-        } else {
-            expected.inputs.clone()
-        };
+        action.inputs.clone_from(&expected.inputs);
     }
     upgraded
 }
@@ -184,24 +171,6 @@ fn insert_sorted<T>(items: &mut Vec<T>, item: T, target: impl Fn(&T) -> &TargetI
     items.insert(index, item);
 }
 
-/// Whether the repository's `scripts/contracts.mjs` may export the documents
-/// from the backend in drift-check mode, as scripts written before the
-/// document check did. Only a recognized client-only drift-check, which
-/// regenerates the clients from the committed documents, lets the drift check
-/// stop reading the backend; a missing script cannot run the drift check.
-pub(crate) fn contract_drift_script_reads_backend(root: &Path) -> bool {
-    let Ok(script) = std::fs::read_to_string(root.join("scripts/contracts.mjs")) else {
-        return false;
-    };
-    let client_only = script
-        .split_once("} else if (mode === \"drift-check\") {")
-        .map(|(_, branch)| branch.split("} else if (").next().unwrap_or(branch))
-        .is_some_and(|branch| {
-            branch.contains("withStagedClients(") && !branch.contains("withStagedContracts(")
-        });
-    !client_only
-}
-
 /// Inputs that earlier generators wrote for a contract check. Every drift
 /// shape is the contract surface plus the backend inputs of its time.
 fn generated_input_history(action: &str, expected: &[String]) -> Vec<Vec<String>> {
@@ -245,75 +214,14 @@ fn with_inputs(inputs: &[String], extra: &[&[&str]]) -> Vec<String> {
     inputs
 }
 
+fn is_drift(target: &TargetId) -> bool {
+    target.component.as_str() == REPO_COMPONENT
+        && target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
+}
+
 fn is_document_check(target: &TargetId) -> bool {
     target.component.as_str() == BACKEND_COMPONENT
         && target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
-}
-
-/// Whether the saved model has the generated document check (a read-only
-/// check with its runner and command, reading at least the generated inputs)
-/// and every profile that runs the drift check, directly or through
-/// dependencies, also runs it.
-fn generated_document_check(
-    current: &RepositoryRenderModel,
-    saved: &AuthoredRepositoryModel,
-    commands: &BTreeMap<String, String>,
-) -> bool {
-    let Some(expected) = current
-        .actions
-        .iter()
-        .find(|action| is_document_check(&action.target))
-    else {
-        return false;
-    };
-    let Some(drift) = current.actions.iter().find(|action| {
-        action.target.component.as_str() == REPO_COMPONENT
-            && action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
-    }) else {
-        return false;
-    };
-    let generated = saved.actions.iter().any(|action| {
-        let mut runner = action.runner.clone();
-        let mut expected_runner = expected.runner.clone();
-        super::runners::make_shell_explicit(&mut runner);
-        super::runners::make_shell_explicit(&mut expected_runner);
-        action.target == expected.target
-            && runner == expected_runner
-            && command(&runner).and_then(|key| commands.get(key))
-                == command(&expected_runner).and_then(|key| current.commands.get(key))
-            && expected
-                .inputs
-                .iter()
-                .all(|input| action.inputs.contains(input))
-    });
-    generated
-        && jig_repository::validate_read_only_check_closure(
-            &saved.actions,
-            std::iter::once(&expected.target),
-        )
-        .is_ok()
-        && saved
-            .profiles
-            .iter()
-            .filter(|profile| reaches(&saved.actions, &profile.targets, &drift.target))
-            .all(|profile| reaches(&saved.actions, &profile.targets, &expected.target))
-}
-
-/// Whether `target` is among `targets` or their dependencies.
-fn reaches(actions: &[ActionSpec], targets: &[TargetId], target: &TargetId) -> bool {
-    let mut pending = targets.to_vec();
-    let mut seen = BTreeSet::new();
-    while let Some(candidate) = pending.pop() {
-        if candidate == *target {
-            return true;
-        }
-        if seen.insert(candidate.clone())
-            && let Some(action) = actions.iter().find(|action| action.target == candidate)
-        {
-            pending.extend(action.depends_on.iter().cloned());
-        }
-    }
-    false
 }
 
 fn command(runner: &ActionRunner) -> Option<&str> {

@@ -156,10 +156,16 @@ pub(super) const OPENAPI_INPUT: &str = "openapi/**";
 /// The backend check that the committed OpenAPI documents match the backend.
 pub(super) const OPENAPI_DOCUMENT_CHECK_ACTION: &str = "openapi";
 
-/// Generators that also wrote the document check describe the drift check
-/// as owning only client freshness.
-pub(super) const DRIFT_DESCRIPTION: &str =
+/// The drift check beside the client-only contract script, which a scaffold
+/// writes together with the document check: it owns only client freshness.
+/// The description records that mode durably in the repository model.
+pub(super) const CLIENT_DRIFT_DESCRIPTION: &str =
     "Check that the generated API clients match the committed OpenAPI documents.";
+
+/// The drift check of a repository whose own contract script exports the
+/// documents from the backend, as scripts did before the document check.
+pub(super) const EXPORTING_DRIFT_DESCRIPTION: &str =
+    "Check that the OpenAPI documents and generated clients match the backend.";
 
 /// Backend sources, manifests, lockfiles, and workspace files. The boundary
 /// check inspects the backend dependency graph, so it reads them, as does a
@@ -183,13 +189,13 @@ pub(super) const BACKEND_CONTRACT_INPUTS: &[&str] = &[
     "**/vendor/modules.txt",
 ];
 
-/// The drift check regenerates the clients from the committed documents, so
-/// it reads only the contract surface; the backend document check owns
-/// document freshness. It also reads the backend while the repository's own
-/// drift script still exports from it, as the boundary check always does.
+/// The client-only drift check regenerates the clients from the committed
+/// documents, so it reads only the contract surface; the backend document
+/// check owns document freshness. A drift check whose script exports from the
+/// backend also reads the backend, as the boundary check always does.
 pub(super) fn frontend_contract_inputs(
     public_boundary: bool,
-    drift_script_reads_backend: bool,
+    drift_reads_backend: bool,
     workspace_roots: &[String],
 ) -> Vec<String> {
     let mut inputs = FRONTEND_SHARED_INPUTS
@@ -201,7 +207,7 @@ pub(super) fn frontend_contract_inputs(
             .iter()
             .map(|root| component_root_input(root)),
     );
-    if public_boundary || drift_script_reads_backend {
+    if public_boundary || drift_reads_backend {
         inputs.extend(BACKEND_CONTRACT_INPUTS.iter().map(|input| (*input).into()));
     }
     if public_boundary {

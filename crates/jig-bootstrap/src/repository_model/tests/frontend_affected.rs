@@ -41,10 +41,9 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
             ["**/*.go", "go.mod", "go.sum", "go.work"],
         ),
     ] {
-        let model = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
-            "{backend}{FRONTEND_APPS}"
-        )))
-        .unwrap();
+        let mut scaffold = scaffold_answers(&format!("{backend}{FRONTEND_APPS}"));
+        scaffold.enable_client_only_contract_drift();
+        let model = RepositoryRenderModel::from_answers(&scaffold).unwrap();
 
         assert!(component(&model, "api").propagate_affected_to_dependents);
         for frontend in ["web", "admin"] {

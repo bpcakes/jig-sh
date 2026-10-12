@@ -365,13 +365,22 @@ fn managed_update_preserves_authored_contract_inputs_commands_and_dependencies()
 }
 
 #[test]
-fn upgraded_contracts_split_backend_and_client_freshness_without_frontend_fanout() {
+fn contracts_split_backend_and_client_freshness_without_frontend_fanout() {
     use jig_context::RepoContext;
     use jig_repository::{PlanRunRequest, RepositoryCatalog, plan_run_with_cancellation};
 
-    for backend in ["rust", "go"] {
-        let answers = load_saved(&legacy_model(backend), backend);
-        let mut model = RepositoryRenderModel::from_answers(&answers).unwrap();
+    // A scaffold's client-only drift check ignores backend changes; an
+    // upgraded repository's own contract script still exports from the
+    // backend, so its drift check keeps running on them.
+    for (backend, client_only) in [("rust", true), ("go", true), ("rust", false), ("go", false)] {
+        let mut model = if client_only {
+            let mut scaffold = scaffold_answers(&format!("backend_language = {backend:?}\n{APP}"));
+            scaffold.enable_client_only_contract_drift();
+            RepositoryRenderModel::from_answers(&scaffold).unwrap()
+        } else {
+            RepositoryRenderModel::from_answers(&load_saved(&legacy_model(backend), backend))
+                .unwrap()
+        };
         model
             .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
             .unwrap();
@@ -476,7 +485,7 @@ fn upgraded_contracts_split_backend_and_client_freshness_without_frontend_fanout
         // checks, and a document change does not rerun every backend test.
         let expectations = backend_paths
             .iter()
-            .map(|path| (*path, true, true, false, false))
+            .map(|path| (*path, true, true, !client_only, false))
             .chain([
                 ("openapi/public.json", false, true, true, true),
                 ("packages/web-api-client/index.ts", false, false, true, true),

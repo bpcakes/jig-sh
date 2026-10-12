@@ -126,87 +126,6 @@ fn drift_reads_go(destination: &Path) -> bool {
         .any(|input| input.as_str() == Some("**/*.go"))
 }
 
-/// Restores the drift-check branch that exported the documents from the
-/// backend, and returns the script it replaced.
-fn export_from_drift_script(destination: &Path) -> String {
-    let path = destination.join("scripts/contracts.mjs");
-    let script = fs::read_to_string(&path).unwrap();
-    let branch = "} else if (mode === \"drift-check\") {";
-    let start = script.find(branch).unwrap();
-    let end = start + 1 + script[start + 1..].find("} else if (").unwrap();
-    let exporting = [
-        &script[..start],
-        branch,
-        "\n  await withStagedContracts(\"check\");\n",
-        &script[end..],
-    ]
-    .concat();
-    fs::write(&path, exporting).unwrap();
-    script
-}
-
-#[test]
-fn go_react_readoption_keeps_drift_backend_inputs_beside_an_exporting_script() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let destination = temp.path().join("go-readoption");
-    run_init(InitOpts {
-        path: destination.clone(),
-        scaffold: ScaffoldOpts {
-            preset: Some(ScaffoldPreset::GoReact),
-            db: Some(ScaffoldDb::None),
-            frontends: vec![ScaffoldFrontend {
-                name: "web".into(),
-                kind: ScaffoldFrontendKind::Spa,
-                custom_default_name: false,
-            }],
-            frontend_list: Vec::new(),
-            metrics: None,
-            jobs: None,
-        },
-        template: Some(template.path().display().to_string()),
-        template_mode: None,
-        vcs_ref: None,
-        force: false,
-        defaults: false,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("go-readoption".into()),
-            go_module: Some("example.com/go-readoption".into()),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-    assert!(!drift_reads_go(&destination));
-    export_from_drift_script(&destination);
-    fs::remove_file(destination.join(crate::managed_paths::MANIFEST_PATH)).unwrap();
-    // Adoption requires the lockfile that installing dependencies writes.
-    fs::write(destination.join("bun.lock"), "").unwrap();
-
-    run_adopt(AdoptOpts {
-        components: Default::default(),
-        path: destination.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: None,
-        vcs_ref: None,
-        force: true,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("go-readoption".into()),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    assert!(drift_reads_go(&destination));
-}
-
 #[test]
 fn go_react_web_workflow_observes_the_complete_application_contract() {
     let _guard = lock_env();
@@ -356,15 +275,7 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         assert_drift_check_scans_the_public_document(&destination, &fake_bin);
     }
 
-    // An update keeps the backend inputs of a drift check whose repository
-    // script still exports from the backend, as scripts did before the
-    // document check.
-    assert!(!drift_reads_go(&destination));
-    let script = export_from_drift_script(&destination);
-    run_update(update_opts(&destination, template.path(), true)).unwrap();
-    assert!(drift_reads_go(&destination));
-    fs::write(destination.join("scripts/contracts.mjs"), script).unwrap();
-    run_update(update_opts(&destination, template.path(), true)).unwrap();
+    // An update keeps the scaffold's client-only drift check off the backend.
     assert!(!drift_reads_go(&destination));
 
     let nested_module_dir = destination.join("services/api");

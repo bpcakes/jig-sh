@@ -485,10 +485,15 @@ impl<'a> ModelBuilder<'a> {
         } else {
             "Check the repository-wide public/private dependency boundary."
         };
+        let drift_description = if self.answers.client_only_contract_drift() {
+            CLIENT_DRIFT_DESCRIPTION
+        } else {
+            EXPORTING_DRIFT_DESCRIPTION
+        };
         for (action_id, description, mode) in [
             (
                 FRONTEND_CONTRACT_DRIFT_ACTION,
-                DRIFT_DESCRIPTION,
+                drift_description,
                 "contracts-drift-check",
             ),
             (
@@ -512,7 +517,7 @@ impl<'a> ModelBuilder<'a> {
             action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
             action.inputs = frontend_contract_inputs(
                 action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION,
-                self.answers.contract_drift_reads_backend(),
+                !self.answers.client_only_contract_drift(),
                 self.answers.frontend_workspace_roots(),
             );
             action.provenance = provenance(&[
@@ -778,7 +783,6 @@ mod frontend;
 use self::ids::{component_id, target_id};
 pub(super) use frontend::frontend_component_id;
 use frontend::*;
-pub(super) use frontend_migration::contract_drift_script_reads_backend;
 
 mod ids;
 
