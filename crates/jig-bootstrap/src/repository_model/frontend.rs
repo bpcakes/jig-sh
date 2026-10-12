@@ -173,6 +173,12 @@ pub(super) const OPENAPI_DOCUMENT_COMMAND_KEY: &str = "api_openapi_command";
 pub(super) const CLIENT_DRIFT_DESCRIPTION: &str =
     "Check that the generated API clients match the committed OpenAPI documents.";
 
+/// The drift check's description before generators wrote the document check.
+/// A repository that has not gained the check keeps it, which marks its model
+/// as one that the next update may give the check.
+pub(super) const HISTORICAL_DRIFT_DESCRIPTION: &str =
+    "Check repository-wide OpenAPI and generated-client drift.";
+
 /// The drift check of a repository whose own contract script exports the
 /// documents from the backend, as scripts did before the document check.
 pub(super) const EXPORTING_DRIFT_DESCRIPTION: &str =

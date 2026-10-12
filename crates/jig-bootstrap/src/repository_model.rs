@@ -479,6 +479,10 @@ impl<'a> ModelBuilder<'a> {
     fn add_frontend_contract_actions(&mut self, dependency_anchor: &FrontendApp) -> Result<()> {
         let drift_description = if self.answers.client_only_contract_drift() {
             CLIENT_DRIFT_DESCRIPTION
+        } else if self.answers.legacy_document_tests_missing() {
+            // The model still predates the document check, which a later
+            // update adds once the backend has its tests.
+            HISTORICAL_DRIFT_DESCRIPTION
         } else {
             EXPORTING_DRIFT_DESCRIPTION
         };

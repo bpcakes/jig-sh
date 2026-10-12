@@ -75,13 +75,15 @@ pub fn refresh(
             retained_owners.insert(action.target, owners);
             continue;
         }
-        // As on update, a model from before the document check gains none
-        // while its owner keeps another command under the check's key.
+        // As on update, only a model that predates the document check gains
+        // it; a refresh never restores a check its owner removed, nor runs it
+        // through a command the owner keeps under its key.
         if action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
-            && let ActionRunner::Command { command, .. } = &action.runner
-            && commands
-                .get(command)
-                .is_some_and(|owned| Some(owned) != generated_commands.get(command))
+            && !prior
+                .actions
+                .iter()
+                .any(|prior| prior.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION)
+            && !prior.predates_document_check(prior_commands, answers.backend_language().is_go())
         {
             continue;
         }

@@ -65,14 +65,16 @@
   and keeps its behavior, so a repository upgraded from an earlier version
   keeps a drift check that reads the backend, whose own script still exports
   from it; the drift check's description records which kind it is.
-  `jig update` and re-adoption add `api:openapi` to a repository generated
-  before this release only when its backend still has the scaffold's document
-  tests (the Rust `committed_public_openapi_is_current`, with
+  `jig update`, and re-adoption that changes the harness footprint or a
+  capability, add `api:openapi` to a repository generated before this release
+  once its backend has the scaffold's document tests (the Rust
+  `committed_public_openapi_is_current`, with
   `committed_admin_openapi_is_current` beside `openapi/admin.json`, or Go's
-  `TestOpenAPIIsCurrent` in `internal/httpapi`) and its `api_openapi_command`
-  key is free; otherwise its drift check keeps exporting the documents from
-  the backend. A check its owner then removes stays removed, and a custom
-  repository model keeps its targets.
+  `TestOpenAPIIsCurrent` in `internal/httpapi`) and while its
+  `api_openapi_command` key is free; until then its drift check keeps
+  exporting the documents from the backend. A check its owner then removes
+  stays removed, re-adoption included, and a custom repository model keeps its
+  targets.
 - `repo:frontend-public-boundary` is generated only where it can guard an
   admin API: for a Rust scaffold with an admin frontend, and in a Rust
   repository whose saved model already declares it, because the admin API
