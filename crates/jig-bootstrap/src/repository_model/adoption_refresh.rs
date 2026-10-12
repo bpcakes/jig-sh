@@ -87,6 +87,17 @@ pub fn refresh(
         {
             continue;
         }
+        // Nor does it restore a boundary check that the model lacks: its
+        // owner removed it, even where an admin app remains.
+        if action.target.component.as_str() == REPO_COMPONENT
+            && action.target.action.as_str() == FRONTEND_PUBLIC_BOUNDARY_ACTION
+            && !prior
+                .actions
+                .iter()
+                .any(|prior| prior.target == action.target)
+        {
+            continue;
+        }
         if let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
             &action.runner
             && let Some(value) = generated_commands.get(command)
