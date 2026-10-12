@@ -67,13 +67,14 @@ pub fn refresh(
             continue;
         }
         // As on update, only a model that predates the document check gains
-        // it; a refresh never restores a check its owner removed, nor runs it
-        // through a command the owner keeps under its key.
+        // it; a refresh never restores a check its owner removed, even beside
+        // another component's, nor runs it through a command the owner keeps
+        // under its key.
         if action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
             && !prior
                 .actions
                 .iter()
-                .any(|prior| prior.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION)
+                .any(|prior| prior.target == action.target)
             && !prior.predates_document_check(prior_commands, answers.backend_language().is_go())
         {
             continue;
