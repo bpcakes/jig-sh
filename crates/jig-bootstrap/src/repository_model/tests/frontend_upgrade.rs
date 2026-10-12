@@ -199,22 +199,34 @@ fn load_saved_at(
         .0
 }
 
+/// A Cargo workspace like a scaffold's, whose members `cargo test` tests.
+const RUST_WORKSPACE: &str = "[workspace]\nmembers = [\"apps/*\", \"crates/*\"]\n";
+
+/// The manifest of a workspace member.
+const RUST_PACKAGE: &str = "[package]\nname = \"example-project\"\nversion = \"0.1.0\"\n";
+
 /// The committed-document test that scaffolds with API contracts write.
 fn write_scaffold_document_tests(root: &Path, backend: &str) {
-    let (path, contents) = if backend == "go" {
-        (
+    let files: &[(&str, &str)] = if backend == "go" {
+        &[(
             "internal/httpapi/httpapi_test.go",
             "package httpapi\n\nimport \"testing\"\n\nfunc TestOpenAPIIsCurrent(t *testing.T) {}\n",
-        )
+        )]
     } else {
-        (
-            "crates/example-project-http/src/lib.rs",
-            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn committed_public_openapi_is_current() {}\n}\n",
-        )
+        &[
+            ("Cargo.toml", RUST_WORKSPACE),
+            ("crates/example-project-http/Cargo.toml", RUST_PACKAGE),
+            (
+                "crates/example-project-http/src/lib.rs",
+                "#[cfg(test)]\nmod tests {\n    #[test]\n    fn committed_public_openapi_is_current() {}\n}\n",
+            ),
+        ]
     };
-    let path = root.join(path);
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, contents).unwrap();
+    for (path, contents) in files {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
 }
 
 /// A model generated with the scaffold's client-only contract script.

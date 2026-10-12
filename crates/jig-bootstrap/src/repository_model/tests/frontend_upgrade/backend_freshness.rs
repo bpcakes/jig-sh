@@ -69,7 +69,7 @@ fn document_check_mut(model: &mut RepositoryRenderModel) -> &mut ActionSpec {
 }
 
 /// Marks `model` custom without touching its contract or backend checks.
-fn customize_frontend(model: &mut RepositoryRenderModel) {
+pub(super) fn customize_frontend(model: &mut RepositoryRenderModel) {
     model
         .components
         .iter_mut()

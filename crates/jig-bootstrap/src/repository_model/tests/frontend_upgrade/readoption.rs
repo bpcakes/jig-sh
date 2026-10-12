@@ -264,3 +264,17 @@ fn capability_refresh_keeps_a_removed_boundary_check_removed() {
             .all(|profile| !profile.targets.contains(&boundary))
     );
 }
+
+#[test]
+fn capability_refresh_adds_the_document_check_to_a_custom_older_model() {
+    // An update kept the customized older model as its owner left it.
+    let mut saved = legacy_model("rust");
+    super::backend_freshness::customize_frontend(&mut saved);
+    let updated = RepositoryRenderModel::from_answers(&load_saved(&saved, "rust")).unwrap();
+    assert!(!has_target(&updated, "api:openapi"));
+
+    let answers = readopt_with_sqlx(&updated).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(has_target(&model, "api:openapi"));
+}

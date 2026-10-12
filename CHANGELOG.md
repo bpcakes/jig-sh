@@ -67,10 +67,12 @@
   from it; the drift check's description records which kind it is.
   `jig update`, and re-adoption that changes the harness footprint or a
   capability, add `api:openapi` to a repository generated before this release
-  once its backend has the scaffold's document tests (the Rust
-  `committed_public_openapi_is_current`, with
-  `committed_admin_openapi_is_current` beside `openapi/admin.json`, or Go's
-  `TestOpenAPIIsCurrent` in `internal/httpapi`) and while its
+  once its backend has the scaffold's document tests where the check runs them
+  (the Rust `committed_public_openapi_is_current`, with
+  `committed_admin_openapi_is_current` beside `openapi/admin.json`, as tests
+  that are not ignored in a package of the root Cargo workspace, or Go's
+  `TestOpenAPIIsCurrent` in a test file of `internal/httpapi` that every build
+  includes, and neither in a comment or a string) and while its
   `api_openapi_command` key is free; until then its drift check keeps
   exporting the documents from the backend. A check its owner then removes
   stays removed, re-adoption included, and a custom repository model keeps its
