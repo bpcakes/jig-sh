@@ -304,8 +304,10 @@ fn managed_update_keeps_backend_inputs_an_owner_added_to_a_client_only_drift_che
     }
 }
 
+/// A command that the owner keeps under the check's key stays theirs: an
+/// update adds no check to run it until the owner asks.
 #[test]
-fn managed_update_keeps_a_model_custom_when_the_check_command_key_is_taken() {
+fn managed_update_keeps_an_owners_command_under_the_check_key() {
     for backend in ["rust", "go"] {
         let mut saved = legacy_model(backend);
         saved.commands.insert(
@@ -316,7 +318,7 @@ fn managed_update_keeps_a_model_custom_when_the_check_command_key_is_taken() {
         let answers = load_saved(&saved, backend);
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
 
-        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(answers.authored_repository().is_none(), "{backend}");
         assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
         assert_eq!(
             upgraded.commands["api_openapi_command"], "printf skip-openapi-check",

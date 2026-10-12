@@ -119,7 +119,9 @@ fn managed_update_runs_the_owners_document_command_when_asked() {
             "{backend}: {notes:?}"
         );
 
-        let answers = load_saved_adding_check(&saved, backend);
+        // The update kept the model one from before the check, so asking
+        // afterwards adds the check, which runs the owner's command.
+        let answers = load_saved_adding_check(&prepared(unchanged), backend);
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
 
         assert!(answers.authored_repository().is_none(), "{backend}");
