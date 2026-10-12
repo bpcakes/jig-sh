@@ -33,23 +33,40 @@ pub(super) fn document_check_deferred(
 }
 
 /// What an update says about a saved model from before the document check:
-/// how to add the check, or that a custom model keeps its own targets.
-pub(super) fn document_check_note(raw: &RawAnswers, custom: bool) -> Option<String> {
-    let repository = raw.repository.as_ref()?;
-    if raw.document_check_deferred && custom {
-        return Some(
+/// how to add the check, or, when asking would leave a custom model as it
+/// is, how to declare it.
+pub(super) fn document_check_note(
+    raw: &RawAnswers,
+    commands: Option<&BTreeMap<String, String>>,
+    custom: bool,
+) -> Option<String> {
+    let (Some(repository), Some(commands)) = (raw.repository.as_ref(), commands) else {
+        return None;
+    };
+    if raw.add_openapi_check {
+        return (custom && !repository.has_document_check()).then(|| {
+            "--add-openapi-check left the custom repository model as it is; declare api:openapi in .jig.toml to add the check."
+                .into()
+        });
+    }
+    if !repository.is_complete() || !repository.lacks_document_check(commands) {
+        return None;
+    }
+    // Asking adds the check, running a command its owner already set, unless
+    // the model is custom for another reason.
+    let mut asking = raw.clone();
+    asking.add_openapi_check = true;
+    asking.document_check_deferred = false;
+    if asking.openapi_check_command.is_none() {
+        asking.openapi_check_command = commands.get("api_openapi_command").cloned();
+    }
+    Some(
+        if loaded_repository_model_is_custom(&asking, Some(commands)) {
             "api:openapi, which checks the committed OpenAPI documents with the backend's document tests, is not part of this custom repository model, which keeps its own targets; declare it in .jig.toml to add the check."
-                .into(),
-        );
-    }
-    if raw.document_check_deferred {
-        return Some(
-            "api:openapi, which checks the committed OpenAPI documents with the backend's document tests, is not part of this repository model yet; `jig update --add-openapi-check` adds it, running api_openapi_command when set."
-                .into(),
-        );
-    }
-    (raw.add_openapi_check && custom && !repository.has_document_check()).then(|| {
-        "--add-openapi-check left the custom repository model as it is; declare api:openapi in .jig.toml to add the check."
             .into()
-    })
+        } else {
+            "api:openapi, which checks the committed OpenAPI documents with the backend's document tests, is not part of this repository model yet; `jig update --add-openapi-check` adds it, running api_openapi_command when set."
+            .into()
+        },
+    )
 }

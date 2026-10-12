@@ -103,6 +103,22 @@ fn managed_update_runs_the_owners_document_command_when_asked() {
             .commands
             .insert("api_openapi_command".into(), custom.into());
 
+        // Until asked, the update keeps the command and says how to add the
+        // check that runs it.
+        let (answers, notes) = update_answers(&saved, backend, false);
+        let unchanged = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(find(&unchanged, "api:openapi").is_none(), "{backend}");
+        assert_eq!(
+            unchanged.commands["api_openapi_command"], custom,
+            "{backend}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|note| note.contains("jig update --add-openapi-check")),
+            "{backend}: {notes:?}"
+        );
+
         let answers = load_saved_adding_check(&saved, backend);
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
 

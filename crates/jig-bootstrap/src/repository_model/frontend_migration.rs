@@ -70,15 +70,13 @@ pub(super) fn has_document_check(actions: &[ActionSpec]) -> bool {
     })
 }
 
-/// Whether the saved model predates the document check, so that update and
-/// re-adoption may give it the check: it has API contracts whose drift check
-/// keeps the description that generators wrote before the check, no document
-/// check, and the check's command key free. Any other model without the check
-/// is one whose owner removed it, which stays removed.
-pub(super) fn predates_document_check(
+/// Whether the saved model has not gained the document check: it has API
+/// contracts whose drift check keeps the description that generators wrote
+/// before the check, and no document check. Any other model without the
+/// check is one whose owner removed it, which stays removed.
+pub(super) fn lacks_document_check(
     actions: &[ActionSpec],
     commands: &BTreeMap<String, String>,
-    generated_command: &str,
 ) -> bool {
     contracts_enabled(actions, commands)
         && actions.iter().any(|action| {
@@ -88,9 +86,33 @@ pub(super) fn predates_document_check(
         && !actions
             .iter()
             .any(|action| action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION)
+}
+
+/// Whether the saved model predates the document check, so that update and
+/// re-adoption may give it the check: it lacks the check, and the check's
+/// command key is free.
+pub(super) fn predates_document_check(
+    actions: &[ActionSpec],
+    commands: &BTreeMap<String, String>,
+    generated_command: &str,
+) -> bool {
+    lacks_document_check(actions, commands)
         && commands
             .get(OPENAPI_DOCUMENT_COMMAND_KEY)
             .is_none_or(|value| value == generated_command)
+}
+
+/// Whether a saved contract check reads other inputs than generation gives it
+/// now. A capability refresh, which cannot change those inputs, keeps such a
+/// check, as its owner may have changed them; loading the model then updates
+/// one that earlier generators wrote, as an update does.
+pub(super) fn customized_contract_inputs(saved: &ActionSpec, generated: &ActionSpec) -> bool {
+    saved.target.component.as_str() == REPO_COMPONENT
+        && matches!(
+            saved.target.action.as_str(),
+            FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
+        )
+        && saved.inputs != generated.inputs
 }
 
 /// Normalize only generated legacy fields, both for custom-model preservation

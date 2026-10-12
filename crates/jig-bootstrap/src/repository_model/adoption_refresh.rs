@@ -37,23 +37,20 @@ pub fn refresh(
     let mut model = prior.clone();
     let mut commands = prior_commands.clone();
     commands.retain(|_, value| !value.trim().is_empty());
-    let mut managed = BTreeSet::new();
+    let managed = managed_targets(&generated, prior);
     for action in &prior.actions {
-        if generated_action(action, prior) {
-            managed.insert(action.target.clone());
-            if let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
+        if managed.contains(&action.target)
+            && let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
                 &action.runner
-            {
-                commands.remove(command);
-            }
+        {
+            commands.remove(command);
         }
     }
-    let declared = declared_dependencies(prior, &managed);
     model
         .actions
         .retain(|action| !managed.contains(&action.target));
     let mut retained_owners = BTreeMap::new();
-    for mut action in generated.actions {
+    for action in generated.actions {
         if model
             .actions
             .iter()
@@ -96,7 +93,6 @@ pub fn refresh(
                 .entry(command.clone())
                 .or_insert_with(|| value.clone());
         }
-        carry_declared_dependencies(&mut action, &declared);
         model.actions.push(action);
     }
     let remap_targets = |targets: &mut Vec<TargetId>| {
@@ -158,38 +154,28 @@ pub fn refresh(
     Ok((model, commands))
 }
 
-/// The dependencies that an owner declared on the generated actions that a
-/// refresh replaces.
-fn declared_dependencies(
+/// The prior actions that the refresh replaces with the generated ones: those
+/// that generation wrote and their owner left as it wrote them. A contract
+/// check with other inputs stays, as on update.
+fn managed_targets(
+    generated: &AuthoredRepositoryModel,
     prior: &AuthoredRepositoryModel,
-    managed: &BTreeSet<TargetId>,
-) -> BTreeMap<TargetId, Vec<TargetId>> {
+) -> BTreeSet<TargetId> {
     prior
         .actions
         .iter()
         .filter(|action| {
-            managed.contains(&action.target)
-                && action.provenance.get("depends_on") == Some(&FieldProvenance::Declared)
+            generated_action(action, prior)
+                && !generated
+                    .actions
+                    .iter()
+                    .find(|replacement| replacement.target == action.target)
+                    .is_some_and(|replacement| {
+                        super::frontend_migration::customized_contract_inputs(action, replacement)
+                    })
         })
-        .map(|action| (action.target.clone(), action.depends_on.clone()))
+        .map(|action| action.target.clone())
         .collect()
-}
-
-/// Gives a regenerated action the dependencies that its owner declared on
-/// the action it replaces.
-fn carry_declared_dependencies(
-    action: &mut ActionSpec,
-    declared: &BTreeMap<TargetId, Vec<TargetId>>,
-) {
-    let Some(dependencies) = declared.get(&action.target) else {
-        return;
-    };
-    action.depends_on.extend(dependencies.iter().cloned());
-    action.depends_on.sort();
-    action.depends_on.dedup();
-    action
-        .provenance
-        .insert("depends_on".into(), FieldProvenance::Declared);
 }
 
 fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> bool {
@@ -197,6 +183,15 @@ fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> boo
     // wrapper's inner Cargo invocation. Preserve its owner and command rather
     // than discarding or transplanting the opt-in onto regenerated code.
     if !action.resources.is_empty() {
+        return false;
+    }
+    // A field that its owner declared belongs to them, and replacing the action
+    // would discard it. Generation itself declares only frontend targets.
+    if action
+        .provenance
+        .iter()
+        .any(|(field, source)| field != "target" && *source == FieldProvenance::Declared)
+    {
         return false;
     }
     // A policy assertion belongs to this implementation and its input set.
