@@ -196,6 +196,23 @@ fn managed_update_keeps_a_custom_model_eligible_for_the_document_check() {
         let mut saved = legacy_model(backend);
         customize_frontend(&mut saved);
 
+        // Asking would not change a custom model, so the update says how to
+        // declare the check instead.
+        let (answers, notes) = update_answers(&saved, backend, false);
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(
+            notes
+                .iter()
+                .any(|note| note.contains("declare it in .jig.toml")),
+            "{backend}: {notes:?}"
+        );
+        assert!(
+            !notes
+                .iter()
+                .any(|note| note.contains("--add-openapi-check")),
+            "{backend}: {notes:?}"
+        );
+
         let (answers, notes) = update_answers(&saved, backend, true);
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
         assert!(answers.authored_repository().is_some(), "{backend}");

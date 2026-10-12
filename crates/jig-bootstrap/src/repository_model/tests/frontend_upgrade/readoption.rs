@@ -376,3 +376,55 @@ fn capability_refresh_keeps_a_retired_boundary_command_that_another_target_runs(
         command
     );
 }
+
+/// A dependency that an owner declared on a generated check survives the
+/// refresh that regenerates the check.
+#[test]
+fn capability_refresh_keeps_declared_dependencies_of_a_generated_check() {
+    let mut saved = saved_current_model("rust");
+    let guard_target = target_id("repo", "release-guard").unwrap();
+    let mut guard = ActionSpec::new(
+        guard_target.clone(),
+        ActionIntent::Check,
+        ActionRunner::command("repo_release_guard_command"),
+    );
+    guard.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+    guard.provenance = provenance(&[
+        ("target", FieldProvenance::Declared),
+        ("runner", FieldProvenance::Declared),
+    ]);
+    saved.actions.push(guard);
+    saved.actions.sort_by(|a, b| a.target.cmp(&b.target));
+    saved
+        .commands
+        .insert("repo_release_guard_command".into(), "true".into());
+    let check = saved
+        .actions
+        .iter_mut()
+        .find(|action| action.target.to_string() == "api:openapi")
+        .unwrap();
+    check.depends_on = vec![guard_target.clone()];
+    check
+        .provenance
+        .insert("depends_on".into(), FieldProvenance::Declared);
+
+    let answers = readopt_with_sqlx(&saved).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(
+        model
+            .components
+            .iter()
+            .any(|component| component.adapters.iter().any(|adapter| adapter == "sqlx"))
+    );
+    let check = model
+        .actions
+        .iter()
+        .find(|action| action.target.to_string() == "api:openapi")
+        .unwrap();
+    assert_eq!(check.depends_on, [guard_target]);
+    assert_eq!(
+        check.provenance.get("depends_on"),
+        Some(&FieldProvenance::Declared)
+    );
+}
