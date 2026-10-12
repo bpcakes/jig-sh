@@ -37,29 +37,8 @@ pub fn refresh(
     let mut model = prior.clone();
     let mut commands = prior_commands.clone();
     commands.retain(|_, value| !value.trim().is_empty());
-    let mut managed = BTreeSet::new();
-    // As on update, a boundary check that generation no longer writes leaves
-    // only if it is unmodified and no other target depends on it.
-    let keeps_boundary = super::frontend_migration::keeps_saved_boundary(
-        &generated,
-        &generated_commands,
-        prior,
-        prior_commands,
-    );
-    for action in &prior.actions {
-        if generated_action(action, prior)
-            && !(keeps_boundary
-                && action.target.component.as_str() == REPO_COMPONENT
-                && action.target.action.as_str() == FRONTEND_PUBLIC_BOUNDARY_ACTION)
-        {
-            managed.insert(action.target.clone());
-            if let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
-                &action.runner
-            {
-                commands.remove(command);
-            }
-        }
-    }
+    let managed = managed_targets(&generated, &generated_commands, prior, prior_commands);
+    drop_managed_commands(prior, &managed, &mut commands);
     model
         .actions
         .retain(|action| !managed.contains(&action.target));
@@ -177,6 +156,62 @@ pub fn refresh(
     }
     model.actions.sort_by(|a, b| a.target.cmp(&b.target));
     Ok((model, commands))
+}
+
+/// The prior actions that the refresh replaces with the generated ones. As on
+/// update, a boundary check that generation no longer writes leaves only if
+/// it is unmodified and no other target depends on it.
+fn managed_targets(
+    generated: &AuthoredRepositoryModel,
+    generated_commands: &BTreeMap<String, String>,
+    prior: &AuthoredRepositoryModel,
+    prior_commands: &BTreeMap<String, String>,
+) -> BTreeSet<TargetId> {
+    let keeps_boundary = super::frontend_migration::keeps_saved_boundary(
+        generated,
+        generated_commands,
+        prior,
+        prior_commands,
+    );
+    prior
+        .actions
+        .iter()
+        .filter(|action| {
+            generated_action(action, prior)
+                && !(keeps_boundary
+                    && action.target.component.as_str() == REPO_COMPONENT
+                    && action.target.action.as_str() == FRONTEND_PUBLIC_BOUNDARY_ACTION)
+        })
+        .map(|action| action.target.clone())
+        .collect()
+}
+
+/// Removes the commands of the managed actions. A command that a retained
+/// action still runs stays, as on update.
+fn drop_managed_commands(
+    prior: &AuthoredRepositoryModel,
+    managed: &BTreeSet<TargetId>,
+    commands: &mut BTreeMap<String, String>,
+) {
+    let runner_command = |action: &ActionSpec| match &action.runner {
+        ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
+            Some(command.clone())
+        }
+        _ => None,
+    };
+    let (managed_actions, retained_actions): (Vec<_>, Vec<_>) = prior
+        .actions
+        .iter()
+        .partition(|action| managed.contains(&action.target));
+    let retained = retained_actions
+        .into_iter()
+        .filter_map(runner_command)
+        .collect::<BTreeSet<_>>();
+    for command in managed_actions.into_iter().filter_map(runner_command) {
+        if !retained.contains(&command) {
+            commands.remove(&command);
+        }
+    }
 }
 
 fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> bool {

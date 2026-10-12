@@ -346,3 +346,33 @@ fn capability_refresh_retires_a_go_boundary_check_only_as_an_update_would() {
         );
     }
 }
+
+/// Retiring a Go boundary check keeps its command while another target runs
+/// it, as an update does.
+#[test]
+fn capability_refresh_keeps_a_retired_boundary_command_that_another_target_runs() {
+    let mut saved = legacy_model("go");
+    let mut audit = ActionSpec::new(
+        target_id("repo", "public-audit").unwrap(),
+        ActionIntent::Check,
+        ActionRunner::command("repo_frontend_public_boundary_command"),
+    );
+    audit.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+    audit.provenance = provenance(&[
+        ("target", FieldProvenance::Declared),
+        ("runner", FieldProvenance::Declared),
+    ]);
+    saved.actions.push(audit);
+    saved.actions.sort_by(|a, b| a.target.cmp(&b.target));
+    let command = saved.commands["repo_frontend_public_boundary_command"].clone();
+
+    let answers = readopt_go_with_full_footprint(&saved).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(!has_target(&model, "repo:frontend-public-boundary"));
+    assert!(has_target(&model, "repo:public-audit"));
+    assert_eq!(
+        model.commands["repo_frontend_public_boundary_command"],
+        command
+    );
+}
