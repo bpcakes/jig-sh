@@ -9,7 +9,12 @@ use crate::answers::{AnswerInput, HarnessFootprint};
 /// the answers as `jig adopt . --write --sqlx-enabled true` does.
 fn readopt_with_sqlx(model: &RepositoryRenderModel) -> Result<RenderAnswers> {
     let temp = TempDir::new().unwrap();
-    let root = temp.path();
+    write_scaffold_document_tests(temp.path(), "rust");
+    readopt_with_sqlx_at(temp.path(), model)
+}
+
+/// Re-adopts the repository at `root`, saved as `model`, enabling SQLx.
+fn readopt_with_sqlx_at(root: &Path, model: &RepositoryRenderModel) -> Result<RenderAnswers> {
     let path = root.join(".jig.toml");
     fs::write(
         &path,
@@ -95,4 +100,42 @@ fn capability_refresh_keeps_a_renamed_backend_document_check_in_ci() {
         ["server:openapi"]
     );
     assert!(model.rust_ci_input_paths().contains(&"openapi/**".into()));
+}
+
+#[test]
+fn capability_refresh_adds_the_document_check_only_beside_its_tests() {
+    for tests in [true, false] {
+        let temp = TempDir::new().unwrap();
+        if tests {
+            write_scaffold_document_tests(temp.path(), "rust");
+        }
+
+        let answers = readopt_with_sqlx_at(temp.path(), &legacy_model("rust")).unwrap();
+        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert_eq!(has_target(&model, "api:openapi"), tests, "{tests}");
+        assert_eq!(
+            model.commands.contains_key("api_openapi_command"),
+            tests,
+            "{tests}"
+        );
+    }
+}
+
+#[test]
+fn capability_refresh_adds_no_document_check_under_a_taken_command_key() {
+    let mut saved = legacy_model("rust");
+    saved.commands.insert(
+        "api_openapi_command".into(),
+        "printf skip-openapi-check".into(),
+    );
+
+    let answers = readopt_with_sqlx(&saved).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(!has_target(&model, "api:openapi"));
+    assert_eq!(
+        model.commands["api_openapi_command"],
+        "printf skip-openapi-check"
+    );
 }

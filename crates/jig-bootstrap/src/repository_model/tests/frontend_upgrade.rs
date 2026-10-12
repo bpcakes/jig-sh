@@ -1,7 +1,10 @@
+use std::path::Path;
+
 use super::*;
 
 mod backend_freshness;
 mod document_commands;
+mod legacy_document_tests;
 mod readoption;
 
 const APP: &str = r#"
@@ -161,13 +164,27 @@ fn generated_model(backend: &str, apps: &str) -> RepositoryRenderModel {
     RepositoryRenderModel::from_answers(&answers).unwrap()
 }
 
+/// Loads `model` as `jig update` does, in a repository that has the
+/// scaffold's committed-document tests.
 fn load_saved(model: &RepositoryRenderModel, backend: &str) -> RenderAnswers {
     load_saved_with(model, backend, APP)
 }
 
 fn load_saved_with(model: &RepositoryRenderModel, backend: &str, apps: &str) -> RenderAnswers {
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join(".jig.toml");
+    write_scaffold_document_tests(temp.path(), backend);
+    load_saved_at(temp.path(), model, backend, apps)
+}
+
+/// Loads `model`, saved with the frontend `apps`, as `jig update` does, in
+/// the repository at `root`.
+fn load_saved_at(
+    root: &Path,
+    model: &RepositoryRenderModel,
+    backend: &str,
+    apps: &str,
+) -> RenderAnswers {
+    let path = root.join(".jig.toml");
     fs::write(
         &path,
         format!(
@@ -177,9 +194,27 @@ fn load_saved_with(model: &RepositoryRenderModel, backend: &str, apps: &str) -> 
         ),
     )
     .unwrap();
-    RenderAnswers::from_managed_answers_file(&path, temp.path())
+    RenderAnswers::from_managed_answers_file(&path, root)
         .unwrap()
         .0
+}
+
+/// The committed-document test that scaffolds with API contracts write.
+fn write_scaffold_document_tests(root: &Path, backend: &str) {
+    let (path, contents) = if backend == "go" {
+        (
+            "internal/httpapi/httpapi_test.go",
+            "package httpapi\n\nimport \"testing\"\n\nfunc TestOpenAPIIsCurrent(t *testing.T) {}\n",
+        )
+    } else {
+        (
+            "crates/example-project-http/src/lib.rs",
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn committed_public_openapi_is_current() {}\n}\n",
+        )
+    };
+    let path = root.join(path);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, contents).unwrap();
 }
 
 /// A model generated with the scaffold's client-only contract script.

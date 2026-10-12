@@ -163,6 +163,10 @@ const BOUNDARY_MANIFEST_INPUTS: &[&str] =
 /// The backend check that the committed OpenAPI documents match the backend.
 pub(super) const OPENAPI_DOCUMENT_CHECK_ACTION: &str = "openapi";
 
+/// The document check's command key, which adoption keeps when it renames the
+/// backend.
+pub(super) const OPENAPI_DOCUMENT_COMMAND_KEY: &str = "api_openapi_command";
+
 /// The drift check beside the client-only contract script, which a scaffold
 /// writes together with the document check: it owns only client freshness.
 /// The description records that mode durably in the repository model.
@@ -307,8 +311,15 @@ impl ModelBuilder<'_> {
     /// The backend owns document freshness through a check that reads what
     /// the backend tests read, plus the documents. Adoption generates the
     /// backend only at the repository root, so a nested backend has no
-    /// generated tests to own the check, and gets none.
+    /// generated tests to own the check, and gets none. Neither does a
+    /// repository from before the check whose backend no longer has the
+    /// scaffold's document tests: its drift check still exports from the
+    /// backend. A saved check keeps its command, like the other backend
+    /// commands.
     pub(super) fn add_openapi_document_check(&mut self) -> Result<()> {
+        if self.answers.legacy_document_tests_missing() {
+            return Ok(());
+        }
         let Some(tests) = self.actions.get(&target_id(BACKEND_COMPONENT, "test")?) else {
             return Ok(());
         };
@@ -316,16 +327,14 @@ impl ModelBuilder<'_> {
         inputs.push(OPENAPI_INPUT.into());
         inputs.sort();
         inputs.dedup();
-        let command_key = CommandScope::Component
-            .command_key(BACKEND_COMPONENT, OPENAPI_DOCUMENT_CHECK_ACTION)?;
-        self.insert_command(
-            &command_key,
-            openapi_document_check_command(self.answers.backend_language().is_go()),
-        )?;
+        let command = self.answers.openapi_check_command().unwrap_or_else(|| {
+            openapi_document_check_command(self.answers.backend_language().is_go())
+        });
+        self.insert_command(OPENAPI_DOCUMENT_COMMAND_KEY, command)?;
         let mut action = ActionSpec::new(
             target_id(BACKEND_COMPONENT, OPENAPI_DOCUMENT_CHECK_ACTION)?,
             ActionIntent::Check,
-            ActionRunner::command(command_key),
+            ActionRunner::command(OPENAPI_DOCUMENT_COMMAND_KEY),
         );
         action.description =
             Some("Check that the committed OpenAPI documents match the backend.".into());

@@ -62,18 +62,27 @@ impl AnswerInput {
         } else {
             path_base.join(path)
         };
-        let mut input = Self::from_file_with_reader(&path, read)?;
+        let mut input = Self::from_file_with_reader(&path, read, None)?;
         input.preserve_repository_model = true;
         Ok(input)
     }
 
+    /// Loads a managed answers file, which sits at its repository root.
     pub(crate) fn from_file(path: &Path) -> Result<Self> {
-        Self::from_file_with_reader(path, |path| fs::read_to_string(path))
+        let root = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        Self::from_file_with_reader(path, |path| fs::read_to_string(path), Some(root))
     }
 
+    /// Given the repository `root`, also records whether a saved model from
+    /// before the document check belongs to a backend without the scaffold's
+    /// document tests, which that check would run.
     fn from_file_with_reader(
         path: &Path,
         read: impl FnOnce(&Path) -> std::io::Result<String>,
+        root: Option<&Path>,
     ) -> Result<Self> {
         let text = read(path).with_context(|| format!("Failed to read {}", path.display()))?;
         let value = toml::from_str::<toml::Value>(&text)
@@ -92,6 +101,14 @@ impl AnswerInput {
         let migration_notes =
             normalize_generated_clippy_defaults(&mut raw, &mut authored_repository_commands)
                 .warnings();
+        if let Some(root) = root {
+            raw.legacy_document_tests_missing =
+                super::document_check::legacy_document_tests_missing(
+                    &raw,
+                    authored_repository_commands.as_ref(),
+                    root,
+                );
+        }
         let preserve_repository_model =
             loaded_repository_model_is_custom(&raw, authored_repository_commands.as_ref());
         Ok(Self {
@@ -120,7 +137,7 @@ impl AnswerInput {
     }
 
     fn from_explicit_file(path: &Path) -> Result<Self> {
-        let mut input = Self::from_file(path)?;
+        let mut input = Self::from_file_with_reader(path, |path| fs::read_to_string(path), None)?;
         input.validate_explicit_file_semantics()?;
         input.preserve_repository_model = true;
         Ok(input)

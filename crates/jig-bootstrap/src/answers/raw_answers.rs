@@ -43,6 +43,13 @@ pub(super) struct RawAnswers {
     pub(super) go_lint_command: Option<String>,
     pub(super) go_test_command: Option<String>,
     pub(super) go_test_locked_command: Option<String>,
+    /// The saved document check's command; not an answer.
+    #[serde(skip)]
+    pub(super) openapi_check_command: Option<String>,
+    /// Whether a saved model from before the document check belongs to a
+    /// repository without the scaffold's document tests; not an answer.
+    #[serde(skip)]
+    pub(super) legacy_document_tests_missing: bool,
     pub(super) sqlc_check_command: Option<String>,
     pub(super) typescript_lint_command: Option<String>,
     pub(super) typescript_typecheck_command: Option<String>,
@@ -170,6 +177,17 @@ impl RawAnswers {
                 &mut self.go_test_locked_command,
                 commands,
                 "api_test_locked_command",
+            );
+        }
+        if self
+            .repository
+            .as_ref()
+            .is_some_and(AuthoredRepositoryModel::has_document_check)
+        {
+            inherit_repository_command(
+                &mut self.openapi_check_command,
+                commands,
+                "api_openapi_command",
             );
         }
         inherit_repository_command(&mut self.sqlx_check_command, commands, "api_sqlx_command");
@@ -649,6 +667,8 @@ impl RawAnswers {
             scaffolded_public_boundary: false,
             go_postgres_integration_script: false,
             client_only_contract_drift: false,
+            openapi_check_command: self.openapi_check_command,
+            legacy_document_tests_missing: self.legacy_document_tests_missing,
             repository_projection_hint: self.repository_projection_hint,
             repo_name,
             default_branch: self.default_branch.unwrap_or_else(|| "main".into()),

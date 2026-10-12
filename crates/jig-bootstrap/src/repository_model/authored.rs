@@ -30,6 +30,18 @@ impl AuthoredRepositoryModel {
         super::frontend_migration::client_only_drift(&self.actions)
     }
 
+    pub fn has_document_check(&self) -> bool {
+        super::frontend_migration::has_document_check(&self.actions)
+    }
+
+    pub fn predates_document_check(&self, commands: &BTreeMap<String, String>, go: bool) -> bool {
+        super::frontend_migration::predates_document_check(
+            &self.actions,
+            commands,
+            super::frontend::openapi_document_check_command(go),
+        )
+    }
+
     pub fn has_adapter(&self, expected: &str) -> bool {
         self.components
             .iter()

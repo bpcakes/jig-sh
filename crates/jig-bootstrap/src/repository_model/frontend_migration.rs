@@ -2,8 +2,9 @@ use super::{
     ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BACKEND_CONTRACT_INPUTS,
     BOUNDARY_DESCRIPTION, BTreeMap, CLIENT_DRIFT_DESCRIPTION, CommandScope,
     FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance,
-    OPENAPI_DOCUMENT_CHECK_ACTION, PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel,
-    TargetId, contract_check_action, retire_saved_frontend_dependencies,
+    OPENAPI_DOCUMENT_CHECK_ACTION, OPENAPI_DOCUMENT_COMMAND_KEY, PUBLIC_DOCUMENT_INPUTS,
+    REPO_COMPONENT, RepositoryRenderModel, TargetId, contract_check_action,
+    retire_saved_frontend_dependencies,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -88,6 +89,35 @@ pub(super) fn client_only_drift(actions: &[ActionSpec]) -> bool {
         is_repo_target(&action.target, FRONTEND_CONTRACT_DRIFT_ACTION)
             && action.description.as_deref() == Some(CLIENT_DRIFT_DESCRIPTION)
     })
+}
+
+/// Whether the saved model runs a document check through the generated
+/// check's command key, whose command generation then keeps, as it keeps the
+/// other backend commands. A key that no document check runs belongs to the
+/// owner, so generation never adopts it.
+pub(super) fn has_document_check(actions: &[ActionSpec]) -> bool {
+    actions.iter().any(|action| {
+        action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
+            && command(&action.runner) == Some(OPENAPI_DOCUMENT_COMMAND_KEY)
+    })
+}
+
+/// Whether the saved model is one that generation would give the document
+/// check: it has API contracts whose drift check exports from the backend, no
+/// document check, and the check's command key free.
+pub(super) fn predates_document_check(
+    actions: &[ActionSpec],
+    commands: &BTreeMap<String, String>,
+    generated_command: &str,
+) -> bool {
+    contracts_enabled(actions, commands)
+        && !client_only_drift(actions)
+        && !actions
+            .iter()
+            .any(|action| action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION)
+        && commands
+            .get(OPENAPI_DOCUMENT_COMMAND_KEY)
+            .is_none_or(|value| value == generated_command)
 }
 
 /// Normalize only generated legacy fields, both for custom-model preservation
