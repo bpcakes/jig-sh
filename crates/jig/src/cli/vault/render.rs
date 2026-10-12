@@ -1,0 +1,345 @@
+use crate::cli::output::{
+    concise_preview_with_truncation, value_bool, value_i64, value_str, value_u64,
+};
+
+pub(in crate::cli) fn format_vault_run_summary(value: &serde_json::Value) -> String {
+    let result = &value["result"];
+    let exit_status = value_i64(result, "exit_status")
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "?".into());
+    let mut lines = vec![format!("Vault run: exit {exit_status}")];
+    if let Some(signal) = value_i64(result, "exit_signal") {
+        lines.push(format!("  Signal: {signal}"));
+    }
+    let mut truncated = false;
+    if let Some(stdout) = value_str(result, "stdout").filter(|text| !text.is_empty()) {
+        let (preview, was_truncated) = concise_preview_with_truncation(stdout, 240);
+        truncated |= was_truncated;
+        lines.push(format!("  stdout: {preview}"));
+    }
+    if let Some(stderr) = value_str(result, "stderr").filter(|text| !text.is_empty()) {
+        let (preview, was_truncated) = concise_preview_with_truncation(stderr, 240);
+        truncated |= was_truncated;
+        lines.push(format!("  stderr: {preview}"));
+    }
+    if truncated {
+        lines.push("  Output truncated; rerun with --json for full output.".into());
+    }
+    lines.join("\n")
+}
+
+pub(in crate::cli) fn format_vault_generic_summary(value: &serde_json::Value) -> String {
+    let command = value_str(value, "command").unwrap_or("vault");
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let scope = value_str(value, "vault_scope").unwrap_or("unknown");
+    let home = value_str(value, "vault_home").unwrap_or("<unknown>");
+    let mut lines = vec![
+        format!("{command}: {}", if ok { "ok" } else { "failed" }),
+        format!("  Scope: {scope}"),
+        format!("  Home: {home}"),
+    ];
+    if let Some(main_checkout_root) = value_str(value, "vault_main_checkout_root") {
+        lines.push(format!("  Shared with main checkout: {main_checkout_root}"));
+    }
+    if let Some(guidance) = value_str(value, "vault_worktree_local_guidance") {
+        lines.push(format!("  Worktree-local vault: {guidance}"));
+    }
+    match command {
+        "vault init" => {
+            let created = value_bool(value, "created").unwrap_or(false);
+            lines.push(format!("  Created: {}", if created { "yes" } else { "no" }));
+        }
+        "vault status" => {
+            let exists = value_bool(value, "exists")
+                .or_else(|| value_bool(value, "vault_file_exists"))
+                .unwrap_or(false);
+            lines.push(format!("  Exists: {}", if exists { "yes" } else { "no" }));
+            if let Some(version) = value_u64(value, "format_version") {
+                lines.push(format!("  Format (unverified header): {version}"));
+            }
+            if value_bool(value, "pending_transaction") == Some(true) {
+                lines.push(
+                    "  Pending transaction: run an authenticated vault command to finish it"
+                        .to_owned(),
+                );
+            }
+        }
+        "vault passphrase change" => {
+            append_optional_bool(&mut lines, value, "changed", "Changed");
+        }
+        "vault backup create" => append_backup_create(&mut lines, value),
+        "vault backup restore" => append_backup_restore(&mut lines, value),
+        "vault migrate" => append_migration(&mut lines, value),
+        "vault field list" => {
+            let fields = value["fields"].as_array().map(Vec::len).unwrap_or(0);
+            lines.push(format!("  Fields: {fields}"));
+            if let Some(item) = value_str(value, "item") {
+                lines.push(format!("  Item: {item}"));
+            }
+            if let Some(items) = value["fields"].as_array() {
+                for field in items.iter().take(20) {
+                    let reference = value_str(field, "reference").unwrap_or("<unknown>");
+                    let kind = value_str(field, "kind").unwrap_or("unknown");
+                    lines.push(format!("  - {reference} ({kind})"));
+                }
+                if items.len() > 20 {
+                    lines.push(format!("  (and {} more)", items.len() - 20));
+                }
+            }
+        }
+        "vault field set" => {
+            append_optional_str(&mut lines, value, "reference", "Field");
+            append_optional_str(&mut lines, value, "kind", "Kind");
+            append_optional_bool(&mut lines, value, "changed", "Changed");
+        }
+        "vault field remove" => {
+            append_optional_str(&mut lines, value, "reference", "Field");
+            append_optional_bool(&mut lines, value, "removed", "Removed");
+        }
+        "vault import onepassword" => append_import(&mut lines, value),
+        "vault secret list" => {
+            let secrets = value["secrets"].as_array().map(Vec::len).unwrap_or(0);
+            lines.push(format!("  Secrets: {secrets}"));
+            if let Some(items) = value["secrets"].as_array() {
+                for secret in items.iter().take(20) {
+                    let name = value_str(secret, "name").unwrap_or("<unknown>");
+                    lines.push(format!("  - {name}"));
+                }
+                if items.len() > 20 {
+                    lines.push(format!("  (and {} more)", items.len() - 20));
+                }
+            }
+        }
+        "vault secret set" => {
+            append_optional_str(&mut lines, value, "name", "Name");
+        }
+        "vault secret remove" => {
+            append_optional_str(&mut lines, value, "name", "Name");
+            append_optional_bool(&mut lines, value, "removed", "Removed");
+        }
+        "vault audit verify" => {
+            let events = value_u64(value, "event_count").unwrap_or(0);
+            lines.push(format!("  Events: {events}"));
+            if let Some(torn) = value_u64(value, "torn_tail_bytes")
+                && torn > 0
+            {
+                lines.push(format!("  Torn tail bytes: {torn}"));
+            }
+        }
+        _ => {}
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+fn append_optional_str(lines: &mut Vec<String>, value: &serde_json::Value, key: &str, label: &str) {
+    if let Some(text) = value_str(value, key) {
+        lines.push(format!("  {label}: {text}"));
+    }
+}
+
+fn append_optional_bool(
+    lines: &mut Vec<String>,
+    value: &serde_json::Value,
+    key: &str,
+    label: &str,
+) {
+    if let Some(enabled) = value_bool(value, key) {
+        lines.push(format!("  {label}: {}", if enabled { "yes" } else { "no" }));
+    }
+}
+
+fn append_backup_create(lines: &mut Vec<String>, value: &serde_json::Value) {
+    append_optional_str(lines, value, "backup", "Backup");
+    if let Some(version) = value_u64(value, "backup_version") {
+        lines.push(format!("  Backup version: {version}"));
+    }
+    if let Some(bytes) = value_u64(value, "bytes_written") {
+        lines.push(format!("  Bytes written: {bytes}"));
+    }
+}
+
+fn append_backup_restore(lines: &mut Vec<String>, value: &serde_json::Value) {
+    append_optional_str(lines, value, "backup", "Backup");
+    append_optional_bool(lines, value, "restored", "Restored");
+    if let Some(version) = value_u64(value, "format_version") {
+        lines.push(format!("  Vault format: {version}"));
+    }
+    if let Some(source) = value_u64(value, "source_format_version")
+        && value_u64(value, "format_version") != Some(source)
+    {
+        lines.push(format!("  Upgraded from archived format: {source}"));
+    }
+    if let Some(generation) = value_u64(value, "generation") {
+        lines.push(format!("  Generation: {generation}"));
+        lines.push("  Other copies of this vault are now stale and will be refused.".to_owned());
+    }
+}
+
+fn append_migration(lines: &mut Vec<String>, value: &serde_json::Value) {
+    if let Some(version) = value_u64(value, "from_version") {
+        lines.push(format!("  From version: {version}"));
+    }
+    if let Some(version) = value_u64(value, "to_version") {
+        lines.push(format!("  To version: {version}"));
+    }
+    append_optional_bool(lines, value, "changed", "Changed");
+}
+
+fn append_import(lines: &mut Vec<String>, value: &serde_json::Value) {
+    append_optional_bool(lines, value, "dry_run", "Dry run");
+    append_optional_str(lines, value, "destination", "Destination");
+    if let Some(fields) = value["fields"].as_array() {
+        lines.push(format!("  Fields: {}", fields.len()));
+        for field in fields.iter().take(20) {
+            let reference = value_str(field, "reference").unwrap_or("<unknown>");
+            let kind = value_str(field, "kind").unwrap_or("unknown");
+            let action = value_str(field, "action")
+                .map(|action| format!(", {action}"))
+                .unwrap_or_default();
+            lines.push(format!("  - {reference} ({kind}{action})"));
+        }
+        if fields.len() > 20 {
+            lines.push(format!("  (and {} more)", fields.len() - 20));
+        }
+    }
+    for (key, flag) in [
+        ("requires_replace", "--replace"),
+        ("requires_overwrite", "--overwrite"),
+    ] {
+        if value_bool(value, key) == Some(true) {
+            lines.push(format!("  Requires: {flag}"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::format_vault_generic_summary;
+
+    #[test]
+    fn field_list_summary_uses_only_metadata() {
+        let summary = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault field list",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/jig-vault",
+            "item": "jig://Production",
+            "fields": [{
+                "reference": "jig://Production/RESTIC_COMPRESSION",
+                "kind": "text",
+                "value_len": 5,
+                "created_at_ms": 1,
+                "updated_at_ms": 1,
+            }],
+        }));
+
+        assert!(summary.contains("Fields: 1"));
+        assert!(summary.contains("jig://Production/RESTIC_COMPRESSION (text)"));
+        assert!(!summary.contains("value_len"));
+    }
+
+    #[test]
+    fn summary_names_the_shared_main_checkout_only_when_present() {
+        let shared = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault status",
+            "vault_scope": "repo",
+            "vault_home": "/tmp/jig-vault/scopes/repo-1",
+            "vault_main_checkout_root": "/tmp/ExampleProject",
+            "exists": true,
+        }));
+        assert!(shared.contains("Shared with main checkout: /tmp/ExampleProject"));
+
+        let checkout = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault status",
+            "vault_scope": "repo",
+            "vault_home": "/tmp/jig-vault/scopes/repo-1",
+            "vault_main_checkout_root": null,
+            "exists": true,
+        }));
+        assert!(!checkout.contains("Shared with main checkout"));
+        assert!(!checkout.contains("Worktree-local vault"));
+
+        let worktree_local = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault status",
+            "vault_scope": "repo",
+            "vault_home": "/tmp/jig-vault/scopes/repo-2",
+            "vault_main_checkout_root": null,
+            "vault_worktree_local": true,
+            "vault_worktree_local_guidance": "This linked Git worktree keeps its own repo-scoped vault.",
+            "exists": true,
+        }));
+        assert!(worktree_local.contains(
+            "Worktree-local vault: This linked Git worktree keeps its own repo-scoped vault."
+        ));
+        assert!(!worktree_local.contains("Shared with main checkout"));
+    }
+
+    #[test]
+    fn migration_summary_reports_an_idempotent_result() {
+        let summary = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault migrate",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/jig-vault",
+            "from_version": 2,
+            "to_version": 2,
+            "changed": false,
+        }));
+
+        assert!(summary.contains("From version: 2"));
+        assert!(summary.contains("To version: 2"));
+        assert!(summary.contains("Changed: no"));
+    }
+
+    #[test]
+    fn lifecycle_summaries_report_only_public_metadata() {
+        let passphrase = "do-not-print-current-or-new-passphrase";
+        let changed = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault passphrase change",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/jig-vault",
+            "changed": true,
+            "unexpected_sensitive_field": passphrase,
+        }));
+        assert!(changed.contains("Changed: yes"));
+
+        let created = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault backup create",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/jig-vault",
+            "backup": "/tmp/jig-vault.backup",
+            "bytes_written": 4096,
+            "backup_version": 1,
+            "created_at_ms": 1,
+        }));
+        assert!(created.contains("Backup version: 1"));
+        assert!(created.contains("Bytes written: 4096"));
+        assert!(!created.contains("created_at_ms"));
+
+        let restored = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault backup restore",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/restored-vault",
+            "backup": "/tmp/jig-vault.backup",
+            "restored": true,
+            "vault_id": "public-vault-id",
+            "format_version": 2,
+        }));
+        assert!(restored.contains("Restored: yes"));
+        assert!(restored.contains("Vault format: 2"));
+        assert!(!restored.contains("public-vault-id"));
+
+        for summary in [changed, created, restored] {
+            assert!(!summary.contains(passphrase));
+        }
+    }
+}

@@ -1,3 +1,0 @@
-Implement scripts/jig agent doctor/bootstrap for Jig skills setup, with config defaults, tests, templates, and docs.
-
-Implemented native scripts/jig agent doctor/bootstrap, default agent_tooling config, Codex config TOML inspection, MCP read-only agent doctor exposure, template/docs updates, and fixture MCP smoke coverage. Validation passed: cargo test -p jig-sh, JIG_DEV_BIN=target/debug/jig scripts/jig test, JIG_DEV_BIN=target/debug/jig scripts/jig clippy, JIG_DEV_BIN=target/debug/jig scripts/jig contract-check, ./scripts/validate-fixtures.sh, and JIG_DEV_BIN=target/debug/jig scripts/jig agent doctor.

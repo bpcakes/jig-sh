@@ -1,11 +1,12 @@
 use std::time::Duration;
 
+use jig_dashboard::DashboardSource;
+
 use super::{
     DashboardOptions, InitialTab,
     model::{App, Tab},
     render,
 };
-use crate::dashboard::DashboardSource;
 use anyhow::{Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use jig_tui::{TerminalSession, is_actionable_key, require_terminal};
@@ -31,13 +32,10 @@ pub(crate) fn run_with_cancellation(
         "use `jig ui --json` or `jig status --json` when redirecting",
     )?;
     let mut terminal = TerminalSession::enter("Jig dashboard")?;
-    let mut app = App::new(match options.initial_tab {
+    let app = App::new(match options.initial_tab {
         InitialTab::Status => Tab::Status,
-        InitialTab::Work => Tab::Work,
+        InitialTab::Timeline => Tab::Timeline,
     });
-    if let Some(plan_id) = options.initial_plan.clone() {
-        app.request_initial_plan(plan_id);
-    }
     event_loop::run(&mut terminal, source, app, options, externally_cancelled)
 }
 
@@ -54,8 +52,6 @@ enum RuntimeAction {
     Redraw,
     TabChanged,
     Refresh,
-    RefreshDetail,
-    DetailRequested,
     GrowTimeline,
     ShrinkTimeline,
     Quit,
@@ -77,28 +73,16 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     }
     if app.detail_is_open() {
         return match key.code {
-            KeyCode::Esc | KeyCode::Backspace => {
+            KeyCode::Esc | KeyCode::Backspace | KeyCode::Enter => {
                 app.close_detail();
                 RuntimeAction::Redraw
             }
-            KeyCode::Enter => {
-                app.open_detail_leaf_or_close();
-                RuntimeAction::Redraw
-            }
-            KeyCode::Tab => {
-                app.cycle_detail_section(false);
-                RuntimeAction::Redraw
-            }
-            KeyCode::BackTab => {
-                app.cycle_detail_section(true);
-                RuntimeAction::Redraw
-            }
             KeyCode::Up | KeyCode::Char('k') => {
-                app.move_detail_selection(-1);
+                app.scroll_detail(-1);
                 RuntimeAction::Redraw
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                app.move_detail_selection(1);
+                app.scroll_detail(1);
                 RuntimeAction::Redraw
             }
             KeyCode::Left | KeyCode::Char('h') => {
@@ -110,11 +94,11 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
                 RuntimeAction::Redraw
             }
             KeyCode::PageUp => {
-                app.move_detail_selection(-8);
+                app.scroll_detail(-8);
                 RuntimeAction::Redraw
             }
             KeyCode::PageDown => {
-                app.move_detail_selection(8);
+                app.scroll_detail(8);
                 RuntimeAction::Redraw
             }
             KeyCode::Home => {
@@ -125,13 +109,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
                 app.move_detail_to_edge(true);
                 RuntimeAction::Redraw
             }
-            KeyCode::Char('r' | 'R') => {
-                if app.detail.target_plan_id.is_some() {
-                    RuntimeAction::RefreshDetail
-                } else {
-                    RuntimeAction::Refresh
-                }
-            }
+            KeyCode::Char('r' | 'R') => RuntimeAction::Refresh,
             _ => RuntimeAction::Ignore,
         };
     }
@@ -142,7 +120,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         KeyCode::Char('r' | 'R') => RuntimeAction::Refresh,
         KeyCode::Enter => {
             if app.open_selected_detail() {
-                RuntimeAction::DetailRequested
+                RuntimeAction::Redraw
             } else {
                 RuntimeAction::Ignore
             }
@@ -160,14 +138,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             RuntimeAction::TabChanged
         }
         KeyCode::Char('2') => {
-            app.select_tab(Tab::Work);
-            RuntimeAction::TabChanged
-        }
-        KeyCode::Char('3') => {
             app.select_tab(Tab::Timeline);
             RuntimeAction::TabChanged
         }
-        KeyCode::Char('4') => {
+        KeyCode::Char('3') => {
             app.select_tab(Tab::Health);
             RuntimeAction::TabChanged
         }
@@ -215,14 +189,9 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
-    fn number_keys_select_the_four_local_views() {
+    fn number_keys_select_the_three_local_views() {
         let mut app = App::default();
-        for (key, tab) in [
-            ('1', Tab::Status),
-            ('2', Tab::Work),
-            ('3', Tab::Timeline),
-            ('4', Tab::Health),
-        ] {
+        for (key, tab) in [('1', Tab::Status), ('2', Tab::Timeline), ('3', Tab::Health)] {
             assert_eq!(
                 handle_key(
                     &mut app,
@@ -232,7 +201,7 @@ mod tests {
             );
             assert_eq!(app.tab, tab);
         }
-        for removed in ['5', '6', '[', ']', 'b'] {
+        for removed in ['4', '5', '6', '[', ']', 'b'] {
             assert_eq!(
                 handle_key(
                     &mut app,

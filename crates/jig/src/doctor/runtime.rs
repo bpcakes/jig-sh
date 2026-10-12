@@ -1,12 +1,19 @@
-use std::{ffi::OsStr, fs, path::Path, time::SystemTime};
+use std::{
+    ffi::OsStr,
+    fs,
+    path::Path,
+    time::{Duration, SystemTime},
+};
 
-use serde_json::json;
-
-use super::{DoctorCheck, LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE, check};
-use crate::context::{
+use jig_context::{
     INSTALLER_CACHE_LAYOUT_MARKER, LAUNCHER_REPAIR_STAGING_PREFIX, RuntimeCacheProfile,
     runtime_cache_base, runtime_profile_cache_path,
 };
+use serde_json::json;
+
+use super::check::{DoctorCheck, check};
+
+pub(super) const LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeDiagnosis<'a> {
@@ -119,7 +126,7 @@ impl<'a> RuntimeFacts<'a> {
             RuntimeDiagnosis::ContractUnreadable
         } else if let Some(version) = self
             .contract_version
-            .filter(|version| !crate::context::is_supported_contract_version(*version))
+            .filter(|version| !jig_context::is_active_contract_version(*version))
         {
             RuntimeDiagnosis::UnsupportedContract(version)
         } else if !self.launcher.contract_probe {
@@ -173,14 +180,14 @@ pub(super) fn runtime_check(
     let fix = if !ok {
         let executable = runtime_executable
             .as_deref()
-            .map(crate::shell::quote)
+            .map(jig_repository::shell::quote)
             .unwrap_or_else(|| "jig".into());
-        let repository = crate::shell::quote(&root.to_string_lossy());
+        let repository = jig_repository::shell::quote(&root.to_string_lossy());
         let managed_manifest_exists = root
-            .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH)
+            .join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH)
             .is_file();
         let narrow_repair_recognizable =
-            crate::bootstrap::launcher_only_repair_scripts_are_recognizable(root);
+            jig_bootstrap::launcher_only_repair_scripts_are_recognizable(root);
         if let RuntimeDiagnosis::UnsupportedContract(version) = diagnosis {
             Some(format!(
                 "This Jig runtime does not support the repository's declared contract {version}. Install a newer compatible Jig runtime and rerun its doctor; do not rewrite the repository with this older runtime."
@@ -198,7 +205,7 @@ pub(super) fn runtime_check(
             } else {
                 Some(format!(
                     "The repository contract manifest and {} cannot establish a safe repair epoch or ownership. Review the repository's current harness footprint and answer overrides, then run `{executable} adopt {repository} --write --force`; rerun `scripts/jig doctor` afterward. If that binary is unavailable, run `cargo install jig-sh` first.",
-                    crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH
+                    jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH
                 ))
             }
         } else if !managed_manifest_exists
@@ -206,7 +213,7 @@ pub(super) fn runtime_check(
         {
             Some(format!(
                 "The generated launcher pair and {} cannot establish narrow repair ownership. Review the repository's current harness footprint and answer overrides, then run `{executable} adopt {repository} --write --force`; rerun `scripts/jig doctor` afterward. If that binary is unavailable, run `cargo install jig-sh` first.",
-                crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH
+                jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH
             ))
         } else if managed_manifest_exists
             && matches!(diagnosis, RuntimeDiagnosis::LegacyLauncher(_))
@@ -221,7 +228,7 @@ pub(super) fn runtime_check(
             } else {
                 format!(
                     " Because {} is missing, review the current footprint and answer overrides, then run `{executable} adopt {repository} --write --force` before a full update.",
-                    crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH
+                    jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH
                 )
             };
             Some(format!(
@@ -259,6 +266,9 @@ pub(super) fn runtime_check(
 }
 
 pub(super) fn launcher_repair_seed_stamp_is_present(root: &Path, contract_version: u32) -> bool {
+    if jig_bootstrap::runtime_artifacts::release_pin_bypasses_source_cache(root) {
+        return false;
+    }
     [RuntimeCacheProfile::Default, RuntimeCacheProfile::Runtime]
         .into_iter()
         .map(|profile| {
@@ -269,7 +279,7 @@ pub(super) fn launcher_repair_seed_stamp_is_present(root: &Path, contract_versio
                 .ok()
                 .and_then(|contents| contents.lines().next().map(str::to_owned))
                 .is_some_and(|first_line| {
-                    first_line == crate::bootstrap::LAUNCHER_REPAIR_SEED_STAMP_HEADER
+                    first_line == jig_bootstrap::LAUNCHER_REPAIR_SEED_STAMP_HEADER
                 })
         })
 }
@@ -278,11 +288,11 @@ pub(super) fn launcher_repair_cache_check(root: &Path, contract_version: u32) ->
     let executable = std::env::current_exe()
         .ok()
         .as_deref()
-        .map(|path| crate::shell::quote(&path.to_string_lossy()))
+        .map(|path| jig_repository::shell::quote(&path.to_string_lossy()))
         .unwrap_or_else(|| "jig".into());
-    let repository = crate::shell::quote(&root.to_string_lossy());
+    let repository = jig_repository::shell::quote(&root.to_string_lossy());
     let managed_manifest_exists = root
-        .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH)
+        .join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH)
         .is_file();
     let fix = if managed_manifest_exists {
         format!(
@@ -492,11 +502,11 @@ pub(super) fn contract_migration_check(root: &Path, contract_version: u32) -> Do
     let executable = std::env::current_exe()
         .ok()
         .as_deref()
-        .map(|path| crate::shell::quote(&path.to_string_lossy()))
+        .map(|path| jig_repository::shell::quote(&path.to_string_lossy()))
         .unwrap_or_else(|| "jig".into());
-    let repository = crate::shell::quote(&root.to_string_lossy());
+    let repository = jig_repository::shell::quote(&root.to_string_lossy());
     let managed_manifest_exists = root
-        .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH)
+        .join(jig_bootstrap::MANAGED_PATHS_MANIFEST_PATH)
         .is_file();
     let fix = if managed_manifest_exists {
         format!(
@@ -514,14 +524,14 @@ pub(super) fn contract_migration_check(root: &Path, contract_version: u32) -> Do
         false,
         "migration available",
         format!(
-            "contract {contract_version} remains supported, but its recorded source may predate compatibility-aware runtime installation; current generated repositories use contract {}",
-            crate::context::CURRENT_CONTRACT_VERSION
+            "contract {contract_version} remains supported; current generated repositories use contract {}, and migrating refreshes the harness to it",
+            jig_context::CURRENT_CONTRACT_VERSION
         ),
     )
     .with_fix(&fix)
     .with_data(json!({
         "contract_version": contract_version,
-        "current_contract_version": crate::context::CURRENT_CONTRACT_VERSION,
+        "current_contract_version": jig_context::CURRENT_CONTRACT_VERSION,
         "managed_paths_manifest_present": managed_manifest_exists,
     }))
 }
@@ -553,7 +563,7 @@ pub(super) fn launcher_version(path: &Path) -> LauncherVersion {
             };
         }
     };
-    let inspection = crate::runtime_artifacts::inspect_launcher(&text);
+    let inspection = jig_bootstrap::runtime_artifacts::inspect_launcher(&text);
     LauncherVersion {
         version: inspection.legacy_version().map(str::to_string),
         contract_version: inspection.readable_contract_version(),
@@ -570,7 +580,7 @@ pub(super) struct InstallerVersion {
 pub(super) fn installer_version(path: &Path) -> InstallerVersion {
     match fs::read_to_string(path) {
         Ok(text) => InstallerVersion {
-            contract_probe: crate::runtime_artifacts::inspect_installer(&text)
+            contract_probe: jig_bootstrap::runtime_artifacts::inspect_installer(&text)
                 .uses_repository_scope_protocol(),
             read_error: None,
         },

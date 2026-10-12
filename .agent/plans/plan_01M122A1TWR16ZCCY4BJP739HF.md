@@ -1,1 +1,0 @@
-Migrate the source repository to baseline-aware work gates, preserve source-specific command and CI ownership, establish managed-path metadata, refresh agent guidance, and validate the contract-v5 workflow.

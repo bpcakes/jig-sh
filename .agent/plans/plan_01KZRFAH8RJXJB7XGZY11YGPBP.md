@@ -1,1 +1,0 @@
-Harden contract-v4 launcher repair against repository-local Python imports and lock-guard symlinks; align doctor root diagnostics, compatibility documentation, cache retirement retry behavior, and launcher parity tests; run repository gates and verify PR CI.

@@ -61,6 +61,14 @@ pub(crate) fn random_array<const N: usize>() -> Result<[u8; N]> {
     Ok(bytes)
 }
 
+/// A fresh random key generated directly into its zeroizing owner, so no
+/// named non-zeroizing copy of the key exists.
+pub(crate) fn random_key() -> Result<Zeroizing<[u8; KEY_LEN]>> {
+    let mut key = Zeroizing::new([0_u8; KEY_LEN]);
+    getrandom::fill(key.as_mut_slice()).context("secure random generation failed")?;
+    Ok(key)
+}
+
 pub(crate) fn derive_wrap_key(
     passphrase: &SecretString,
     salt: &[u8],

@@ -1,0 +1,728 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::io::ErrorKind;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use jig_execution::progress::CliProgress;
+use jig_repository::path::{
+    validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
+};
+use minijinja::{Environment, UndefinedBehavior, syntax::SyntaxConfig};
+use serde_json::{Value as JsonValue, json};
+use tempfile::TempDir;
+
+use super::ANSWERS_FILE;
+use super::answers::RenderAnswers;
+use super::embedded_templates::EMBEDDED_TEMPLATE_FILES;
+use super::managed_paths;
+use super::preview_seed::seed_preview_workspace;
+use super::repository_model::RepositoryRenderModel;
+use super::staged_render::FILE_BUDGET_POLICY_PATH;
+use super::staged_render::StagedRender;
+use super::template_source::{PreparedTemplateSource, TemplateRenderSource};
+
+mod runtime_contract;
+pub(super) use runtime_contract::validate_staged_runtime_contract;
+
+const TEMPLATE_SUBDIRECTORY: &str = "templates/project";
+const TEMPLATE_SUFFIX: &str = ".jinja";
+pub(super) const RUST_GATE_COMMAND_AUTHORITY_PATHS: &[&str] =
+    &["Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"];
+pub(super) const FRONTEND_GATE_SHARED_PATHS: &[&str] = &[
+    "packages/**",
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    ".node-version",
+    "**/.node-version",
+    ".npmrc",
+    "**/.npmrc",
+    ".yarnrc",
+    ".yarnrc.yml",
+    "**/.yarnrc",
+    "**/.yarnrc.yml",
+    ".pnpmfile.cjs",
+    "pnpmfile.cjs",
+    "**/.pnpmfile.cjs",
+    "**/pnpmfile.cjs",
+    "bunfig.toml",
+    "**/bunfig.toml",
+    "patches/**",
+    "**/patches/**",
+    ".yarn/patches/**",
+    ".yarn/plugins/**",
+    ".yarn/releases/**",
+    "**/.yarn/patches/**",
+    "**/.yarn/plugins/**",
+    "**/.yarn/releases/**",
+    "tsconfig*.json",
+    "eslint.config.*",
+    "vite.config.*",
+    "vitest.config.*",
+    "scripts/check-webapps.sh",
+    "scripts/check-webapp-scripts.mjs",
+    "scripts/enforce-coverage.cjs",
+    "scripts/web-node.cjs",
+];
+
+pub(super) struct RenderStageRequest<'a> {
+    pub(super) template: &'a PreparedTemplateSource,
+    pub(super) answers: &'a RenderAnswers,
+    pub(super) seed_repo_path: Option<&'a Path>,
+    // Init does not seed other repository content, but can preserve an authored policy.
+    pub(super) policy_repo_path: Option<&'a Path>,
+    pub(super) prior_managed_paths: Option<&'a BTreeSet<PathBuf>>,
+    pub(super) reconcile_runtime_config: bool,
+    pub(super) preferred_rendered_commands: BTreeSet<String>,
+    pub(super) contract_version: Option<u32>,
+    pub(super) progress: CliProgress,
+}
+
+pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRender> {
+    let root = request
+        .progress
+        .log_blocked_on_err(TempDir::new().context("Failed to create staging directory"))?;
+    let destination = root.path().join("render");
+    if let Some(seed_repo_path) = request.seed_repo_path {
+        request
+            .progress
+            .step("seed agent guides", "scan existing repo for AGENTS.md");
+        request
+            .progress
+            .log_blocked_on_err(seed_preview_workspace(seed_repo_path, &destination))?;
+    }
+
+    request
+        .progress
+        .step("render templates", "managed files, scripts, and workflows");
+    let mut active_paths =
+        request
+            .progress
+            .log_blocked_on_err(render_template_files_with_policy(
+                request.template,
+                request.answers,
+                &destination,
+                request.policy_repo_path,
+                None,
+                request.contract_version,
+            ))?;
+    let answers_path = destination.join(ANSWERS_FILE);
+    if !answers_path.exists() {
+        request
+            .progress
+            .blocked(format!("staging render did not produce {ANSWERS_FILE}"));
+        bail!("Staging render did not produce {ANSWERS_FILE}");
+    }
+    let authored_seed_paths = take_authored_seed_paths(&mut active_paths, request.answers);
+    if !request.answers.is_minimal_footprint() {
+        request
+            .progress
+            .step("generate agent map", "native renderer");
+        request
+            .progress
+            .log_blocked_on_err(run_post_render_tasks(&destination))?;
+    } else {
+        request
+            .progress
+            .log_blocked_on_err(set_scripts_executable(&destination))?;
+    }
+    merge_existing_managed_blocks(
+        request.seed_repo_path,
+        &destination,
+        &active_paths,
+        request.progress,
+    )?;
+    let mut retirement_paths = BTreeSet::new();
+    if let Some(prior_paths) = request.prior_managed_paths {
+        retire_inactive_managed_blocks(
+            request.seed_repo_path,
+            &destination,
+            &active_paths,
+            prior_paths,
+            &mut retirement_paths,
+            request.progress,
+        )?;
+    }
+    if request.reconcile_runtime_config {
+        super::runtime_config::reconcile_runtime_config(
+            request.seed_repo_path,
+            &destination,
+            &request.preferred_rendered_commands,
+        )?;
+    }
+    super::runtime_config::reconcile_tracker_ownership(request.seed_repo_path, &destination)?;
+
+    active_paths.insert(PathBuf::from(managed_paths::MANIFEST_PATH));
+    request
+        .progress
+        .log_blocked_on_err(validate_portable_planned_file_collisions(
+            active_paths.iter().chain(authored_seed_paths.iter()),
+        ))?;
+    request
+        .progress
+        .log_blocked_on_err(managed_paths::write_manifest(&destination, &active_paths))?;
+    if let Some(prior_paths) = request.prior_managed_paths {
+        retirement_paths.extend(
+            prior_paths
+                .difference(&active_paths)
+                .filter(|path| managed_paths::managed_block_spec(path).is_none())
+                .cloned(),
+        );
+    }
+    super::retired_mcp::stage_retirement(
+        request.seed_repo_path,
+        &destination,
+        &mut retirement_paths,
+        request.progress,
+    )?;
+
+    let staged_context = jig_context::RepoContext::load_from_root(destination.clone())
+        .with_context(|| {
+            format!(
+                "Staged render produced an invalid Jig config or contract in {}",
+                destination.display()
+            )
+        })?;
+    validate_staged_runtime_contract(&destination, staged_context.contract_version())?;
+    jig_policy::validate_contract(&staged_context).with_context(|| {
+        format!(
+            "Staged render produced an invalid Jig config or contract in {}",
+            destination.display()
+        )
+    })?;
+
+    Ok(StagedRender {
+        _root: root,
+        destination,
+        active_paths,
+        retirement_paths,
+    })
+}
+
+pub(super) fn stage_selected_render(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+    selected_paths: &BTreeSet<PathBuf>,
+    contract_version: u32,
+    progress: CliProgress,
+) -> Result<StagedRender> {
+    let root = progress
+        .log_blocked_on_err(TempDir::new().context("Failed to create staging directory"))?;
+    let destination = root.path().join("render");
+    progress.step("render templates", "selected managed files");
+    let active_paths = progress.log_blocked_on_err(render_template_files(
+        template,
+        answers,
+        &destination,
+        Some(selected_paths),
+        Some(contract_version),
+    ))?;
+    let missing_paths = selected_paths
+        .difference(&active_paths)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if !missing_paths.is_empty() {
+        bail!(
+            "Embedded template is missing selected managed paths: {}",
+            missing_paths.join(", ")
+        );
+    }
+    progress.log_blocked_on_err(set_scripts_executable(&destination))?;
+    progress.log_blocked_on_err(validate_staged_runtime_contract(
+        &destination,
+        contract_version,
+    ))?;
+    progress.log_blocked_on_err(validate_portable_planned_file_collisions(&active_paths))?;
+
+    Ok(StagedRender {
+        _root: root,
+        destination,
+        active_paths,
+        retirement_paths: BTreeSet::new(),
+    })
+}
+
+fn take_authored_seed_paths(
+    active_paths: &mut BTreeSet<PathBuf>,
+    answers: &RenderAnswers,
+) -> BTreeSet<PathBuf> {
+    let policy = PathBuf::from(FILE_BUDGET_POLICY_PATH);
+    if answers.is_minimal_footprint() || !active_paths.remove(&policy) {
+        BTreeSet::new()
+    } else {
+        BTreeSet::from([policy])
+    }
+}
+
+fn render_template_files(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+    destination: &Path,
+    selected_paths: Option<&BTreeSet<PathBuf>>,
+    contract_version: Option<u32>,
+) -> Result<BTreeSet<PathBuf>> {
+    render_template_files_with_policy(
+        template,
+        answers,
+        destination,
+        None,
+        selected_paths,
+        contract_version,
+    )
+}
+
+fn render_template_files_with_policy(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+    destination: &Path,
+    policy_repo_path: Option<&Path>,
+    selected_paths: Option<&BTreeSet<PathBuf>>,
+    contract_version: Option<u32>,
+) -> Result<BTreeSet<PathBuf>> {
+    let mut context = render_context(template, answers, contract_version)?;
+    let active_paths = render_template_files_pass(
+        template,
+        answers,
+        destination,
+        selected_paths,
+        &context,
+        false,
+    )?;
+    if file_budget_audit_available(destination, policy_repo_path, answers)? {
+        context
+            .as_object_mut()
+            .expect("render context is an object")
+            .insert("file_budget_audit_available".into(), JsonValue::Bool(true));
+        render_template_files_pass(
+            template,
+            answers,
+            destination,
+            selected_paths,
+            &context,
+            true,
+        )?;
+    }
+    Ok(active_paths)
+}
+
+pub(super) fn file_budget_audit_available(
+    destination: &Path,
+    policy_repo_path: Option<&Path>,
+    answers: &RenderAnswers,
+) -> Result<bool> {
+    if answers.is_minimal_footprint() {
+        return Ok(false);
+    }
+    let staged_path = destination.join(FILE_BUDGET_POLICY_PATH);
+    let path = if let Some(policy_repo_path) = policy_repo_path {
+        let authored_path = policy_repo_path.join(FILE_BUDGET_POLICY_PATH);
+        match fs::symlink_metadata(&authored_path) {
+            Ok(metadata) if metadata.file_type().is_file() => authored_path,
+            Ok(_) => return Ok(false),
+            Err(error) if error.kind() == ErrorKind::NotFound => staged_path,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to inspect {}", authored_path.display()));
+            }
+        }
+    } else {
+        staged_path
+    };
+    let mut file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to read {}", path.display()));
+        }
+    };
+    let before = file.metadata()?;
+    if !before.file_type().is_file() || before.len() > jig_file_budget::MAX_POLICY_BYTES_V1 as u64 {
+        return Ok(false);
+    }
+    let mut policy = Vec::new();
+    (&mut file)
+        .take(jig_file_budget::MAX_POLICY_BYTES_V1 as u64)
+        .read_to_end(&mut policy)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let after = file.metadata()?;
+    if !after.file_type().is_file()
+        || before.len() != after.len()
+        || before.modified().ok() != after.modified().ok()
+    {
+        return Ok(false);
+    }
+    let now = time::OffsetDateTime::now_utc().date();
+    let current_date =
+        jig_file_budget::PolicyDateV1::new(now.year() as u16, now.month() as u8, now.day())
+            .map_err(anyhow::Error::msg)?;
+    Ok(jig_file_budget::parse_policy_v1(&policy, current_date).is_ok())
+}
+
+pub(super) fn preview_file_budget_audit_available(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+    policy_repo_path: Option<&Path>,
+) -> Result<bool> {
+    let preview = TempDir::new().context("Failed to create file-budget policy preview")?;
+    let selected = BTreeSet::from([PathBuf::from(FILE_BUDGET_POLICY_PATH)]);
+    render_template_files(template, answers, preview.path(), Some(&selected), None)?;
+    file_budget_audit_available(preview.path(), policy_repo_path, answers)
+}
+
+fn render_template_files_pass(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+    destination: &Path,
+    selected_paths: Option<&BTreeSet<PathBuf>>,
+    context: &JsonValue,
+    skip_policy: bool,
+) -> Result<BTreeSet<PathBuf>> {
+    let mut environment = Environment::new();
+    environment.set_syntax(
+        SyntaxConfig::builder()
+            .block_delimiters("[%", "%]")
+            .variable_delimiters("<<[", "]>>")
+            .comment_delimiters("<#", "#>")
+            .build()?,
+    );
+    environment.set_undefined_behavior(UndefinedBehavior::Strict);
+    // Templates end with a newline; keep it so rendered files are complete
+    // text files and match the launcher parity check.
+    environment.set_keep_trailing_newline(true);
+
+    let mut render = TemplateRender {
+        environment: &mut environment,
+        context,
+        answers,
+        destination,
+        selected_paths,
+        skip_policy,
+        managed_paths: BTreeSet::new(),
+    };
+    match template.render_source() {
+        TemplateRenderSource::Filesystem(render_root) => {
+            let template_root = render_root.join(TEMPLATE_SUBDIRECTORY);
+            if !template_root.is_dir() {
+                bail!(
+                    "Template source does not contain {}: {}",
+                    TEMPLATE_SUBDIRECTORY,
+                    render_root.display()
+                );
+            }
+            for template_path in collect_template_paths(&template_root)? {
+                let relative_template =
+                    template_path
+                        .strip_prefix(&template_root)
+                        .with_context(|| {
+                            format!(
+                                "{} is not under {}",
+                                template_path.display(),
+                                template_root.display()
+                            )
+                        })?;
+                let source = fs::read_to_string(&template_path)
+                    .with_context(|| format!("Failed to read {}", template_path.display()))?;
+                render.entry(
+                    relative_template,
+                    &template_path.display().to_string(),
+                    &source,
+                )?;
+            }
+        }
+        TemplateRenderSource::Embedded => {
+            for template_file in EMBEDDED_TEMPLATE_FILES {
+                render.entry(
+                    Path::new(template_file.relative_path),
+                    template_file.relative_path,
+                    template_file.contents,
+                )?;
+            }
+        }
+    }
+
+    Ok(render.managed_paths)
+}
+
+struct TemplateRender<'a, 'env> {
+    environment: &'a mut Environment<'env>,
+    context: &'a JsonValue,
+    answers: &'a RenderAnswers,
+    destination: &'a Path,
+    selected_paths: Option<&'a BTreeSet<PathBuf>>,
+    skip_policy: bool,
+    managed_paths: BTreeSet<PathBuf>,
+}
+
+impl TemplateRender<'_, '_> {
+    fn entry(&mut self, relative_template: &Path, source_label: &str, source: &str) -> Result<()> {
+        let relative = output_relative_path(relative_template)?;
+        if self.skip_policy && relative == Path::new(FILE_BUDGET_POLICY_PATH) {
+            return Ok(());
+        }
+        if self
+            .selected_paths
+            .is_some_and(|selected_paths| !selected_paths.contains(&relative))
+        {
+            return Ok(());
+        }
+        if managed_paths::should_omit_unmanaged_rendered_path(&relative, self.answers) {
+            return Ok(());
+        }
+        self.managed_paths.insert(relative.clone());
+
+        let rendered = self
+            .environment
+            .render_str(source, self.context)
+            .with_context(|| format!("Failed to render {source_label}"))?;
+        write_rendered_file(self.destination, &relative, rendered.as_bytes())
+    }
+}
+
+fn merge_existing_managed_blocks(
+    seed_repo_path: Option<&Path>,
+    destination: &Path,
+    managed_paths: &BTreeSet<PathBuf>,
+    progress: CliProgress,
+) -> Result<()> {
+    let Some(seed_repo_path) = seed_repo_path else {
+        return Ok(());
+    };
+
+    for spec in managed_paths::managed_block_specs() {
+        let relative = Path::new(spec.path);
+        if !managed_paths.contains(relative) {
+            continue;
+        }
+        merge_existing_managed_block(seed_repo_path, destination, relative, progress)?;
+    }
+    Ok(())
+}
+
+fn retire_inactive_managed_blocks(
+    seed_repo_path: Option<&Path>,
+    destination: &Path,
+    active_paths: &BTreeSet<PathBuf>,
+    prior_paths: &BTreeSet<PathBuf>,
+    retirement_paths: &mut BTreeSet<PathBuf>,
+    progress: CliProgress,
+) -> Result<()> {
+    let Some(seed_repo_path) = seed_repo_path else {
+        return Ok(());
+    };
+
+    for spec in managed_paths::managed_block_specs() {
+        let relative = Path::new(spec.path);
+        if active_paths.contains(relative) || !prior_paths.contains(relative) {
+            continue;
+        }
+        retire_managed_block(
+            seed_repo_path,
+            destination,
+            relative,
+            *spec,
+            retirement_paths,
+            progress,
+        )?;
+    }
+    Ok(())
+}
+
+fn retire_managed_block(
+    seed_repo_path: &Path,
+    destination: &Path,
+    relative: &Path,
+    spec: managed_paths::ManagedBlockSpec,
+    retirement_paths: &mut BTreeSet<PathBuf>,
+    progress: CliProgress,
+) -> Result<()> {
+    let existing_path = seed_repo_path.join(relative);
+    let metadata = match fs::symlink_metadata(&existing_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to stat {}", existing_path.display()));
+        }
+    };
+    if !metadata.is_file() {
+        return Ok(());
+    }
+
+    let existing = fs::read(&existing_path)
+        .with_context(|| format!("Failed to read {}", existing_path.display()))?;
+    let Some((start, end)) = jig_block_byte_bounds(&existing, &existing_path, spec)? else {
+        return Ok(());
+    };
+
+    progress.step(
+        "retire managed block",
+        format!("preserve repo-owned {} content", spec.path),
+    );
+    let remaining = remove_jig_block_and_separator(&existing, start, end);
+    let rendered_path = destination.join(relative);
+    fs::write(&rendered_path, remaining)
+        .with_context(|| format!("Failed to write {}", rendered_path.display()))?;
+    retirement_paths.insert(relative.to_path_buf());
+    Ok(())
+}
+
+fn remove_jig_block_and_separator(contents: &[u8], start: usize, end: usize) -> Vec<u8> {
+    let splice_start = if contents[..start].ends_with(b"\r\n\r\n") {
+        start - 2
+    } else if contents[..start].ends_with(b"\n\n") {
+        start - 1
+    } else {
+        start
+    };
+    let splice_end = if contents[end..].starts_with(b"\r\n") {
+        end + 2
+    } else if contents[end..].starts_with(b"\n") {
+        end + 1
+    } else {
+        end
+    };
+    let mut remaining = Vec::with_capacity(contents.len() - (splice_end - splice_start));
+    remaining.extend_from_slice(&contents[..splice_start]);
+    remaining.extend_from_slice(&contents[splice_end..]);
+    remaining
+}
+
+fn jig_block_byte_bounds(
+    contents: &[u8],
+    path: &Path,
+    spec: managed_paths::ManagedBlockSpec,
+) -> Result<Option<(usize, usize)>> {
+    let begins = byte_match_indices(contents, spec.begin.as_bytes());
+    let ends = byte_match_indices(contents, spec.end.as_bytes());
+    match (begins.as_slice(), ends.as_slice()) {
+        ([], []) => Ok(None),
+        ([begin], [end]) if begin < end => Ok(Some((*begin, end + spec.end.len()))),
+        _ => bail!(
+            "Malformed Jig managed block in {}. Expected exactly one begin marker before exactly one end marker.",
+            path.display()
+        ),
+    }
+}
+
+fn byte_match_indices(contents: &[u8], needle: &[u8]) -> Vec<usize> {
+    contents
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(index, candidate)| (candidate == needle).then_some(index))
+        .collect()
+}
+
+fn merge_existing_managed_block(
+    seed_repo_path: &Path,
+    destination: &Path,
+    relative: &Path,
+    progress: CliProgress,
+) -> Result<()> {
+    let Some(spec) = managed_paths::managed_block_spec(relative) else {
+        return Ok(());
+    };
+
+    let existing_path = seed_repo_path.join(relative);
+    if !existing_path.exists() {
+        return Ok(());
+    }
+
+    let rendered_path = destination.join(relative);
+    if !rendered_path.exists() {
+        return Ok(());
+    }
+
+    let step_label = format!("merge {}", spec.progress_label);
+    progress.step(
+        &step_label,
+        format!("preserve repo-owned {} content", spec.path),
+    );
+    let existing = progress.log_blocked_on_err(
+        fs::read_to_string(&existing_path)
+            .with_context(|| format!("Failed to read {}", existing_path.display())),
+    )?;
+    let rendered = progress.log_blocked_on_err(
+        fs::read_to_string(&rendered_path)
+            .with_context(|| format!("Failed to read {}", rendered_path.display())),
+    )?;
+    let block = progress.log_blocked_on_err(extract_jig_block(&rendered, &rendered_path, spec))?;
+    let merged =
+        progress.log_blocked_on_err(merge_jig_block(&existing, block, &existing_path, spec))?;
+    progress.log_blocked_on_err(
+        fs::write(&rendered_path, merged)
+            .with_context(|| format!("Failed to write {}", rendered_path.display())),
+    )
+}
+
+fn extract_jig_block<'a>(
+    contents: &'a str,
+    path: &Path,
+    spec: managed_paths::ManagedBlockSpec,
+) -> Result<&'a str> {
+    let Some((start, end)) = jig_block_bounds(contents, path, spec)? else {
+        bail!(
+            "Rendered {} does not contain a Jig managed block.",
+            path.display()
+        );
+    };
+    Ok(&contents[start..end])
+}
+
+fn merge_jig_block(
+    existing: &str,
+    block: &str,
+    path: &Path,
+    spec: managed_paths::ManagedBlockSpec,
+) -> Result<String> {
+    if let Some((start, end)) = jig_block_bounds(existing, path, spec)? {
+        return Ok(format!(
+            "{}{}{}",
+            &existing[..start],
+            block,
+            &existing[end..]
+        ));
+    }
+
+    let mut merged = existing.trim_end_matches('\n').to_string();
+    if !merged.is_empty() {
+        merged.push_str("\n\n");
+    }
+    merged.push_str(block.trim_end_matches('\n'));
+    merged.push('\n');
+    Ok(merged)
+}
+
+fn jig_block_bounds(
+    contents: &str,
+    path: &Path,
+    spec: managed_paths::ManagedBlockSpec,
+) -> Result<Option<(usize, usize)>> {
+    let begins = contents.match_indices(spec.begin).collect::<Vec<_>>();
+    let ends = contents.match_indices(spec.end).collect::<Vec<_>>();
+
+    match (begins.as_slice(), ends.as_slice()) {
+        ([], []) => Ok(None),
+        ([(begin, _)], [(end, _)]) if begin < end => Ok(Some((*begin, end + spec.end.len()))),
+        _ => bail!(
+            "Malformed Jig managed block in {}. Expected exactly one begin marker before exactly one end marker.",
+            path.display()
+        ),
+    }
+}
+
+mod render_context;
+use render_context::render_context;
+
+mod files;
+use files::*;
+
+#[cfg(test)]
+#[path = "renderer_tests.rs"]
+mod renderer_tests;

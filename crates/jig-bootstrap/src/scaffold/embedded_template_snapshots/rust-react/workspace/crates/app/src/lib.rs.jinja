@@ -1,0 +1,113 @@
+mod config;
+
+use ::<<[ module_name ]>>_core::AppVersion;
+[% if db_enabled %]
+#[cfg(feature = "db")]
+pub use ::<<[ module_name ]>>_db as db;
+[% endif %]
+pub use config::AppConfig;
+
+#[derive(Clone, Debug)]
+pub struct AppState {
+    config: AppConfig,
+    [% if db_enabled %]
+    #[cfg(feature = "db")]
+    db: Option<db::Db>,
+    [% endif %]
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self::for_tests()
+    }
+
+    pub fn new_with_version(version: impl Into<String>) -> Self {
+        Self::for_tests_with_version(version)
+    }
+
+    pub fn for_tests() -> Self {
+        Self::for_tests_with_version(env!("CARGO_PKG_VERSION"))
+    }
+
+    pub fn for_tests_with_version(version: impl Into<String>) -> Self {
+        Self::from_test_config(AppConfig::for_tests_with_version(version))
+    }
+
+    pub fn from_test_config(config: AppConfig) -> Self {
+        Self::from_config(config)
+    }
+
+    /// State for a service without an initialized database. The runtime owns
+    /// every native resource; application state only carries handles to them.
+    pub fn from_config(config: AppConfig) -> Self {
+        [% if db_enabled %]
+        Self {
+            config,
+            #[cfg(feature = "db")]
+            db: None,
+        }
+        [% else %]
+        Self { config }
+        [% endif %]
+    }
+[% if db_enabled %]
+
+    #[cfg(feature = "db")]
+    pub fn from_database(config: AppConfig, database: db::Db) -> Self {
+        Self {
+            config,
+            db: Some(database),
+        }
+    }
+[% endif %]
+
+    pub fn config(&self) -> &AppConfig {
+        &self.config
+    }
+
+    pub fn version(&self) -> &AppVersion {
+        self.config.version()
+    }
+
+    /// Application-owned readiness. The HTTP boundary adds it to lifecycle and
+    /// dependency health as the `application-state` readiness condition.
+    pub fn is_ready(&self) -> bool {
+        [% if db_enabled %]
+        #[cfg(feature = "db")]
+        {
+            self.db.is_some()
+        }
+
+        #[cfg(not(feature = "db"))]
+        {
+            true
+        }
+        [% else %]
+        true
+        [% endif %]
+    }
+[% if db_enabled %]
+
+    #[cfg(feature = "db")]
+    pub fn db(&self) -> Option<&db::Db> {
+        self.db.as_ref()
+    }
+[% endif %]
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::<<[ module_name ]>>_core::APP_NAME;
+
+    #[test]
+    fn app_state_uses_current_version() {
+        assert_eq!(AppState::new().version().name, APP_NAME);
+    }
+}

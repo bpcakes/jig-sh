@@ -255,7 +255,8 @@ impl ToolForm {
                 confirmation,
                 ..
             } => {
-                new_passphrase.validate_new_vault_passphrase()?;
+                // The backend distinguishes a genuinely new credential from
+                // a retry completing a recorded passphrase change.
                 if !new_passphrase.matches(confirmation) {
                     return Err("New vault passphrase confirmation did not match.".to_owned());
                 }

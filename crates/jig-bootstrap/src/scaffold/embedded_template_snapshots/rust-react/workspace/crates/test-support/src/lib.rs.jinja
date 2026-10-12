@@ -1,0 +1,10 @@
+pub mod app;
+[% if db_enabled %]
+pub mod db;
+[% endif %]
+pub mod http;
+pub mod responses;
+
+// `self::` keeps these local even when the application crate shares a module name.
+pub use self::app::TestApp;
+pub use self::responses::TestResponse;

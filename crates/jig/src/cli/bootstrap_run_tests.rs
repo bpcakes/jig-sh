@@ -69,16 +69,23 @@ fn noninteractive_init_vault_error_names_init_and_its_escape_hatches() {
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("JIG_VAULT_PASSPHRASE is required"));
-    assert!(error.contains("`jig init`"));
+    assert!(error.contains("`jig init` cannot prompt for an initial vault passphrase"));
+    assert!(error.contains("not running from a terminal"));
+    assert!(!error.contains("--no-input"));
     assert!(error.contains("--no-vault"));
-    assert!(error.contains("export JIG_VAULT_PASSPHRASE"));
+    assert!(error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
+    assert!(!error.contains("export "));
 
     let no_input_error =
         BootstrapVaultPlan::resolve(Initialize, NoInput, Prompt, BootstrapVaultCommand::Adopt)
             .unwrap_err()
             .to_string();
     assert!(no_input_error.contains("`jig adopt --write`"));
+    assert!(no_input_error.contains("the exact command must omit --no-input"));
+    assert!(!no_input_error.contains("not running from a terminal"));
+    assert!(no_input_error.contains("--no-vault"));
+    assert!(no_input_error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
+    assert!(!no_input_error.contains("export "));
 }
 
 #[test]
@@ -164,6 +171,8 @@ fn invalid_go_module_fails_before_vault_capture_or_destination_writes() {
                     db: Some(bootstrap::ScaffoldDb::None),
                     frontends: vec![bootstrap::parse_scaffold_frontend("web").unwrap()],
                     frontend_list: Vec::new(),
+                    metrics: None,
+                    jobs: None,
                 },
                 template: None,
                 template_mode: None,
@@ -189,15 +198,65 @@ fn invalid_go_module_fails_before_vault_capture_or_destination_writes() {
 }
 
 #[test]
-fn pre_capture_rejects_short_new_vault_passphrase() {
+fn prepare_bootstrap_vault_leaves_no_reserved_variables_before_rendering() {
+    use BootstrapPassphraseAvailability::{Prompt, Unavailable};
+    use BootstrapVaultIntent::{Disabled, Initialize};
+
     let _env = lock_env();
-    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "short");
+    let _current = EnvVarGuard::remove("JIG_VAULT_PASSPHRASE");
+    // Neither plan reads a stale rotation value, so nothing is captured.
+    for (intent, mode, availability, expected) in [
+        (
+            Disabled,
+            BootstrapInputMode::NoInput,
+            Unavailable,
+            BootstrapVaultPlan::Disabled,
+        ),
+        (
+            Initialize,
+            BootstrapInputMode::Interactive,
+            Prompt,
+            BootstrapVaultPlan::CaptureAfterRender,
+        ),
+    ] {
+        let _new = EnvVarGuard::set("JIG_VAULT_NEW_PASSPHRASE", "test-only-reserved-new");
 
-    let error = runtime::capture_new_vault_passphrase()
-        .unwrap_err()
-        .to_string();
+        let plan = prepare_bootstrap_vault_with_availability(
+            intent,
+            mode,
+            availability,
+            BootstrapVaultCommand::Init,
+        )
+        .unwrap();
 
-    assert!(error.contains("at least 12 bytes"));
+        assert_eq!(plan, expected);
+        assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
+        assert!(std::env::var_os("JIG_VAULT_NEW_PASSPHRASE").is_none());
+    }
+}
+
+#[test]
+fn noninteractive_bootstrap_vault_error_explains_an_outer_withheld_passphrase() {
+    let _env = lock_env();
+    let _current = EnvVarGuard::remove("JIG_VAULT_PASSPHRASE");
+    let _new = EnvVarGuard::remove("JIG_VAULT_NEW_PASSPHRASE");
+    let _marker = EnvVarGuard::set(runtime::VAULT_PASSPHRASE_WITHHELD_ENV, "1");
+
+    let error = BootstrapVaultPlan::resolve(
+        BootstrapVaultIntent::Initialize,
+        BootstrapInputMode::NoInput,
+        BootstrapPassphraseAvailability::Unavailable,
+        BootstrapVaultCommand::Adopt,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("`jig adopt --write`"), "{error}");
+    assert!(
+        error.contains("outer Jig command withheld the vault passphrase"),
+        "{error}"
+    );
+    assert!(error.contains(runtime::VAULT_PASSPHRASE_OPERATOR_GUIDANCE));
 }
 
 #[test]
@@ -439,7 +498,7 @@ fn adopt_human_summary_includes_reviewable_next_steps() {
             "files_removed": [],
             "conflicts": [
                 {
-                    "path": ".agent/PLANS.md",
+                    "path": ".github/workflows/rust-tests.yml",
                     "detail": "destination differs from the rendered template-managed path"
                 }
             ]
@@ -462,9 +521,38 @@ fn adopt_human_summary_includes_reviewable_next_steps() {
     assert!(summary.contains("mode: preview"));
     assert!(summary.contains("managed files: 1 created, 0 modified, 0 removed"));
     assert!(summary.contains("stack: Rust workspace, SQLx"));
-    assert!(summary.contains(".agent/PLANS.md"));
+    assert!(summary.contains(".github/workflows/rust-tests.yml"));
     assert!(summary.contains("SQLx metadata directory was not detected"));
     assert!(summary.contains("Re-run jig adopt . --write"));
+}
+
+#[test]
+fn adopt_human_summary_preserves_detection_warnings_after_fifth() {
+    let output = serde_json::json!({
+        "render_mode": "preview",
+        "render_report": {
+            "files_created": [],
+            "files_modified": [],
+            "files_removed": []
+        },
+        "detection_report": {
+            "warnings": [
+                "Could not inspect the Rust workspace",
+                "Could not inspect the SQLx migrations",
+                "Could not inspect the frontend workspace",
+                "Could not inspect the package manager",
+                "Could not inspect the CI workflow",
+                "Review the unsupported GitHub runner before adoption"
+            ]
+        }
+    });
+
+    let summary = format_adopt_human_summary(&output);
+
+    assert!(summary.contains("warnings: 6"));
+    assert!(summary.contains("Could not inspect the Rust workspace"));
+    assert!(summary.contains("Review the unsupported GitHub runner before adoption"));
+    assert!(!summary.contains("and 1 more"));
 }
 
 #[test]
@@ -528,7 +616,7 @@ fn init_human_summary_includes_scaffold_and_next_steps() {
 }
 
 #[test]
-fn adopt_human_summary_includes_notes() {
+fn adopt_human_summary_includes_repository_notes_after_frontend_guidance() {
     let summary = format_adopt_human_summary(&json!({
         "render_mode": "preview",
         "destination": "/tmp/repo",
@@ -543,6 +631,15 @@ fn adopt_human_summary_includes_notes() {
         },
         "adoption_review": [],
         "notes": [
+            "The first scripts/jig command may install or compile a compatible Jig runtime into this repo's contract/profile cache.",
+            "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.",
+            "Re-run scripts/jig doctor after setup changes to confirm readiness.",
+            "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION.",
+            "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs.",
+            "Frontend checks expect package scripts for lint, typecheck, build:bundle, and test:coverage plus a package-manager lockfile; generated preset apps include them.",
+            "Frontend checks are available as scripts/jig check typescript-lint, typescript-typecheck, typescript-build, and typescript-coverage; select those relevant to the change.",
+            "Use scripts/jig check contract for harness wiring changes and scripts/jig check agent-guides for ownership guidance changes.",
+            "Preserved deprecated dev_command for migration; generated commands ignore it. Move that value into [dev] / [[dev.apps]] when ready.",
             "Existing .jig.toml had no [vault] block, so Jig added a new repo-scoped vault scope."
         ],
         "detection_report": {
@@ -552,6 +649,12 @@ fn adopt_human_summary_includes_notes() {
     }));
 
     assert!(summary.contains("notes:"));
+    assert!(summary.contains("Frontend checks are available"));
+    assert!(
+        summary.contains(
+            "Preserved deprecated dev_command for migration; generated commands ignore it."
+        )
+    );
     assert!(summary.contains("repo-scoped vault scope"));
 }
 
@@ -565,7 +668,7 @@ fn update_human_summary_reports_managed_file_counts() {
             "files_created": ["scripts/new-helper.sh"],
             "files_modified": ["scripts/jig", "scripts/install-jig.sh"],
             "files_removed": [],
-            "files_unchanged": [".mcp.json"],
+            "files_unchanged": [".agent/.cache/.gitignore"],
             "conflicts": []
         },
         "warnings": ["Embedded launcher templates will replace source-specific customizations."],

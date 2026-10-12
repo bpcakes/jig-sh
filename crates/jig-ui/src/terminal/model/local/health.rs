@@ -1,20 +1,22 @@
+use jig_dashboard::Remediation;
+
 use super::*;
 
 pub(super) fn health_items(
     failures: &[FailureView],
-    tools: &[ToolView],
+    targets: &[TargetView],
     loops: Option<&LoopObservation>,
 ) -> Vec<HealthItemView> {
     let mut items = failures
         .iter()
         .map(|failure| HealthItemView {
-            identity: format!("failure:{}", failure.id),
+            identity: failure.identity.clone(),
             section: "Recent failures",
-            primary: format!("{} exit {}", failure.tool, failure.exit_status),
-            secondary: format!("{} · {}", failure.ended_at, failure.display_id),
+            primary: format!("{} {}", failure.target, failure.outcome),
+            secondary: format!("{} · {}", failure.ended_at, failure.run_id),
             detail: failure_detail(failure),
         })
-        .chain(tools.iter().map(tool_health))
+        .chain(targets.iter().map(target_health))
         .collect::<Vec<_>>();
     if let Some(loops) = loops {
         items.push(loop_overview(loops));
@@ -104,24 +106,24 @@ fn loop_overview(loops: &LoopObservation) -> HealthItemView {
     }
 }
 
-fn tool_health(tool: &ToolView) -> HealthItemView {
+fn target_health(target: &TargetView) -> HealthItemView {
     HealthItemView {
-        identity: format!("tool:{}", tool.raw_tool),
+        identity: format!("target:{}", target.raw_target),
         section: "Check health",
-        primary: format!("{} {}", tool.tool, tool.last_status),
+        primary: format!("{} {}", target.target, target.last_status),
         secondary: format!(
             "{} runs · {} failures · avg {}",
-            tool.runs, tool.failures, tool.average
+            target.runs, target.failures, target.average
         ),
         detail: DetailDocument::new(
-            "Tool health",
+            "Target health",
             vec![
-                format!("Tool: {}", tool.tool),
-                format!("Last run: {}", tool.last_ended_at),
-                format!("Last status: {}", tool.last_status),
-                format!("Runs: {}", tool.runs),
-                format!("Failures: {}", tool.failures),
-                format!("Average duration: {}", tool.average),
+                format!("Target: {}", target.target),
+                format!("Last run: {}", target.last_ended_at),
+                format!("Last conclusion: {}", target.last_status),
+                format!("Runs: {}", target.runs),
+                format!("Failures: {}", target.failures),
+                format!("Average duration: {}", target.average),
             ],
         ),
     }
@@ -129,15 +131,12 @@ fn tool_health(tool: &ToolView) -> HealthItemView {
 
 fn failure_detail(failure: &FailureView) -> DetailDocument {
     let mut lines = vec![
-        format!("Receipt: {}", failure.display_id),
-        format!("Tool: {}", failure.tool),
-        format!("Exit: {}", failure.exit_status),
+        format!("Run: {}", failure.run_id),
+        format!("Target: {}", failure.target),
+        format!("Conclusion: {}", failure.outcome),
         format!("Ended: {}", failure.ended_at),
     ];
-    if let Some(plan) = &failure.display_plan_id {
-        lines.push(format!("Plan: {plan}"));
-    }
-    append_text(&mut lines, "Stderr", &failure.stderr);
+    append_text(&mut lines, "Output tail", &failure.output);
     DetailDocument::new("Failure detail", lines)
 }
 
@@ -318,16 +317,18 @@ fn occurrence_health(occurrence: &ScheduledOccurrence, section: &'static str) ->
         ),
         format!("Started: {}", nonzero_timestamp(occurrence.started_at_ms)),
     ];
-    push_optional(
-        &mut lines,
-        "Worker receipt",
-        occurrence.worker_receipt_id.as_deref(),
-    );
+    if occurrence.worker_invoked {
+        lines.push("Worker: invoked".into());
+    }
     push_optional(&mut lines, "Worktree", occurrence.worktree.as_deref());
     push_optional(&mut lines, "Error", occurrence.error.as_deref());
     if let Some(value) = occurrence.uses_shared_checkout {
         lines.push(format!("Shared checkout: {value}"));
     }
+    lines.push(field(
+        "Evidence",
+        &format!("scripts/jig loop show {}", occurrence.occurrence_id),
+    ));
     HealthItemView {
         identity: format!("occurrence:{section}:{}", occurrence.occurrence_id),
         section,
@@ -385,5 +386,38 @@ fn state_error_health(error: &LoopStateError, duplicate_ordinal: usize) -> Healt
                 field("Error", &error.error),
             ],
         ),
+    }
+}
+
+/// A producer recovery command shown as inert, shell-quoted text. The
+/// dashboard never executes it.
+struct RemediationView {
+    display: String,
+    inert_argv: String,
+}
+
+impl From<Remediation> for RemediationView {
+    fn from(remediation: Remediation) -> Self {
+        Self {
+            display: sanitize_text(&remediation.display),
+            inert_argv: remediation
+                .argv
+                .iter()
+                .map(|arg| quote_argument(&sanitize_text(arg)))
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+}
+
+fn quote_argument(argument: &str) -> String {
+    if !argument.is_empty()
+        && argument
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_@%+=:,./-".contains(character))
+    {
+        argument.to_string()
+    } else {
+        format!("'{}'", argument.replace('\'', "'\"'\"'"))
     }
 }

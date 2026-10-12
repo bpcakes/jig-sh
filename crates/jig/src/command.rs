@@ -1,45 +1,40 @@
 //! Runtime-facing command DTOs.
 //!
 //! CLI parsing stays in `cli`, and runtime execution stays in `runtime`.
-//! This module owns the neutral request shapes passed between them. Types that
-//! also back MCP tool arguments derive `Deserialize` here so both CLI and MCP
-//! paths reach runtime through the same request vocabulary. Command families
-//! live in sibling modules; this file is the public hub for runtime DTO imports.
+//! This module owns the neutral request shapes passed between them, so runtime
+//! code never depends on clap types. The CLI is the only producer of
+//! [`RuntimeCommand`]. Command families live in sibling modules; this file is
+//! the hub for runtime DTO imports.
 
 mod agent;
 mod check;
-mod loops;
 mod migration;
 mod proxy;
 mod repository_run;
 mod sqlx;
 mod state;
 mod vault;
-mod work;
 
 pub(crate) use agent::{AgentBootstrapRequest, AgentCommand};
 pub(crate) use check::{
-    AgentMapCommand, AgentMapRequest, CheckCommand, MigrationImmutabilityRequest,
+    AgentMapCommand, AgentMapRequest, CheckCommand, MigrationImmutabilityRequest, NamedCheck,
     RepositoryCheckRequest, SqlxTodoRequest,
 };
-pub(crate) use loops::{
+pub(crate) use jig_loops::{
     LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopCommand, LoopDispatchRequest,
-    LoopRunRequest, LoopStatusRequest, LoopTickRequest,
+    LoopRunRequest, LoopShowRequest, LoopStatusRequest, LoopTickRequest,
 };
 pub(crate) use migration::MigrationAddRequest;
 pub(crate) use proxy::{
-    DevCommand, DevRequest, DevStatusRequest, DevStopRequest, ProxyAliasRequest, ProxyCertCommand,
-    ProxyCertGenerateRequest, ProxyCertRuntimeRequest, ProxyCertTrustRequest,
+    DevCommand, DevRecoverRequest, DevRequest, DevStatusRequest, DevStopRequest, ProxyAliasRequest,
+    ProxyCertCommand, ProxyCertGenerateRequest, ProxyCertRuntimeRequest, ProxyCertTrustRequest,
     ProxyCertUntrustRequest, ProxyCommand, ProxyListRequest, ProxyPruneRequest, ProxyRunRequest,
     ProxyRuntimeOptions, ProxyServiceCommand, ProxyServiceInstallRequest,
     ProxyServiceRuntimeRequest, ProxyStartRequest, ProxyStopRequest,
 };
 pub(crate) use repository_run::RepositoryRunRequest;
 pub(crate) use sqlx::SqlxCommand;
-pub(crate) use state::{
-    StateArchiveRequest, StateCommand, StateCompactSessionsRequest, StateDiagnoseRequest,
-    StateExportReceiptsRequest, StateRestoreRequest,
-};
+pub(crate) use state::{StateArchiveRequest, StateCommand, StateRestoreRequest};
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyRequest, VaultBackupCommand, VaultBackupCreateRequest,
     VaultBackupRestoreRequest, VaultCommand, VaultExecAssignment, VaultExecEnvironment,
@@ -50,17 +45,11 @@ pub(crate) use vault::{
     VaultPassphraseCommand, VaultReadRequest, VaultRepoScope, VaultRunRequest, VaultRuntimeOptions,
     VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest, VaultSecretRemoveRequest,
     VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest, VaultTuiRequest,
-    is_valid_vault_scope_id,
-};
-pub(crate) use work::{
-    DEFAULT_REFINE_MAX_ITERATIONS, WorkAppendRequest, WorkCheckRequest, WorkCommand,
-    WorkDecisionRequest, WorkEvidenceRequest, WorkFinishRequest, WorkGatesRequest, WorkGoalRequest,
-    WorkReceiptsRequest, WorkRefineRequest, WorkReviewRequest, WorkStartRequest,
 };
 
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
-    Bootstrap(ToolRequest),
+    Bootstrap,
     Check(CheckCommand),
     Run(RepositoryRunRequest),
     MigrationAdd(MigrationAddRequest),
@@ -72,7 +61,6 @@ pub(crate) enum RuntimeCommand {
     #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
     Proxy(ProxyCommand),
     Agent(AgentCommand),
-    Work(WorkCommand),
     Loop(LoopCommand),
     State(StateCommand),
 }
@@ -93,93 +81,37 @@ impl RuntimeCommand {
 
         match self {
             Self::Run(_)
-            | Self::Bootstrap(_)
+            | Self::Bootstrap
             | Self::MigrationAdd(_)
             | Self::Sqlx(_)
             | Self::Agent(_) => Cooperative,
             Self::Check(command) => match command {
-                CheckCommand::Repository(_)
-                | CheckCommand::Fmt(_)
-                | CheckCommand::Lint(_)
-                | CheckCommand::Clippy(_)
-                | CheckCommand::Test(_)
-                | CheckCommand::TestLocked(_)
-                | CheckCommand::TypeScriptLint(_)
-                | CheckCommand::TypeScriptTypecheck(_)
-                | CheckCommand::TypeScriptBuild(_)
-                | CheckCommand::TypeScriptCoverage(_)
-                | CheckCommand::Sqlx(_)
-                | CheckCommand::Sqlc(_)
-                | CheckCommand::Schema(_)
-                | CheckCommand::Contract(_) => Cooperative,
+                CheckCommand::Repository(_) | CheckCommand::Named(_) => Cooperative,
                 CheckCommand::AgentMap(_)
                 | CheckCommand::AgentGuides
                 | CheckCommand::MigrationImmutability(_)
                 | CheckCommand::SqlxUncheckedNonTest => Native,
             },
-            Self::Work(command) => match command {
-                WorkCommand::Check(_)
-                | WorkCommand::Gates(_)
-                | WorkCommand::Evidence(_)
-                | WorkCommand::Review(_)
-                | WorkCommand::Refine(_)
-                | WorkCommand::Status
-                | WorkCommand::Finish(_) => Cooperative,
-                WorkCommand::Goal(_)
-                | WorkCommand::Start(_)
-                | WorkCommand::Append(_)
-                | WorkCommand::Decide(_)
-                | WorkCommand::Receipts(_) => Native,
-            },
             Self::Loop(command) => match command {
                 LoopCommand::Tick(_)
                 | LoopCommand::Dispatch(_)
                 | LoopCommand::Status(_)
+                | LoopCommand::Show(_)
                 | LoopCommand::Run(_)
                 | LoopCommand::ClearAttempt(_)
                 | LoopCommand::AcknowledgeOccurrence(_) => Cooperative,
             },
             Self::State(command) => match command {
                 StateCommand::Summary => Cooperative,
-                StateCommand::Diagnose(_)
-                | StateCommand::CompactSessions(_)
-                | StateCommand::Restore(_)
-                | StateCommand::ExportReceipts(_)
-                | StateCommand::Archive(_) => Native,
+                StateCommand::Diagnose | StateCommand::Restore(_) | StateCommand::Archive(_) => {
+                    Native
+                }
             },
             Self::AgentMap(_)
             | Self::GenerateSqlxUncheckedQueriesTodo(_)
             | Self::Dev(_)
             | Self::Proxy(_) => Native,
         }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ToolRequest {
-    plan_id: Option<String>,
-    record_receipt: bool,
-}
-
-impl Default for ToolRequest {
-    fn default() -> Self {
-        Self {
-            plan_id: None,
-            record_receipt: true,
-        }
-    }
-}
-
-impl ToolRequest {
-    pub(crate) const fn new(plan_id: Option<String>, record_receipt: bool) -> Self {
-        Self {
-            plan_id,
-            record_receipt,
-        }
-    }
-
-    pub(crate) fn into_parts(self) -> (Option<String>, bool) {
-        (self.plan_id, self.record_receipt)
     }
 }
 
@@ -193,27 +125,12 @@ mod tests {
     fn unsupported_observer_paths_keep_native_signal_handling() {
         let native_commands = [
             RuntimeCommand::Check(CheckCommand::AgentGuides),
-            RuntimeCommand::Work(WorkCommand::Receipts(WorkReceiptsRequest {
-                session_id: None,
-                plan_id: None,
-                tool_name: None,
-                failed_only: false,
-                limit: 10,
-            })),
-            RuntimeCommand::State(StateCommand::Diagnose(StateDiagnoseRequest { deep: true })),
-            RuntimeCommand::State(StateCommand::CompactSessions(StateCompactSessionsRequest {
-                dry_run: true,
-            })),
+            RuntimeCommand::State(StateCommand::Diagnose),
             RuntimeCommand::State(StateCommand::Restore(StateRestoreRequest {
                 backup: PathBuf::from("backup"),
             })),
-            RuntimeCommand::State(StateCommand::ExportReceipts(StateExportReceiptsRequest {
-                before: "2026-01-01".into(),
-                output: PathBuf::from("receipts.json"),
-            })),
             RuntimeCommand::State(StateCommand::Archive(StateArchiveRequest {
                 before: "2026-01-01".into(),
-                include_runs: true,
                 dry_run: true,
             })),
         ];
@@ -226,8 +143,7 @@ mod tests {
     #[test]
     fn command_backed_and_cancellable_scans_use_cooperative_signals() {
         let cooperative_commands = [
-            RuntimeCommand::Check(CheckCommand::Test(ToolRequest::default())),
-            RuntimeCommand::Work(WorkCommand::Status),
+            RuntimeCommand::Check(CheckCommand::Named(NamedCheck::TEST)),
             RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
             RuntimeCommand::Loop(LoopCommand::ClearAttempt(LoopClearAttemptRequest {
                 workflow: "ExampleProject".into(),

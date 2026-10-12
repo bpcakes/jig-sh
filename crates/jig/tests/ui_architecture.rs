@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use jig_ui::dashboard::{
-    DEFAULT_TIMELINE_ROWS, LIMIT_SPECS, PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS,
+use jig_dashboard::{
+    DEFAULT_TIMELINE_ROWS, LIMIT_SPECS, RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION,
     SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
 };
 
@@ -73,7 +73,8 @@ fn production_tree_contains_no_http_surface() {
         );
     }
 
-    let dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    let mut dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    dashboard_source.push_str(&read_rust_tree(&root.join("crates/jig-dashboard/src")));
     let mut cli_source = fs::read_to_string(root.join("crates/jig/src/ui.rs")).unwrap();
     cli_source.push_str(&read_rust_tree(&root.join("crates/jig/src/ui")));
     cli_source.push_str(&fs::read_to_string(root.join("crates/jig/src/status.rs")).unwrap());
@@ -99,7 +100,7 @@ fn external_status_subsystem_is_absent() {
     for relative in [
         "crates/jig-contract/src/status_provider.rs",
         "crates/jig-contract/contracts/status-provider",
-        "crates/jig/src/context/status_config.rs",
+        "crates/jig-context/src/status_config.rs",
         "crates/jig/src/status/summary.rs",
         "crates/jig-ui/src/terminal/model/package_detail.rs",
         "crates/jig-ui/src/terminal/model/typed.rs",
@@ -113,7 +114,8 @@ fn external_status_subsystem_is_absent() {
         );
     }
 
-    let dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    let mut dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    dashboard_source.push_str(&read_rust_tree(&root.join("crates/jig-dashboard/src")));
     let mut status_source = fs::read_to_string(root.join("crates/jig/src/status.rs")).unwrap();
     status_source.push_str(&read_rust_tree(&root.join("crates/jig/src/status")));
     for forbidden in [
@@ -186,16 +188,18 @@ fn assert_no_retired_dashboard_guidance(documents: &[(&str, String)]) {
 
 fn assert_human_dashboard_guidance(documents: &[(&str, String)]) {
     let readme = document(documents, "README.md");
-    assert!(readme.contains("Status, Work, Timeline, and Health"));
+    assert!(readme.contains("Status, Timeline, and Health"));
     assert!(readme.contains("docs/developer-ux.md#terminal-dashboard"));
 
     let developer_ux = document(documents, "docs/developer-ux.md");
     assert!(developer_ux.contains("## Terminal Dashboard"));
     assert!(developer_ux.contains("108 by 24"));
-    assert!(developer_ux.contains("may stop parsing in 0.4.0"));
+    assert!(developer_ux.contains("may stop parsing in a later release"));
     assert!(developer_ux.contains("public-contract.md#dashboard-and-status-output"));
     assert!(developer_ux.contains("one cancellable worker"));
-    assert!(developer_ux.contains("schema version 2"));
+    assert!(developer_ux.contains(&format!(
+        "recorder JSON document uses schema version {RECORDER_SCHEMA_VERSION}"
+    )));
 
     let repo_intent = document(documents, "docs/repo-intent.md");
     assert!(repo_intent.contains("no replacement server or HTTP compatibility layer"));
@@ -210,15 +214,15 @@ fn assert_machine_dashboard_contract(public_contract: &str) {
         .split_once("\n## ")
         .unwrap()
         .0;
-    assert!(
-        dashboard_contract.contains("`snapshot_kind` is the string `\"recorder\"` or `\"plan\"`")
-    );
+    assert!(dashboard_contract.contains(&format!(
+        "`schema_version` is the unsigned integer `{RECORDER_SCHEMA_VERSION}`"
+    )));
     assert!(public_contract.contains("contract version 7"));
     assert!(
         dashboard_contract.contains(&format!("defaults to {DEFAULT_TIMELINE_ROWS}")),
         "dashboard contract must match the default timeline size"
     );
-    for fields in [RECORDER_ROOT_FIELDS, PLAN_ROOT_FIELDS, STATUS_ROOT_FIELDS] {
+    for fields in [RECORDER_ROOT_FIELDS, STATUS_ROOT_FIELDS] {
         let ordered_fields = fields
             .iter()
             .map(|field| format!("`{field}`"))

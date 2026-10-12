@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn scheduled_worker_observes_its_published_running_claim_before_start() {
@@ -42,7 +44,7 @@ fn scheduled_pr_manager_rejects_corrupt_branch_authority_before_claiming() {
     fs::write(authority.join("branch_leases.json"), b"{").unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let output = crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+    let output = jig_loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
 
     assert_eq!(output["status"], "failed", "{output:#}");
     assert_eq!(output["due_count"], 1, "{output:#}");
@@ -88,7 +90,7 @@ fn manual_pr_manager_rejects_corrupt_branch_authority_before_claiming() {
 
 #[cfg(unix)]
 #[test]
-fn scheduled_lease_failure_preserves_worker_receipt_and_retained_worktree() {
+fn scheduled_lease_failure_preserves_worker_invocation_and_retained_worktree() {
     use std::time::{Duration, Instant};
 
     use fs4::fs_std::FileExt;
@@ -145,7 +147,7 @@ printf 'task complete\n'
     let occurrence = &output["actions"][0]["occurrence"];
     assert_eq!(output["status"], "failed", "{output:#}");
     assert_eq!(occurrence["status"], "needs_attention", "{output:#}");
-    assert!(occurrence["worker_receipt_id"].is_string(), "{output:#}");
+    assert_eq!(occurrence["worker_invoked"], true, "{output:#}");
     let worktree = occurrence["worktree"]
         .as_str()
         .expect("cancelled isolated worker must retain its worktree");
@@ -159,16 +161,15 @@ printf 'task complete\n'
     assert!(
         output["actions"][0]["tick"]["release_warning"]
             .as_str()
-            .is_some_and(|error| error.contains(
-                "Loop state migration marker exists without protected state"
-            )),
+            .is_some_and(|error| error
+                .contains("Loop state migration marker exists without protected state")),
         "{output:#}"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn scheduled_codex_start_failure_links_retry_receipt_without_consuming_occurrence() {
+fn scheduled_codex_start_failure_keeps_worker_evidence_without_consuming_occurrence() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -181,20 +182,19 @@ fn scheduled_codex_start_failure_links_retry_receipt_without_consuming_occurrenc
 
     assert_eq!(output["ok"], false, "{output:#}");
     assert_eq!(
-        output["actions"][0]["reason"],
-        "pre_execution_error",
+        output["actions"][0]["reason"], "pre_execution_error",
         "{output:#}"
     );
     assert_eq!(output["actions"][0]["retryable"], true, "{output:#}");
     assert_eq!(
-        output["actions"][0]["occurrence_state_persisted"],
-        false,
+        output["actions"][0]["occurrence_state_persisted"], false,
         "{output:#}"
     );
-    let worker_receipt = output["actions"][0]["tick"]["actions"][0]["worker_receipt_id"]
-        .as_str()
-        .expect("pre-start worker failure must link its diagnostic receipt");
-    assert!(worker_receipt.starts_with("receipt_"));
+    let worker = &output["actions"][0]["tick"]["actions"][0]["worker"];
+    assert_eq!(
+        worker["status"], "error",
+        "pre-start worker failure keeps its evidence: {output:#}"
+    );
     let checkout = &output["actions"][0]["tick"]["actions"][0]["checkout"];
     assert_eq!(checkout["retained"], false, "{output:#}");
     let removed = checkout["path"]
@@ -230,8 +230,7 @@ printf 'task complete\n'
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
     let attempts_path = temp.path().join(".git/jig/loop/attempts.json");
-    let _attempts_path =
-        EnvVarGuard::set("JIG_TEST_ATTEMPTS_PATH", attempts_path.as_os_str());
+    let _attempts_path = EnvVarGuard::set("JIG_TEST_ATTEMPTS_PATH", attempts_path.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = dispatch_loop(&ctx);
@@ -242,7 +241,7 @@ printf 'task complete\n'
     assert_eq!(output["state_errors"][0]["kind"], "attempts", "{output:#}");
     assert_eq!(action["status"], "succeeded", "{output:#}");
     assert_eq!(occurrence["status"], "succeeded", "{output:#}");
-    assert!(occurrence["worker_receipt_id"].is_string(), "{output:#}");
+    assert_eq!(occurrence["worker_invoked"], true, "{output:#}");
     let worktree = occurrence["worktree"]
         .as_str()
         .expect("successful dirty worker must retain its worktree");
@@ -379,11 +378,14 @@ fn missing_durable_ledger_behind_migration_marker_blocks_worker_launch() {
         error.contains("migration marker exists without durable state"),
         "{error}"
     );
-    assert!(!marker.exists(), "worker must not start without a durable claim");
+    assert!(
+        !marker.exists(),
+        "worker must not start without a durable claim"
+    );
 }
 
 #[cfg(unix)]
-fn configure_scheduled_task(
+pub(super) fn configure_scheduled_task(
     temp: &tempfile::TempDir,
     id: &str,
     extra_config: &str,

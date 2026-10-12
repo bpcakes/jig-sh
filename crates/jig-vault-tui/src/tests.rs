@@ -1017,7 +1017,7 @@ fn short_initialization_passphrase_is_rejected_without_consuming_either_input() 
     assert_eq!(confirmation.len(), "too-short".len());
     assert_eq!(
         app.status.as_ref().unwrap().text,
-        "New vault passphrases must contain at least 12 bytes."
+        jig_vault::NEW_VAULT_PASSPHRASE_POLICY
     );
 }
 
@@ -2066,7 +2066,7 @@ fn platform_capabilities_gate_private_output_without_disabling_portable_actions(
     assert_eq!(
         UiCommand::RestoreBackup
             .availability_with_capabilities(&absent, PlatformCapabilities::PORTABLE_ONLY),
-        CommandAvailability::Disabled("Restore is currently supported only on Linux.")
+        CommandAvailability::Disabled("Restore is currently supported only on Linux and macOS.")
     );
 }
 
@@ -2430,7 +2430,7 @@ fn passphrase_form_emits_metadata_only_action() {
     assert!(matches!(action, VaultAction::ChangePassphrase { .. }));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn absent_restore_form_protects_passphrase_and_requires_restore_text() {
     let mut app = App::new(descriptor(false));

@@ -24,12 +24,12 @@ fn status_distinguishes_vault_home_lifecycle_without_creating_it() {
 }
 
 #[test]
-fn passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
+fn v2_passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     let old = passphrase();
     let new = SecretString::from("new correct horse battery staple".to_owned());
-    store.init(&old).unwrap();
+    init_v2(&store, &old);
     store
         .apply_field_batch(
             &old,
@@ -66,8 +66,12 @@ fn passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
         )
         .unwrap(),
     );
-    let state_plaintext =
-        Zeroizing::new(opened.state.serialize_for_version(FORMAT_VERSION).unwrap());
+    let state_plaintext = Zeroizing::new(
+        opened
+            .state
+            .serialize_for_version(V2_FORMAT_VERSION)
+            .unwrap(),
+    );
     let state_nonce = crate::crypto::random_array::<NONCE_LEN>().unwrap();
     legacy_policy_file.state_nonce_b64 = B64.encode(state_nonce);
     legacy_policy_file.state_b64 = B64.encode(
@@ -92,7 +96,7 @@ fn passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
     let before_state = Zeroizing::new(
         before_open
             .state
-            .serialize_for_version(FORMAT_VERSION)
+            .serialize_for_version(V2_FORMAT_VERSION)
             .unwrap(),
     );
     drop(before_open);
@@ -104,7 +108,7 @@ fn passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
     let after_state = Zeroizing::new(
         after_open
             .state
-            .serialize_for_version(FORMAT_VERSION)
+            .serialize_for_version(V2_FORMAT_VERSION)
             .unwrap(),
     );
     assert_eq!(after_open.dek.as_ref(), before_dek.as_ref());
@@ -119,6 +123,8 @@ fn passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
         after_file.header.created_at_ms,
         before_file.header.created_at_ms
     );
+    assert_eq!(after_file.header.version, V2_FORMAT_VERSION);
+    assert_eq!(after_file.header.generation, None);
     assert_eq!(
         serde_json::to_value(&after_file.header.kdf).unwrap(),
         serde_json::to_value(KdfParams::default()).unwrap()
@@ -154,11 +160,14 @@ fn rejected_passphrase_changes_leave_vault_and_audit_bytes_unchanged() {
     let before_vault = store.read_vault_text().unwrap().unwrap();
     let before_audit = store.read_audit_text().unwrap().unwrap();
 
-    let short = SecretString::from("too-short".to_owned());
-    let error = store.change_passphrase(&old, &short).unwrap_err();
-    assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
-    assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
+    for rejected in ["too-short", "passwordpasswordpassword"] {
+        let rejected = SecretString::from(rejected.to_owned());
+        let error = store.change_passphrase(&old, &rejected).unwrap_err();
+        assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
+        assert_eq!(error.message(), crate::NEW_VAULT_PASSPHRASE_POLICY);
+        assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
+        assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
+    }
 
     let wrong = SecretString::from("wrong current passphrase".to_owned());
     let replacement = SecretString::from("valid replacement passphrase".to_owned());
@@ -176,12 +185,12 @@ fn rejected_passphrase_changes_leave_vault_and_audit_bytes_unchanged() {
 }
 
 #[test]
-fn passphrase_change_save_failure_leaves_old_envelope_and_leading_intent() {
+fn v2_passphrase_change_save_failure_leaves_old_envelope_and_leading_intent() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     let old = passphrase();
     let new = SecretString::from("replacement passphrase after fault".to_owned());
-    store.init(&old).unwrap();
+    init_v2(&store, &old);
     let before_vault = store.read_vault_text().unwrap().unwrap();
     store.fail_next_vault_write_for_test();
 
@@ -216,7 +225,7 @@ fn passphrase_preflight_is_noncreating_and_rejects_version_one() {
     let before_audit = store.read_audit_text().unwrap().unwrap();
     let error = Vault::preflight_passphrase_change(home).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert!(error.to_string().contains("migrate --to 2"));
+    assert!(error.to_string().contains("migrate --to 3"));
     assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
     assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
 }
@@ -291,6 +300,53 @@ fn vault_bound_private_output_precondition_rechecks_namespace_ownership() {
     .install()
     .unwrap();
     assert_eq!(std::fs::read(destination).unwrap(), b"MODE=production\n");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn private_outputs_below_an_inheriting_parent_carry_no_acl_entries() {
+    use crate::acl::test_support::{has_acl_entries, inheriting_read_directory};
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let shared = inheriting_read_directory(&std::fs::canonicalize(temp.path()).unwrap());
+    let vault = Vault::resolve_for_test(Some(shared.join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+    let reference = VaultReference::parse("jig://Production/TOKEN").unwrap();
+    vault
+        .set_field(
+            &passphrase(),
+            reference.clone(),
+            FieldKind::Concealed,
+            SecretBytes::new(b"acl-export-sentinel".to_vec()),
+        )
+        .unwrap();
+
+    let exported = shared.join("exported.bin");
+    vault
+        .read_field_to_file(&passphrase(), reference, &exported, false)
+        .unwrap();
+    let destination = shared.join("generated.env");
+    let precondition = vault.preview_private_output(&destination).unwrap();
+    crate::PreparedPrivateFile::prepare_if_unchanged(
+        precondition,
+        SecretBytes::new(b"TOKEN=jig://Production/TOKEN\n".to_vec()),
+        false,
+    )
+    .unwrap()
+    .install()
+    .unwrap();
+    let backup = shared.join("vault.backup");
+    let request =
+        Vault::preflight_backup_create(vault.root().to_path_buf(), &backup, false).unwrap();
+    Vault::create_backup(&passphrase(), request).unwrap();
+
+    assert_eq!(std::fs::read(&exported).unwrap(), b"acl-export-sentinel");
+    for path in [exported, destination, backup] {
+        assert!(path.is_file(), "{}", path.display());
+        assert!(!has_acl_entries(&path), "{}", path.display());
+    }
 }
 
 #[cfg(unix)]

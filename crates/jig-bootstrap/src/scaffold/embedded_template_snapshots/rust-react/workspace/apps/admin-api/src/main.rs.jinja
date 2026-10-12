@@ -1,0 +1,67 @@
+use std::process::ExitCode;
+
+use ::<<[ module_name ]>> as app_crate;
+use ::<<[ module_name ]>>_admin_http as admin_http_crate;
+use ::<<[ module_name ]>>_runtime as runtime;
+use anyhow::Context;
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    load_dotenv();
+    init_tracing();
+    install_panic_hook();
+
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(error = ?error, "admin API server failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn load_dotenv() {
+    match dotenvy::dotenv() {
+        Ok(_) => {}
+        Err(dotenvy::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!("warning: failed to load .env: {error}"),
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
+    if let Some(argument) = std::env::args_os().nth(1) {
+        anyhow::bail!("unexpected admin API argument {argument:?}");
+    }
+    let config = app_crate::AppConfig::from_env().context("Failed to load application config")?;
+    // Replace DenyAllAdminAuthorizer with the application's real authorizer.
+    runtime::serve(config, |state, admission, readiness| {
+        admin_http_crate::assemble(
+            state,
+            admin_http_crate::DenyAllAdminAuthorizer,
+            admission,
+            readiness,
+        )
+    })
+    .await
+}
+
+fn init_tracing() {
+    #[allow(clippy::useless_concat)]
+    let default_filter = concat!(
+        // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
+        "<<[ module_name ]>>=info,",
+        "<<[ module_name ]>>_admin_api=info,",
+        "batter=info,batter_axum=info",
+    );
+    tracing_subscriber::fmt()
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| default_filter.into()))
+        .init();
+}
+
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        tracing::error!(panic = %panic_info, "application panic");
+        default_hook(panic_info);
+    }));
+}

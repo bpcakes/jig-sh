@@ -1,22 +1,22 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
+use jig_context::RepoContext;
 use jig_contract::{
     ActionRunner, ActionSpec, ComparisonPreparationV1, Finding, FindingLocation, FindingSeverity,
     ManifestTool, NativeActionResult, NativeToolKind, PolicyPreparationV1, PreparedNativeInputV1,
     RunConclusion, TargetId,
 };
-use serde::Serialize;
-use serde_json::{Value, json};
-
-use crate::context::RepoContext;
 #[cfg(test)]
-use crate::execution::NoopExecutionObserver;
-use crate::execution::{
+use jig_execution::NoopExecutionObserver;
+use jig_execution::{
     ExecutionCommandError, ExecutionControl, ExecutionPhase, PhasePosition,
     SupervisedExecutionError, run_supervised_execution_command,
 };
-use crate::policy::NativeToolOutput;
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use jig_policy::NativeToolOutput;
 
 pub(super) struct NativeActionContext<'a> {
     pub(super) repository: &'a RepoContext,
@@ -25,7 +25,6 @@ pub(super) struct NativeActionContext<'a> {
     pub(super) cancelled: &'a dyn Fn() -> bool,
     pub(super) run_id: &'a str,
     pub(super) target: &'a TargetId,
-    pub(super) work_plan_id: Option<&'a str>,
 }
 
 pub(super) fn run_prepared_native_action(
@@ -59,7 +58,6 @@ pub(super) fn run_prepared_native_action(
         "comparison": prepared.comparison,
         "run_id": context.run_id,
         "target": context.target,
-        "work_plan_id": context.work_plan_id,
         "repository_contract_version": context.repository.contract_version(),
     });
     if let PolicyPreparationV1::InvalidPolicy {
@@ -103,13 +101,15 @@ pub(super) fn run_prepared_native_action(
             Some(evidence),
         ));
     }
-    super::file_budget::execute_prepared_file_budget(super::file_budget::FileBudgetEngineContext {
-        repository: context.repository,
-        prepared_input: context.prepared_input,
-        deadline: context.deadline,
-        cancelled: context.cancelled,
-        mode: super::file_budget::FileBudgetEvaluationMode::Check,
-    })
+    jig_repository::file_budget::execute_prepared_file_budget(
+        jig_repository::file_budget::FileBudgetEngineContext {
+            repository: context.repository,
+            prepared_input: context.prepared_input,
+            deadline: context.deadline,
+            cancelled: context.cancelled,
+            mode: jig_repository::file_budget::FileBudgetEvaluationMode::Check,
+        },
+    )
 }
 
 fn native_terminal_result(
@@ -150,119 +150,32 @@ fn native_result(
         findings,
         finding_count,
         evidence,
-        evaluated_at_ms: crate::state::now_ms(),
+        evaluated_at_ms: jig_state::now_ms(),
         valid_until_ms: None,
     }
 }
-use crate::repository::RepositoryCatalog;
-use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
-use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
+use jig_commands::tool_defs::{args, kind, tool};
+use jig_repository::RepositoryCatalog;
 
 mod failure;
 
 pub(in crate::runtime) use failure::manifest_tool_result_failure;
 use failure::tool_failure_message;
 
-pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    request: crate::command::ToolRequest,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    let (plan_id, record_receipt) = request.into_parts();
-    execute_manifest_tool_with_observer(ctx, tool_name, args, plan_id, record_receipt, observer)
-}
-
-pub(super) fn call_manifest_tool_with_observer(
-    ctx: &RepoContext,
-    tool: &ManifestTool,
-    args_obj: &JsonObject,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    let plan_id = string_arg(args_obj, args::PLAN_ID);
-    let args = tool_defs::execution_tool_args(tool, args_obj)?;
-
-    // MCP execution tools are evidence-producing by design; the CLI-only
-    // --no-receipt escape hatch is intentionally not part of the tool schema.
-    execute_manifest_tool_with_observer(ctx, &tool.name, args, plan_id, true, observer)
-}
-
 pub(super) fn execute_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
-    plan_id: Option<String>,
-    record_receipt: bool,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    execute_manifest_tool_with_options(
+    execute_manifest_tool_with_boundary(
         ctx,
         tool_name,
         args,
-        plan_id,
-        ManifestToolExecutionOptions::fail_fast(record_receipt, true, true),
-        PhasePosition::single(),
+        ManifestToolExecutionBoundary::single(),
         observer,
     )?
     .into_value()
-}
-
-#[cfg(test)]
-pub(super) fn execute_manifest_tool_result_without_worktree_fingerprint(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    plan_id: Option<String>,
-) -> Result<Value> {
-    execute_manifest_tool_with_options(
-        ctx,
-        tool_name,
-        args,
-        plan_id,
-        ManifestToolExecutionOptions::collect_result(true, false, false),
-        PhasePosition::single(),
-        &mut NoopExecutionObserver,
-    )?
-    .into_value()
-}
-
-pub(super) fn execute_manifest_tool_with_options_for_work_check(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    plan_id: Option<String>,
-    position: PhasePosition,
-    observer: &mut dyn ExecutionControl,
-) -> Result<ManifestToolExecutionOutcome> {
-    execute_manifest_tool_with_options(
-        ctx,
-        tool_name,
-        args,
-        plan_id,
-        ManifestToolExecutionOptions::collect_result(true, false, false),
-        position,
-        observer,
-    )
-}
-
-pub(super) fn execute_manifest_tool_without_lease_wait_for_work_check(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    plan_id: Option<String>,
-    position: PhasePosition,
-    observer: &mut dyn ExecutionControl,
-) -> Result<ManifestToolExecutionOutcome> {
-    execute_manifest_tool_with_options(
-        ctx,
-        tool_name,
-        args,
-        plan_id,
-        ManifestToolExecutionOptions::collect_result_without_lease_wait(true, false, false),
-        position,
-        observer,
-    )
 }
 
 pub(super) enum ManifestToolExecutionOutcome {
@@ -275,14 +188,10 @@ impl ManifestToolExecutionOutcome {
         match self {
             Self::Completed(value) => Ok(value),
             Self::Cancelled(value) => {
-                let mut message = manifest_tool_result_failure(&value)?.map_or_else(
+                let message = manifest_tool_result_failure(&value)?.map_or_else(
                     || "Tool execution was cancelled".to_string(),
                     |(_, message)| message,
                 );
-                if let Some(receipt_id) = value.get("receipt_id").and_then(Value::as_str) {
-                    message.push_str("\nreceipt: ");
-                    message.push_str(receipt_id);
-                }
                 bail!("{message}")
             }
         }
@@ -298,99 +207,33 @@ pub(in crate::runtime) fn undeclared_tool_message(ctx: &RepoContext, tool_name: 
 }
 
 #[derive(Clone, Copy)]
-enum ToolFailureMode {
-    FailFast,
-    CollectResult,
+struct ManifestToolExecutionBoundary<'a> {
+    position: PhasePosition,
+    expected_authority_digest: Option<&'a str>,
 }
 
-#[derive(Clone, Copy)]
-struct ManifestToolExecutionOptions {
-    record_receipt: bool,
-    collect_git_metadata: bool,
-    collect_worktree_fingerprint: bool,
-    failure_mode: ToolFailureMode,
-    lease_contention: LeaseContention,
-}
-
-#[derive(Clone, Copy)]
-enum LeaseContention {
-    Wait,
-    Reject,
-}
-
-impl LeaseContention {
-    fn acquire(
-        self,
-        ctx: &RepoContext,
-        effects: &[jig_contract::ActionEffect],
-    ) -> Result<crate::state::RepositoryExecutionLease> {
-        match self {
-            Self::Wait => crate::state::acquire_repository_execution_lease(ctx, effects),
-            Self::Reject => {
-                crate::state::acquire_repository_execution_lease_without_wait(ctx, effects)
-            }
-        }
-    }
-}
-
-impl ManifestToolExecutionOptions {
-    const fn fail_fast(
-        record_receipt: bool,
-        collect_git_metadata: bool,
-        collect_worktree_fingerprint: bool,
-    ) -> Self {
+impl ManifestToolExecutionBoundary<'_> {
+    fn single() -> Self {
         Self {
-            record_receipt,
-            collect_git_metadata,
-            collect_worktree_fingerprint,
-            failure_mode: ToolFailureMode::FailFast,
-            lease_contention: LeaseContention::Wait,
-        }
-    }
-
-    const fn collect_result(
-        record_receipt: bool,
-        collect_git_metadata: bool,
-        collect_worktree_fingerprint: bool,
-    ) -> Self {
-        Self {
-            record_receipt,
-            collect_git_metadata,
-            collect_worktree_fingerprint,
-            failure_mode: ToolFailureMode::CollectResult,
-            lease_contention: LeaseContention::Wait,
-        }
-    }
-
-    const fn collect_result_without_lease_wait(
-        record_receipt: bool,
-        collect_git_metadata: bool,
-        collect_worktree_fingerprint: bool,
-    ) -> Self {
-        Self {
-            record_receipt,
-            collect_git_metadata,
-            collect_worktree_fingerprint,
-            failure_mode: ToolFailureMode::CollectResult,
-            lease_contention: LeaseContention::Reject,
+            position: PhasePosition::single(),
+            expected_authority_digest: None,
         }
     }
 }
 
-fn execute_manifest_tool_with_options(
+fn execute_manifest_tool_with_boundary(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
-    plan_id: Option<String>,
-    options: ManifestToolExecutionOptions,
-    position: PhasePosition,
+    boundary: ManifestToolExecutionBoundary<'_>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
-    let current = if ctx.contract_version() >= 6 {
+    let current = if ctx.contract_version() >= 6 || boundary.expected_authority_digest.is_some() {
         super::refreshed_repository_context(ctx)?
     } else {
         ctx.clone()
     };
+    ensure_expected_execution_authority(&current, boundary.expected_authority_digest)?;
     let tool = current
         .tool_spec(tool_name)
         .cloned()
@@ -402,9 +245,7 @@ fn execute_manifest_tool_with_options(
                 "Contract-v6 tool '{tool_name}' does not resolve to a repository action through legacy_aliases"
             );
         }
-        return execute_v6_action_alias(
-            current, tool_name, args, plan_id, options, position, observer,
-        );
+        return execute_v6_action_alias(current, tool_name, args, boundary, observer);
     }
     if let Some(error) = jig_features::tool_admission_error(&current, tool_name) {
         bail!(error);
@@ -419,9 +260,7 @@ fn execute_manifest_tool_with_options(
                 timeout_seconds: None,
             },
             args,
-            plan_id,
-            options,
-            position,
+            boundary.position,
             observer,
         ),
         kind::COMMAND => {
@@ -442,9 +281,7 @@ fn execute_manifest_tool_with_options(
                     timeout: current.command_timeout().duration(),
                 },
                 args,
-                plan_id,
-                options,
-                position,
+                boundary.position,
                 observer,
             )
         }
@@ -456,9 +293,7 @@ fn execute_v6_action_alias(
     mut current: RepoContext,
     tool_name: &str,
     args: Value,
-    plan_id: Option<String>,
-    options: ManifestToolExecutionOptions,
-    position: PhasePosition,
+    boundary: ManifestToolExecutionBoundary<'_>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
     loop {
@@ -469,11 +304,15 @@ fn execute_v6_action_alias(
         // effects. The authority can change while this blocks, so this lease is
         // only admission to a second resolution below, not permission to run
         // the action value resolved above.
-        let repository_execution = options
-            .lease_contention
-            .acquire(&current, &action.effects)?;
+        let repository_execution =
+            super::run_execution::acquire_observed_repository_execution_lease(
+                &current,
+                &action.effects,
+                observer,
+            )?;
 
         let refreshed = super::refreshed_repository_context(&current)?;
+        ensure_expected_execution_authority(&refreshed, boundary.expected_authority_digest)?;
         let tool = refreshed
             .tool_spec(tool_name)
             .cloned()
@@ -495,13 +334,26 @@ fn execute_v6_action_alias(
             &tool,
             action,
             normalized,
-            plan_id,
-            options,
-            position,
+            boundary.position,
             observer,
             repository_execution,
         );
     }
+}
+
+fn ensure_expected_execution_authority(
+    current: &RepoContext,
+    expected_authority_digest: Option<&str>,
+) -> Result<()> {
+    if let Some(expected) = expected_authority_digest
+        && current.contract_digest() != expected
+    {
+        bail!(
+            "repository execution authority changed after phase selection (expected {expected}, current {}); select again",
+            current.contract_digest()
+        );
+    }
+    Ok(())
 }
 
 fn bind_alias_arguments(
@@ -521,7 +373,7 @@ fn bind_alias_arguments(
     {
         return Ok(args);
     }
-    Ok(json!(crate::repository::arguments::bind(
+    Ok(json!(jig_repository::arguments::bind(
         ctx.contract_version(),
         action,
         serde_json::from_value(args)?
@@ -546,9 +398,10 @@ fn validate_action_admission(
 ) -> Result<()> {
     let admission_name = match &action.runner {
         ActionRunner::Native { operation, .. } => operation.as_str(),
-        ActionRunner::Command { .. } | ActionRunner::Shell { .. } | ActionRunner::Argv { .. } => {
-            tool_name
-        }
+        ActionRunner::Command { .. }
+        | ActionRunner::Shell { .. }
+        | ActionRunner::Argv { .. }
+        | ActionRunner::RustNextestV1 { .. } => tool_name,
     };
     if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
         bail!(error);
@@ -562,13 +415,17 @@ fn execute_action_alias(
     tool: &ManifestTool,
     action: ActionSpec,
     args: Value,
-    plan_id: Option<String>,
-    options: ManifestToolExecutionOptions,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
-    repository_execution: crate::state::RepositoryExecutionLease,
+    repository_execution: jig_state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
+    if !action.resources.is_empty() {
+        return resource_alias::execute(ctx, tool, action, args, observer, repository_execution);
+    }
     let outcome = match action.runner {
+        ActionRunner::RustNextestV1 { .. } => bail!(
+            "typed Rust actions require a prepared repository target; legacy tool aliases are unsupported"
+        ),
         ActionRunner::Argv {
             program,
             args: positions,
@@ -589,8 +446,6 @@ fn execute_action_alias(
                     .unwrap_or_else(|| ctx.command_timeout().duration()),
             },
             args,
-            plan_id,
-            options,
             position,
             observer,
         ),
@@ -603,8 +458,6 @@ fn execute_action_alias(
                 timeout_seconds: action.timeout_seconds,
             },
             args,
-            plan_id,
-            options,
             position,
             observer,
         ),
@@ -634,8 +487,6 @@ fn execute_action_alias(
                         .unwrap_or_else(|| ctx.command_timeout().duration()),
                 },
                 args,
-                plan_id,
-                options,
                 position,
                 observer,
             )
@@ -651,6 +502,8 @@ use native::*;
 
 mod command_tool;
 use command_tool::*;
+
+mod resource_alias;
 
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,10 @@
 use clap::{Args, Subcommand};
+use jig_commands::tool_defs;
 
-use crate::tool_defs;
+use super::runtime_dispatch::RuntimeDispatch;
+use crate::command::{self, RuntimeCommand};
+
+pub(super) mod render;
 
 pub(super) const AGENT_AFTER_HELP: &str = "\
 Human-readable output is the default. Pass --json for structured automation output.
@@ -37,4 +41,39 @@ pub(crate) struct AgentBootstrapOpts {
         help = "Marketplace source to register; defaults to the single configured source"
     )]
     pub(crate) marketplace: Option<String>,
+}
+
+impl AgentCommand {
+    pub(super) fn into_dispatch(self) -> RuntimeDispatch {
+        match self {
+            // A readiness report: `ok: false` means required local tooling is
+            // missing or unregistered, which fails the command.
+            Self::Doctor => RuntimeDispatch::new(
+                RuntimeCommand::Agent(self.into()),
+                render::format_agent_doctor_summary,
+            )
+            .failing_on_ok_false(),
+            Self::Bootstrap(_) => RuntimeDispatch::new(
+                RuntimeCommand::Agent(self.into()),
+                render::format_agent_bootstrap_summary,
+            ),
+        }
+    }
+}
+
+impl From<AgentCommand> for command::AgentCommand {
+    fn from(command: AgentCommand) -> Self {
+        match command {
+            AgentCommand::Doctor => Self::Doctor,
+            AgentCommand::Bootstrap(opts) => Self::Bootstrap(opts.into()),
+        }
+    }
+}
+
+impl From<AgentBootstrapOpts> for command::AgentBootstrapRequest {
+    fn from(opts: AgentBootstrapOpts) -> Self {
+        Self {
+            marketplace: opts.marketplace,
+        }
+    }
 }

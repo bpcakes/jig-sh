@@ -1,5 +1,5 @@
 {
-  "contract_version": 8,
+  "contract_version": 9,
   "tool_namespace": "jig",
 
   "required_commands": [
@@ -7,11 +7,13 @@
 ],
   "tools": [
   {
+    "command": null,
     "description": "Prepare repository dependencies and local tooling.",
     "kind": "command",
     "name": "jig.bootstrap"
   },
   {
+    "command": null,
     "description": "Run Rust Clippy with repository policy.",
     "kind": "command",
     "name": "jig.clippy"
@@ -29,41 +31,49 @@
     "name": "jig.file_budget"
   },
   {
+    "command": null,
     "description": "Check Rust formatting.",
     "kind": "command",
     "name": "jig.fmt_check"
   },
   {
-    "description": "Run the source repository's fast core Rust test partition.",
+    "command": null,
+    "description": "Run the source repository\u0027s fast core Rust test partition.",
     "kind": "command",
     "name": "jig.source_core_test"
   },
   {
+    "command": null,
     "description": "Check Rust formatting.",
     "kind": "command",
     "name": "jig.source_fmt_check"
   },
   {
-    "description": "Run the source repository's generated-frontend Rust test partition.",
+    "command": null,
+    "description": "Run the source repository\u0027s generated-frontend Rust test partition.",
     "kind": "command",
     "name": "jig.source_frontend_test"
   },
   {
-    "description": "Run the source repository's process and signal Rust test partition.",
+    "command": null,
+    "description": "Run the source repository\u0027s process and signal Rust test partition.",
     "kind": "command",
     "name": "jig.source_process_test"
   },
   {
+    "command": null,
     "description": "Run Rust tests.",
     "kind": "command",
     "name": "jig.source_test"
   },
   {
-    "description": "Run the source repository's vault Rust test partition.",
+    "command": null,
+    "description": "Run the source repository\u0027s vault Rust test partition.",
     "kind": "command",
     "name": "jig.source_vault_test"
   },
   {
+    "command": null,
     "description": "Run Rust tests.",
     "kind": "command",
     "name": "jig.test"
@@ -157,6 +167,7 @@
       "**/clippy.toml",
       "**/.clippy.toml"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
     "legacy_aliases": [
       "jig.clippy"
@@ -164,9 +175,11 @@
     "provenance": {
       "effects": "inherited",
       "inputs": "inherited",
+      "inputs_policy": "inferred",
       "intent": "inherited",
       "legacy_aliases": "inherited",
       "runner": "overridden",
+      "source_state": "inferred",
       "target": "inherited"
     },
     "runner": {
@@ -185,13 +198,14 @@
       "kind": "argv",
       "program": "cargo"
     },
+    "source_state": "git",
     "target": {
       "action": "clippy",
       "component": "api"
     }
   },
   {
-    "description": "Check Rust formatting.",
+    "description": "Check Rust formatting and that every source is a module cargo fmt reaches.",
     "effects": [
       "read_only",
       "process"
@@ -217,19 +231,20 @@
       "**/clippy.toml",
       "**/.clippy.toml"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
-    "source_state": "worktree",
     "legacy_aliases": [
       "jig.fmt_check",
       "jig.source_fmt_check"
     ],
     "provenance": {
-      "source_state": "declared",
       "effects": "inherited",
       "inputs": "inherited",
+      "inputs_policy": "inferred",
       "intent": "inherited",
       "legacy_aliases": "inherited",
       "runner": "overridden",
+      "source_state": "declared",
       "target": "inherited"
     },
     "runner": {
@@ -237,6 +252,7 @@
       "kind": "argv",
       "program": "scripts/check-rust-format.sh"
     },
+    "source_state": "worktree",
     "target": {
       "action": "fmt",
       "component": "api"
@@ -269,6 +285,7 @@
       "**/clippy.toml",
       "**/.clippy.toml"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
     "legacy_aliases": [
       "jig.test",
@@ -277,9 +294,11 @@
     "provenance": {
       "effects": "inherited",
       "inputs": "inherited",
+      "inputs_policy": "inferred",
       "intent": "inherited",
       "legacy_aliases": "inherited",
       "runner": "overridden",
+      "source_state": "inferred",
       "target": "inherited"
     },
     "runner": {
@@ -297,6 +316,7 @@
       "kind": "argv",
       "program": "cargo"
     },
+    "source_state": "git",
     "target": {
       "action": "test",
       "component": "api"
@@ -309,6 +329,8 @@
       "process"
     ],
     "inputs": [
+      "scripts/ci/test-rust.sh",
+      ".config/nextest.toml",
       "Cargo.toml",
       "Cargo.lock",
       "**/Cargo.toml",
@@ -329,22 +351,26 @@
       "**/clippy.toml",
       "**/.clippy.toml"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
     "legacy_aliases": [
       "jig.test_locked"
     ],
     "provenance": {
       "effects": "inherited",
-      "inputs": "inherited",
+      "inputs": "overridden",
+      "inputs_policy": "inferred",
       "intent": "inherited",
       "legacy_aliases": "inherited",
       "runner": "overridden",
+      "source_state": "inferred",
       "target": "inherited"
     },
     "runner": {
       "command": "api_test_locked_command",
       "kind": "shell"
     },
+    "source_state": "git",
     "target": {
       "action": "test-locked",
       "component": "api"
@@ -357,6 +383,7 @@
       "process",
       "external"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "operate",
     "legacy_aliases": [
       "jig.bootstrap"
@@ -364,9 +391,11 @@
     "provenance": {
       "effects": "inherited",
       "inputs": "inherited",
+      "inputs_policy": "inferred",
       "intent": "inherited",
       "legacy_aliases": "inherited",
       "runner": "overridden",
+      "source_state": "inferred",
       "target": "inherited"
     },
     "runner": {
@@ -376,6 +405,7 @@
       "kind": "argv",
       "program": "cargo"
     },
+    "source_state": "git",
     "target": {
       "action": "bootstrap",
       "component": "repo"
@@ -391,6 +421,7 @@
       ".jig.toml",
       "scripts/jig"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
     "legacy_aliases": [
       "jig.contract_check"
@@ -398,15 +429,18 @@
     "provenance": {
       "effects": "inherited",
       "inputs": "inherited",
+      "inputs_policy": "inferred",
       "intent": "inherited",
       "legacy_aliases": "inherited",
       "runner": "overridden",
+      "source_state": "inferred",
       "target": "inherited"
     },
     "runner": {
       "kind": "native",
       "operation": "jig.contract_check"
     },
+    "source_state": "git",
     "target": {
       "action": "contract",
       "component": "repo"
@@ -420,6 +454,7 @@
     "inputs": [
       "**"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
     "legacy_aliases": [
       "jig.file_budget"
@@ -427,9 +462,11 @@
     "provenance": {
       "effects": "inherited",
       "inputs": "inherited",
+      "inputs_policy": "inferred",
       "intent": "inherited",
       "legacy_aliases": "inherited",
       "runner": "inherited",
+      "source_state": "inferred",
       "target": "inherited"
     },
     "runner": {
@@ -442,13 +479,56 @@
       "kind": "native",
       "operation": "jig.file_budget"
     },
+    "source_state": "git",
     "target": {
       "action": "file-budget",
       "component": "repo"
     }
   },
   {
-    "description": "Run the source repository's fast core Rust test partition.",
+    "description": "Build the current Jig runtime and validate its repository contract through the launcher.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "crates/**",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain*",
+      ".cargo/**",
+      ".jig.toml",
+      ".jig/**",
+      "templates/**",
+      "scripts/**"
+    ],
+    "inputs_policy": "whole_repository",
+    "intent": "check",
+    "provenance": {
+      "effects": "declared",
+      "inputs": "declared",
+      "inputs_policy": "inferred",
+      "intent": "declared",
+      "runner": "declared",
+      "source_state": "declared",
+      "target": "declared"
+    },
+    "runner": {
+      "args": [
+        "check",
+        "contract"
+      ],
+      "kind": "argv",
+      "program": "scripts/jig-dev"
+    },
+    "source_state": "worktree",
+    "target": {
+      "action": "source-runtime-check",
+      "component": "repo"
+    }
+  },
+  {
+    "description": "Run the source repository\u0027s fast core Rust test partition.",
     "effects": [
       "read_only",
       "process"
@@ -467,6 +547,7 @@
       "examples/**",
       "tests/**"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
     "legacy_aliases": [
       "jig.source_core_test"
@@ -474,9 +555,11 @@
     "provenance": {
       "effects": "declared",
       "inputs": "declared",
+      "inputs_policy": "inferred",
       "intent": "declared",
       "legacy_aliases": "declared",
       "runner": "declared",
+      "source_state": "inferred",
       "target": "declared"
     },
     "runner": {
@@ -486,20 +569,21 @@
       "kind": "argv",
       "program": "scripts/test-rust-partition.sh"
     },
+    "source_state": "git",
     "target": {
       "action": "source-core-test",
       "component": "repo"
     }
   },
   {
-    "description": "Run the source repository's generated-frontend Rust test partition.",
+    "description": "Run the source repository\u0027s generated-frontend Rust test partition.",
     "effects": [
       "read_only",
       "process"
     ],
     "inputs": [
-      "crates/jig/src/bootstrap.rs",
-      "crates/jig/src/bootstrap/**",
+      "crates/jig-bootstrap/**",
+      "crates/jig-git/**",
       "Cargo.toml",
       "Cargo.lock",
       "rust-toolchain*",
@@ -511,6 +595,7 @@
       "scripts/test-rust-partition.sh",
       "tests/fixtures/**"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
     "legacy_aliases": [
       "jig.source_frontend_test"
@@ -518,9 +603,11 @@
     "provenance": {
       "effects": "declared",
       "inputs": "declared",
+      "inputs_policy": "inferred",
       "intent": "declared",
       "legacy_aliases": "declared",
       "runner": "declared",
+      "source_state": "inferred",
       "target": "declared"
     },
     "runner": {
@@ -530,13 +617,14 @@
       "kind": "argv",
       "program": "scripts/test-rust-partition.sh"
     },
+    "source_state": "git",
     "target": {
       "action": "source-frontend-test",
       "component": "repo"
     }
   },
   {
-    "description": "Run the source repository's process and signal Rust test partition.",
+    "description": "Run the source repository\u0027s process and signal Rust test partition.",
     "effects": [
       "read_only",
       "process"
@@ -548,35 +636,34 @@
       "crates/jig/src/cli.rs",
       "crates/jig/src/runtime.rs",
       "crates/jig/src/signal_supervision.rs",
-      "crates/jig/src/claude.rs",
+      "crates/jig-agents/**",
       "crates/jig/src/agent_launch.rs",
-      "crates/jig/src/agent_provider.rs",
-      "crates/jig/src/agent_provider/**",
+      "crates/jig/src/exit.rs",
       "crates/jig/src/cli/agent_run.rs",
       "crates/jig/src/cli/agent_run/**",
       "crates/jig/src/cli/home_picker.rs",
-      "crates/jig/src/cli/codex_run.rs",
-      "crates/jig-codex-tui/**",
-      "crates/jig/src/home_paths.rs",
+      "crates/jig/src/cli/codex/**",
+      "crates/jig-agents-tui/**",
       "crates/jig/src/cli/output/command_display.rs",
-      "crates/jig/src/claude/**",
       "crates/jig/src/cli/claude*.rs",
-      "crates/jig/src/codex.rs",
-      "crates/jig/src/codex/**",
+      "crates/jig/src/cli/claude/**",
       "crates/jig/src/dev_proxy.rs",
       "crates/jig/src/dev_proxy/**",
       "crates/jig/src/cli/codex*.rs",
       "crates/jig/src/cli/dev*.rs",
       "crates/jig/src/cli/proxy.rs",
+      "crates/jig/src/cli/proxy/**",
       "crates/jig/src/cli/run.rs",
       "crates/jig/src/cli/run/**",
-      "crates/jig/src/doctor/signal_session.rs",
+      "crates/jig/src/cli/runtime_dispatch.rs",
+      "crates/jig/src/signal_supervision/**",
       "crates/jig/tests/claude_launcher.rs",
       "crates/jig/tests/codex_launcher.rs",
+      "crates/jig/tests/codex_launcher/**",
       "crates/jig/tests/dev_launcher_loss.rs",
       "crates/jig/tests/dev_lifecycle.rs",
       "crates/jig/tests/dev_sigint.rs",
-      "crates/jig/tests/dev_sigint_parts/**",
+      "crates/jig/tests/dev_sigint/**",
       "crates/jig/Cargo.toml",
       "Cargo.toml",
       "Cargo.lock",
@@ -587,6 +674,7 @@
       ".jig.toml",
       "scripts/test-rust-partition.sh"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
     "legacy_aliases": [
       "jig.source_process_test"
@@ -594,9 +682,11 @@
     "provenance": {
       "effects": "declared",
       "inputs": "declared",
+      "inputs_policy": "inferred",
       "intent": "declared",
       "legacy_aliases": "declared",
       "runner": "declared",
+      "source_state": "inferred",
       "target": "declared"
     },
     "runner": {
@@ -606,13 +696,14 @@
       "kind": "argv",
       "program": "scripts/test-rust-partition.sh"
     },
+    "source_state": "git",
     "target": {
       "action": "source-process-test",
       "component": "repo"
     }
   },
   {
-    "description": "Run the source repository's vault Rust test partition.",
+    "description": "Run the source repository\u0027s vault Rust test partition.",
     "effects": [
       "read_only",
       "process"
@@ -622,12 +713,23 @@
       "crates/jig-vault-tui/**",
       "crates/jig-tui/**",
       "crates/jig/src/cli.rs",
+      "crates/jig/src/cli/run.rs",
+      "crates/jig/src/cli/bootstrap_run*.rs",
       "crates/jig/src/**/vault*.rs",
       "crates/jig/src/**/vault/**",
+      "crates/jig-context/src/vault_config.rs",
       "crates/jig/src/command/vault.rs",
+      "crates/jig/src/exit.rs",
+      "crates/jig/src/doctor.rs",
+      "crates/jig/src/doctor/**",
       "crates/jig/src/runtime.rs",
+      "crates/jig-git/**",
       "crates/jig/src/signal_supervision.rs",
+      "crates/jig/src/signal_supervision/**",
       "crates/jig/tests/vault_*.rs",
+      "crates/jig/tests/vault_*/**",
+      "crates/jig/tests/cli_json.rs",
+      "crates/jig/tests/cli_json/**",
       "Cargo.toml",
       "Cargo.lock",
       "rust-toolchain*",
@@ -638,6 +740,7 @@
       "templates/**",
       "scripts/test-rust-partition.sh"
     ],
+    "inputs_policy": "whole_repository",
     "intent": "check",
     "legacy_aliases": [
       "jig.source_vault_test"
@@ -645,9 +748,11 @@
     "provenance": {
       "effects": "declared",
       "inputs": "declared",
+      "inputs_policy": "inferred",
       "intent": "declared",
       "legacy_aliases": "declared",
       "runner": "declared",
+      "source_state": "inferred",
       "target": "declared"
     },
     "runner": {
@@ -657,19 +762,92 @@
       "kind": "argv",
       "program": "scripts/test-rust-partition.sh"
     },
+    "source_state": "git",
     "target": {
       "action": "source-vault-test",
+      "component": "repo"
+    }
+  },
+  {
+    "description": "Run only the Rust tests that changes since the merge base with origin/master can affect.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "crates/**",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain*",
+      ".cargo/**",
+      "nextest.toml",
+      ".config/nextest.toml",
+      ".jig.toml",
+      "templates/**",
+      "scripts/**",
+      "examples/**",
+      "tests/**"
+    ],
+    "inputs_policy": "whole_repository",
+    "intent": "check",
+    "provenance": {
+      "effects": "declared",
+      "inputs": "declared",
+      "inputs_policy": "inferred",
+      "intent": "declared",
+      "runner": "declared",
+      "source_state": "declared",
+      "target": "declared"
+    },
+    "runner": {
+      "args": [],
+      "kind": "argv",
+      "program": "scripts/test-rust-affected.py"
+    },
+    "source_state": "worktree",
+    "target": {
+      "action": "source-affected-test",
       "component": "repo"
     }
   }
 ],
   "profiles": [
   {
+    "description": "Local formatting, lint, and repository checks before workspace tests.",
+    "id": "preflight",
+    "provenance": {
+      "id": "declared",
+      "targets": "declared"
+    },
+    "targets": [
+      {
+        "action": "fmt",
+        "component": "api"
+      },
+      {
+        "action": "clippy",
+        "component": "api"
+      },
+      {
+        "action": "contract",
+        "component": "repo"
+      },
+      {
+        "action": "file-budget",
+        "component": "repo"
+      },
+      {
+        "action": "source-runtime-check",
+        "component": "repo"
+      }
+    ]
+  },
+  {
     "description": "Default repository verification targets.",
     "id": "verify",
     "provenance": {
       "id": "inferred",
-      "targets": "inherited"
+      "targets": "overridden"
     },
     "targets": [
       {
@@ -690,6 +868,10 @@
       },
       {
         "action": "file-budget",
+        "component": "repo"
+      },
+      {
+        "action": "source-runtime-check",
         "component": "repo"
       }
     ]

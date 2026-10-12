@@ -1,0 +1,495 @@
+use jig_context::backend::BackendLanguage;
+
+use crate::AnswerOpts;
+use crate::answers::AnswerResolution;
+use crate::repository_model::RepositoryProjectionHint;
+use crate::scaffold::InitScaffoldPlan;
+use crate::template_source::PrivateAnswerOverrides;
+use crate::{ScaffoldDb, ScaffoldOpts, ScaffoldPreset};
+
+use super::*;
+
+#[path = "renderer_tests/freshness.rs"]
+mod freshness;
+#[path = "renderer_tests/guidance.rs"]
+mod guidance;
+
+fn rust_render_answers(projection: RepositoryProjectionHint) -> RenderAnswers {
+    let destination = tempfile::tempdir().unwrap();
+    let opts = AnswerOpts {
+        repo_name: Some("ExampleProject".into()),
+        backend_language: Some(BackendLanguage::Rust),
+        repository_projection_hint: projection,
+        sqlx_enabled: Some(false),
+        schema_dump_enabled: Some(false),
+        rust_crate_roots: vec!["crates".into()],
+        ..AnswerOpts::default()
+    };
+    AnswerResolution::from_opts(&opts, destination.path(), false)
+        .unwrap()
+        .into_parts()
+        .0
+}
+
+fn live_template_source() -> PreparedTemplateSource {
+    PreparedTemplateSource::test_local(
+        "fixture".into(),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."),
+        None,
+        PrivateAnswerOverrides::default(),
+    )
+}
+
+fn assert_jig_jobs_cache_release_runtime(workflow: &str, name: &str) -> usize {
+    let rendered: JsonValue = serde_yaml_ng::from_str(workflow).unwrap();
+    let jobs = rendered["jobs"].as_object().unwrap();
+    let mut jig_jobs = 0;
+    for (job_name, job) in jobs {
+        let steps = job["steps"].as_array().unwrap();
+        let jig_step = steps.iter().position(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|run| run.contains("scripts/jig "))
+        });
+        let Some(jig_step) = jig_step else { continue };
+        jig_jobs += 1;
+        let cache_steps: Vec<_> = steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| step["name"] == "Cache pinned Jig runtime")
+            .collect();
+        assert_eq!(
+            cache_steps.len(),
+            1,
+            "{name}/{job_name} needs one Jig cache"
+        );
+        let (cache_index, cache) = cache_steps[0];
+        assert!(
+            cache_index < jig_step,
+            "{name}/{job_name} caches after running Jig"
+        );
+        assert_eq!(
+            cache["if"],
+            "${{ hashFiles('.jig/runtime-version') != '' }}"
+        );
+        assert_eq!(cache["uses"], "actions/cache@v5");
+        let paths: Vec<_> = cache["with"]["path"].as_str().unwrap().lines().collect();
+        assert_eq!(
+            paths,
+            [
+                ".git/jig-tools/release-*-runtime/bin/jig",
+                ".agent/.cache/jig/release-*-runtime/bin/jig",
+            ],
+            "{name}/{job_name} cache path must match the runtime installer"
+        );
+        assert_eq!(
+            cache["with"]["key"],
+            "jig-release-runtime-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.jig/runtime-version', 'scripts/install-jig.sh', 'scripts/jig') }}",
+            "{name}/{job_name} cache key must track the selected runtime"
+        );
+    }
+    assert!(jig_jobs > 0, "{name} rendered no Jig-invoking jobs");
+    jig_jobs
+}
+
+#[test]
+fn rendered_jig_workflows_cache_the_installer_runtime_profile() {
+    let selected = BTreeSet::from([
+        PathBuf::from("scripts/install-jig.sh"),
+        PathBuf::from(".github/workflows/agent-map-check.yml"),
+        PathBuf::from(".github/workflows/go-tests.yml"),
+        PathBuf::from(".github/workflows/repo-policy.yml"),
+        PathBuf::from(".github/workflows/rust-tests.yml"),
+    ]);
+    let rust = rust_render_answers(RepositoryProjectionHint::Backend);
+    let go_destination = tempfile::tempdir().unwrap();
+    let go = AnswerResolution::from_opts(
+        &AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            backend_language: Some(BackendLanguage::Go),
+            go_database: Some(jig_context::backend::GoDatabase::Postgres),
+            go_module: Some("example.com/ExampleProject".into()),
+            sqlx_enabled: Some(false),
+            schema_dump_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+        go_destination.path(),
+        false,
+    )
+    .unwrap()
+    .into_parts()
+    .0;
+
+    let mut checked_jobs = 0;
+    for (answers, workflows) in [
+        (
+            rust,
+            ["rust-tests.yml", "repo-policy.yml", "agent-map-check.yml"],
+        ),
+        (
+            go,
+            ["go-tests.yml", "repo-policy.yml", "agent-map-check.yml"],
+        ),
+    ] {
+        let destination = tempfile::tempdir().unwrap();
+        render_template_files(
+            &live_template_source(),
+            &answers,
+            destination.path(),
+            Some(&selected),
+            Some(jig_context::CURRENT_CONTRACT_VERSION),
+        )
+        .unwrap();
+        let installer =
+            fs::read_to_string(destination.path().join("scripts/install-jig.sh")).unwrap();
+        for expected in [
+            "CONTRACT_CACHE_KEY=\"release-$RUNTIME_VERSION-$CONTRACT_CACHE_KEY\"",
+            "DEFAULT_INSTALL_ROOT=\"$DEFAULT_INSTALL_BASE/$CONTRACT_CACHE_KEY-runtime\"",
+            "DEFAULT_INSTALL_BASE=\"$ROOT_DIR/.git/jig-tools\"",
+            "DEFAULT_INSTALL_BASE=\"$ROOT_DIR/.agent/.cache/jig\"",
+        ] {
+            assert!(
+                installer.contains(expected),
+                "rendered installer lacks {expected}"
+            );
+        }
+        for workflow_name in workflows {
+            let workflow = fs::read_to_string(
+                destination
+                    .path()
+                    .join(".github/workflows")
+                    .join(workflow_name),
+            )
+            .unwrap();
+            checked_jobs += assert_jig_jobs_cache_release_runtime(&workflow, workflow_name);
+        }
+    }
+
+    let scaffold_destination = tempfile::tempdir().unwrap();
+    let scaffold = InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::Postgres),
+            ..ScaffoldOpts::default()
+        },
+        &AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            go_module: Some("example.com/ExampleProject".into()),
+            ..AnswerOpts::default()
+        },
+        scaffold_destination.path(),
+    )
+    .unwrap()
+    .unwrap();
+    scaffold.write(scaffold_destination.path(), false).unwrap();
+    let e2e = fs::read_to_string(
+        scaffold_destination
+            .path()
+            .join(".github/workflows/e2e.yml"),
+    )
+    .unwrap();
+    checked_jobs += assert_jig_jobs_cache_release_runtime(&e2e, "go-react/e2e.yml");
+    assert!(
+        checked_jobs >= 10,
+        "expected all generated Jig workflow jobs"
+    );
+}
+
+#[test]
+fn action_arguments_and_freshness_render_in_v8_and_preserve_file_budget_configuration() {
+    let destination = tempfile::tempdir().unwrap();
+    let answers = AnswerResolution::from_opts(
+        &AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            sqlx_enabled: Some(true),
+            rust_migration_dir: Some("migrations".into()),
+            schema_dump_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+        destination.path(),
+        false,
+    )
+    .unwrap()
+    .into_parts()
+    .0;
+    let template = live_template_source();
+    let v7 = render_context(&template, &answers, Some(7)).unwrap();
+    let v8 = render_context(&template, &answers, Some(8)).unwrap();
+    let action = |context: &JsonValue, operation: &str| {
+        context["repository"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["runner"]["operation"] == operation)
+            .unwrap()
+            .clone()
+    };
+    let migration = action(&v8, jig_contract::tool::MIGRATION_ADD);
+    assert_eq!(
+        migration["arguments"]["name"],
+        json!({"type":"string", "required":true, "allow_empty":false, "max_bytes":200})
+    );
+    assert!(
+        action(&v7, jig_contract::tool::MIGRATION_ADD)
+            .get("arguments")
+            .is_none()
+    );
+    let source: toml::Value = toml::from_str(v8["repository_toml"].as_str().unwrap()).unwrap();
+    let authored = source["repository"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["target"]["action"].as_str() == Some("migration-add"))
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&authored["arguments"]).unwrap(),
+        migration["arguments"]
+    );
+    let v7_file_budget = action(&v7, jig_contract::tool::FILE_BUDGET);
+    let v8_file_budget = action(&v8, jig_contract::tool::FILE_BUDGET);
+    assert_eq!(v7_file_budget["runner"], v8_file_budget["runner"]);
+    assert!(v7_file_budget.get("inputs_policy").is_none());
+    assert!(v7_file_budget.get("source_state").is_none());
+    assert_eq!(v8_file_budget["inputs_policy"], "whole_repository");
+    assert_eq!(v8_file_budget["source_state"], "git");
+}
+
+#[test]
+fn neutral_rust_workspace_guidance_survives_authored_recopy() {
+    let template = live_template_source();
+    let initial = tempfile::tempdir().unwrap();
+    let selected = BTreeSet::from([PathBuf::from(".jig.toml"), PathBuf::from("AGENTS.md")]);
+    render_template_files(
+        &template,
+        &rust_render_answers(RepositoryProjectionHint::RustWorkspace),
+        initial.path(),
+        Some(&selected),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
+    )
+    .unwrap();
+    let initial_guide = fs::read_to_string(initial.path().join("AGENTS.md")).unwrap();
+
+    for expected in [
+        "ownership guidance in crate-level guides",
+        "ownership guidance for Rust work",
+        "## Rust Defaults",
+        "## Crate Guide Conventions",
+    ] {
+        assert!(initial_guide.contains(expected), "missing {expected}");
+    }
+    for absent in [
+        "Keep transport logic thin",
+        "- `scripts/jig dev`",
+        "## Backend Defaults",
+        "For backend changes",
+        "## Backend Guide Conventions",
+    ] {
+        assert!(!initial_guide.contains(absent), "unexpected {absent}");
+    }
+
+    let reloaded = RenderAnswers::from_answers_file(&initial.path().join(".jig.toml")).unwrap();
+    assert_eq!(
+        reloaded.repository_projection_hint(),
+        RepositoryProjectionHint::Backend
+    );
+    let recopy = tempfile::tempdir().unwrap();
+    let guide_only = BTreeSet::from([PathBuf::from("AGENTS.md")]);
+    render_template_files(
+        &template,
+        &reloaded,
+        recopy.path(),
+        Some(&guide_only),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(recopy.path().join("AGENTS.md")).unwrap(),
+        initial_guide
+    );
+}
+
+#[test]
+fn backend_guidance_keeps_ownership_and_focused_checks() {
+    let destination = tempfile::tempdir().unwrap();
+    render_template_files(
+        &live_template_source(),
+        &rust_render_answers(RepositoryProjectionHint::Backend),
+        destination.path(),
+        Some(&BTreeSet::from([PathBuf::from("AGENTS.md")])),
+        Some(jig_context::CURRENT_CONTRACT_VERSION),
+    )
+    .unwrap();
+    let guide = fs::read_to_string(destination.path().join("AGENTS.md")).unwrap();
+
+    for expected in [
+        "ownership guidance in backend-level guides",
+        "ownership guidance for backend work",
+        "## Backend Defaults",
+        "Keep transport logic thin and business logic in the owning crate.",
+        "- `scripts/jig dev`",
+        "Validate the affected behavior with focused checks.",
+        "## Backend Guide Conventions",
+    ] {
+        assert!(guide.contains(expected), "missing {expected}");
+    }
+    for absent in ["before backend work", "For backend changes"] {
+        assert!(!guide.contains(absent), "unexpected {absent}");
+    }
+    assert!(!guide.contains("## Rust Defaults"));
+    assert!(!guide.contains("## Crate Guide Conventions"));
+}
+
+#[test]
+fn template_output_paths_reject_reserved_git_metadata_aliases() {
+    for relative in [
+        ".git/config.jinja",
+        "vendor/.GiT/config.jinja",
+        ".g\u{200c}it/config.jinja",
+        "\u{feff}.G\u{202e}i\u{206a}T/config.jinja",
+    ] {
+        let error = output_relative_path(Path::new(relative))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("reserved Git metadata component"),
+            "{relative}: {error}"
+        );
+        assert!(
+            error.contains(relative.trim_end_matches(".jinja")),
+            "{relative}: {error}"
+        );
+    }
+}
+
+#[test]
+fn template_output_paths_allow_git_near_misses() {
+    for relative in [
+        ".github/workflows/check.yml.jinja",
+        ".gitignore.jinja",
+        ".gitkeep.jinja",
+        "git/config.jinja",
+        ".git .config.jinja",
+        ".git\u{a0}.jinja",
+        ".git\u{200b}.jinja",
+        ".gi\u{200b}t.jinja",
+        ".git\u{2029}.jinja",
+        ".git\u{2060}.jinja",
+        ".git\u{2069}.jinja",
+    ] {
+        output_relative_path(Path::new(relative)).unwrap();
+    }
+}
+
+#[test]
+fn legacy_go_postgres_render_preserves_a_custom_sqlc_command() {
+    let template_root = tempfile::tempdir().unwrap();
+    let project_templates = template_root.path().join("templates/project");
+    fs::create_dir_all(&project_templates).unwrap();
+    fs::write(
+        project_templates.join(".jig.toml.jinja"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../templates/project/.jig.toml.jinja"
+        )),
+    )
+    .unwrap();
+    let answers_root = tempfile::tempdir().unwrap();
+    let answers_path = answers_root.path().join("answers.toml");
+    let custom_command = r#"go tool sqlc diff --file="custom sqlc.yaml""#;
+    fs::write(
+        &answers_path,
+        format!(
+            "repo_name = \"ExampleProject\"\nbackend_language = \"go\"\ngo_database = \"postgres\"\nsqlx_enabled = false\nschema_dump_enabled = false\nsqlc_check_command = {}\n",
+            toml::Value::String(custom_command.into())
+        ),
+    )
+    .unwrap();
+    let answers = RenderAnswers::from_answers_file(&answers_path).unwrap();
+    let template = PreparedTemplateSource::test_local(
+        "fixture".into(),
+        template_root.path().to_path_buf(),
+        None,
+        PrivateAnswerOverrides::default(),
+    );
+    let destination = answers_root.path().join("rendered");
+
+    render_template_files(&template, &answers, &destination, None, Some(5)).unwrap();
+
+    let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
+    let config = toml::from_str::<toml::Value>(&rendered).unwrap();
+    assert_eq!(
+        config["commands"]["sqlc_check_command"].as_str(),
+        Some(custom_command)
+    );
+}
+
+#[test]
+fn argv_epoch_renders_explicit_shell_and_preserves_authored_runner_choice() {
+    let template = live_template_source();
+    let answers = rust_render_answers(RepositoryProjectionHint::RustWorkspace);
+    let old = render_context(&template, &answers, Some(7)).unwrap();
+    let current = render_context(&template, &answers, Some(8)).unwrap();
+    for action in current["repository"]["actions"].as_array().unwrap() {
+        assert_ne!(action["runner"]["kind"], "command");
+    }
+    assert!(
+        old["repository"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["runner"]["kind"] == "command")
+    );
+    assert!(
+        current["repository"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["runner"]["kind"] == "shell")
+    );
+    let initial = tempfile::tempdir().unwrap();
+    let selected = BTreeSet::from([
+        PathBuf::from(".jig.toml"),
+        PathBuf::from(".agent/jig-contract.json"),
+    ]);
+    render_template_files(
+        &template,
+        &answers,
+        initial.path(),
+        Some(&selected),
+        Some(8),
+    )
+    .unwrap();
+    let path = initial.path().join(".jig.toml");
+    let mut source: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let actions = source["repository"]["actions"].as_array_mut().unwrap();
+    let action = actions
+        .iter_mut()
+        .find(|a| a["runner"]["kind"].as_str() == Some("shell"))
+        .unwrap();
+    action["runner"] = toml::Value::try_from(
+        json!({"kind":"argv", "program":"literal program", "args":["literal *", ""]}),
+    )
+    .unwrap();
+    let expected = source["repository"]["actions"].clone();
+    fs::write(&path, toml::to_string(&source).unwrap()).unwrap();
+    let authored = RenderAnswers::from_answers_file(&path).unwrap();
+    assert!(render_context(&template, &authored, Some(7)).is_err());
+    let recopy = tempfile::tempdir().unwrap();
+    render_template_files(
+        &template,
+        &authored,
+        recopy.path(),
+        Some(&selected),
+        Some(8),
+    )
+    .unwrap();
+    let copied: toml::Value =
+        toml::from_str(&fs::read_to_string(recopy.path().join(".jig.toml")).unwrap()).unwrap();
+    assert_eq!(copied["repository"]["actions"], expected);
+    let manifest: JsonValue = serde_json::from_str(
+        &fs::read_to_string(recopy.path().join(".agent/jig-contract.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["contract_version"], 8);
+    assert_eq!(manifest["actions"], serde_json::to_value(expected).unwrap());
+}

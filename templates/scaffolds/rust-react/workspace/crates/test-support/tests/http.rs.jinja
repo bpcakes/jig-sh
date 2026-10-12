@@ -4,17 +4,19 @@ use axum::http::StatusCode;
 
 #[tokio::test]
 async fn health_returns_ok() {
-    let app = TestApp::new();
+    let app = TestApp::new().await;
 
-    let response = app.get("/health/live").await;
+    for path in ["/health", "/health/live"] {
+        let response = app.get(path).await;
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.text(), "ok");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text(), "ok");
+    }
 }
 
 #[tokio::test]
 async fn readiness_reflects_state() {
-    let app = TestApp::new();
+    let app = TestApp::new().await;
 
     let response = app.get("/health/ready").await;
 
@@ -33,12 +35,13 @@ async fn readiness_reflects_state() {
     assert_eq!(body["request_id"], request_id);
     [% else %]
     assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.body().is_empty());
     [% endif %]
 }
 
 #[tokio::test]
 async fn responses_include_request_id() {
-    let app = TestApp::new();
+    let app = TestApp::new().await;
 
     let response = app.get("/health/live").await;
 
@@ -47,7 +50,7 @@ async fn responses_include_request_id() {
 
 #[tokio::test]
 async fn unknown_routes_return_a_standard_error_with_the_request_id() {
-    let app = TestApp::new();
+    let app = TestApp::new().await;
 
     let response = app.get("/does-not-exist").await;
     let request_id = response
@@ -67,7 +70,7 @@ async fn unknown_routes_return_a_standard_error_with_the_request_id() {
 
 #[tokio::test]
 async fn version_returns_json() {
-    let app = TestApp::new();
+    let app = TestApp::new().await;
 
     let version: serde_json::Value = app.get_json("/api/version").await;
 
@@ -76,7 +79,7 @@ async fn version_returns_json() {
 
 #[tokio::test]
 async fn status_returns_application_identity_and_readiness() {
-    let app = TestApp::new();
+    let app = TestApp::new().await;
 
     let status: serde_json::Value = app.get_json("/api/status").await;
 

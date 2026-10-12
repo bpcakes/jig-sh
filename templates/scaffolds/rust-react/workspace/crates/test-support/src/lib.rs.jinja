@@ -1,6 +1,3 @@
-use ::<<[ module_name ]>> as app_crate;
-use ::<<[ module_name ]>>_http as app_http_crate;
-
 pub mod app;
 [% if db_enabled %]
 pub mod db;
@@ -8,9 +5,6 @@ pub mod db;
 pub mod http;
 pub mod responses;
 
-pub use app::TestApp;
-pub use responses::TestResponse;
-
-pub fn test_router() -> axum::Router {
-    app_http_crate::router(app_crate::AppState::new())
-}
+// `self::` keeps these local even when the application crate shares a module name.
+pub use self::app::TestApp;
+pub use self::responses::TestResponse;

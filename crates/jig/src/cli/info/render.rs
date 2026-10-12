@@ -1,0 +1,274 @@
+pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
+    if value["command"].as_str() == Some("info commands") {
+        return crate::info::format_commands_summary(value);
+    }
+    if value["command"]
+        .as_str()
+        .is_some_and(|command| command.starts_with("info "))
+    {
+        return format_repository_info(value);
+    }
+
+    let repo = &value["repo"];
+    let mut lines = vec![
+        format!("Jig info: {}", repo["name"].as_str().unwrap_or("<unknown>")),
+        format!(
+            "Template source: {} @ {}",
+            repo["template_source"].as_str().unwrap_or("<unknown>"),
+            repo["template_commit"].as_str().unwrap_or("<unknown>")
+        ),
+        format!(
+            "Runtime: jig {} · contract v{}",
+            repo["runtime_version"].as_str().unwrap_or("<unknown>"),
+            repo["contract_version"].as_u64().unwrap_or(0)
+        ),
+    ];
+
+    lines.push(format!(
+        "Capabilities: {}",
+        enabled_capabilities(value).join(", ")
+    ));
+    if let Some(main_checkout_root) = value["capabilities"]["vault_main_checkout_root"].as_str() {
+        lines.push(format!(
+            "Vault: shared with main checkout {main_checkout_root}"
+        ));
+    }
+    if value["capabilities"]["vault_worktree_local"].as_bool() == Some(true) {
+        lines.push(
+            "Vault: worktree-local, not shared with the main checkout; run `scripts/jig vault status` for details".to_string(),
+        );
+    }
+    if let Some(check_tools) = value["check_tools"].as_array() {
+        lines.push(format!(
+            "Check tools: {}",
+            string_list(Some(check_tools)).join(", ")
+        ));
+    }
+    if let Some(work_gates) = value["work_gates"].as_array() {
+        lines.push(format!("Work gates: {}", work_gates.len()));
+    }
+    lines.push(format!(
+        "Dev apps: {}",
+        value["dev_apps"].as_array().map(Vec::len).unwrap_or(0)
+    ));
+    lines.join("\n")
+}
+
+fn format_repository_info(value: &serde_json::Value) -> String {
+    let command = value["command"].as_str().unwrap_or("info workspace");
+    let workspace = &value["workspace"];
+    let mut lines = vec![format!(
+        "Jig {}: {} (contract v{})",
+        command.trim_start_matches("info "),
+        workspace["name"].as_str().unwrap_or("<unknown>"),
+        workspace["contract_version"].as_u64().unwrap_or(0)
+    )];
+
+    if let Some(component) = value.get("component") {
+        lines.push(format!(
+            "  Component: {} · root {}",
+            component["id"].as_str().unwrap_or("?"),
+            component["root"].as_str().unwrap_or("?")
+        ));
+    }
+    if let Some(profile) = value.get("profile") {
+        lines.push(format!(
+            "  Profile: {}{}",
+            profile["id"].as_str().unwrap_or("?"),
+            if value["is_default_check_profile"].as_bool().unwrap_or(false) {
+                " (default)"
+            } else {
+                ""
+            }
+        ));
+    }
+    if let Some(components) = value["components"].as_array() {
+        lines.push(format!("  Components: {}", components.len()));
+        for item in components {
+            let component = item.get("component").unwrap_or(item);
+            lines.push(format!(
+                "  - {} · root {}",
+                component["id"].as_str().unwrap_or("?"),
+                component["root"].as_str().unwrap_or("?")
+            ));
+        }
+    }
+    if let Some(target) = value.get("target") {
+        lines.push(format!("  Target: {}", target_text(&target["id"])));
+        lines.push(format!(
+            "  Intent: {} · effects {}",
+            target["intent"].as_str().unwrap_or("?"),
+            string_list(target["effects"].as_array()).join(", ")
+        ));
+        if let Some(policy) = freshness_policy_text(target) {
+            lines.push(format!("  Freshness: {policy}"));
+        }
+        if let Some(arguments) = target["arguments"].as_object() {
+            for (name, spec) in arguments {
+                lines.push(format!(
+                    "  Argument: {name} · string · {} · max {} bytes · empty {}",
+                    if spec["required"].as_bool() == Some(true) {
+                        "required"
+                    } else {
+                        "optional"
+                    },
+                    spec["max_bytes"],
+                    if spec["allow_empty"].as_bool() == Some(true) {
+                        "allowed"
+                    } else {
+                        "forbidden"
+                    },
+                ));
+            }
+        }
+    }
+    if let Some(targets) = value["targets"].as_array() {
+        lines.push(format!("  Targets: {}", targets.len()));
+        for target in targets {
+            let mut line = format!("  - {}", target_text(&target["id"]));
+            if let Some(policy) = freshness_policy_text(target) {
+                line.push_str(" · ");
+                line.push_str(&policy);
+            }
+            lines.push(line);
+        }
+    }
+    if let Some(profiles) = value["profiles"].as_array() {
+        lines.push(format!("  Profiles: {}", profiles.len()));
+        for profile in profiles {
+            lines.push(format!(
+                "  - {} · {} targets",
+                profile["id"].as_str().unwrap_or("?"),
+                profile["targets"].as_array().map_or(0, Vec::len)
+            ));
+        }
+    }
+    lines.push("  full record: rerun with --json".into());
+    lines.join("\n")
+}
+
+fn freshness_policy_text(target: &serde_json::Value) -> Option<String> {
+    let policy = target.get("freshness_policy")?;
+    Some(format!(
+        "inputs={} ({}) · source={} ({}) · mode={}",
+        policy["inputs_policy"]["effective"].as_str().unwrap_or("?"),
+        policy_field_metadata(&policy["inputs_policy"]),
+        policy["source_state"]["effective"].as_str().unwrap_or("?"),
+        policy_field_metadata(&policy["source_state"]),
+        policy["mode"].as_str().unwrap_or("?"),
+    ))
+}
+
+fn policy_field_metadata(field: &serde_json::Value) -> String {
+    format!(
+        "defaulted={}, provenance={}",
+        field["defaulted"]
+            .as_bool()
+            .map_or("?", |value| if value { "true" } else { "false" }),
+        field["provenance"].as_str().unwrap_or("unavailable")
+    )
+}
+
+fn target_text(value: &serde_json::Value) -> String {
+    format!(
+        "{}:{}",
+        value["component"].as_str().unwrap_or("?"),
+        value["action"].as_str().unwrap_or("?")
+    )
+}
+
+fn enabled_capabilities(value: &serde_json::Value) -> Vec<&'static str> {
+    let capabilities = &value["capabilities"];
+    let mut enabled = Vec::new();
+    for (key, label) in [
+        ("sqlx", "SQLx"),
+        ("schema_dumps", "schema dumps"),
+        ("frontend_apps", "frontend apps"),
+        ("dev_proxy", "dev proxy"),
+    ] {
+        if capabilities[key].as_bool().unwrap_or(false) {
+            enabled.push(label);
+        }
+    }
+    if capabilities["vault_initialized"].as_bool().unwrap_or(false) {
+        enabled.push("vault initialized");
+    } else if capabilities["vault_available"].as_bool().unwrap_or(false) {
+        enabled.push("vault available (not initialized)");
+    }
+    if enabled.is_empty() {
+        enabled.push("none");
+    }
+    enabled
+}
+
+fn string_list(values: Option<&Vec<serde_json::Value>>) -> Vec<String> {
+    match values {
+        Some(values) => values
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::format_info_summary;
+
+    #[test]
+    fn agent_target_policy_is_visible_in_human_output() {
+        let target = json!({
+            "id": {"component": "api", "action": "test"},
+            "intent": "check",
+            "effects": ["read_only"],
+            "arguments": {},
+            "freshness_policy": {
+                "contract_epoch": 8,
+                "mode": "target_freshness_v1",
+                "inputs_policy": {
+                    "effective": "exhaustive",
+                    "defaulted": false,
+                    "provenance": "declared"
+                },
+                "source_state": {
+                    "effective": "worktree",
+                    "defaulted": false,
+                    "provenance": "declared"
+                }
+            }
+        });
+        let summary = format_info_summary(&json!({
+            "command": "info target",
+            "workspace": {"name": "ExampleProject", "contract_version": 8},
+            "target": target
+        }));
+
+        assert!(
+            summary.contains("Freshness: inputs=exhaustive"),
+            "{summary}"
+        );
+        assert!(summary.contains("source=worktree"), "{summary}");
+        assert!(
+            summary.contains("defaulted=false, provenance=declared"),
+            "{summary}"
+        );
+        assert!(summary.contains("mode=target_freshness_v1"), "{summary}");
+    }
+
+    #[test]
+    fn standard_target_summary_remains_unchanged() {
+        let summary = format_info_summary(&json!({
+            "command": "info targets",
+            "workspace": {"name": "ExampleProject", "contract_version": 8},
+            "targets": [{"id": {"component": "api", "action": "test"}}]
+        }));
+
+        assert_eq!(
+            summary,
+            "Jig targets: ExampleProject (contract v8)\n  Targets: 1\n  - api:test\n  full record: rerun with --json"
+        );
+    }
+}

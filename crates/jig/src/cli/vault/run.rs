@@ -1,0 +1,360 @@
+use std::io::IsTerminal;
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+use jig_context::RepoContext;
+
+use super::{VaultCommand, render};
+use crate::cli::output::{self, emit};
+use crate::cli::run::finish_after_json_output;
+use crate::cli::structured_error::require_json_ok;
+use crate::exit::CliExit;
+use crate::runtime;
+
+pub(in crate::cli) fn run_vault_command(command: VaultCommand, json_output: bool) -> Result<()> {
+    run_vault_command_with_terminal_state(
+        command,
+        json_output,
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    )
+}
+
+#[cfg(test)]
+fn run_vault_command_with_stdout_terminal(
+    command: VaultCommand,
+    json_output: bool,
+    stdout_is_terminal: bool,
+) -> Result<()> {
+    run_vault_command_with_terminal_state(command, json_output, true, stdout_is_terminal)
+}
+
+fn run_vault_command_with_terminal_state(
+    command: VaultCommand,
+    json_output: bool,
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+) -> Result<()> {
+    if matches!(&command, VaultCommand::Tui(_)) {
+        if json_output {
+            bail!("--json is not supported by vault tui; use the interactive terminal interface");
+        }
+        jig_tui::require_terminal_with_state(
+            "jig vault tui",
+            "use `jig vault field list` for non-interactive metadata",
+            stdin_is_terminal,
+            stdout_is_terminal,
+        )?;
+    }
+    let render = vault_renderer(&command);
+    let mut runtime_command: crate::command::VaultCommand = command.into();
+    let is_raw = vault_command_uses_raw_output(&runtime_command);
+    validate_raw_vault_command(&runtime_command, json_output, stdout_is_terminal)?;
+    if vault_command_needs_input_preparation(&runtime_command) {
+        runtime::prepare_vault_raw_input(&mut runtime_command)?;
+    }
+    apply_repo_vault_scope(&mut runtime_command)?;
+    runtime::preflight_vault_scope(vault_options_mut(&mut runtime_command))?;
+    runtime::preflight_scoped_vault_command(&mut runtime_command)?;
+    if let crate::command::VaultCommand::Tui(request) = runtime_command {
+        let initial_passphrase = runtime::take_optional_vault_tui_passphrase()?;
+        // Capture consumes the current value and clears both reserved names;
+        // repeat the boundary call to preserve the invariant if capture
+        // behavior changes later.
+        runtime::strip_vault_passphrase_environment();
+        return runtime::run_vault_tui(request, initial_passphrase);
+    }
+    let is_run = matches!(runtime_command, crate::command::VaultCommand::Run(_));
+    if vault_command_requires_passphrase(&runtime_command) {
+        // Invariant: capture and clear the process environment copy before vault
+        // runtime code can start background threads.
+        match &runtime_command {
+            crate::command::VaultCommand::Init(_) => runtime::capture_new_vault_passphrase()?,
+            crate::command::VaultCommand::Passphrase(
+                crate::command::VaultPassphraseCommand::Change(_),
+            ) => runtime::capture_vault_passphrase_change()?,
+            _ => runtime::capture_vault_passphrase()?,
+        }
+    }
+    // Status and any future passphrase-free vault commands still cross the
+    // same reserved-environment boundary. Successful capture modes already do
+    // this themselves; repeat it here so every dispatched invocation is safe.
+    runtime::strip_vault_passphrase_environment();
+    if is_raw {
+        return match runtime::dispatch_vault_raw(runtime_command)? {
+            runtime::VaultRawOutcome::Complete => Ok(()),
+            runtime::VaultRawOutcome::ChildExit(0) => Ok(()),
+            runtime::VaultRawOutcome::ChildExit(status) => Err(vault_exec_child_exit(status)),
+        };
+    }
+    let output = runtime::dispatch_vault(runtime_command)?;
+    emit(json_output, render, &output)?;
+    if is_run {
+        // `vault run` mirrors the child process status. Its JSON `ok` field is
+        // derived from that same status, so avoid reporting a second generic
+        // ok=false error for the same child failure.
+        return finish_after_json_output(require_vault_child_status_ok(&output), json_output);
+    }
+    finish_after_json_output(require_json_ok(true, &output), json_output)
+}
+
+/// `vault run` mirrors its child: a non-zero child status becomes the exit.
+fn require_vault_child_status_ok(output: &serde_json::Value) -> Result<()> {
+    let status = output
+        .get("result")
+        .and_then(|value| value.get("exit_status"))
+        .and_then(serde_json::Value::as_i64);
+    if status.is_none() && output.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
+        anyhow::bail!("vault run returned ok=false without result.exit_status");
+    }
+    let Some(status) = status else {
+        return Ok(());
+    };
+    if status != 0 {
+        // The CLI process exit API is limited to shell-style status bytes.
+        // Preserve non-zero vault child failures while keeping output portable.
+        let status = status.clamp(1, 255) as i32;
+        return Err(
+            CliExit::reported(status, format!("Vault child exited with status {status}")).into(),
+        );
+    }
+    Ok(())
+}
+
+/// `vault exec` is transparent: the child already owned stdout and stderr.
+fn vault_exec_child_exit(status: i32) -> anyhow::Error {
+    CliExit::reported(
+        status,
+        format!("Transparent vault child exited with status {status}"),
+    )
+    .into()
+}
+
+const fn vault_command_needs_input_preparation(command: &crate::command::VaultCommand) -> bool {
+    vault_command_uses_raw_output(command)
+        || matches!(command, crate::command::VaultCommand::Import(_))
+}
+
+const fn vault_command_uses_raw_output(command: &crate::command::VaultCommand) -> bool {
+    matches!(
+        command,
+        crate::command::VaultCommand::Exec(_)
+            | crate::command::VaultCommand::Inject(_)
+            | crate::command::VaultCommand::Read(_)
+    )
+}
+
+fn validate_raw_vault_command(
+    command: &crate::command::VaultCommand,
+    json_output: bool,
+    stdout_is_terminal: bool,
+) -> Result<()> {
+    let (name, reveal, out_file, overwrite) = match command {
+        crate::command::VaultCommand::Exec(_) => {
+            if json_output {
+                bail!(
+                    "--json is not supported by vault exec; child output is a raw streaming protocol"
+                );
+            }
+            return Ok(());
+        }
+        crate::command::VaultCommand::Read(request) => (
+            "vault read",
+            request.reveal,
+            request.out_file.as_deref(),
+            request.overwrite,
+        ),
+        crate::command::VaultCommand::Inject(request) => (
+            "vault inject",
+            request.reveal,
+            request.out_file.as_deref(),
+            request.overwrite,
+        ),
+        _ => return Ok(()),
+    };
+
+    if json_output {
+        bail!("--json is not supported by {name}; choose an exact byte output sink instead");
+    }
+    if reveal && out_file.is_some() {
+        bail!("{name} cannot combine --reveal with --out-file");
+    }
+    if overwrite && out_file.is_none() {
+        bail!("{name} requires --out-file when --overwrite is used");
+    }
+    if out_file.is_none() && stdout_is_terminal && !reveal {
+        bail!("{name} refuses to reveal bytes to a terminal without --reveal");
+    }
+
+    if let crate::command::VaultCommand::Inject(request) = command
+        && let Some(output) = &request.out_file
+        && !request.overwrite
+        && input_and_output_are_same_file(&request.input, output)?
+    {
+        bail!(
+            "vault inject input and output refer to the same file; pass --overwrite to request atomic replacement"
+        );
+    }
+
+    Ok(())
+}
+
+fn input_and_output_are_same_file(input: &Path, output: &Path) -> Result<bool> {
+    if input == Path::new("-") {
+        return Ok(false);
+    }
+    if normalize_absolute_path(input)? == normalize_absolute_path(output)? {
+        return Ok(true);
+    }
+
+    let (Ok(input_metadata), Ok(output_metadata)) =
+        (std::fs::metadata(input), std::fs::metadata(output))
+    else {
+        return Ok(false);
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        Ok(input_metadata.dev() == output_metadata.dev()
+            && input_metadata.ino() == output_metadata.ino())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (input_metadata, output_metadata);
+        Ok(std::fs::canonicalize(input).ok() == std::fs::canonicalize(output).ok())
+    }
+}
+
+fn normalize_absolute_path(path: &Path) -> Result<std::path::PathBuf> {
+    use std::path::Component;
+
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    Ok(normalized)
+}
+
+const fn vault_renderer(command: &VaultCommand) -> output::Render {
+    match command {
+        VaultCommand::Run(_) => render::format_vault_run_summary,
+        _ => render::format_vault_generic_summary,
+    }
+}
+
+const fn vault_command_requires_passphrase(command: &crate::command::VaultCommand) -> bool {
+    !matches!(
+        command,
+        crate::command::VaultCommand::Status(_) | crate::command::VaultCommand::Tui(_)
+    )
+}
+
+/// Context for a discovered repository configuration that fails to load.
+/// Agents act on error text, so it must not suggest deleting configuration or
+/// writing harness files, routes `--home` to the operator as the generated
+/// Vault rules do, and stays value-free; the load error follows it.
+const VAULT_REPO_CONTEXT_HINT: &str = "Vault scope selection could not load the Jig repository configuration found in this directory or a parent. Do not delete or bypass an existing repository's configuration; fix the reported problem (for example by updating Jig) or ask the operator. Placeholder harness files created only to reach the vault are unsupported. Outside a Jig repository, `jig vault` uses the user-level vault. Selecting a vault directory with `--home DIR` (a private directory outside any repository) is an operator diagnostic step; agents must ask the operator instead of passing it. Reported problem";
+
+pub(super) fn apply_repo_vault_scope(command: &mut crate::command::VaultCommand) -> Result<()> {
+    let options = vault_options_mut(command);
+    if options.home.is_some() {
+        return Ok(());
+    }
+
+    // Fail closed: a configuration that exists but cannot load must never
+    // fall back to the user-level vault or bypass `allow_global`.
+    let Some(ctx) = RepoContext::load_optional().context(VAULT_REPO_CONTEXT_HINT)? else {
+        return Ok(());
+    };
+    let vault = ctx.vault_config();
+    apply_repo_vault_scope_to_options(
+        options,
+        runtime::repo_vault_options_for_context(&ctx),
+        vault.allow_global(),
+    )
+}
+
+pub(super) const fn vault_options_mut(
+    command: &mut crate::command::VaultCommand,
+) -> &mut crate::command::VaultRuntimeOptions {
+    match command {
+        crate::command::VaultCommand::Audit(command) => match command {
+            crate::command::VaultAuditCommand::Verify(request) => &mut request.vault,
+        },
+        crate::command::VaultCommand::Backup(command) => match command {
+            crate::command::VaultBackupCommand::Create(request) => &mut request.vault,
+            crate::command::VaultBackupCommand::Restore(request) => &mut request.vault,
+        },
+        crate::command::VaultCommand::Init(request) => &mut request.vault,
+        crate::command::VaultCommand::Status(request) => &mut request.vault,
+        crate::command::VaultCommand::Tui(request) => &mut request.vault,
+        crate::command::VaultCommand::Migrate(request) => &mut request.vault,
+        crate::command::VaultCommand::Passphrase(command) => match command {
+            crate::command::VaultPassphraseCommand::Change(request) => &mut request.vault,
+        },
+        crate::command::VaultCommand::Exec(request) => &mut request.vault,
+        crate::command::VaultCommand::Import(command) => match command {
+            crate::command::VaultImportCommand::OnePassword(request) => &mut request.vault,
+        },
+        crate::command::VaultCommand::Field(command) => match command {
+            crate::command::VaultFieldCommand::List(request) => &mut request.vault,
+            crate::command::VaultFieldCommand::Set(request) => &mut request.vault,
+            crate::command::VaultFieldCommand::Remove(request) => &mut request.vault,
+        },
+        crate::command::VaultCommand::Inject(request) => &mut request.vault,
+        crate::command::VaultCommand::Read(request) => &mut request.vault,
+        crate::command::VaultCommand::Secret(command) => match command {
+            crate::command::VaultSecretCommand::List(request) => &mut request.vault,
+            crate::command::VaultSecretCommand::Set(request) => &mut request.vault,
+            crate::command::VaultSecretCommand::Remove(request) => &mut request.vault,
+        },
+        crate::command::VaultCommand::Run(request) => &mut request.vault,
+    }
+}
+
+pub(super) fn apply_repo_vault_scope_to_options(
+    options: &mut crate::command::VaultRuntimeOptions,
+    repo_options: Option<crate::command::VaultRuntimeOptions>,
+    allow_global: bool,
+) -> Result<()> {
+    if options.home.is_some() {
+        return Ok(());
+    }
+    let has_repo_scope = repo_options.is_some();
+    match &options.scope {
+        crate::command::VaultScopeSelection::Auto => {
+            if let Some(repo_options) = repo_options {
+                *options = repo_options;
+            }
+            Ok(())
+        }
+        crate::command::VaultScopeSelection::Global if !allow_global && has_repo_scope => {
+            anyhow::bail!(
+                "This repo is configured for repo-scoped vault access and [vault].allow_global is false; remove --global or set allow_global = true after reviewing the risk."
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+#[path = "run_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "run_context_tests.rs"]
+mod context_tests;

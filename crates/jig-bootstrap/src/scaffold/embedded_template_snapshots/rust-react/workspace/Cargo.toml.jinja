@@ -1,0 +1,58 @@
+[workspace]
+resolver = "3"
+members = [
+  "apps/<<[ package_name ]>>-api",
+[% if admin_api_enabled %]
+  "apps/<<[ package_name ]>>-admin-api",
+[% endif %]
+  "crates/<<[ package_name ]>>-core",
+  "crates/<<[ package_name ]>>",
+  "crates/<<[ package_name ]>>-http",
+  "crates/<<[ package_name ]>>-http-common",
+  "crates/<<[ package_name ]>>-runtime",
+[% if admin_api_enabled %]
+  "crates/<<[ package_name ]>>-admin-http",
+[% endif %]
+  "crates/<<[ package_name ]>>-test-support",
+[% if db_enabled %]
+  "crates/<<[ package_name ]>>-db",
+[% endif %]
+[% if jobs_enabled %]
+  "crates/<<[ package_name ]>>-jobs",
+[% endif %]
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+rust-version = "1.94"
+
+[workspace.lints.clippy]
+cognitive_complexity = "warn"
+mod_module_files = "warn"
+
+[workspace.dependencies]
+batter = { git = "https://github.com/bpcakes/batter", rev = "<<[ batter_revision ]>>", features = ["axum"[% if db_enabled %], "sqlx"[% endif %][% if metrics_enabled %], "otlp"[% endif %][% if jobs_enabled %], "runledger"[% endif %]] }
+anyhow = "1"
+async-trait = "0.1"
+axum = "0.8"
+dotenvy = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+utoipa = "5.5.0"
+utoipa-axum = "0.2.0"
+[% if db_enabled %]
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "<<[ sqlx_driver ]>>", "migrate", "macros"] }
+# Batter's SQLx fixture support takes the harness by value, so this must stay on
+# the exact revision Batter selects. Upgrade both pins together.
+postgres-test-harness = { git = "https://github.com/bpcakes/postgres-test-harness.git", rev = "<<[ postgres_test_harness_revision ]>>", default-features = false }
+[% endif %]
+[% if jobs_enabled %]
+uuid = { version = "1", features = ["v7"] }
+[% endif %]

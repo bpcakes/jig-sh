@@ -1,0 +1,45 @@
+[package]
+name = "jig-repository"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Repository action catalog, run planning, and Git source identity for Jig."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lib]
+name = "jig_repository"
+
+[features]
+# Plan helpers that dependents' tests call directly.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+globset.workspace = true
+jig-context.workspace = true
+jig-contract.workspace = true
+jig-execution.workspace = true
+jig-file-budget.workspace = true
+jig-git.workspace = true
+jig-owned-process.workspace = true
+jig-rust.workspace = true
+jig-state.workspace = true
+libc.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+time.workspace = true
+toml.workspace = true
+toml_edit = "0.23.10"
+
+[dev-dependencies]
+jig-context = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

@@ -1,8 +1,8 @@
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
-use crate::root_commands::{self, RootCommand};
-use crate::tool_defs::tool;
+use jig_commands::root_commands::{self, RootCommand, RootCommandId};
+use jig_commands::tool_defs::tool;
 
 use super::VaultCapability;
 
@@ -119,76 +119,10 @@ pub(super) fn info_with_capabilities(
     agent: &Value,
 ) -> Value {
     let jig = command_prefix(ctx);
-    let mut commands = vec![
-        ready_command(root_commands::INIT),
-        ready_command(root_commands::PRESETS),
-        ready_command(root_commands::ADOPT),
-        ready_command(root_commands::UPDATE),
-        manifest_command(
-            ctx,
-            root_commands::BOOTSTRAP,
-            tool::BOOTSTRAP,
-            (
-                ReasonCode::BootstrapToolMissing,
-                "The bootstrap tool is missing from the generated contract.",
-            ),
-            (
-                ReasonCode::BootstrapToolInvalid,
-                "The bootstrap tool declaration or configured command is invalid.",
-            ),
-        ),
-        manifest_command(
-            ctx,
-            root_commands::SETUP,
-            tool::BOOTSTRAP,
-            (
-                ReasonCode::BootstrapToolMissing,
-                "Setup cannot prepare project dependencies because the bootstrap tool is missing from the generated contract.",
-            ),
-            (
-                ReasonCode::BootstrapToolInvalid,
-                "Setup cannot prepare project dependencies because the bootstrap tool declaration or configured command is invalid.",
-            ),
-        ),
-        ready_command(root_commands::DOCTOR),
-        ready_command(root_commands::INFO),
-    ];
-
-    commands.push(dev_command(ctx));
-    commands.extend([
-        ready_command(root_commands::CHECK),
-        if ctx.contract_version() >= 6 {
-            ready_command(root_commands::RUN)
-        } else {
-            not_configured_command(
-                root_commands::RUN,
-                ReasonCode::RepositoryContractUpgradeRequired,
-                "Repository actions require contract version 6 or later.",
-                Some("Run `jig update` to migrate the repository."),
-            )
-        },
-        ready_command(root_commands::FILE_BUDGET),
-        ready_command(root_commands::STATUS),
-        ready_command(root_commands::UI),
-        ready_command(root_commands::WORK),
-    ]);
-    // `noop-status` is built in and remains available when no custom workflow
-    // is configured or every configured custom workflow is disabled.
-    commands.push(ready_command(root_commands::LOOP));
-
-    commands.push(migration_command(ctx));
-    commands.push(sqlx_command(ctx));
-    commands.push(vault_command(vault, &jig));
-    commands.push(proxy_command(Some(ctx)));
-    commands.push(agent_command(agent, &jig));
-    commands.extend([
-        ready_command(root_commands::CODEX),
-        ready_command(root_commands::CLAUDE),
-        ready_command(root_commands::AGENT_MAP),
-        ready_command(root_commands::STATE),
-    ]);
-    // `.mcp.json` registers clients; the root stdio server does not read it.
-    commands.push(ready_command(root_commands::MCP));
+    let commands = root_commands::ALL
+        .iter()
+        .map(|&command| command_with_context(command, ctx, &vault, agent, &jig))
+        .collect::<Vec<_>>();
 
     json!({
         "ok": true,
@@ -204,6 +138,75 @@ pub(super) fn info_with_capabilities(
     })
 }
 
+/// Availability of one root command in a valid repository. Keep this match
+/// exhaustive so every new root command states its readiness explicitly.
+fn command_with_context(
+    command: RootCommand,
+    ctx: &RepoContext,
+    vault: &VaultCapability,
+    agent: &Value,
+    jig: &str,
+) -> Value {
+    match command.id {
+        RootCommandId::Bootstrap => manifest_command(
+            ctx,
+            command,
+            tool::BOOTSTRAP,
+            (
+                ReasonCode::BootstrapToolMissing,
+                "The bootstrap tool is missing from the generated contract.",
+            ),
+            (
+                ReasonCode::BootstrapToolInvalid,
+                "The bootstrap tool declaration or configured command is invalid.",
+            ),
+        ),
+        RootCommandId::Setup => manifest_command(
+            ctx,
+            command,
+            tool::BOOTSTRAP,
+            (
+                ReasonCode::BootstrapToolMissing,
+                "Setup cannot prepare project dependencies because the bootstrap tool is missing from the generated contract.",
+            ),
+            (
+                ReasonCode::BootstrapToolInvalid,
+                "Setup cannot prepare project dependencies because the bootstrap tool declaration or configured command is invalid.",
+            ),
+        ),
+        RootCommandId::Dev => dev_command(ctx),
+        RootCommandId::Run if ctx.contract_version() < 6 => not_configured_command(
+            command,
+            ReasonCode::RepositoryContractUpgradeRequired,
+            "Repository actions require contract version 6 or later.",
+            Some("Run `jig update` to migrate the repository."),
+        ),
+        RootCommandId::Migration => migration_command(ctx),
+        RootCommandId::Sqlx => sqlx_command(ctx),
+        RootCommandId::Vault => vault_command(vault, jig),
+        RootCommandId::Proxy => proxy_command(Some(ctx)),
+        RootCommandId::Agent => agent_command(agent, jig),
+        // `loop` stays ready without custom workflows: `noop-status` is built
+        // in and remains available when every configured workflow is disabled.
+        RootCommandId::Init
+        | RootCommandId::Presets
+        | RootCommandId::Adopt
+        | RootCommandId::Update
+        | RootCommandId::Doctor
+        | RootCommandId::Info
+        | RootCommandId::Check
+        | RootCommandId::Run
+        | RootCommandId::FileBudget
+        | RootCommandId::Status
+        | RootCommandId::Ui
+        | RootCommandId::Loop
+        | RootCommandId::Codex
+        | RootCommandId::Claude
+        | RootCommandId::AgentMap
+        | RootCommandId::State => ready_command(command),
+    }
+}
+
 pub(super) fn info_without_context(context_error: &str, fallback: ContextFallback) -> Value {
     let (context_status, dev, vault, repo_context_next_step, dev_proxy_available) = match fallback {
         ContextFallback::Tolerant {
@@ -215,7 +218,7 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
         } => (
             context_status,
             dev,
-            vault_command(vault, &jig),
+            vault_command(&vault, &jig),
             match context_status {
                 RepoContextStatus::Invalid | RepoContextStatus::Recovered => {
                     INVALID_OVERRIDE_NEXT_STEP
@@ -239,34 +242,41 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
             )
         }
     };
-    let commands = vec![
-        ready_command(root_commands::INIT),
-        ready_command(root_commands::PRESETS),
-        ready_command(root_commands::ADOPT),
-        repo_context_command_with_next_step(root_commands::UPDATE, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::BOOTSTRAP, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::SETUP, repo_context_next_step),
-        ready_command(root_commands::DOCTOR),
-        info_without_context_command(repo_context_next_step),
-        dev,
-        repo_context_command_with_next_step(root_commands::CHECK, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::RUN, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::FILE_BUDGET, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::STATUS, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::UI, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::WORK, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::LOOP, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::MIGRATION, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::SQLX, repo_context_next_step),
-        vault,
-        proxy_without_valid_context_command(repo_context_next_step, dev_proxy_available),
-        repo_context_command_with_next_step(root_commands::AGENT, repo_context_next_step),
-        ready_command(root_commands::CODEX),
-        ready_command(root_commands::CLAUDE),
-        repo_context_command_with_next_step(root_commands::AGENT_MAP, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::STATE, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::MCP, repo_context_next_step),
-    ];
+    // Keep this match exhaustive so every new root command states what it
+    // can do without a valid repository context.
+    let commands = root_commands::ALL
+        .iter()
+        .map(|&command| match command.id {
+            RootCommandId::Init
+            | RootCommandId::Presets
+            | RootCommandId::Adopt
+            | RootCommandId::Doctor
+            | RootCommandId::Codex
+            | RootCommandId::Claude => ready_command(command),
+            RootCommandId::Info => info_without_context_command(repo_context_next_step),
+            RootCommandId::Dev => dev.clone(),
+            RootCommandId::Vault => vault.clone(),
+            RootCommandId::Proxy => {
+                proxy_without_valid_context_command(repo_context_next_step, dev_proxy_available)
+            }
+            RootCommandId::Update
+            | RootCommandId::Bootstrap
+            | RootCommandId::Setup
+            | RootCommandId::Check
+            | RootCommandId::Run
+            | RootCommandId::FileBudget
+            | RootCommandId::Status
+            | RootCommandId::Ui
+            | RootCommandId::Loop
+            | RootCommandId::Migration
+            | RootCommandId::Sqlx
+            | RootCommandId::Agent
+            | RootCommandId::AgentMap
+            | RootCommandId::State => {
+                repo_context_command_with_next_step(command, repo_context_next_step)
+            }
+        })
+        .collect::<Vec<_>>();
 
     json!({
         "ok": true,
@@ -414,12 +424,12 @@ fn migration_command(ctx: &RepoContext) -> Value {
                 Some(ReasonCode::MigrationAddToolInvalid),
                 Some(&reason),
                 Some(
-                    "Run `scripts/jig check contract --no-receipt`, correct the repository migration owner, then run `jig update --recopy`.",
+                    "Run `scripts/jig check contract`, correct the repository migration owner, then run `jig update --recopy`.",
                 ),
             );
         }
     };
-    if migration_backend == crate::context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
+    if migration_backend == jig_context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
         return ready_command(root_commands::SQLX);
     }
     manifest_command(
@@ -477,7 +487,7 @@ fn manifest_command(
     ready_command(command)
 }
 
-fn vault_command(vault: VaultCapability, jig: &str) -> Value {
+fn vault_command(vault: &VaultCapability, jig: &str) -> Value {
     if !vault.available {
         let next_step = format!("Run `{jig} vault status` for details.");
         return command_value(
@@ -489,7 +499,9 @@ fn vault_command(vault: VaultCapability, jig: &str) -> Value {
         );
     }
     if !vault.initialized {
-        let next_step = format!("Run `{jig} vault init`.");
+        let next_step = format!(
+            "Operator step: run `{jig} vault init` in a terminal; it prompts for a new vault passphrase. Agents should ask the operator and never choose or handle the passphrase."
+        );
         return command_value(
             root_commands::VAULT,
             "needs_setup",
@@ -617,12 +629,32 @@ fn command_status_label(status: &str) -> &'static str {
     }
 }
 
+/// Prefix for remediation commands. Invoked from the repository root, next
+/// steps use the documented `scripts/jig ...` form; from any other directory
+/// they stay anchored to the discovered root so they remain correct to copy.
+/// The report's `root` field always carries the absolute path.
 pub(super) fn command_prefix(ctx: &RepoContext) -> String {
-    if repo_launcher_available(ctx) {
-        crate::shell::quote(&ctx.root().join("scripts/jig").display().to_string())
-    } else {
+    command_prefix_from(ctx, invoked_at_root(ctx))
+}
+
+fn command_prefix_from(ctx: &RepoContext, at_root: bool) -> String {
+    if !repo_launcher_available(ctx) {
         "jig".into()
+    } else if at_root {
+        "scripts/jig".into()
+    } else {
+        jig_repository::shell::quote(&ctx.root().join("scripts/jig").display().to_string())
     }
+}
+
+fn invoked_at_root(ctx: &RepoContext) -> bool {
+    let Some(cwd) = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| cwd.canonicalize().ok())
+    else {
+        return false;
+    };
+    ctx.root().canonicalize().is_ok_and(|root| root == cwd)
 }
 
 pub(super) fn dev_proxy_available(ctx: Option<&RepoContext>) -> bool {
@@ -651,8 +683,16 @@ fn is_executable_file(path: &std::path::Path) -> bool {
 }
 
 fn adopt_command(ctx: &RepoContext) -> String {
-    let destination = crate::shell::quote(&ctx.root().display().to_string());
-    let mut command = format!("{} adopt {destination}", command_prefix(ctx));
+    adopt_command_from(ctx, invoked_at_root(ctx))
+}
+
+fn adopt_command_from(ctx: &RepoContext, at_root: bool) -> String {
+    let destination = if at_root {
+        ".".to_string()
+    } else {
+        jig_repository::shell::quote(&ctx.root().display().to_string())
+    };
+    let mut command = format!("{} adopt {destination}", command_prefix_from(ctx, at_root));
     let stored_source = ctx.source_path().trim();
     let local_source = ctx.template_local_path().trim();
     let local_source = (!local_source.is_empty()).then(|| {
@@ -672,7 +712,7 @@ fn adopt_command(ctx: &RepoContext) -> String {
     };
     if !source.is_empty() {
         command.push_str(" --template ");
-        command.push_str(&crate::shell::quote(&source));
+        command.push_str(&jig_repository::shell::quote(&source));
         let is_remote =
             source.contains("://") || (source.starts_with("git@") && source.contains(':'));
         let is_embedded = source.starts_with("embedded:");
@@ -682,11 +722,11 @@ fn adopt_command(ctx: &RepoContext) -> String {
         let commit = ctx.source_commit().trim();
         if !commit.is_empty() && !is_embedded {
             command.push_str(" --vcs-ref ");
-            command.push_str(&crate::shell::quote(commit));
+            command.push_str(&jig_repository::shell::quote(commit));
         }
         if use_local_source && !stored_source.is_empty() && stored_source != source {
             command.push_str(" --template-source-url ");
-            command.push_str(&crate::shell::quote(stored_source));
+            command.push_str(&jig_repository::shell::quote(stored_source));
         }
     }
     if ctx.is_minimal_footprint() {

@@ -10,9 +10,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-[% if sqlx_driver == "sqlite" %]
-fs4.workspace = true
-url.workspace = true
-[% endif %]
+batter.workspace = true
 sqlx.workspace = true
 tokio.workspace = true

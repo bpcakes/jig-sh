@@ -1,11 +1,12 @@
-use super::{CheckComparisonOpts, ToolOpts};
+use super::CheckComparisonOpts;
+use super::output;
+use super::runtime_dispatch::RuntimeDispatch;
+use crate::command::RuntimeCommand;
 use clap::{Args, ValueEnum};
 use jig_contract::ActionEffect;
 
 #[derive(Args, Debug)]
 pub(crate) struct RepositoryRunOpts {
-    #[command(flatten)]
-    tool: ToolOpts,
     #[arg(value_name = "SELECTOR", help = "Component action or target selectors")]
     selectors: Vec<String>,
     #[arg(
@@ -49,11 +50,21 @@ enum ApprovedEffect {
     External,
 }
 
+impl RepositoryRunOpts {
+    pub(super) fn into_dispatch(self) -> anyhow::Result<RuntimeDispatch> {
+        Ok(RuntimeDispatch::new(
+            RuntimeCommand::Run(self.try_into()?),
+            output::format_repository_run_summary,
+        )
+        .failing_on_ok_false())
+    }
+}
+
 impl TryFrom<RepositoryRunOpts> for crate::command::RepositoryRunRequest {
     type Error = anyhow::Error;
     fn try_from(opts: RepositoryRunOpts) -> Result<Self, Self::Error> {
         Ok(Self {
-            arguments: crate::repository::arguments::parse_cli(opts.arguments)?,
+            arguments: jig_repository::arguments::parse_cli(opts.arguments)?,
             comparison: opts.comparison.request()?,
             selectors: opts.selectors,
             profile: opts.profile,
@@ -68,7 +79,6 @@ impl TryFrom<RepositoryRunOpts> for crate::command::RepositoryRunRequest {
                     ApprovedEffect::External => ActionEffect::External,
                 })
                 .collect(),
-            tool: opts.tool.into(),
         })
     }
 }
@@ -129,8 +139,6 @@ mod tests {
             "api:generate",
             "--approve-effect",
             "worktree",
-            "--plan-id",
-            "plan_fixture",
             "--fail-fast",
             "--comparison-strict-inventory",
         ])
@@ -144,10 +152,6 @@ mod tests {
         assert_eq!(request.approved_effects, [ActionEffect::Worktree]);
         assert!(request.fail_fast);
         assert!(request.comparison.is_some());
-        assert_eq!(
-            request.tool.into_parts(),
-            (Some("plan_fixture".into()), true)
-        );
         for args in [
             vec!["jig", "run", "--approve-effect", "read-only"],
             vec![

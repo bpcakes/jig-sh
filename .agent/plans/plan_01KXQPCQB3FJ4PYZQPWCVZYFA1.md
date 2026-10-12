@@ -1,1 +1,0 @@
-Validate iteration 14 state compatibility, repeat all gates, then run the exact merged comprehensive review until it has no actionable findings.

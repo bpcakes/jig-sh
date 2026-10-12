@@ -1,11 +1,11 @@
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use jig_contract::ActionEffect;
+use jig_execution::ExecutionControl;
+use jig_repository::{PlanRunRequest, RepositoryCatalog};
 use serde_json::{Value, json};
 
 use crate::command::RepositoryRunRequest;
-use crate::context::RepoContext;
-use crate::execution::ExecutionControl;
-use crate::repository::{PlanRunRequest, RepositoryCatalog};
 
 use super::run_execution::{ExecuteCheckRunRequest, execute_foreground_action_run};
 
@@ -22,12 +22,11 @@ pub(super) fn dispatch(
     }
     let catalog = RepositoryCatalog::from_context(&current)?;
     if request.comparison.is_some()
-        && current.contract_version() < crate::repository::FILE_BUDGET_CONTRACT_VERSION
+        && current.contract_version() < jig_repository::FILE_BUDGET_CONTRACT_VERSION
     {
         bail!("explicit run comparison authority requires repository contract version 7 or later");
     }
-    let (work_plan_id, record_receipts) = request.tool.into_parts();
-    let plan = crate::repository::plan_action_run_with_cancellation(
+    let plan = jig_repository::plan_action_run_with_cancellation(
         &current,
         &catalog,
         PlanRunRequest {
@@ -35,7 +34,6 @@ pub(super) fn dispatch(
             profile: request.profile,
             affected_base: request.affected_base,
             comparison: request.comparison,
-            work_plan_id: work_plan_id.clone(),
         },
         request.arguments,
         &|| observer.cancelled(),
@@ -44,16 +42,12 @@ pub(super) fn dispatch(
         return Ok(json!({"ok": true, "command": "run plan", "executed": false, "plan": plan}));
     }
     validate_effect_approval("jig run", &plan.effects, &request.approved_effects)?;
-    if let Some(id) = work_plan_id.as_deref() {
-        crate::state::ensure_plan_is_open(&current, id)?;
-    }
     let execution = execute_foreground_action_run(
         &current,
         &catalog,
         plan.clone(),
         ExecuteCheckRunRequest {
-            work_plan_id,
-            record_receipts,
+            alias_override: None,
             fail_fast: request.fail_fast,
         },
         observer,

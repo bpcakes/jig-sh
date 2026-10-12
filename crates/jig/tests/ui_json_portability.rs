@@ -5,8 +5,8 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
-use jig_ui::dashboard::{
-    PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
+use jig_dashboard::{
+    RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
 };
 
 mod support;
@@ -95,36 +95,13 @@ fn assert_exact_root_fields(value: &Value, expected: &[&str]) {
 }
 
 #[test]
-fn recorder_plan_and_status_json_entrypoints_remain_portable_after_deletion() {
+fn recorder_and_status_json_entrypoints_remain_portable_after_deletion() {
     let root = fixture();
 
     let recorder = success_json(jig(root.path(), &["ui", "--json"]));
     assert_eq!(recorder["command"], "ui");
-    assert_eq!(recorder["snapshot_kind"], "recorder");
+    assert_eq!(recorder["schema_version"], RECORDER_SCHEMA_VERSION);
     assert_exact_root_fields(&recorder, RECORDER_ROOT_FIELDS);
-
-    let started = jig(
-        root.path(),
-        &[
-            "work",
-            "start",
-            "--title",
-            "Example plan",
-            "--body",
-            "# Example plan",
-            "--print-plan-id",
-        ],
-    );
-    assert!(started.status.success());
-    let plan_id = String::from_utf8(started.stdout).unwrap();
-    let plan = success_json(jig(
-        root.path(),
-        &["ui", "--plan", plan_id.trim(), "--json"],
-    ));
-    assert_eq!(plan["command"], "ui");
-    assert_eq!(plan["snapshot_kind"], "plan");
-    assert_eq!(plan["plan"]["plan_id"], plan_id.trim());
-    assert_exact_root_fields(&plan, PLAN_ROOT_FIELDS);
 
     let status = success_json(jig(root.path(), &["status", "--json"]));
     assert_eq!(status["command"], "status");

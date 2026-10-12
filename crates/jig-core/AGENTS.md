@@ -18,7 +18,7 @@
 ## Invariants
 
 - Keep this crate narrowly scoped to base harness feature metadata and pure dev environment naming rules.
-- Do not add runtime orchestration, state handling, MCP transport, bootstrap implementation, or process execution here.
+- Do not add runtime orchestration, state handling, bootstrap implementation, or process execution here.
 - Depend only downward on `jig-contract`; aggregation belongs in `jig-features`.
 
 ## Common commands

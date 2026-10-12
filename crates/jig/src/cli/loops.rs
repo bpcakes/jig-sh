@@ -1,6 +1,12 @@
 use clap::{Args, Subcommand};
+use jig_commands::tool_defs;
 
-use crate::tool_defs;
+use super::output;
+use super::runtime_dispatch::RuntimeDispatch;
+use crate::command::RuntimeCommand;
+
+mod convert;
+pub(super) mod render;
 
 pub(super) const LOOP_AFTER_HELP: &str = "\
 `jig loop` runs runtime-owned orchestration ticks. Workflow kinds are compiled
@@ -11,12 +17,14 @@ Examples:
   jig loop tick --workflow noop-status
   jig loop dispatch
   jig loop status --workflow noop-status
+  jig loop show nightly@1787364000000
   jig loop run --workflow noop-status --until idle
   jig loop clear-attempt --workflow pr-status --item pr-123
   jig loop acknowledge-occurrence --occurrence nightly@1787364000000";
 
 pub(super) const LOOP_TICK_AFTER_HELP: &str = "\
-Run one idempotent reconcile pass for a workflow and record receipt evidence.
+Run one idempotent reconcile pass for a workflow. A tick that claims an
+occurrence records its evidence; inspect it with `jig loop show`.
 
 Examples:
   jig loop tick --workflow noop-status";
@@ -38,6 +46,15 @@ workflows run exactly once through `jig loop tick` or when due through
 Examples:
   jig loop run --workflow noop-status --until idle
   jig loop run --workflow noop-status --until idle --max-ticks 5";
+
+pub(super) const LOOP_SHOW_AFTER_HELP: &str = "\
+Show one loop occurrence and the evidence its tick recorded: what the workflow
+observed and did, worker runs with their bounded output, and errors. Evidence
+is kept while the occurrence stays in history.
+
+Examples:
+  jig loop show nightly@1787364000000
+  jig --json loop show nightly@1787364000000";
 
 pub(super) const LOOP_CLEAR_ATTEMPT_AFTER_HELP: &str = "\
 Clear one cached attempt-budget record after a human resolves or accepts the
@@ -71,6 +88,9 @@ pub(crate) enum LoopCommand {
     /// Show configured loop workflows, live leases, and attempt state.
     #[command(name = tool_defs::cli_command::LOOP_STATUS)]
     Status(LoopStatusOpts),
+    /// Show one occurrence and the evidence its tick recorded.
+    #[command(name = tool_defs::cli_command::LOOP_SHOW, after_help = LOOP_SHOW_AFTER_HELP)]
+    Show(LoopShowOpts),
     /// Run repeated ticks until the workflow is idle or waiting.
     #[command(name = tool_defs::cli_command::LOOP_RUN, after_help = LOOP_RUN_AFTER_HELP)]
     Run(LoopRunOpts),
@@ -107,6 +127,12 @@ pub(crate) struct LoopTickOpts {
 pub(crate) struct LoopStatusOpts {
     #[arg(long, help = "Workflow id to inspect; defaults to all workflows")]
     pub(crate) workflow: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct LoopShowOpts {
+    #[arg(help = "Occurrence id reported by loop status or loop tick")]
+    pub(crate) occurrence: String,
 }
 
 #[derive(Args, Debug)]
@@ -161,4 +187,28 @@ pub(crate) struct LoopTuningOpts {
         help = "Override attempt backoff in seconds for workflows that record attempts"
     )]
     pub(crate) backoff_seconds: Option<u64>,
+}
+
+impl LoopCommand {
+    pub(super) fn into_dispatch(self) -> RuntimeDispatch {
+        let render: output::Render = match &self {
+            Self::Tick(_) => render::format_loop_tick_summary,
+            Self::Dispatch(_) => render::format_loop_dispatch_summary,
+            Self::Status(_) => render::format_loop_status_summary,
+            Self::Show(_) => render::format_loop_show_summary,
+            Self::Run(_) => render::format_loop_run_summary,
+            Self::ClearAttempt(_) => render::format_loop_clear_attempt_summary,
+            Self::AcknowledgeOccurrence(_) => render::format_loop_acknowledge_occurrence_summary,
+        };
+        // Tick, dispatch and run do work, so `ok: false` fails them. The
+        // others are diagnostic reports: their JSON may carry `ok: false`, but
+        // the command stays inspectable instead of becoming a CLI error.
+        let executes = matches!(self, Self::Tick(_) | Self::Dispatch(_) | Self::Run(_));
+        let dispatch = RuntimeDispatch::new(RuntimeCommand::Loop(self.into()), render);
+        if executes {
+            dispatch.failing_on_ok_false()
+        } else {
+            dispatch
+        }
+    }
 }

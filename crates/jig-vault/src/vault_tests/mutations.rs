@@ -21,7 +21,7 @@ fn field_mutations_require_explicit_version_one_migration_without_writing() {
         .unwrap_err();
 
     assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert!(error.to_string().contains("jig vault migrate --to 2"));
+    assert!(error.to_string().contains("jig vault migrate --to 3"));
     assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
     assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
 }
@@ -242,10 +242,10 @@ fn batch_validation_rejects_mixed_valid_short_and_oversized_values_without_writi
 }
 
 #[test]
-fn field_batch_save_failure_leaves_audited_leading_intent_and_can_be_retried() {
+fn v2_field_batch_save_failure_leaves_audited_leading_intent_and_can_be_retried() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    store.init(&passphrase()).unwrap();
+    init_v2(&store, &passphrase());
     let before_vault = store.read_vault_text().unwrap().unwrap();
     let reference = VaultReference::parse("jig://Production/RESTIC_PASSWORD").unwrap();
 
@@ -280,24 +280,30 @@ fn field_batch_save_failure_leaves_audited_leading_intent_and_can_be_retried() {
 
 #[test]
 fn migration_save_failure_leaves_version_one_readable_and_can_be_retried() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    init_v1(&store, &passphrase());
-    let before_vault = store.read_vault_text().unwrap().unwrap();
+    for target in [V2_FORMAT_VERSION, V3_FORMAT_VERSION] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+        init_v1(&store, &passphrase());
+        let before_vault = store.read_vault_text().unwrap().unwrap();
 
-    store.fail_next_vault_write_for_test();
-    let error = store.migrate(&passphrase(), FORMAT_VERSION).unwrap_err();
-    assert_eq!(error.kind(), VaultErrorKind::Io);
-    assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
-    assert!(store.verify_audit(&passphrase()).is_ok());
-    let still_v1: VaultFile = serde_json::from_str(&before_vault).unwrap();
-    assert_eq!(still_v1.header.version, V1_FORMAT_VERSION);
+        store.fail_next_vault_write_for_test();
+        let error = store.migrate(&passphrase(), target).unwrap_err();
+        assert_eq!(error.kind(), VaultErrorKind::Io);
+        assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
+        let still_v1: VaultFile = serde_json::from_str(&before_vault).unwrap();
+        assert_eq!(still_v1.header.version, V1_FORMAT_VERSION);
+        // Format 2 keeps the legacy audit-ahead behavior and needs a retry;
+        // a format 3 migration is pending and the next authenticated command
+        // finishes it instead.
+        assert!(store.verify_audit(&passphrase()).is_ok());
 
-    let retry = store.migrate(&passphrase(), FORMAT_VERSION).unwrap();
-    assert!(retry.changed);
-    let migrated: VaultFile =
-        serde_json::from_str(&store.read_vault_text().unwrap().unwrap()).unwrap();
-    assert_eq!(migrated.header.version, FORMAT_VERSION);
+        let retry = store.migrate(&passphrase(), target).unwrap();
+        assert_eq!(retry.changed, target == V2_FORMAT_VERSION);
+        let migrated: VaultFile =
+            serde_json::from_str(&store.read_vault_text().unwrap().unwrap()).unwrap();
+        assert_eq!(migrated.header.version, target);
+        store.verify_audit(&passphrase()).unwrap();
+    }
 }
 
 #[test]
@@ -334,7 +340,7 @@ fn tampered_audit_blocks_field_batches_and_migration_without_new_append() {
     std::fs::write(migration_store.audit_path(), &migration_audit).unwrap();
     let before_migration_vault = migration_store.read_vault_text().unwrap().unwrap();
     let migration_error = migration_store
-        .migrate(&passphrase(), FORMAT_VERSION)
+        .migrate(&passphrase(), V3_FORMAT_VERSION)
         .unwrap_err();
     assert_eq!(migration_error.kind(), VaultErrorKind::AuditTampered);
     assert_eq!(
@@ -527,14 +533,19 @@ fn init_refuses_stale_audit_without_vault() {
 }
 
 #[test]
-fn init_rejects_short_passphrase() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    let error = store
-        .init(&SecretString::from("too-short".to_string()))
-        .unwrap_err();
-    assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert!(error.to_string().contains("at least 12 bytes"));
+fn init_rejects_short_or_guessable_passphrases_without_state() {
+    for rejected in ["too-short", "passwordpasswordpassword"] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+        let error = store
+            .init(&SecretString::from(rejected.to_string()))
+            .unwrap_err();
+        assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
+        assert_eq!(error.message(), crate::NEW_VAULT_PASSPHRASE_POLICY);
+        assert!(!error.to_string().contains(rejected));
+        assert!(!store.exists().unwrap());
+        assert!(!store.audit_exists().unwrap());
+    }
 }
 
 #[test]
@@ -704,12 +715,11 @@ fn audited_edit_rejects_tampered_audit_before_saving_state() {
         )
         .unwrap_err();
     assert_eq!(public_error.kind(), VaultErrorKind::AuditTampered);
-    let reopened = store.open_unlocked(&passphrase()).unwrap();
-    assert!(
-        reopened
-            .secret_value(&SecretName::parse("other").unwrap())
-            .is_err()
-    );
+    // The tampered chain also blocks authenticated reads, so inspect the
+    // encrypted state directly.
+    let file: VaultFile = serde_json::from_str(&store.read_vault_text().unwrap().unwrap()).unwrap();
+    let state = decrypt_state_for_test(&file, &passphrase());
+    assert!(!String::from_utf8_lossy(&state).contains("\"other\""));
 }
 
 #[test]

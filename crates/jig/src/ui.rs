@@ -4,61 +4,83 @@ use std::cell::Cell;
 use std::io::Write;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
-use jig_ui::dashboard::{
-    DashboardSource, PlanBasis, PlanSnapshotResult, RecorderMode, RecorderRequest, TimelineLimit,
-};
+use anyhow::{Context, Result};
+use jig_dashboard::{DashboardSource, RecorderMode, RecorderRequest, TimelineLimit};
 use jig_ui::terminal::{DashboardOptions, InitialTab};
 
-use crate::cli::UiOpts;
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 mod source;
 
 pub(crate) use source::RepoDashboardSource;
 
-pub(crate) fn run(ctx: RepoContext, opts: UiOpts, json_output: bool) -> Result<()> {
-    let timeline_limit = usize::try_from(opts.effective_timeline_limit())
-        .ok()
-        .and_then(|rows| TimelineLimit::new(rows).ok())
-        .context("the validated timeline limit was outside the runtime range")?;
-    if json_output {
-        let output_started = Cell::new(false);
-        let result = supervised(|cancelled| {
-            let document = json_document(ctx, opts.plan, timeline_limit, cancelled)?;
-            output_started.set(true);
-            write_json(&document)
-        });
-        return finish_json_result(result, output_started.get());
-    }
-    let options = work_dashboard_options(opts, timeline_limit)?;
+/// The interactive dashboard's inputs. The caller owns flag parsing and
+/// defaults.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DashboardRequest {
+    pub(crate) timeline_limit: u64,
+    pub(crate) refresh_interval: Duration,
+}
+
+/// A failed one-shot recorder document. Once output has started, the caller
+/// must not follow the partial document with an error document.
+#[derive(Debug)]
+pub(crate) struct RecorderJsonError {
+    pub(crate) error: anyhow::Error,
+    pub(crate) output_started: bool,
+}
+
+pub(crate) fn run(ctx: RepoContext, request: DashboardRequest) -> Result<()> {
+    let options = timeline_dashboard_options(request)?;
     supervised(|cancelled| {
         jig_ui::terminal::run_with_cancellation(RepoDashboardSource::new(ctx), options, cancelled)
     })
 }
 
-fn work_dashboard_options(opts: UiOpts, timeline_limit: TimelineLimit) -> Result<DashboardOptions> {
-    Ok(DashboardOptions::new(
-        InitialTab::Work,
-        Duration::from_secs(opts.effective_refresh_seconds()),
-    )
-    .with_timeline_limit(timeline_limit.get())
-    .context("the validated timeline limit was outside the terminal range")?
-    .with_initial_plan(opts.plan))
+/// Writes one local recorder snapshot to stdout as a JSON document.
+pub(crate) fn write_recorder_json(
+    ctx: RepoContext,
+    timeline_limit: u64,
+) -> std::result::Result<(), RecorderJsonError> {
+    let output_started = Cell::new(false);
+    let result = runtime_timeline_limit(timeline_limit).and_then(|timeline_limit| {
+        supervised(|cancelled| {
+            let document = json_document(ctx, timeline_limit, cancelled)?;
+            output_started.set(true);
+            write_json(&document)
+        })
+    });
+    recorder_json_result(result, output_started.get())
 }
 
-pub(crate) fn run_status(
-    ctx: RepoContext,
-    refresh_interval: Duration,
-    freshness_timeout_ms: Option<u64>,
-) -> Result<()> {
+fn recorder_json_result(
+    result: Result<()>,
+    output_started: bool,
+) -> std::result::Result<(), RecorderJsonError> {
+    result.map_err(|error| RecorderJsonError {
+        error,
+        output_started,
+    })
+}
+
+fn runtime_timeline_limit(rows: u64) -> Result<TimelineLimit> {
+    usize::try_from(rows)
+        .ok()
+        .and_then(|rows| TimelineLimit::new(rows).ok())
+        .context("the validated timeline limit was outside the runtime range")
+}
+
+fn timeline_dashboard_options(request: DashboardRequest) -> Result<DashboardOptions> {
+    let timeline_limit = runtime_timeline_limit(request.timeline_limit)?;
+    DashboardOptions::new(InitialTab::Timeline, request.refresh_interval)
+        .with_timeline_limit(timeline_limit.get())
+        .context("the validated timeline limit was outside the terminal range")
+}
+
+pub(crate) fn run_status(ctx: RepoContext, refresh_interval: Duration) -> Result<()> {
     let options = status_dashboard_options(refresh_interval);
     supervised(|cancelled| {
-        jig_ui::terminal::run_with_cancellation(
-            RepoDashboardSource::new(ctx).with_freshness_timeout(freshness_timeout_ms),
-            options,
-            cancelled,
-        )
+        jig_ui::terminal::run_with_cancellation(RepoDashboardSource::new(ctx), options, cancelled)
     })
 }
 
@@ -66,32 +88,12 @@ fn status_dashboard_options(refresh_interval: Duration) -> DashboardOptions {
     DashboardOptions::new(InitialTab::Status, refresh_interval)
 }
 
-fn finish_json_result(result: Result<()>, output_started: bool) -> Result<()> {
-    result.map_err(|error| {
-        if output_started {
-            crate::cli::json_output_already_emitted(error)
-        } else {
-            crate::cli::json_command_error("ui", error)
-        }
-    })
-}
-
 fn json_document(
     ctx: RepoContext,
-    plan_id: Option<String>,
     timeline_limit: TimelineLimit,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<u8>> {
     let source = RepoDashboardSource::new(ctx);
-    if let Some(plan_id) = plan_id {
-        return match source.plan(PlanBasis::Fresh, plan_id.clone(), cancelled)? {
-            PlanSnapshotResult::Found(snapshot) => serialize_json(&snapshot),
-            PlanSnapshotResult::NotFound => bail!("plan `{plan_id}` was not found"),
-            PlanSnapshotResult::StaleRecorderEpoch => {
-                bail!("fresh plan collection returned an invalid stale-epoch result")
-            }
-        };
-    }
     let refresh = source.recorder(
         RecorderRequest {
             mode: RecorderMode::Refresh,
@@ -123,7 +125,7 @@ fn write_json_to(output: &mut impl Write, document: &[u8]) -> Result<()> {
 fn supervised<T>(operation: impl FnOnce(&dyn Fn() -> bool) -> Result<T>) -> Result<T> {
     #[cfg(all(unix, not(test)))]
     {
-        let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
+        let signal_session = crate::signal_supervision::SignalSession::start().map_err(|_| {
             anyhow::anyhow!("Dashboard was not started because signal supervision is unavailable")
         })?;
         let cancellation = signal_session.cancellation();

@@ -1,1 +1,0 @@
-Add conservative command inference to adopt: detect Rust test/fmt/clippy wrappers such as Justfile, Makefile, cargo-nextest, and cargo-hack; report detected web tooling hints for turbo, nx, vitest, playwright, eslint, and biome; preserve explicit answers and add regression tests.

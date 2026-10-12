@@ -1,44 +1,4 @@
-#[test]
-fn loop_tick_releases_lease_and_records_failed_receipt_on_workflow_error() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    fs::write(temp.path().join(".agent/state/plans.jsonl"), "{not-json\n").unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
-            workflow: Some("noop-status".into()),
-            lease_ttl_seconds: None,
-            max_attempts: None,
-            backoff_seconds: None,
-        })),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Loop workflow 'noop-status' failed; receipt"));
-
-    let status = crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
-    )
-    .unwrap();
-    assert!(status["leases"].as_array().unwrap().is_empty());
-
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(LOOP_TICK_TOOL.into()),
-            failed_only: true,
-            limit: 10,
-        },
-    )
-    .unwrap();
-    assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
-}
+use super::*;
 
 #[test]
 fn loop_configured_noop_workflow_uses_toml_tuning() {
@@ -166,13 +126,12 @@ esac
         "PRRT_1"
     );
     assert_eq!(
-        output["observed"]["pull_requests"][0]["review_threads"]["nodes"][0]["comments"]
-            ["nodes"][0]["author"]["permission"],
+        output["observed"]["pull_requests"][0]["review_threads"]["nodes"][0]["comments"]["nodes"]
+            [0]["author"]["permission"],
         "write"
     );
     assert_eq!(
-        output["observed"]["pull_requests"][0]["review_threads"]["summary"]
-            ["trusted_unresolved"],
+        output["observed"]["pull_requests"][0]["review_threads"]["summary"]["trusted_unresolved"],
         1
     );
     assert_eq!(
@@ -183,7 +142,7 @@ esac
 
 #[cfg(unix)]
 #[test]
-fn loop_tick_github_pr_status_records_failed_receipt_when_gh_fails() {
+fn loop_tick_github_pr_status_records_failed_evidence_when_gh_fails() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -209,7 +168,10 @@ exit 4
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("Loop workflow 'pr-status' failed; receipt"));
+    assert!(
+        error.contains("Loop workflow 'pr-status' failed in occurrence pr-status@manual:"),
+        "{error}"
+    );
     assert!(
         error.contains(
             "gh repo view --json nameWithOwner,name,owner,url,defaultBranchRef failed with status 4"
@@ -224,18 +186,9 @@ exit 4
     .unwrap();
     assert!(status["leases"].as_array().unwrap().is_empty());
 
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(LOOP_TICK_TOOL.into()),
-            failed_only: true,
-            limit: 10,
-        },
-    )
-    .unwrap();
-    assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
+    let shown = crate::runtime::tests::common::latest_loop_show(&ctx, "pr-status");
+    assert_eq!(shown["occurrence"]["status"], "failed", "{shown:#}");
+    assert_eq!(shown["evidence"]["tick"]["status"], "failed");
 }
 
 #[cfg(unix)]
@@ -414,7 +367,7 @@ exit 2
             .iter()
             .any(|reason| reason == "unresolved_review_threads")
     );
-    assert!(output["actions"][0]["worker_receipt_id"].as_str().is_some());
+    assert_eq!(output["actions"][0]["worker"]["kind"], "worker_run");
     assert_eq!(
         output["actions"][0]["review_thread_posts"][0]["replied"],
         true
@@ -458,25 +411,17 @@ exit 2
     assert!(gh_mutations.contains("resolveReviewThread"));
     assert!(!gh_mutations.contains("PRRT_FOREIGN"));
 
-    let worker_receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(WORKER_RUN_TOOL.into()),
-            failed_only: false,
-            limit: 10,
-        },
-    )
-    .unwrap();
-    assert_eq!(worker_receipts["receipts"].as_array().unwrap().len(), 1);
+    let worker = &output["actions"][0]["worker"];
+    assert_eq!(worker["purpose"], "pr_manager");
     assert_eq!(
-        worker_receipts["receipts"][0]["evidence"]["purpose"],
-        "pr_manager"
+        worker["codex_home_resolved"],
+        output["actions"][0]["codex_home_resolved"]
     );
-    assert_eq!(
-        worker_receipts["receipts"][0]["evidence"]["codex_home_resolved"],
-        "<repository-root>/.codex-loop"
+    assert!(
+        worker["codex_home_resolved"]
+            .as_str()
+            .is_some_and(|home| home.ends_with(".codex-loop")),
+        "{worker:#}"
     );
 }
 
@@ -511,23 +456,11 @@ fn invalid_pr_manager_codex_home_does_not_consume_attempt_budget() {
     .unwrap();
     assert!(status["attempts"].as_array().unwrap().is_empty());
 
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(LOOP_TICK_TOOL.into()),
-            failed_only: true,
-            limit: 10,
-        },
-    )
-    .unwrap();
-    assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
-    assert_eq!(receipts["receipts"][0]["evidence"]["observed"], Value::Null);
-    let actions = receipts["receipts"][0]["evidence"]["actions"]
-        .as_array()
-        .unwrap();
-    assert_eq!(actions.len(), 1, "{receipts:#}");
+    let shown = crate::runtime::tests::common::latest_loop_show(&ctx, "pr-manager");
+    let tick = &shown["evidence"]["tick"];
+    assert_eq!(tick["observed"], Value::Null);
+    let actions = tick["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 1, "{shown:#}");
     assert_eq!(actions[0]["kind"], "pr_manager_pre_execution");
     assert_eq!(actions[0]["status"], "failed");
     assert_eq!(actions[0]["unexecuted_reason"], "pre_execution_error");
@@ -535,14 +468,9 @@ fn invalid_pr_manager_codex_home_does_not_consume_attempt_budget() {
         actions[0]["error"]
             .as_str()
             .is_some_and(|error| error.contains("Codex home does not exist")),
-        "{receipts:#}"
+        "{shown:#}"
     );
-    assert!(
-        receipts["receipts"][0]["evidence"]["attempts"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(tick["attempts"].as_array().unwrap().is_empty());
 }
 
 #[cfg(unix)]

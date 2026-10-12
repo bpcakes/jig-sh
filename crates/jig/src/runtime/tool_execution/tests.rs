@@ -20,7 +20,6 @@ fn prepared_native_input(
         policy_source: jig_contract::PolicySourceV1 {
             path: ".jig/file-budget.toml".into(),
         },
-        work_plan_id: None,
         policy,
         comparison,
     }
@@ -38,7 +37,6 @@ fn native_context<'a>(
         cancelled: &not_cancelled,
         run_id: "run_example",
         target,
-        work_plan_id: None,
     }
 }
 
@@ -301,11 +299,11 @@ legacy_aliases = ["jig.compat_check"]"#,
     );
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let result = execute_manifest_tool_result_without_worktree_fingerprint(
+    let result = execute_manifest_tool_with_observer(
         &ctx,
         "jig.compat_check",
         serde_json::json!({}),
-        None,
+        &mut jig_execution::NoopExecutionObserver,
     )
     .unwrap();
 
@@ -343,15 +341,19 @@ legacy_aliases = ["jig.migration_add"]"#,
         ],
     );
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let result = execute_manifest_tool_result_without_worktree_fingerprint(
+    // A long shell-looking value proves both legacy length compatibility and
+    // byte-exact environment delivery without shell evaluation.
+    let name = format!("Create Examples $(touch injected) {}", "x".repeat(201));
+    let result = execute_manifest_tool_with_observer(
         &ctx,
         tool::MIGRATION_ADD,
-        serde_json::json!({"name": "Create Examples"}),
-        None,
+        serde_json::json!({"name": name}),
+        &mut jig_execution::NoopExecutionObserver,
     )
     .unwrap();
     assert_eq!(result["result"]["exit_status"], 0);
-    assert_eq!(result["result"]["stdout"], "Create Examples");
+    assert_eq!(result["result"]["stdout"], name.as_str());
+    assert!(!temp.path().join("injected").exists());
 }
 
 #[test]
@@ -390,26 +392,23 @@ legacy_aliases = ["jig.compat_contract"]"#,
     );
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let result = execute_manifest_tool_result_without_worktree_fingerprint(
+    let error = execute_manifest_tool_with_observer(
         &ctx,
         "jig.compat_contract",
         serde_json::json!({}),
-        None,
+        &mut jig_execution::NoopExecutionObserver,
     )
-    .unwrap();
+    .unwrap_err()
+    .to_string();
 
-    assert_eq!(result["result"]["exit_status"], 1, "{result:#}");
+    assert!(error.contains("failed with status 1"), "{error}");
     assert!(
-        result["result"]["stderr"]
-            .as_str()
-            .unwrap()
-            .contains("Missing required jig tool definition: jig.bootstrap")
+        error.contains("Missing required jig tool definition: jig.bootstrap"),
+        "{error}"
     );
     assert!(
-        !result["result"]["stderr"]
-            .as_str()
-            .unwrap()
-            .contains("Unsupported native tool: jig.compat_contract")
+        !error.contains("Unsupported native tool: jig.compat_contract"),
+        "{error}"
     );
 }
 
@@ -444,11 +443,11 @@ legacy_aliases = ["jig.compat_check"]"#,
     );
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let error = execute_manifest_tool_result_without_worktree_fingerprint(
+    let error = execute_manifest_tool_with_observer(
         &ctx,
         "jig.bootstrap",
         serde_json::json!({}),
-        None,
+        &mut jig_execution::NoopExecutionObserver,
     )
     .unwrap_err()
     .to_string();
@@ -457,9 +456,7 @@ legacy_aliases = ["jig.compat_check"]"#,
         "{error}"
     );
 
-    let contract_error = crate::policy::validate_contract(&ctx)
-        .unwrap_err()
-        .to_string();
+    let contract_error = jig_policy::validate_contract(&ctx).unwrap_err().to_string();
     assert!(
         contract_error.contains(
             "Contract-v6 tool jig.bootstrap is not mapped to a repository action through legacy_aliases"

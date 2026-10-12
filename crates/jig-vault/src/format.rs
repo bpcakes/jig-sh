@@ -10,9 +10,22 @@ use crate::aad::push_length_prefixed_field;
 use crate::crypto::{KdfParams, decode_array};
 use crate::types::FieldKind;
 
+mod v3;
+
+pub(crate) use v3::{AuditRoot, V3StateFields};
+
 pub(crate) const MAGIC: &str = "jig-vault";
+/// Legacy envelope with concealed-only entries. Readable, never created.
 pub(crate) const V1_FORMAT_VERSION: u32 = 1;
-pub(crate) const FORMAT_VERSION: u32 = 2;
+/// Envelope that adds encrypted field kinds. Retained for compatibility,
+/// including its legacy passphrase rewrap that keeps the DEK.
+pub(crate) const V2_FORMAT_VERSION: u32 = 2;
+/// Envelope that adds an independent audit root, a monotonic state
+/// generation, and the MAC of the state's mutation audit event.
+pub(crate) const V3_FORMAT_VERSION: u32 = 3;
+/// Format created by initialization and offered as the newest explicit
+/// migration target. Legacy-specific behavior must name its own version.
+pub(crate) const LATEST_FORMAT_VERSION: u32 = V3_FORMAT_VERSION;
 pub(crate) const AEAD_ALGORITHM: &str = "xchacha20poly1305";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +52,10 @@ pub(crate) struct VaultHeader {
     pub(crate) kdf: KdfParams,
     pub(crate) salt_b64: String,
     pub(crate) aead: String,
+    /// Committed state generation. Required by version 3 and absent from
+    /// earlier envelopes, whose wire shape must stay unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) generation: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -50,16 +67,23 @@ pub(crate) struct VaultFile {
     pub(crate) state_b64: String,
 }
 
-#[derive(Default, Deserialize, Serialize)]
+/// Decrypted vault state. Version 3 additionally carries its security
+/// fields; earlier versions never do.
+#[derive(Default)]
 pub(crate) struct VaultState {
     pub(crate) secrets: std::collections::BTreeMap<String, SecretEntry>,
+    pub(crate) v3: Option<V3StateFields>,
 }
 
 impl VaultState {
     /// Serializes state using the schema authenticated by the enclosing
-    /// envelope version. Version 1 had no field kind, so writing a legacy
-    /// envelope must not add one that an old binary would silently ignore.
+    /// envelope version. Each version has an explicit schema so a newer
+    /// field can never leak into an envelope that an old binary would
+    /// silently accept while ignoring it.
     pub(crate) fn serialize_for_version(&self, version: u32) -> Result<Vec<u8>> {
+        if (version == V3_FORMAT_VERSION) != self.v3.is_some() {
+            bail!("vault state security fields do not match vault format {version}");
+        }
         match version {
             V1_FORMAT_VERSION => {
                 let secrets = self
@@ -79,19 +103,45 @@ impl VaultState {
                     .collect();
                 Ok(serde_json::to_vec(&VaultStateV1Serialized { secrets })?)
             }
-            FORMAT_VERSION => Ok(serde_json::to_vec(self)?),
+            V2_FORMAT_VERSION => Ok(serde_json::to_vec(&VaultStateV2Serialized {
+                secrets: &self.secrets,
+            })?),
+            V3_FORMAT_VERSION => {
+                let fields = self.v3.as_ref().expect("checked above");
+                v3::serialize_state(&self.secrets, fields)
+            }
             version => bail!("unsupported vault version {version}"),
         }
     }
 
-    pub(crate) fn deserialize_for_version(version: u32, bytes: &[u8]) -> serde_json::Result<Self> {
+    pub(crate) fn deserialize_for_version(version: u32, bytes: &[u8]) -> Result<Self> {
         match version {
-            V1_FORMAT_VERSION => {
-                serde_json::from_slice::<VaultStateV1Deserialized>(bytes).map(Into::into)
+            V1_FORMAT_VERSION => Ok(serde_json::from_slice::<VaultStateV1Deserialized>(bytes)
+                .context("failed to parse version 1 vault state")?
+                .into()),
+            V2_FORMAT_VERSION => {
+                let state = serde_json::from_slice::<VaultStateV2Deserialized>(bytes)
+                    .context("failed to parse version 2 vault state")?;
+                Ok(Self {
+                    secrets: state.secrets,
+                    v3: None,
+                })
             }
-            FORMAT_VERSION => serde_json::from_slice(bytes),
+            V3_FORMAT_VERSION => {
+                let (secrets, fields) = v3::deserialize_state(bytes)?;
+                Ok(Self {
+                    secrets,
+                    v3: Some(fields),
+                })
+            }
             _ => unreachable!("vault headers are validated before state deserialization"),
         }
+    }
+
+    /// Digest of the logical secret map, used to recognize a no-op edit
+    /// without keeping a plaintext copy of the previous state.
+    pub(crate) fn secrets_fingerprint(&self) -> Result<[u8; 32]> {
+        v3::secrets_fingerprint(&self.secrets)
     }
 }
 
@@ -121,6 +171,16 @@ struct SecretEntryV1Deserialized {
     updated_at_ms: i128,
 }
 
+#[derive(Serialize)]
+struct VaultStateV2Serialized<'a> {
+    secrets: &'a std::collections::BTreeMap<String, SecretEntry>,
+}
+
+#[derive(Deserialize)]
+struct VaultStateV2Deserialized {
+    secrets: std::collections::BTreeMap<String, SecretEntry>,
+}
+
 impl Drop for SecretEntryV1Deserialized {
     fn drop(&mut self) {
         self.value_b64.zeroize();
@@ -146,7 +206,7 @@ impl From<VaultStateV1Deserialized> for VaultState {
                 )
             })
             .collect();
-        Self { secrets }
+        Self { secrets, v3: None }
     }
 }
 
@@ -155,6 +215,7 @@ impl fmt::Debug for VaultState {
         formatter
             .debug_struct("VaultState")
             .field("secret_count", &self.secrets.len())
+            .field("v3", &self.v3)
             .finish()
     }
 }
@@ -205,6 +266,16 @@ fn validate_header_with_supported_version(
     if header.aead != AEAD_ALGORITHM {
         bail!("unsupported vault AEAD '{}'", header.aead);
     }
+    match (header.version, header.generation) {
+        (V3_FORMAT_VERSION, Some(generation)) if generation >= 1 => {}
+        (V3_FORMAT_VERSION, Some(_)) => bail!("vault format 3 generation must be at least 1"),
+        (V3_FORMAT_VERSION, None) => bail!("vault format 3 header is missing its generation"),
+        (_, Some(_)) => bail!(
+            "vault format {} header must not contain a generation",
+            header.version
+        ),
+        (_, None) => {}
+    }
     Ok(())
 }
 
@@ -213,12 +284,45 @@ fn validate_v1_header_compat(header: &VaultHeader) -> Result<()> {
     validate_header_with_supported_version(header, |version| version == V1_FORMAT_VERSION)
 }
 
+/// Mirrors the version gate of readers released before format 3 existed.
+#[cfg(test)]
+fn validate_v2_reader_header_compat(header: &VaultHeader) -> Result<()> {
+    validate_header_with_supported_version(header, |version| {
+        matches!(version, V1_FORMAT_VERSION | V2_FORMAT_VERSION)
+    })
+}
+
 pub(crate) const fn is_supported_format_version(version: u32) -> bool {
-    matches!(version, V1_FORMAT_VERSION | FORMAT_VERSION)
+    matches!(
+        version,
+        V1_FORMAT_VERSION | V2_FORMAT_VERSION | V3_FORMAT_VERSION
+    )
+}
+
+/// Formats with encrypted field kinds. They accept field mutation, import,
+/// passphrase change, and backup; version 1 needs explicit migration first.
+pub(crate) const fn supports_field_kinds(version: u32) -> bool {
+    matches!(version, V2_FORMAT_VERSION | V3_FORMAT_VERSION)
+}
+
+/// Formats whose passphrase change rotates the data-encryption key. Format
+/// 2 keeps its frozen contract of rewrapping the unchanged key.
+pub(crate) const fn rotates_dek_on_rekey(version: u32) -> bool {
+    matches!(version, V3_FORMAT_VERSION)
 }
 
 pub(crate) fn payload_aad(header: &VaultHeader, role: AeadRole) -> Vec<u8> {
     let mut aad = header_aad_string(header);
+    if header.version == V3_FORMAT_VERSION && role == AeadRole::State {
+        // The generation changes with every committed state save, so only
+        // the state ciphertext authenticates it. The wrapped DEK stays bound
+        // to the immutable header fields and survives ordinary saves.
+        let generation = header
+            .generation
+            .map(|generation| generation.to_string())
+            .unwrap_or_default();
+        push_length_prefixed_field(&mut aad, "generation", &generation);
+    }
     push_length_prefixed_field(&mut aad, "payload_role", role.as_str());
     aad.into_bytes()
 }
@@ -228,7 +332,8 @@ fn header_aad_string(header: &VaultHeader) -> String {
         // Keep the v1 byte string exactly as it was before v2 existed so
         // legacy ciphertext continues to authenticate without migration.
         V1_FORMAT_VERSION => "jig-vault-header-v1\n",
-        FORMAT_VERSION => "jig-vault-header-v2\n",
+        V2_FORMAT_VERSION => "jig-vault-header-v2\n",
+        V3_FORMAT_VERSION => "jig-vault-header-v3\n",
         // Callers validate headers before attempting cryptography. Use an
         // impossible domain here rather than panicking if a future internal
         // caller asks for AAD before validation.
@@ -272,76 +377,4 @@ pub(crate) fn decode_b64_array<const N: usize>(label: &str, value: &str) -> Resu
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        AEAD_ALGORITHM, AeadRole, FORMAT_VERSION, MAGIC, V1_FORMAT_VERSION, VaultHeader,
-        VaultState, payload_aad, validate_header, validate_v1_header_compat,
-    };
-    use crate::crypto::KdfParams;
-    use crate::types::FieldKind;
-
-    fn fixture_header(version: u32) -> VaultHeader {
-        VaultHeader {
-            magic: MAGIC.into(),
-            version,
-            vault_id: "fixture-vault".into(),
-            created_at_ms: 7,
-            kdf: KdfParams::default(),
-            salt_b64: "c2FsdA==".into(),
-            aead: AEAD_ALGORITHM.into(),
-        }
-    }
-
-    #[test]
-    fn v1_payload_aad_remains_byte_for_byte_stable() {
-        let header = fixture_header(V1_FORMAT_VERSION);
-        let aad = payload_aad(&header, AeadRole::WrappedDek);
-        assert_eq!(
-            aad,
-            b"jig-vault-header-v1\n\
-magic:9:jig-vault\n\
-version:1:1\n\
-vault_id:13:fixture-vault\n\
-created_at_ms:1:7\n\
-kdf.algorithm:8:argon2id\n\
-kdf.memory_kib:6:131072\n\
-kdf.iterations:1:3\n\
-kdf.parallelism:1:4\n\
-kdf.output_len:2:32\n\
-salt_b64:8:c2FsdA==\n\
-aead:17:xchacha20poly1305\n\
-payload_role:11:wrapped_dek\n"
-        );
-    }
-
-    #[test]
-    fn version_two_has_a_distinct_aad_domain_and_old_validator_rejects_it() {
-        let header = fixture_header(FORMAT_VERSION);
-        validate_header(&header).unwrap();
-        assert!(payload_aad(&header, AeadRole::State).starts_with(b"jig-vault-header-v2\n"));
-        let error = validate_v1_header_compat(&header).unwrap_err().to_string();
-        assert_eq!(error, "unsupported vault version 2");
-    }
-
-    #[test]
-    fn missing_v2_field_kind_defensively_defaults_to_concealed() {
-        let state: VaultState = serde_json::from_str(
-            r#"{
-                "secrets": {
-                    "Production/RESTIC_PASSWORD": {
-                        "value_b64": "c2VjcmV0",
-                        "value_len": 6,
-                        "created_at_ms": 1,
-                        "updated_at_ms": 1
-                    }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            state.secrets["Production/RESTIC_PASSWORD"].kind,
-            FieldKind::Concealed
-        );
-    }
-}
+mod tests;

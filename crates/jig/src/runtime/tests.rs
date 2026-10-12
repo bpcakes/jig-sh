@@ -20,17 +20,11 @@ fn named_v6_checks_preserve_feature_specific_unavailable_diagnostics() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let mut observer = crate::execution::NoopExecutionObserver;
+    let mut observer = jig_execution::NoopExecutionObserver;
 
-    let direct_error = dispatch_named_check(
-        &ctx,
-        "sqlc",
-        crate::tool_defs::tool::SQLC_CHECK,
-        crate::command::ToolRequest::default(),
-        &mut observer,
-    )
-    .unwrap_err()
-    .to_string();
+    let direct_error = dispatch_named_check(&ctx, NamedCheck::SQLC, &mut observer)
+        .unwrap_err()
+        .to_string();
 
     let flagged_error = dispatch_repository_check(
         &ctx,
@@ -41,7 +35,6 @@ fn named_v6_checks_preserve_feature_specific_unavailable_diagnostics() {
             comparison: None,
             explain: true,
             fail_fast: false,
-            tool: crate::command::ToolRequest::default(),
         },
         &mut observer,
     )
@@ -78,7 +71,6 @@ rust_migration_layout = "versioned_artifacts"
         &ctx,
         RuntimeCommand::MigrationAdd(crate::command::MigrationAddRequest {
             name: "create_users".into(),
-            tool: crate::command::ToolRequest::default(),
         }),
     )
     .unwrap_err();
@@ -117,7 +109,6 @@ migration_add_command = "mkdir -p schema && touch schema/should-not-exist.sql"
         &ctx,
         RuntimeCommand::MigrationAdd(crate::command::MigrationAddRequest {
             name: "create_users".into(),
-            tool: crate::command::ToolRequest::default(),
         }),
     )
     .unwrap_err();
@@ -288,7 +279,7 @@ fn dispatch(ctx: &RepoContext, command: CommandKind) -> Result<Value> {
 
 fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
     match command {
-        CommandKind::Bootstrap(opts) => RuntimeCommand::Bootstrap(opts.into()),
+        CommandKind::Bootstrap => RuntimeCommand::Bootstrap,
         CommandKind::Run(opts) => RuntimeCommand::Run(opts.try_into().unwrap()),
         CommandKind::Check(command) => RuntimeCommand::Check(command.try_into().unwrap()),
         CommandKind::Migration(MigrationCommand::Add(opts)) => {
@@ -297,12 +288,8 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Sqlx(SqlxCommand::Migration(SqlxMigrationCommand::Add(opts))) => {
             RuntimeCommand::MigrationAdd(opts.into())
         }
-        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts))) => {
-            RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(opts.into()))
-        }
-        CommandKind::SchemaDump(opts) => {
-            RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(opts.into()))
-        }
+        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump))
+        | CommandKind::SchemaDump => RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump),
         CommandKind::MigrationAdd(opts) => RuntimeCommand::MigrationAdd(opts.into()),
         CommandKind::AgentMap(command) => RuntimeCommand::AgentMap(command.into()),
         CommandKind::GenerateSqlxUncheckedQueriesTodo(opts) => {
@@ -311,7 +298,6 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Dev(opts) => RuntimeCommand::Dev(opts.into()),
         CommandKind::Proxy(command) => RuntimeCommand::Proxy(command.into()),
         CommandKind::Agent(command) => RuntimeCommand::Agent(command.into()),
-        CommandKind::Work(command) => RuntimeCommand::Work(command.into()),
         CommandKind::Loop(command) => RuntimeCommand::Loop(command.into()),
         CommandKind::State(command) => RuntimeCommand::State(command.into()),
         CommandKind::Init(_)
@@ -327,8 +313,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         | CommandKind::Claude(_)
         | CommandKind::Codex(_)
         | CommandKind::Vault(_)
-        | CommandKind::Ui(_)
-        | CommandKind::Mcp => {
+        | CommandKind::Ui(_) => {
             panic!("runtime test helper only accepts runtime commands")
         }
     }
@@ -344,28 +329,16 @@ fn dispatch_routes_state_summary() {
 
     assert_eq!(output["ok"], true);
     assert_eq!(output["command"], "state summary");
-    assert_eq!(output["counts"]["receipts"], 0);
-}
-
-#[test]
-fn dispatch_distinguishes_work_status_from_state_summary() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = dispatch(&ctx, CommandKind::Work(crate::cli::WorkCommand::Status)).unwrap();
-
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["command"], "work status");
+    assert_eq!(output["counts"]["runs"], 0);
 }
 
 #[test]
 fn runtime_state_summary_polls_operation_cancellation_during_collection() {
     struct CancelAfterBoundary(std::cell::Cell<usize>);
 
-    impl crate::execution::ExecutionObserver for CancelAfterBoundary {}
+    impl jig_execution::ExecutionObserver for CancelAfterBoundary {}
 
-    impl crate::execution::ExecutionCancellation for CancelAfterBoundary {
+    impl jig_execution::ExecutionCancellation for CancelAfterBoundary {
         fn cancelled(&self) -> bool {
             let polls = self.0.get() + 1;
             self.0.set(polls);
@@ -387,50 +360,6 @@ fn runtime_state_summary_polls_operation_cancellation_during_collection() {
     .to_string();
 
     assert_eq!(error, "status collection was cancelled");
-}
-
-#[test]
-fn runtime_does_not_reclassify_committed_work_as_cancelled() {
-    struct CancelAfterEntry(std::cell::Cell<usize>);
-
-    impl crate::execution::ExecutionObserver for CancelAfterEntry {}
-
-    impl crate::execution::ExecutionCancellation for CancelAfterEntry {
-        fn cancelled(&self) -> bool {
-            let polls = self.0.get() + 1;
-            self.0.set(polls);
-            polls > 1
-        }
-    }
-
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let mut observer = CancelAfterEntry(std::cell::Cell::new(0));
-
-    let output = dispatch_with_observer(
-        &ctx,
-        RuntimeCommand::Work(crate::command::WorkCommand::Start(
-            crate::command::WorkStartRequest {
-                title: "Example committed work".into(),
-                body: Some("Regression fixture for the durable commit boundary.".into()),
-                body_file: None,
-                base: None,
-            },
-        )),
-        &mut observer,
-    )
-    .unwrap();
-
-    let plan_id = output["plan"]["plan_id"].as_str().unwrap();
-    assert!(
-        crate::state::open_plan_summaries(&ctx)
-            .unwrap()
-            .iter()
-            .any(|plan| plan["plan_id"] == plan_id),
-        "the successful result must identify the committed plan"
-    );
-    assert_eq!(observer.0.get(), 1, "dispatch must not poll after commit");
 }
 
 #[cfg(feature = "dev-proxy")]
@@ -465,7 +394,7 @@ fn dispatch_routes_proxy_list_through_dev_proxy_feature() {
 }
 
 #[test]
-fn tool_no_receipt_skips_receipt_append() {
+fn command_tool_check_writes_no_receipt() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
@@ -487,19 +416,17 @@ rust_test_command = "printf 'command tool ran\n'"
     let output = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
-                tool: crate::cli::ToolOpts {
-                    plan_id: None,
-                    no_receipt: true,
+            crate::cli::CheckCommand::Named(crate::cli::NamedCheckCommand::Test(
+                crate::cli::CheckTargetOpts {
+                    selectors: Vec::new(),
                 },
-                selectors: Vec::new(),
-            }),
+            )),
         )),
     )
     .unwrap();
 
     assert_eq!(output["ok"], true);
-    assert_eq!(output["receipt_id"], serde_json::Value::Null);
+    assert!(output.get("receipt_id").is_none());
     assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 }
 
@@ -544,7 +471,6 @@ checks = ["jig.fmt_check", "jig.test"]
                 comparison: None,
                 explain: true,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(None, false),
             },
         )),
     )
@@ -564,7 +490,6 @@ checks = ["jig.fmt_check", "jig.test"]
                 comparison: None,
                 explain: false,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(None, false),
             },
         )),
     )
@@ -576,7 +501,7 @@ checks = ["jig.fmt_check", "jig.test"]
 }
 
 #[test]
-fn repository_check_persists_queryable_runs_and_target_receipts() {
+fn repository_check_persists_queryable_runs_without_receipts() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .contract_version(5)
@@ -606,7 +531,6 @@ checks = ["jig.fmt_check", "jig.test"]
         .write();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    crate::state::seed_open_plan_for_test(&ctx, "plan_work", "Work", "Body").unwrap();
 
     let output = super::dispatch(
         &ctx,
@@ -618,54 +542,32 @@ checks = ["jig.fmt_check", "jig.test"]
                 comparison: None,
                 explain: false,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(Some("plan_work".into()), true),
             },
         )),
     )
     .unwrap();
     let run_id = output["run"]["run_id"].as_str().unwrap();
 
-    let durable = crate::state::run_by_id(&ctx, run_id).unwrap();
-    assert_eq!(durable.work_plan_id.as_deref(), Some("plan_work"));
+    let durable = jig_state::run_by_id(&ctx, run_id).unwrap();
     assert_eq!(durable.result.status, jig_contract::RunStatus::Completed);
     assert_eq!(
         durable.result.conclusion,
         Some(jig_contract::RunConclusion::Success)
     );
     assert_eq!(durable.result.targets.len(), 2);
-    assert!(
-        durable
-            .result
-            .targets
-            .iter()
-            .all(|target| target.receipt_id.is_some())
-    );
-
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: Some("plan_work".into()),
-            tool_name: None,
-            failed_only: false,
-            limit: 20,
-        },
-    )
-    .unwrap();
-    let receipts = receipts["receipts"].as_array().unwrap();
-    assert_eq!(receipts.len(), 2);
-    assert!(receipts.iter().all(|receipt| receipt["run_id"] == run_id));
-    assert!(receipts.iter().all(|receipt| receipt["target"].is_object()));
-    assert!(
-        receipts
-            .iter()
-            .all(|receipt| receipt["config_digest"].as_str().is_some())
-    );
-    assert!(
-        receipts
-            .iter()
-            .all(|receipt| receipt["input_digest"].as_str().is_some())
-    );
+    for target in &durable.result.targets {
+        assert!(target.config_digest.starts_with("sha256:"));
+        assert!(target.input_digest.starts_with("sha256:"));
+        assert!(
+            target.output_tail.is_none(),
+            "successful targets keep no output"
+        );
+    }
+    for target in output["run"]["targets"].as_array().unwrap() {
+        assert!(target.get("receipt_id").is_none(), "{target:#}");
+        assert!(target.get("target_freshness").is_none(), "{target:#}");
+    }
+    assert!(!ctx.state_file("receipts.jsonl").exists());
 }
 
 #[test]
@@ -692,10 +594,9 @@ checks = ["jig.test"]
         .write();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
-    let plan =
-        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
-            .unwrap();
+    let catalog = jig_repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = jig_repository::plan_run(&ctx, &catalog, jig_repository::PlanRunRequest::default())
+        .unwrap();
     fs::write(temp.path().join("changed-after-plan.txt"), "changed\n").unwrap();
 
     let error = super::run_execution::execute_check_run(
@@ -703,8 +604,7 @@ checks = ["jig.test"]
         &catalog,
         plan,
         super::run_execution::ExecuteCheckRunRequest {
-            work_plan_id: None,
-            record_receipts: true,
+            alias_override: None,
             fail_fast: false,
         },
         &|| false,
@@ -718,9 +618,11 @@ checks = ["jig.test"]
 
 mod affected_check;
 mod agent;
+mod argv_runners;
 mod common;
+mod foreground_run;
 mod legacy_loc;
 mod loops;
-mod mcp;
+mod policy_checks;
 mod repository_execution;
-mod work;
+mod validation_contexts;

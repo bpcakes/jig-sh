@@ -10,7 +10,7 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 
-frontend_filter='package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime))'
+frontend_filter='package(jig-bootstrap) & (test(tests::frontend_adoption) | test(tests::basic::scaffold_generation) | test(tests::basic::scaffold_runtime))'
 process_filter='(package(jig-sh) & (binary(claude_launcher) | binary(codex_launcher) | binary(dev_launcher_loss) | binary(dev_lifecycle) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
 vault_filter='package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'
 status_args=(--status-level fail --final-status-level fail)
@@ -29,7 +29,9 @@ case "$1" in
     cargo nextest run --workspace -P local \
       -E "($vault_filter) & not (package(jig-sh) & binary(vault_tui))" \
       "${status_args[@]}"
-    exec cargo nextest run -P local -p jig-sh --test vault_tui -j 1 \
+    # Keep workspace features identical to the preceding build.
+    exec cargo nextest run --workspace -P local \
+      -E 'package(jig-sh) & binary(vault_tui)' -j 1 \
       "${status_args[@]}"
     ;;
   process)

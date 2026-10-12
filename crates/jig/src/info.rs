@@ -1,24 +1,20 @@
-use std::fs;
-use std::io::ErrorKind;
-use std::path::Path;
-
 use anyhow::Result;
+use jig_context::{DevAppConfig, REPO_CONTEXT_NOT_FOUND, RepoContext, WorkGate};
 use serde_json::{Value, json};
 
 #[cfg(test)]
 use crate::cli::format_info_summary_for_test as format_summary;
 use crate::command::{VaultCommand, VaultStatusRequest};
-use crate::context::{DevAppConfig, REPO_CONTEXT_NOT_FOUND, RepoContext, WorkGate};
 
 const COMMAND: &str = "info";
-const DEFAULT_MCP_COMMAND: &str = "scripts/jig mcp";
 
 mod commands;
 
 pub(crate) fn run(
     commands: bool,
     json_output: bool,
-    request: Option<crate::repository::InspectRequest>,
+    request: Option<jig_repository::InspectRequest>,
+    projection: jig_repository::surface::ResponseSurface,
 ) -> Result<Value> {
     if commands && request.is_some() {
         anyhow::bail!("--commands cannot be combined with an info subject");
@@ -76,7 +72,7 @@ pub(crate) fn run(
     }
     let ctx = RepoContext::load()?;
     match request {
-        Some(request) => crate::repository::inspect_repository(&ctx, request),
+        Some(request) => jig_repository::inspect_repository(&ctx, request, projection),
         None => Ok(repo_info(&ctx)),
     }
 }
@@ -90,7 +86,6 @@ fn repo_info(ctx: &RepoContext) -> Value {
 }
 
 fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
-    let mcp_command = mcp_command(ctx.root());
     let dev_apps = ctx
         .dev_config()
         .apps
@@ -110,7 +105,7 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    json!({
+    let mut value = json!({
         "ok": true,
         "command": COMMAND,
         "repo": {
@@ -135,9 +130,11 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             "vault_home": vault.home,
             "vault_scope": vault.scope,
             "vault_scope_id": vault.scope_id,
+            "vault_main_checkout_root": vault.main_checkout_root,
+            "vault_worktree_local": vault.worktree_local,
+            "vault_format_version": vault.format_version,
             "vault_error": vault.error,
         },
-        "check_tools": ctx.work_check_tools(),
         "contract_tools": ctx.tool_specs().iter().map(|tool| {
             json!({
                 "name": &tool.name,
@@ -146,7 +143,6 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
                 "description": &tool.description,
             })
         }).collect::<Vec<_>>(),
-        "work_gates": ctx.work_gates().iter().map(work_gate_value).collect::<Vec<_>>(),
         "frontend_apps": frontend_apps,
         "dev": {
             "proxy_port": ctx.dev_config().proxy_port,
@@ -158,10 +154,18 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             "workspace_discovery": ctx.dev_config().workspace_discovery,
         },
         "dev_apps": dev_apps,
-        "mcp_command": mcp_command.command,
-        "mcp_command_source": mcp_command.source,
-        "mcp_command_error": mcp_command.error,
-    })
+    });
+    // `[work]` settings exist only through contract 8.
+    if ctx.contract_version() <= jig_context::LAST_WORK_CONFIG_CONTRACT_VERSION {
+        value["check_tools"] = json!(ctx.work_check_tools());
+        value["work_gates"] = json!(
+            ctx.work_gates()
+                .iter()
+                .map(work_gate_value)
+                .collect::<Vec<_>>()
+        );
+    }
+    value
 }
 
 struct VaultCapability {
@@ -170,6 +174,14 @@ struct VaultCapability {
     home: Option<String>,
     scope: Option<String>,
     scope_id: Option<String>,
+    /// Repository root in the main checkout whose repo-scoped vault a linked
+    /// Git worktree shares.
+    main_checkout_root: Option<String>,
+    /// Whether a linked Git worktree keeps the vault an earlier Jig version
+    /// created in its own namespace instead of sharing the main checkout's.
+    worktree_local: bool,
+    /// Unauthenticated format version from the public vault header.
+    format_version: Option<u32>,
     error: Option<String>,
 }
 
@@ -184,6 +196,13 @@ fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
             home: output["vault_home"].as_str().map(str::to_string),
             scope: output["vault_scope"].as_str().map(str::to_string),
             scope_id: output["vault_scope_id"].as_str().map(str::to_string),
+            main_checkout_root: output["vault_main_checkout_root"]
+                .as_str()
+                .map(str::to_string),
+            worktree_local: output["vault_worktree_local"].as_bool().unwrap_or(false),
+            format_version: output["format_version"]
+                .as_u64()
+                .and_then(|version| u32::try_from(version).ok()),
             error: None,
         },
         Err(error) => VaultCapability {
@@ -192,106 +211,12 @@ fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
+            worktree_local: false,
+            format_version: None,
             error: Some(format!("{error:#}")),
         },
     }
-}
-
-struct McpCommandInfo {
-    command: String,
-    source: &'static str,
-    error: Option<String>,
-}
-
-fn mcp_command(root: &Path) -> McpCommandInfo {
-    let path = root.join(".mcp.json");
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == ErrorKind::NotFound => return default_mcp_command(None),
-        Err(error) => {
-            return default_mcp_command(Some(format!(
-                "Failed to read {}: {error}",
-                path.display()
-            )));
-        }
-    };
-    let value = match serde_json::from_str::<Value>(&text) {
-        Ok(value) => value,
-        Err(error) => {
-            return default_mcp_command(Some(format!(
-                "Failed to parse {}: {error}",
-                path.display()
-            )));
-        }
-    };
-    let command = match mcp_command_parts(&value, &path) {
-        Ok(command) => command,
-        Err(error) => return default_mcp_command(Some(error)),
-    };
-
-    // MCP `command` is a single program path and `args` are already structured.
-    // Render a shell-friendly display line for humans; Jig does not parse this
-    // string back into an MCP command.
-    McpCommandInfo {
-        command: shell_display_command(&command),
-        source: ".mcp.json",
-        error: None,
-    }
-}
-
-fn mcp_command_parts(value: &Value, path: &Path) -> Result<Vec<String>, String> {
-    let server = &value["mcpServers"]["jig"];
-    let command = server["command"].as_str().ok_or_else(|| {
-        format!(
-            "{} does not define a non-empty mcpServers.jig.command",
-            path.display()
-        )
-    })?;
-    if command.is_empty() {
-        return Err(format!(
-            "{} does not define a non-empty mcpServers.jig.command",
-            path.display()
-        ));
-    }
-    let mut parts = vec![normalize_repo_relative_command(command)];
-    if let Some(args_value) = server.get("args") {
-        let Some(args) = args_value.as_array() else {
-            return Err(format!(
-                "{} mcpServers.jig.args must be an array of strings",
-                path.display()
-            ));
-        };
-        for (index, arg) in args.iter().enumerate() {
-            let arg = arg.as_str().ok_or_else(|| {
-                format!(
-                    "{} mcpServers.jig.args[{index}] must be a string",
-                    path.display()
-                )
-            })?;
-            parts.push(arg.to_string());
-        }
-    }
-    Ok(parts)
-}
-
-fn shell_display_command(command: &[String]) -> String {
-    command
-        .iter()
-        .map(|part| crate::shell::quote(part))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn default_mcp_command(error: Option<String>) -> McpCommandInfo {
-    McpCommandInfo {
-        command: DEFAULT_MCP_COMMAND.into(),
-        source: "default",
-        error,
-    }
-}
-
-fn normalize_repo_relative_command(command: &str) -> String {
-    command.strip_prefix("./").unwrap_or(command).to_string()
 }
 
 fn dev_app_value(app: &DevAppConfig) -> Value {
@@ -317,10 +242,10 @@ fn work_gate_value(gate: &WorkGate) -> Value {
         }),
         WorkGate::Evidence(gate) => {
             let (target, profile) = match &gate.selector {
-                crate::context::WorkEvidenceSelector::Target(target) => {
+                jig_context::WorkEvidenceSelector::Target(target) => {
                     (Some(target.to_string()), None)
                 }
-                crate::context::WorkEvidenceSelector::Profile(profile) => {
+                jig_context::WorkEvidenceSelector::Profile(profile) => {
                     (None, Some(profile.to_string()))
                 }
             };
@@ -352,11 +277,11 @@ fn work_gate_value(gate: &WorkGate) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use jig_commands::tool_defs::tool;
+
     use super::*;
     use crate::test_env::TestRepoBuilder;
-    use crate::tool_defs::tool;
     use serde_json::json;
-    use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
 
@@ -382,6 +307,8 @@ mod tests {
         assert_eq!(capabilities["vault_home"], "/tmp/vault");
         assert_eq!(capabilities["vault_scope"], "repo");
         assert_eq!(capabilities["vault_scope_id"], "scope_1");
+        assert_eq!(capabilities["vault_main_checkout_root"], "/tmp/main");
+        assert_eq!(capabilities["vault_format_version"], 3);
     }
 
     fn assert_repo_integrations(output: &Value) {
@@ -390,9 +317,9 @@ mod tests {
         assert_eq!(output["dev_apps"][0]["name"], "web");
         assert_eq!(output["frontend_apps"][0]["kind"], "vite");
         assert_eq!(output["frontend_apps"][0]["role"], "spa");
-        assert_eq!(output["mcp_command"], "scripts/jig mcp");
-        assert_eq!(output["mcp_command_source"], "default");
-        assert_eq!(output["mcp_command_error"], Value::Null);
+        assert!(output.get("mcp_command").is_none());
+        assert!(output.get("mcp_command_source").is_none());
+        assert!(output.get("mcp_command_error").is_none());
     }
 
     fn assert_repo_summary(output: &Value) {
@@ -406,6 +333,7 @@ mod tests {
         assert!(summary.contains(
             "Capabilities: SQLx, schema dumps, frontend apps, dev proxy, vault initialized"
         ));
+        assert!(summary.contains("Vault: shared with main checkout /tmp/main"));
     }
 
     #[test]
@@ -422,6 +350,9 @@ mod tests {
                 home: Some("/tmp/vault".into()),
                 scope: Some("repo".into()),
                 scope_id: Some("scope_1".into()),
+                main_checkout_root: Some("/tmp/main".into()),
+                worktree_local: false,
+                format_version: Some(3),
                 error: None,
             },
         );
@@ -446,6 +377,9 @@ mod tests {
                 home: Some("/tmp/vault".into()),
                 scope: Some("repo".into()),
                 scope_id: Some("scope_1".into()),
+                main_checkout_root: None,
+                worktree_local: false,
+                format_version: None,
                 error: None,
             },
         );
@@ -454,8 +388,48 @@ mod tests {
         assert_eq!(output["capabilities"]["vault_available"], true);
         assert_eq!(output["capabilities"]["vault_initialized"], false);
         assert_eq!(output["capabilities"]["vault_home"], "/tmp/vault");
+        assert_eq!(
+            output["capabilities"]["vault_main_checkout_root"],
+            Value::Null
+        );
         let summary = format_summary(&output);
         assert!(summary.contains("vault available (not initialized)"));
+        assert!(!summary.contains("shared with main checkout"), "{summary}");
+        assert_eq!(output["capabilities"]["vault_worktree_local"], false);
+        assert!(!summary.contains("worktree-local"), "{summary}");
+    }
+
+    #[test]
+    fn reports_a_kept_worktree_local_vault() {
+        let temp = tempdir().unwrap();
+        write_info_fixture(temp.path());
+        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+
+        let output = repo_info_with_vault(
+            &ctx,
+            VaultCapability {
+                available: true,
+                initialized: true,
+                home: Some("/tmp/vault/scopes/repo-2".into()),
+                scope: Some("repo".into()),
+                scope_id: Some("scope_1".into()),
+                main_checkout_root: None,
+                worktree_local: true,
+                format_version: None,
+                error: None,
+            },
+        );
+
+        assert_eq!(output["capabilities"]["vault_worktree_local"], true);
+        let summary = format_summary(&output);
+        assert!(
+            summary.contains("Vault: worktree-local, not shared with the main checkout"),
+            "{summary}"
+        );
+        assert!(
+            !summary.contains("shared with main checkout /"),
+            "{summary}"
+        );
     }
 
     #[test]
@@ -472,6 +446,9 @@ mod tests {
                 home: None,
                 scope: None,
                 scope_id: None,
+                main_checkout_root: None,
+                worktree_local: false,
+                format_version: None,
                 error: Some("vault status failed".into()),
             },
         );
@@ -480,137 +457,6 @@ mod tests {
         assert_eq!(output["capabilities"]["vault_available"], false);
         assert_eq!(output["capabilities"]["vault_initialized"], false);
         assert_eq!(output["capabilities"]["vault_error"], "vault status failed");
-    }
-
-    #[test]
-    fn reports_mcp_command_from_mcp_json() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::write(
-            temp.path().join(".mcp.json"),
-            serde_json::to_string_pretty(&json!({
-                "mcpServers": {
-                    "jig": {
-                        "command": "./tools/local jig",
-                        "args": ["mcp", "--mode", "agent one"]
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(
-            output["mcp_command"],
-            "'tools/local jig' mcp --mode 'agent one'"
-        );
-        assert_eq!(output["mcp_command_source"], ".mcp.json");
-        assert_eq!(output["mcp_command_error"], Value::Null);
-    }
-
-    #[test]
-    fn reports_default_mcp_command_for_malformed_mcp_json() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::write(temp.path().join(".mcp.json"), "{not json").unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(output["mcp_command"], DEFAULT_MCP_COMMAND);
-        assert_eq!(output["mcp_command_source"], "default");
-        assert!(
-            output["mcp_command_error"]
-                .as_str()
-                .unwrap()
-                .contains("Failed to parse")
-        );
-
-        let summary = format_summary(&output);
-        assert!(summary.contains("MCP command fallback: Failed to parse"));
-    }
-
-    #[test]
-    fn reports_default_mcp_command_for_unreadable_mcp_json() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::create_dir(temp.path().join(".mcp.json")).unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(output["mcp_command"], DEFAULT_MCP_COMMAND);
-        assert_eq!(output["mcp_command_source"], "default");
-        assert!(
-            output["mcp_command_error"]
-                .as_str()
-                .unwrap()
-                .contains("Failed to read")
-        );
-    }
-
-    #[test]
-    fn reports_default_mcp_command_for_empty_mcp_command() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::write(
-            temp.path().join(".mcp.json"),
-            serde_json::to_string_pretty(&json!({
-                "mcpServers": {
-                    "jig": {
-                        "command": "",
-                        "args": ["mcp"]
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(output["mcp_command"], DEFAULT_MCP_COMMAND);
-        assert_eq!(output["mcp_command_source"], "default");
-        assert!(
-            output["mcp_command_error"]
-                .as_str()
-                .unwrap()
-                .contains("non-empty mcpServers.jig.command")
-        );
-    }
-
-    #[test]
-    fn reports_default_mcp_command_for_non_string_mcp_arg() {
-        let temp = tempdir().unwrap();
-        write_info_fixture(temp.path());
-        fs::write(
-            temp.path().join(".mcp.json"),
-            serde_json::to_string_pretty(&json!({
-                "mcpServers": {
-                    "jig": {
-                        "command": "scripts/jig",
-                        "args": [123, "mcp"]
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let output = repo_info(&ctx);
-
-        assert_eq!(output["mcp_command"], DEFAULT_MCP_COMMAND);
-        assert!(
-            output["mcp_command_error"]
-                .as_str()
-                .unwrap()
-                .contains("args[0] must be a string")
-        );
     }
 
     pub(super) fn write_info_fixture(root: &Path) {

@@ -2,12 +2,44 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
+use jig_execution::ExecutionStream;
+
 use super::*;
-use crate::execution::ExecutionStream;
 
 const MAX_PARALLEL_LAYER_TARGETS: usize = 8;
 const PARALLEL_EVENT_QUEUE_CAPACITY: usize = 64;
 const MAX_EVENTS_PER_COORDINATOR_TICK: usize = 64;
+
+mod resource_waves;
+pub(super) use resource_waves::{ResourceCandidates, execute_resource_layer};
+mod slots;
+use slots::ExecutionSlot;
+pub(super) use slots::ExecutionSlots;
+mod ready;
+pub(super) use ready::execute_ready_read_only_targets;
+
+pub(super) fn has_parallel_dependencies(plan: &RunPlan) -> bool {
+    plan.execution_layers.len() > 1
+        && plan.execution_layers.iter().any(|layer| layer.len() > 1)
+        && plan.targets.iter().all(is_parallel_read_only_check)
+}
+
+pub(super) fn is_parallel_read_only_check(planned: &PlannedTarget) -> bool {
+    planned.intent == jig_contract::ActionIntent::Check
+        && planned.effects.contains(&ActionEffect::ReadOnly)
+        && !planned.effects.contains(&ActionEffect::Worktree)
+        && !planned.effects.contains(&ActionEffect::External)
+}
+
+pub(super) fn planned_target<'a>(
+    plan: &'a RunPlan,
+    target: &TargetId,
+) -> Result<&'a PlannedTarget> {
+    plan.targets
+        .iter()
+        .find(|planned| &planned.target == target)
+        .ok_or_else(|| anyhow::anyhow!("run plan references missing target '{target}'"))
+}
 
 pub(super) struct ParallelTargetOutcome {
     pub(super) completed: CompletedTargetCapture,
@@ -56,11 +88,10 @@ impl ParallelTargetExecution {
 pub(super) fn execute_parallel_read_only_layer(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    run: &crate::state::DurableRun,
+    run: &jig_state::DurableRun,
     control: &mut dyn RepositoryRunControl,
     source_epoch: &mut ExecutionSourceEpoch,
     targets: &[(&PlannedTarget, PhasePosition)],
-    freshness: Option<&super::freshness::ExecutionFreshness>,
 ) -> Result<ParallelLayerExecution> {
     let cancellation = Arc::new(ParallelCancellationState::default());
     let initial_cancellation = control.cancelled();
@@ -72,7 +103,7 @@ pub(super) fn execute_parallel_read_only_layer(
     source_epoch.begin_read_only_layer();
     if source_may_be_observed {
         if let Err(error) =
-            crate::repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
+            jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
         {
             let outcomes = targets
                 .iter()
@@ -95,7 +126,7 @@ pub(super) fn execute_parallel_read_only_layer(
             return Ok(ParallelLayerExecution { outcomes });
         }
         if let Err(message) = source_epoch.prepare_read_only_layer(ctx, targets.len()) {
-            let fingerprint = source_epoch.receipt_fingerprint();
+            let fingerprint = source_epoch.observed_fingerprint();
             let outcomes = targets
                 .iter()
                 .map(|(planned, _)| ParallelTargetOutcome {
@@ -155,7 +186,6 @@ pub(super) fn execute_parallel_read_only_layer(
                             (planned, position),
                             &mut target_control,
                             (index >= worker_count).then_some(queued_source_epoch),
-                            freshness,
                         );
                         if outcome_tx.send((index, outcome)).is_err() {
                             break;
@@ -232,11 +262,10 @@ pub(super) fn execute_parallel_read_only_layer(
 fn execute_parallel_target(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    run: &crate::state::DurableRun,
+    run: &jig_state::DurableRun,
     (planned, position): (&PlannedTarget, PhasePosition),
     control: &mut dyn RepositoryRunControl,
     queued_source_epoch: Option<&Mutex<&mut ExecutionSourceEpoch>>,
-    freshness: Option<&super::freshness::ExecutionFreshness>,
 ) -> Result<ParallelTargetExecution> {
     let execution = match control.cancelled() {
         Ok(true) => ParallelTargetExecution::not_started(
@@ -262,10 +291,9 @@ fn execute_parallel_target(
             )),
         ),
         Ok(false) => {
-            if let Err(error) = crate::repository::validate_current_repository_authority(
-                ctx,
-                &run.plan.config_digest,
-            ) {
+            if let Err(error) =
+                jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
+            {
                 let message = format!(
                     "target '{}' could not start because repository execution authority could not be verified: {error:#}",
                     planned.target
@@ -284,15 +312,8 @@ fn execute_parallel_target(
                 let started_at_ms = now_ms();
                 let label = format!("Repository target '{}'", planned.target);
                 let phase = ExecutionPhase::start(control, &label, position);
-                let capture = run_target_capture(
-                    ctx,
-                    catalog,
-                    &run.result.run_id,
-                    run.work_plan_id.as_deref(),
-                    planned,
-                    control,
-                    freshness,
-                );
+                let capture =
+                    run_target_capture(ctx, catalog, &run.result.run_id, planned, control);
                 let phase = phase.complete_owned();
                 ParallelTargetExecution::completed(started_at_ms, capture, phase)
             }

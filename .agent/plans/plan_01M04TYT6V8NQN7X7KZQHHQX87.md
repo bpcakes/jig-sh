@@ -1,1 +1,0 @@
-Adopt utoipa and utoipa-axum in the Rust-React scaffold, generate deterministic split OpenAPI artifacts, provide separately owned public/admin TypeScript clients, and add drift and generated-app verification.

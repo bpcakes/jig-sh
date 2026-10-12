@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use crate::dashboard::{SourceError, TimelineLimit};
+use jig_dashboard::{SourceError, TimelineLimit};
 
 mod model;
 mod render;
@@ -19,8 +19,8 @@ mod tests;
 pub enum InitialTab {
     /// Local status overview used by `jig status --tui`.
     Status,
-    /// Local work overview used by canonical `jig ui`.
-    Work,
+    /// Local recorder timeline used by canonical `jig ui`.
+    Timeline,
 }
 
 /// Terminal runtime configuration.
@@ -29,7 +29,6 @@ pub struct DashboardOptions {
     pub initial_tab: InitialTab,
     pub refresh_interval: Duration,
     pub timeline_limit: TimelineLimit,
-    pub initial_plan: Option<String>,
 }
 
 impl DashboardOptions {
@@ -39,7 +38,6 @@ impl DashboardOptions {
             initial_tab,
             refresh_interval,
             timeline_limit: TimelineLimit::DEFAULT,
-            initial_plan: None,
         }
     }
 
@@ -53,12 +51,6 @@ impl DashboardOptions {
         self.timeline_limit = TimelineLimit::new(rows)?;
         Ok(self)
     }
-
-    #[must_use]
-    pub fn with_initial_plan(mut self, plan_id: Option<String>) -> Self {
-        self.initial_plan = plan_id;
-        self
-    }
 }
 
 /// Run the unified terminal application.
@@ -68,7 +60,7 @@ impl DashboardOptions {
 /// Returns an error when terminal setup, collection, input, rendering, or
 /// restoration fails.
 pub fn run(
-    source: impl crate::dashboard::DashboardSource + 'static,
+    source: impl jig_dashboard::DashboardSource + 'static,
     options: DashboardOptions,
 ) -> anyhow::Result<()> {
     runtime::run(source, options)
@@ -80,7 +72,7 @@ pub fn run(
 /// the normal Rust drop path.
 #[doc(hidden)]
 pub fn run_with_cancellation(
-    source: impl crate::dashboard::DashboardSource + 'static,
+    source: impl jig_dashboard::DashboardSource + 'static,
     options: DashboardOptions,
     externally_cancelled: impl Fn() -> bool,
 ) -> anyhow::Result<()> {

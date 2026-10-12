@@ -1,1 +1,0 @@
-Pull origin/master, preserve staged and unstaged work, resolve all conflicts, and run the full configured test suite.

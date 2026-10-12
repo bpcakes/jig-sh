@@ -1,0 +1,397 @@
+#!/bin/sh
+set -eu
+# jig-generated-runtime-launcher:v1
+# jig-runtime-repository-scope:v1
+# jig-release-runtime-pin:v1
+# jig-check-subcommands:fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test
+# jig-capability-only-subcommands:adopt,claude,codex,doctor,init,presets,update
+# jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault
+# jig-global-flags:--json
+
+# Keep launcher behavior synchronized with scripts/jig in the jig-sh source
+# tree; this template may gate source-checkout-only user messages.
+SCRIPT_DIR="$(dirname "$0")"
+ROOT_DIR="$(CDPATH= cd "$SCRIPT_DIR/.." && pwd -P)"
+INSTALLER="$ROOT_DIR/scripts/install-jig.sh"
+CONTRACT_VERSION="<<[ _jig.contract_version ]>>"
+
+if [ ! -x "$INSTALLER" ]; then
+  printf '%s\n' "Missing $INSTALLER." >&2
+  exit 1
+fi
+
+run_installer() {
+  if [ "$installer_scope" = repository ]; then
+    "$INSTALLER" --contract-version "$CONTRACT_VERSION" --repository-scope "$@"
+  else
+    "$INSTALLER" --contract-version "$CONTRACT_VERSION" "$@"
+  fi
+}
+
+jig_is_global_flag() {
+  case "$1" in
+    # jig-global-flags-begin
+    --json)
+      # jig-global-flags-end
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+jig_info_requested_before_separator() {
+  [ "$#" -gt 0 ] || return 0
+  for arg in "$@"; do
+    if jig_is_global_flag "$arg"; then
+      continue
+    fi
+    case "$arg" in
+      --)
+        return 1
+        ;;
+      -h | --help | -V | --version)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+jig_subcommand() {
+  launcher_options=1
+  for arg in "$@"; do
+    if [ "$launcher_options" -eq 1 ] && [ "$arg" = "--" ]; then
+      launcher_options=0
+      continue
+    fi
+    if [ "$launcher_options" -eq 1 ] && jig_is_global_flag "$arg"; then
+      continue
+    fi
+    case "$arg" in
+      -*)
+        return 1
+        ;;
+      *)
+        printf '%s\n' "$arg"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+jig_pin_value_option() {
+  case "$1" in
+    --template|--template-mode|--vcs-ref|--answers-file|--repo-name|--go-module|\
+    --default-branch|--ci-github-runner|--jig-version|--template-source-url|\
+    --sqlx-enabled|--rust-crate-root|--rust-migration-dir|--rust-migration-layout|\
+    --rust-sqlx-metadata-dir|--schema-dump-enabled|--schema-dump-command|\
+    --schema-docs-dir|--schema-check-command|--sqlx-check-command|\
+    --migration-add-command|--bootstrap-command|--contract-check-command|\
+    --dev-command|--rust-fmt-check-command|--rust-clippy-command|\
+    --rust-test-command|--rust-test-locked-command|--web-package-manager|\
+    --application-contracts-enabled|--frontend-app|--preset|--db|--frontend|\
+    --frontends|--include-component|--exclude-component)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# Find the same positional destination that init/adopt/update resolve from the
+# invocation directory. Skip option values so a template path cannot stand in
+# for the repository whose managed scripts will be written.
+jig_pin_write_target() {
+  pin_target=.
+  pin_target_seen=0
+  pin_write_requested=0
+  pin_command_seen=0
+  pin_options=1
+  pin_value_next=0
+  for pin_arg in "$@"; do
+    if [ "$pin_command_seen" -eq 0 ]; then
+      if [ "$pin_arg" = "$subcommand" ]; then
+        pin_command_seen=1
+      fi
+      continue
+    fi
+    if [ "$pin_value_next" -eq 1 ]; then
+      pin_value_next=0
+      continue
+    fi
+    if [ "$pin_options" -eq 1 ]; then
+      case "$pin_arg" in
+        --)
+          pin_options=0
+          continue
+          ;;
+        --write)
+          if [ "$subcommand" = adopt ]; then pin_write_requested=1; fi
+          continue
+          ;;
+        --force)
+          if [ "$subcommand" = init ]; then pin_write_requested=1; fi
+          continue
+          ;;
+        --json|--minimal|--defaults|--no-input|--no-vault|--recopy|--launcher-only|--help|--version)
+          continue
+          ;;
+        --*=*)
+          pin_option=${pin_arg%%=*}
+          if jig_pin_value_option "$pin_option"; then continue; fi
+          ;;
+        --*)
+          if jig_pin_value_option "$pin_arg"; then
+            pin_value_next=1
+            continue
+          fi
+          ;;
+        -*)
+          ;;
+        *)
+          if [ "$pin_target_seen" -eq 0 ]; then
+            pin_target="$pin_arg"
+            pin_target_seen=1
+          fi
+          continue
+          ;;
+      esac
+      printf '%s\n' "Cannot determine the $subcommand destination from option $pin_arg; update scripts/jig before using this option." >&2
+      return 1
+    fi
+    if [ "$pin_target_seen" -eq 0 ]; then
+      pin_target="$pin_arg"
+      pin_target_seen=1
+    fi
+  done
+  if [ "$pin_value_next" -eq 1 ]; then
+    printf '%s\n' "Missing value for a $subcommand option." >&2
+    return 1
+  fi
+  if [ "$subcommand" = update ]; then pin_write_requested=1; fi
+  if [ "$subcommand" = init ] && [ "$pin_target_seen" -eq 0 ]; then
+    pin_write_requested=0
+  fi
+}
+
+jig_capability_only_requested() {
+  capability_command=
+  launcher_options=1
+  for arg in "$@"; do
+    if [ -z "$capability_command" ] \
+      && [ "$launcher_options" -eq 1 ] \
+      && [ "$arg" = "--" ]; then
+      launcher_options=0
+      continue
+    fi
+    if [ "$launcher_options" -eq 1 ] && jig_is_global_flag "$arg"; then
+      continue
+    fi
+    if [ -z "$capability_command" ] && [ "$launcher_options" -eq 1 ]; then
+      case "$arg" in
+        -*)
+          return 1
+          ;;
+      esac
+    fi
+    case "$capability_command" in
+      '')
+        capability_command="$arg"
+        case "$capability_command" in
+          # jig-capability-only-subcommands-begin
+          adopt | claude | codex | doctor | init | presets | update)
+            # jig-capability-only-subcommands-end
+            return 0
+            ;;
+          check)
+            ;;
+          # jig-repository-scope-subcommands-begin
+          agent | agent-map | bootstrap | dev | file-budget | generate-sqlx-unchecked-queries-todo | info | loop | migration | migration-add | proxy | run | schema-dump | setup | sqlx | state | status | ui | vault)
+            # jig-repository-scope-subcommands-end
+            return 1
+            ;;
+          *)
+            # Unknown top-level commands only need a capable parser. Let
+            # Clap report the typo even when this repository is broken.
+            return 0
+            ;;
+        esac
+        ;;
+      check)
+        case "$arg" in
+          -h | --help | -V | --version)
+            return 0
+            ;;
+          contract)
+            capability_command=check-contract
+            ;;
+          # jig-strict-check-subcommands-begin
+          fmt | lint | clippy | test | test-locked | typescript-lint | typescript-typecheck | typescript-build | typescript-coverage | sqlx | sqlc | schema | agent-map | agent-guides | migration-immutability | sqlx-unchecked-non-test)
+            # jig-strict-check-subcommands-end
+            return 1
+            ;;
+          *)
+            # Bare check, selectors, and unknown check-shaped input must be
+            # pinned to this repository. Clap can still diagnose a typo after
+            # the launcher validates the repository boundary.
+            return 1
+            ;;
+        esac
+        ;;
+      check-contract)
+        case "$arg" in
+          -h | --help | -V | --version)
+            return 0
+            ;;
+          *)
+            return 1
+            ;;
+        esac
+        ;;
+    esac
+  done
+  # A global-only invocation behaves like bare help. Bare `check` is a valid
+  # repository operation and therefore stays repository-scoped.
+  [ -z "$capability_command" ] \
+    || [ "$capability_command" = check-contract ]
+}
+
+resolve_cached_binary() {
+  requested_profile="$1"
+  run_installer --profile "$requested_profile" --resolve-only
+}
+
+resolve_info_binary() {
+  if [ -n "${JIG_DEV_BIN:-}" ]; then
+    # The installer treats an explicit development binary as authoritative.
+    run_installer --profile runtime
+    return
+  fi
+
+  resolve_cached_binary runtime
+}
+
+resolve_or_install_info_binary() {
+  if [ -n "${JIG_DEV_BIN:-}" ]; then
+    # An explicit development binary is authoritative. Propagate its single
+    # compatibility failure instead of retrying the identical installer path.
+    bin_path="$(resolve_info_binary)"
+    return
+  fi
+  if ! bin_path="$(resolve_info_binary)"; then
+    printf '%s\n' \
+      "Preparing a Jig runtime compatible with contract $CONTRACT_VERSION for help or version output; first run may populate the repo-local runtime cache." >&2
+    bin_path="$(run_installer --profile runtime)"
+  fi
+}
+
+resolve_or_install_doctor_binary() {
+  if [ -n "${JIG_DEV_BIN:-}" ]; then
+    bin_path="$(run_installer --profile runtime)"
+    return
+  fi
+  if bin_path="$(resolve_cached_binary runtime)"; then
+    return
+  fi
+  printf '%s\n' \
+    "No cached Jig runtime is available for doctor; preparing one compatible with launcher contract $CONTRACT_VERSION." >&2
+  bin_path="$(run_installer --profile runtime)"
+}
+
+# Keep repository and agent commands on stripped builds.
+subcommand="$(jig_subcommand "$@" || true)"
+installer_scope=repository
+info_requested=0
+if jig_info_requested_before_separator "$@"; then
+  info_requested=1
+fi
+if [ "$info_requested" -eq 1 ] || jig_capability_only_requested "$@"; then
+  installer_scope=capability
+fi
+selected_profile=runtime
+case "$subcommand" in
+  doctor)
+    selected_profile=runtime
+    resolve_or_install_doctor_binary
+    ;;
+  dev | proxy)
+    if [ "$info_requested" -eq 1 ]; then
+      selected_profile=runtime
+      resolve_or_install_info_binary
+    else
+      selected_profile=default
+      bin_path="$(run_installer --profile default)"
+    fi
+    ;;
+  *)
+    selected_profile=runtime
+    if [ "$info_requested" -eq 1 ]; then
+      resolve_or_install_info_binary
+    else
+      bin_path="$(run_installer --profile runtime)"
+    fi
+    ;;
+esac
+
+# Older runtimes can rewrite a pinned destination's managed scripts from
+# templates that do not understand .jig/runtime-version.
+case "$subcommand" in
+  update | adopt | init)
+    if [ "$info_requested" -eq 0 ]; then
+      jig_pin_write_target "$@" || exit $?
+    fi
+    ;;
+esac
+if [ "${pin_write_requested:-0}" -eq 1 ] && [ "$info_requested" -eq 0 ]; then
+  case "$pin_target" in
+    /*) pin_repository="$pin_target" ;;
+    *) pin_repository="$PWD/$pin_target" ;;
+  esac
+  pin_file="$pin_repository/.jig/runtime-version"
+  if [ -e "$pin_file" ] || [ -L "$pin_file" ]; then
+  if ! "$bin_path" __runtime-compatible \
+    --require-runtime-pin-update \
+    --contract-version "$CONTRACT_VERSION" \
+    --profile runtime "$pin_repository" >/dev/null 2>&1; then
+    printf '%s\n' \
+      "The selected Jig runtime cannot safely run $subcommand on $pin_repository: its templates may remove .jig/runtime-version support." \
+      "Run a pin-aware Jig binary directly, or set JIG_DEV_BIN to one for this command." >&2
+    exit 1
+  fi
+  fi
+fi
+
+# Repo-local commands run with the binary's working directory set to the owning
+# repository, even when this launcher is invoked by absolute path from another
+# cwd. Commands that accept caller-relative paths must explicitly opt into
+# JIG_INVOKE_CWD before the cd below.
+case "$subcommand" in
+  init | adopt | update)
+    export JIG_INVOKE_CWD="$PWD"
+    ;;
+  *)
+    unset JIG_INVOKE_CWD
+    ;;
+esac
+
+if [ "$installer_scope" = repository ]; then
+  # The installer has already proved binary capability. Hand strict repository
+  # validation to that binary in-process so configuration errors remain
+  # distinct from install failures without adding another startup subprocess.
+  set -- \
+    --__launcher-contract-version "$CONTRACT_VERSION" \
+    --__launcher-profile "$selected_profile" \
+    --__launcher-repo-root "$ROOT_DIR" \
+    "$@"
+fi
+
+# Agent homes are user-global, and the launched agent process must inherit the
+# directory where the user invoked the launcher rather than this Jig repo.
+if [ "$subcommand" = "codex" ] || [ "$subcommand" = "claude" ]; then
+  exec "$bin_path" "$@"
+fi
+
+cd "$ROOT_DIR"
+exec "$bin_path" "$@"

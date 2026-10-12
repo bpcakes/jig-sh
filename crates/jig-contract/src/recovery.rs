@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::TargetId;
 
-/// Read-only recovery advice shared by CLI, MCP, and dashboard projections.
+/// Read-only recovery advice shared by CLI and dashboard projections.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GateRecovery {
     pub scope: String,

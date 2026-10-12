@@ -1,10 +1,11 @@
 use super::*;
 #[cfg(unix)]
 use crate::BrokeredEnv;
+use crate::format::{V1_FORMAT_VERSION, V2_FORMAT_VERSION, V3_FORMAT_VERSION};
 use crate::{ExecEnvBinding, VaultExec};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Write};
 use zeroize::Zeroizing;
 
@@ -14,14 +15,27 @@ mod exec;
 mod import;
 #[path = "vault_tests/legacy.rs"]
 mod legacy;
+#[path = "vault_tests/legacy_v2.rs"]
+mod legacy_v2;
 #[path = "vault_tests/lifecycle.rs"]
 mod lifecycle;
 #[path = "vault_tests/management.rs"]
 mod management;
 #[path = "vault_tests/mutations.rs"]
 mod mutations;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "vault_tests/rehearsal.rs"]
+mod rehearsal;
 #[path = "vault_tests/reveal.rs"]
 mod reveal;
+#[path = "vault_tests/rollback.rs"]
+mod rollback;
+#[path = "vault_tests/rotation.rs"]
+mod rotation;
+#[path = "vault_tests/transaction.rs"]
+mod transaction;
+#[path = "vault_tests/v3.rs"]
+mod v3;
 
 fn passphrase() -> SecretString {
     SecretString::from("correct horse battery staple".to_string())
@@ -64,26 +78,27 @@ fn audit_events(store: &VaultStore) -> Vec<AuditEvent> {
         .collect()
 }
 
-fn init_v1(store: &VaultStore, passphrase: &SecretString) {
+/// Creates a vault in an explicit format without the current new-passphrase
+/// policy, modelling a vault written by an older release.
+fn init_with_format(store: &VaultStore, passphrase: &SecretString, version: u32) {
     store
         .with_lock(|| {
-            let envelope = NewVaultEnvelope::seal_v1(
-                passphrase,
+            let material = envelope::NewVaultMaterial::generate(
+                version,
                 now_ms(),
                 store.initialization_kdf().clone(),
             )?;
-            AuditEvent::append_unlocked(
-                store,
-                envelope.audit_key.as_ref(),
-                AuditAction::VaultInitialized,
-                serde_json::json!({
-                    "vault_id": envelope.file.header.vault_id,
-                }),
-            )?;
-            store.write_vault_text_unlocked(&envelope.file_text)?;
-            Ok(())
+            store.init_with_material_unlocked(passphrase, material)
         })
         .unwrap();
+}
+
+fn init_v1(store: &VaultStore, passphrase: &SecretString) {
+    init_with_format(store, passphrase, V1_FORMAT_VERSION);
+}
+
+fn init_v2(store: &VaultStore, passphrase: &SecretString) {
+    init_with_format(store, passphrase, V2_FORMAT_VERSION);
 }
 
 fn decrypt_state_for_test(file: &VaultFile, passphrase: &SecretString) -> Zeroizing<Vec<u8>> {

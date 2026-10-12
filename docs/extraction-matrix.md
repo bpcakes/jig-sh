@@ -6,23 +6,22 @@ This matrix captures what was extracted from the source application workflow and
 |---|---|---|
 | `AGENTS.md` | Templated | Converted to generic repo-wide guidance with configurable paths and commands. |
 | `agent-map.md` | Templated + generated | Rendered as a starter file, then refreshed by native `scripts/jig agent-map generate`. |
-| `.agent/PLANS.md` | Templated | Preserved as the generic ExecPlan contract. |
-| `.agent/jig-contract.json` | Templated | Declares command-backed and native repo contract tools for CLI and MCP consumers, with SQLx tools gated by `sqlx_enabled` and migration-add gated by the flat migration layout. |
+| `.agent/PLANS.md` | Retired | No longer generated; `jig update` retires the formerly managed file. |
+| `.agent/jig-contract.json` | Templated | Declares command-backed and native repo contract tools for CLI consumers, with SQLx tools gated by `sqlx_enabled` and migration-add gated by the flat migration layout. |
 | `.agent/state/*.jsonl` | Runtime-owned | Append-only repo memory populated by `jig`. |
 | `scripts/jig doctor` / `scripts/jig doctor --json` | Runtime-owned | Unified read-only readiness check for runtime/contract compatibility, config, required command executables, Codex-side Jig skills, dev proxy status, vault status, and the next setup command. Human-readable by default; `--json` for automation. |
 | `scripts/jig agent doctor` / `scripts/jig agent doctor --json` + `scripts/jig agent bootstrap` | Runtime-owned | Checks and explicitly installs expected Codex-side Jig skills without adding more rendered shell scripts. Human-readable output is the default; pass `--json` for structured automation output. |
-| `scripts/jig claude homes` + `scripts/jig claude launch` | Runtime-owned | Discovers separate `CLAUDE_CONFIG_DIR` roots and launches Claude with a selected existing home. CLI-only; no MCP surface. |
-| `scripts/jig codex homes` + `scripts/jig codex launch` + `scripts/jig codex resume` | Runtime-owned | Discovers separate `CODEX_HOME` account/state roots through the Codex app-server API, launches Codex with a selected home, and resolves a session ID to its owning home before resume. CLI-only; no rendered launcher or MCP surface. |
-| `.mcp.json` | Templated | Repo-local MCP entrypoint that launches `scripts/jig mcp`. |
-| `crates/jig` | Added | Publishable runtime that exposes the typed CLI/MCP surface over the generated command contract and runtime-owned state. |
+| `scripts/jig claude homes` + `scripts/jig claude launch` | Runtime-owned | Discovers separate `CLAUDE_CONFIG_DIR` roots and launches Claude with a selected existing home. CLI-only. |
+| `scripts/jig codex homes` + `scripts/jig codex launch` + `scripts/jig codex resume` | Runtime-owned | Discovers separate `CODEX_HOME` account/state roots through the Codex app-server API, launches Codex with a selected home, and resolves a session ID to its owning home before resume. CLI-only; no rendered launcher surface. |
+| `crates/jig` | Added | Publishable runtime that exposes the typed CLI surface over the generated command contract and runtime-owned state. |
 | Agent map, guide, Rust LOC, migration immutability, and SQLx unchecked-query checks | Runtime-owned | Implemented natively in `crates/jig`; generated repos call `scripts/jig ...` instead of rendered helper scripts. |
 | `scripts/jig migration add` | Runtime-owned | Adds a timestamped migration stub in the configured Go/Goose backend or a SQLx backend using `rust_migration_layout = "flat_migrations"`; versioned artifact layouts reject it before mutation, and the SQLx-namespaced and flattened compatibility paths follow the same rule. |
 | `scripts/jig check contract` | Runtime-owned | Validates runtime wiring and manifest drift. |
 | `scripts/install-jig.sh` + `scripts/jig` | Templated | Contract/profile-compatible runtime launcher and installer for generated repos. |
 | `scripts/enforce-coverage.cjs` | Extracted | Kept generic and CommonJS so it runs inside ESM frontend packages. |
 | `scripts/new-checkout.sh` | Extracted + generalized | Uses current repo basename instead of source-specific naming. |
-| `.github/workflows/agent-map-check.yml` | Templated | Runner label is configurable. |
-| `.github/workflows/repo-policy.yml` | Templated subset | Keeps core policy checks and only includes SQLx/migration jobs when `sqlx_enabled` is `true`. |
+| `.github/workflows/agent-map-check.yml` | Templated | Generated projects keep a standalone agent-map workflow with a configurable runner; the source repository runs this check in `repo-policy.yml`. |
+| `.github/workflows/repo-policy.yml` | Templated subset | Generated projects keep core policy checks and only include SQLx/migration jobs when `sqlx_enabled` is `true`. The source repository shares its Clippy builds with native policy checks. |
 | `.github/workflows/rust-tests.yml` | Templated subset | Simplified to generic fmt, clippy, and locked workspace tests. |
 | `.github/workflows/webapp-checks-reusable.yml` + app workflows | Consolidated | Replaced with one generated matrix-style workflow or a disabled placeholder. |
 | `scripts/dev.sh` | Excluded | Too application-specific. Downstream repos implement dev orchestration through `[dev]`, `[[dev.apps]]`, or project-owned scripts. |

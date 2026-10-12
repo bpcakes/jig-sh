@@ -1,8 +1,8 @@
 # Agent providers
 
 Claude and Codex implement the internal `AgentProvider` interface in
-`crates/jig/src/agent_provider.rs`. Their CLI parsers dispatch homes and launch
-requests to `crates/jig/src/cli/agent_run.rs`. The common workflow checks usage
+`crates/jig-agents/src/agent_provider.rs`. Their CLI parsers dispatch homes and
+launch requests to `crates/jig/src/cli/agent_run.rs`. The common workflow checks usage
 support and JSON/launch combinations, supervises inspection, builds the picker,
 revalidates the selected configuration, emits dry runs, and executes prepared
 commands through the transparent child launcher.
@@ -14,7 +14,8 @@ variable, usage support, plain-list inspection policy, and primary subscription
 bucket), a provider-owned `Home` type, and implementations of these operations:
 
 - `resolve`: interpret an explicit CLI home argument.
-- `discover`: return choices with display metadata and an optional inspection source.
+- `discover`: return choices with display metadata and an optional inspection source;
+  `InspectionMode` explicitly chooses interactive or headless credential policy.
 - `revalidate`: check the chosen configuration after an interactive wait.
 - `prepare`: build exact native argv/environment and the existing dry-run JSON report,
   without launching, reading credentials, or inspecting usage.
@@ -28,7 +29,8 @@ access. Claude's picker permits bounded Keychain prompting; its headless report
 never does. These policies remain in provider adapters rather than the common CLI.
 
 `SessionProvider` is an optional extension implemented by Codex for session-home
-lookup. Other providers do not need a dummy implementation. Provider-specific
+lookup; like `homes_report`, it takes a cancellation callback, and the CLI owns
+the process-wide signal supervision around it. Other providers do not need a dummy implementation. Provider-specific
 resume argument construction and session validation remain with the Codex CLI.
 
 ## Identity and lifetime rules
@@ -54,8 +56,8 @@ known names. Other buckets retain generic duration labels. With no primary bucke
 usage may still be displayed but the picker does not recommend a configuration
 based on subscription headroom. Missing/invalid usage remains unknown.
 
-The crate package name `jig-codex-tui` and its old public selection functions remain
-for compatibility. New integrations use `select_provider_with_cancellation`, which
+The picker lives in `jig-agents-tui`, which was published as `jig-codex-tui`
+through v0.7.2. Integrations use `select_provider_with_cancellation`, which
 accepts provider presentation, optional inspection, and explicit quota semantics.
 No new provider-dependent JSON fields are required.
 
@@ -79,3 +81,20 @@ Validate changes with the affected provider/picker tests, the Claude and Codex
 launcher integration tests, and the repository test check using a newly built
 `JIG_DEV_BIN=target/debug/jig`. Preserve the existing JSON schemas, forwarded native
 arguments, invocation directory, child exit status, and signal cleanup behavior.
+
+## Automatic selection
+
+`jig-agents::selection` owns headless quota assessment and selection, independently
+of the TUI. It discovers with `InspectionMode::Headless`, collects indexed
+inspection updates with a cooperative deadline, scores each candidate's most
+constrained returned window, and revalidates the original provider-owned choice.
+Missing or invalid quota is ineligible. Additional model-specific windows are
+included conservatively; forwarded agent arguments are not parsed for model or
+configuration selection. Claude normalizes `weekly_scoped` rows from `limits[]`
+without requiring a model ID, so Fable allowances survive into assessment.
+
+The CLI's `agent_run/automatic.rs` supplies signal supervision and emits decisions
+only for dry runs. Actual launches use the existing transparent handoff. The
+selection report is diagnostic data; its paths, names, and indices must never be
+resolved into a second launch identity. No cache or persistent selection state is
+written, and there is no retry after the child starts.

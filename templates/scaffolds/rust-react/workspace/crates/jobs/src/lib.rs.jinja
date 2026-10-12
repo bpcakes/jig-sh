@@ -1,0 +1,163 @@
+//! Durable background jobs. Runledger stores, claims, retries, and settles work
+//! in PostgreSQL; Batter supervises the worker's startup acknowledgement,
+//! drain, native settlement, and the order of database cleanup.
+
+use std::time::Duration;
+
+use ::<<[ module_name ]>>_core::APP_NAME;
+use ::<<[ module_name ]>>_db::Db;
+use anyhow::Context;
+use batter::{
+    operation::OperationContext,
+    registration::RegistrationTarget,
+    runledger::{
+        native::{
+            core::{
+                jobs::{JobCompletion, JobContext, JobFailure, JobHandler, JobType},
+                prelude::async_trait,
+            },
+            postgres::jobs::JobEnqueue,
+            runtime::{Supervisor as NativeSupervisor, catalog::JobCatalog, config::JobsConfig},
+        },
+        run_atomic,
+    },
+};
+use serde_json::{Value, json};
+
+/// Example durable job type. Replace it, and its handler, with application work.
+pub const EXAMPLE_JOB: JobType<'static> = JobType::new(concat!(
+    // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
+    "<<[ module_name ]>>",
+    ".example",
+));
+
+/// Bound for catalog synchronization during startup.
+const CATALOG_SYNC_BUDGET: Duration = Duration::from_secs(10);
+
+/// Handles [`EXAMPLE_JOB`]: validates its payload and records completion.
+pub struct ExampleJob;
+
+#[async_trait]
+impl JobHandler for ExampleJob {
+    fn job_type(&self) -> JobType<'static> {
+        EXAMPLE_JOB
+    }
+
+    async fn execute(
+        &self,
+        context: JobContext,
+        payload: Value,
+    ) -> Result<JobCompletion, JobFailure> {
+        let message = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .ok_or_else(|| JobFailure::terminal("example.payload", "Expected a message."))?;
+        tracing::info!(job_id = %context.job_id, attempt = context.attempt, message, "example job executed");
+        Ok(JobCompletion::success())
+    }
+}
+
+/// Every handler this application registers.
+pub fn catalog() -> JobCatalog {
+    JobCatalog::new().handler(ExampleJob)
+}
+
+/// Worker settings with Runledger's defaults. A worker identity must be unique
+/// per running process; without `JOBS_WORKER_ID`, one is derived per process.
+pub fn worker_config(worker_id: Option<&str>) -> JobsConfig {
+    JobsConfig {
+        worker_id: worker_id.map_or_else(
+            || format!("{APP_NAME}-worker-{}", uuid::Uuid::now_v7()),
+            str::to_owned,
+        ),
+        poll_interval: Duration::from_millis(500),
+        claim_batch_size: 16,
+        lease_ttl_seconds: 60,
+        max_global_concurrency: 16,
+        reaper_interval: Duration::from_secs(15),
+        schedule_poll_interval: Duration::from_secs(30),
+        reaper_retry_delay_ms: 30_000,
+    }
+}
+
+/// Synchronize job definitions, then register inert native preparation. Batter
+/// starts the worker when the running driver takes ownership; `startup` bounds
+/// native initialization, and the process shutdown budget bounds its drain.
+pub async fn register<T>(
+    target: &mut T,
+    db: &Db,
+    worker_id: Option<&str>,
+    startup: &OperationContext,
+) -> anyhow::Result<()>
+where
+    T: RegistrationTarget + ?Sized,
+{
+    let catalog = catalog();
+    let sync = startup.child(CATALOG_SYNC_BUDGET)?.into_context();
+    sync.run("jobs.catalog.sync", |_| catalog.sync_definitions(db.pool()))
+        .await
+        .context("Failed to synchronize job definitions")?;
+    let prepared = NativeSupervisor::builder(db.pool(), worker_config(worker_id))
+        .context("Invalid Runledger worker configuration")?
+        .with_catalog(&catalog)
+        .prepare()
+        .context("Failed to prepare the Runledger worker")?;
+    batter::runledger::register_in(target, "jobs", startup.clone(), prepared)?;
+    Ok(())
+}
+
+/// The enqueue transaction failed; its native cause is retained as the source.
+#[derive(Debug, thiserror::Error)]
+#[error("the job could not be enqueued")]
+pub struct EnqueueFailure(#[source] Box<dyn std::error::Error + Send + Sync>);
+
+/// Enqueue one example job. Runledger deduplicates by idempotency key, and the
+/// job is visible to workers only after the transaction commits.
+pub async fn enqueue_example(db: &Db, message: &str, idempotency_key: &str) -> anyhow::Result<()> {
+    let payload = json!({ "message": message });
+    let request = JobEnqueue {
+        job_type: EXAMPLE_JOB,
+        organization_id: None,
+        payload: &payload,
+        priority: None,
+        max_attempts: Some(3),
+        timeout_seconds: Some(30),
+        next_run_at: None,
+        idempotency_key: Some(idempotency_key),
+        stage: None,
+    };
+    run_atomic(
+        db.runledger(),
+        async |scope| -> Result<(), EnqueueFailure> {
+            scope
+                .queue()
+                .enqueue_job(&request)
+                .await
+                .map_err(|error| EnqueueFailure(Box::new(error)))?;
+            Ok(())
+        },
+    )
+    .await
+    .context("Failed to enqueue the example job")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_worker_identity_is_kept_and_defaults_are_unique() {
+        assert_eq!(worker_config(Some("worker-a")).worker_id, "worker-a");
+        let first = worker_config(None);
+        let second = worker_config(None);
+        assert_ne!(first.worker_id, second.worker_id);
+        first.validate().expect("default worker settings are valid");
+    }
+
+    #[test]
+    fn example_job_has_a_namespaced_type() {
+        assert_eq!(ExampleJob.job_type(), EXAMPLE_JOB);
+        assert!(EXAMPLE_JOB.as_str().ends_with(".example"));
+    }
+}

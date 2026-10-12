@@ -25,9 +25,11 @@
 - Never place concealed vault values or passphrases in model strings, Ratatui buffers, errors, logs, debug output, or action results. An interactively entered `text` field value is intentionally visible in its form, but remains redacted from debug output and actions.
 - Keep exact `VaultReference` and legacy-name identities separate from sanitized display text.
 - Protected inputs use `SecretInput`; they are neither cloned nor formatted as plaintext.
+- Initialization forms delegate to `jig_vault::validate_new_vault_passphrase_bytes` for early feedback. Passphrase-change forms check confirmation and defer policy to the backend so a retry can complete its matching recorded rekey despite a changed estimate. The core remains the enforcement boundary for new credentials; show only value-free policy errors.
 - Protected file input accepts only a bounded, non-symlink regular file and preserves exact bytes without routing them through text metadata buffers.
 - Import dry-run and preview paths resolve no values; a commit requires the separate exact `IMPORT` confirmation and rechecks current collisions and destination state.
-- Restore is offered only for an absent target and returns through the ordinary locked/unlock flow; passphrase rotation replaces the session credential only after the atomic core change succeeds.
+- Version 1 is read-only and offers only explicit migration to the latest format. Versions 2 and 3 share the complete management surface; version 2 additionally offers explicit migration, whose confirmation names the current and target versions. Gate on field-kind support, never on equality with one version.
+- Restore is offered only for an absent target and returns through the ordinary locked/unlock flow; after a witnessed restore (`other_copies_stale`), the status tells the operator that other copies of the vault are now stale and will be refused, as the CLI does (`src/restore_notice.rs`); a home with a recorded pending transaction is presented as initialized by the backend so unlock finishes it; passphrase rotation replaces the session credential only after the atomic core change succeeds.
 - At most one backend worker may exist. Join a non-cancellable mutation before terminal restoration.
 - Scope is fixed for the session and stays visible.
 - Lock drops credentials, snapshots, and all pending protected inputs.

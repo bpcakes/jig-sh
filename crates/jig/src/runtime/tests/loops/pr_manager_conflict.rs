@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn loop_tick_pr_manager_resolves_merge_conflict_with_expected_head_lease() {

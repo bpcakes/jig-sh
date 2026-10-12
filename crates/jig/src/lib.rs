@@ -1,33 +1,23 @@
-mod agent_guides;
 mod agent_launch;
-mod agent_provider;
-mod backend;
-mod bootstrap;
 #[cfg(test)]
 #[path = "../build_identity.rs"]
 mod build_identity;
-mod cancellation;
-mod claude;
 mod cli;
-mod codex;
 mod command;
-mod context;
 #[cfg(feature = "dev-proxy")]
 mod dev_proxy;
 mod doctor;
-mod execution;
-mod frontend_metadata;
-mod strict_json;
+mod exit;
 #[cfg(not(feature = "dev-proxy"))]
 mod dev_proxy {
     // Keep the CLI surface parseable in `--no-default-features` binaries while
     // returning a direct runtime error for commands that require proxy support.
     pub(crate) mod commands {
         use anyhow::{Result, bail};
+        use jig_context::RepoContext;
         use serde_json::Value;
 
         use crate::command::{DevCommand, ProxyCommand};
-        use crate::context::RepoContext;
 
         pub(crate) fn dev(_ctx: &RepoContext, _command: DevCommand) -> Result<Value> {
             bail!(
@@ -54,60 +44,55 @@ mod dev_proxy {
         }
     }
 }
-mod git_receipts;
-mod home_paths;
 mod info;
-mod mcp;
-mod policy;
-mod progress;
-mod repository;
-mod repository_path;
-mod root_commands;
+#[cfg(test)]
+mod launcher_command_lists;
 mod runtime;
-mod runtime_artifacts;
-mod runtime_cache_lock;
-mod serde_helpers;
-mod shell;
 mod signal_supervision;
-mod source_projection;
-mod state;
 mod status;
 #[cfg(test)]
-mod test_env;
+use jig_context::test_support as test_env;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod test_process;
-mod text;
-mod tool_defs;
 mod ui;
 
 // Shared protocol between generated optional Cargo command defaults and
 // `work check`: keep this prefix stable unless both sides change.
 // User commands that intentionally print this prefix are treated as those
 // generated harness skips in summary output.
-pub(crate) const CARGO_SKIP_OUTPUT_PREFIX: &str = "No Cargo.toml found; skipping cargo ";
 
 /// Runs the Jig command-line interface.
+///
+/// Call this before the process creates any threads. Right after parsing,
+/// commands that cannot capture the vault passphrase remove the reserved
+/// `JIG_VAULT_PASSPHRASE` and `JIG_VAULT_NEW_PASSPHRASE` variables from the
+/// process environment, and launcher handoffs set `JIG_REPO_ROOT`; those
+/// environment mutations are sound only while the process is single-threaded.
 ///
 /// # Errors
 ///
 /// Returns an error when command parsing, repository loading, command
 /// execution, structured output, or cleanup fails.
 pub fn run() -> anyhow::Result<()> {
+    jig_bootstrap::record_build_template_pin_policy(option_env!("JIG_BUILD_OFFICIAL_TEMPLATE_PIN"));
     cli::run()
 }
 
+/// Returns whether the command already reported this failure in its own
+/// protocol. Callers must then exit without printing the error.
 pub fn error_is_structured_command_failure(error: &anyhow::Error) -> bool {
-    cli::is_structured_json_failure(error)
+    exit::CliExit::of(error).is_some_and(exit::CliExit::is_reported)
 }
 
+/// Returns the process exit status this failure decided, if it decided one.
 pub fn error_exit_code(error: &anyhow::Error) -> Option<i32> {
-    cli::structured_error_exit_code(error)
+    exit::CliExit::of(error).map(exit::CliExit::code)
 }
 
 /// Returns whether human stderr delivery was abandoned after its shutdown
 /// deadline. Callers must not perform another blocking stderr write afterward.
 pub fn stderr_delivery_abandoned() -> bool {
-    progress::stderr_delivery_abandoned()
+    jig_execution::progress::stderr_delivery_abandoned()
 }
 
 #[cfg(all(test, not(feature = "dev-proxy")))]
@@ -126,7 +111,7 @@ mod no_dev_proxy_feature_tests {
     fn runtime_dispatch_reports_proxy_disabled_without_dev_proxy_feature() {
         let temp = tempdir().unwrap();
         write_minimal_repo(temp.path());
-        let ctx = context::RepoContext::load_from(temp.path()).unwrap();
+        let ctx = jig_context::RepoContext::load_from(temp.path()).unwrap();
 
         let error = runtime::dispatch(
             &ctx,
@@ -187,6 +172,40 @@ mod build_identity_tests {
     }
 
     #[test]
+    fn development_display_version_adds_git_provenance() {
+        assert_eq!(
+            crate::build_identity::development_display_version(
+                "0.4.1-dev",
+                "16",
+                "0bd929d1",
+                false,
+            ),
+            "0.4.1-dev.16+g0bd929d1"
+        );
+        assert_eq!(
+            crate::build_identity::development_display_version("0.4.1-dev", "16", "0bd929d1", true,),
+            "0.4.1-dev.16+g0bd929d1.dirty"
+        );
+    }
+
+    #[test]
+    fn development_display_version_handles_stable_and_metadata_versions() {
+        assert_eq!(
+            crate::build_identity::development_display_version("0.4.1", "2", "abcdef12", false,),
+            "0.4.1-dev.2+gabcdef12"
+        );
+        assert_eq!(
+            crate::build_identity::development_display_version(
+                "0.4.1-dev+local",
+                "2",
+                "abcdef12",
+                false,
+            ),
+            "0.4.1-dev.2+local.gabcdef12"
+        );
+    }
+
+    #[test]
     fn packaged_layout_identity_uses_only_package_local_inputs() {
         let package = tempdir().unwrap();
         std::fs::create_dir_all(package.path().join("src/nested")).unwrap();
@@ -229,7 +248,7 @@ mod build_identity_tests {
         std::fs::write(package.join("src/lib.rs"), "pub fn packaged() {}\n").unwrap();
 
         let layout = crate::build_identity::resolve_source_layout(&package).unwrap();
-        assert!(layout.live_template_root("project").is_none());
+        assert!(!layout.is_checkout());
         let first = crate::build_identity::compute(&package, &build_configuration()).unwrap();
         std::fs::write(
             workspace.path().join("templates/project/ambient.jinja"),

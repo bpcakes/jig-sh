@@ -28,13 +28,14 @@ fn create_open_set_list_remove_secret() {
 }
 
 #[test]
-fn new_vaults_use_version_two_envelopes() {
+fn new_vaults_use_version_three_envelopes() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
 
     let file: VaultFile = serde_json::from_str(&store.read_vault_text().unwrap().unwrap()).unwrap();
-    assert_eq!(file.header.version, FORMAT_VERSION);
+    assert_eq!(file.header.version, V3_FORMAT_VERSION);
+    assert_eq!(file.header.generation, Some(1));
     assert!(store.open_unlocked(&passphrase()).is_ok());
 }
 
@@ -91,36 +92,37 @@ fn cli_generated_v1_fixture_opens_lists_and_maps_concealed_fields() {
 #[cfg(unix)]
 #[test]
 fn cli_generated_v1_fixture_runs_without_emitting_plaintext() {
-    let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    install_cli_generated_v1_fixture(&vault.store);
-    let passphrase = cli_generated_v1_fixture_passphrase();
-    let request = BrokeredRun::new(
-        vec![
-            "sh".into(),
-            "-c".into(),
-            "test \"$V1_FIXTURE_RESTIC_PASSWORD\" = \"v1-fixture-restic-password-6f2ab1\" && printf fixture-v1-run-ok".into(),
-        ],
-        vec![
-            BrokeredEnv::parse(
-                "V1_FIXTURE_RESTIC_PASSWORD=Production/RESTIC_PASSWORD",
-            )
-            .unwrap(),
-        ],
-    )
-    .unwrap();
+    // The canonical reference resolves the same legacy map key as the name.
+    for mapping in [
+        "V1_FIXTURE_RESTIC_PASSWORD=Production/RESTIC_PASSWORD",
+        "V1_FIXTURE_RESTIC_PASSWORD=jig://Production/RESTIC_PASSWORD",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+        install_cli_generated_v1_fixture(&vault.store);
+        let passphrase = cli_generated_v1_fixture_passphrase();
+        let request = BrokeredRun::new(
+            vec![
+                "sh".into(),
+                "-c".into(),
+                "test \"$V1_FIXTURE_RESTIC_PASSWORD\" = \"v1-fixture-restic-password-6f2ab1\" && printf fixture-v1-run-ok".into(),
+            ],
+            vec![BrokeredEnv::parse(mapping).unwrap()],
+        )
+        .unwrap();
 
-    let output = vault.run_brokered(&passphrase, request).unwrap();
-    assert_eq!(output.exit_status, 0);
-    assert_eq!(output.exit_signal, None);
-    assert_eq!(output.stdout, "fixture-v1-run-ok");
-    assert!(output.stderr.is_empty());
-    assert!(!output.stdout.contains("v1-fixture-restic-password-6f2ab1"));
-    assert!(!output.stderr.contains("v1-fixture-restic-password-6f2ab1"));
+        let output = vault.run_brokered(&passphrase, request).unwrap();
+        assert_eq!(output.exit_status, 0, "{mapping}");
+        assert_eq!(output.exit_signal, None);
+        assert_eq!(output.stdout, "fixture-v1-run-ok");
+        assert!(output.stderr.is_empty());
+        assert!(!output.stdout.contains("v1-fixture-restic-password-6f2ab1"));
+        assert!(!output.stderr.contains("v1-fixture-restic-password-6f2ab1"));
 
-    let audit = vault.verify_audit(&passphrase).unwrap();
-    assert_eq!(audit.event_count, 4);
-    assert_eq!(audit.torn_tail_bytes, 0);
+        let audit = vault.verify_audit(&passphrase).unwrap();
+        assert_eq!(audit.event_count, 4);
+        assert_eq!(audit.torn_tail_bytes, 0);
+    }
 }
 
 #[cfg(unix)]
@@ -162,7 +164,7 @@ fn cli_generated_v1_fixture_supports_transparent_exec_as_concealed() {
 }
 
 #[test]
-fn cli_generated_v1_fixture_migrates_without_rewriting_its_audit_prefix() {
+fn cli_generated_v1_fixture_migrates_to_v2_without_rewriting_its_audit_prefix() {
     let temp = tempfile::tempdir().unwrap();
     let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     install_cli_generated_v1_fixture(&vault.store);
@@ -171,19 +173,19 @@ fn cli_generated_v1_fixture_migrates_without_rewriting_its_audit_prefix() {
     let before_audit = vault.store.read_audit_text().unwrap().unwrap();
     let before: VaultFile = serde_json::from_str(&before_vault).unwrap();
 
-    let migration = vault.migrate(&passphrase, FORMAT_VERSION).unwrap();
+    let migration = vault.migrate(&passphrase, V2_FORMAT_VERSION).unwrap();
     assert_eq!(
         migration,
         VaultMigration {
             from_version: V1_FORMAT_VERSION,
-            to_version: FORMAT_VERSION,
+            to_version: V2_FORMAT_VERSION,
             changed: true,
         }
     );
 
     let after_vault = vault.store.read_vault_text().unwrap().unwrap();
     let after: VaultFile = serde_json::from_str(&after_vault).unwrap();
-    assert_eq!(after.header.version, FORMAT_VERSION);
+    assert_eq!(after.header.version, V2_FORMAT_VERSION);
     assert_eq!(after.header.vault_id, before.header.vault_id);
     assert_eq!(after.header.created_at_ms, before.header.created_at_ms);
     assert_eq!(after.header.salt_b64, before.header.salt_b64);
@@ -403,12 +405,12 @@ fn explicit_migration_reseals_version_one_under_version_two_aad() {
     let before_text = store.read_vault_text().unwrap().unwrap();
     let before: VaultFile = serde_json::from_str(&before_text).unwrap();
 
-    let migration = store.migrate(&passphrase(), FORMAT_VERSION).unwrap();
+    let migration = store.migrate(&passphrase(), V2_FORMAT_VERSION).unwrap();
     assert_eq!(
         migration,
         VaultMigration {
             from_version: V1_FORMAT_VERSION,
-            to_version: FORMAT_VERSION,
+            to_version: V2_FORMAT_VERSION,
             changed: true,
         }
     );
@@ -420,13 +422,13 @@ fn explicit_migration_reseals_version_one_under_version_two_aad() {
     assert_v1_ciphertext_rejected_under_v2_aad(before);
     assert_migration_audit_is_value_free(&store);
 
-    let migration_again = store.migrate(&passphrase(), FORMAT_VERSION).unwrap();
+    let migration_again = store.migrate(&passphrase(), V2_FORMAT_VERSION).unwrap();
     assert!(!migration_again.changed);
     assert_eq!(store.read_vault_text().unwrap().unwrap(), after_text);
 }
 
 fn assert_migration_resealed_header(before: &VaultFile, after: &VaultFile) {
-    assert_eq!(after.header.version, FORMAT_VERSION);
+    assert_eq!(after.header.version, V2_FORMAT_VERSION);
     assert_eq!(after.header.vault_id, before.header.vault_id);
     assert_eq!(after.header.created_at_ms, before.header.created_at_ms);
     assert_eq!(after.header.salt_b64, before.header.salt_b64);
@@ -477,7 +479,7 @@ fn assert_v1_ciphertext_rejected_under_v2_aad(before: VaultFile) {
         crate::crypto::decode_array::<KEY_LEN>("vault key", &old_dek_plaintext).unwrap(),
     );
     let mut v2_header_for_v1_ciphertext = before.header;
-    v2_header_for_v1_ciphertext.version = FORMAT_VERSION;
+    v2_header_for_v1_ciphertext.version = V2_FORMAT_VERSION;
     assert!(
         open(
             &old_dek,

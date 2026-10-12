@@ -1,0 +1,399 @@
+# Agent-Native Repository Product Model
+
+Status: accepted for implementation on 2026-08-21. Structured work and
+work-gate evaluation were later removed with `jig work`; see
+[Removed Work Commands](public-contract.md#removed-work-commands). The migration
+slices and acceptance criteria below are the historical record.
+
+## Product statement
+
+Jig turns a repository's local conventions into a versioned, typed, inspectable
+contract that developers, coding agents, and CI can execute. Every execution
+produces durable evidence tied to the exact repository state it validated.
+
+Jig is a repository API and evidence control plane. It is not a replacement for
+Cargo, Go tooling, package managers, Nx, Turborepo, Dagger, Taskfile, or a CI
+provider. It gives those systems one stack-neutral interface and connects their
+results to repository guidance and durable run history.
+
+## Problem
+
+The contract through version 5 models a repository as one global collection of
+tools and commands. Its configuration has a singular backend language, separate
+frontend application records, and language-shaped command keys. Stable tool
+names such as `jig.test` and `jig.fmt_check` do not identify the code they
+operate on. A repository containing a Go API, a Rust worker, and a TypeScript
+frontend therefore cannot represent all three test or format actions without
+colliding or teaching Jig's core CLI about every stack combination.
+
+Adding another language-specific branch would preserve that limitation. The
+contract instead needs to model what is in the repository, what each part can
+do, what a requested execution resolves to, and what evidence it produced.
+
+## Core model
+
+The repository model has the following relationships:
+
+    Workspace
+     |-- Components ---------------- component dependency and affected graph
+     |    `-- Actions
+     |         `-- Target = component:action
+     |-- Profiles ------------------ named target selections
+     `-- RunPlan --> Run --> TargetRuns --> Evidence
+
+A **workspace** is the repository, its version-control state, defaults, and
+resolved Jig contract.
+
+A **component** is an addressable software unit. An application, service,
+library, worker, command-line program, infrastructure package, or repository-
+wide policy area can all be components. A component has a stable id, one root,
+optional tags, component dependencies, and optional scoped agent guidance. The
+reserved `repo` component owns operations that genuinely apply to the entire
+repository.
+
+An **action** is a typed capability offered by a component. Examples include
+`test`, `lint`, `build`, `serve`, `generate`, `migrate`, and `contract`. An
+action declares its semantic intent, effects, runner, inputs, dependencies,
+timeout, and result parser. `task` is deliberately not the product term because
+it is already overloaded by build tools, agents, and asynchronous protocols.
+
+A **target** is one concrete component and action pair. Its canonical text form
+is `component:action`, for example `api:test`, `web:lint`, or `repo:contract`.
+The structured form always carries `component` and `action` separately so
+callers never need to parse the text address.
+
+A **profile** is a named, version-controlled target selection such as `quick`,
+`verify`, `ci`, or `release`. A profile is configuration, not an execution. The
+word `suite` is not used for static selection because test frameworks and CI
+systems commonly use it for runtime aggregates.
+
+A **run plan** is an immutable resolution of selectors and repository state
+into exact targets, dependency edges, selection reasons, effects, inputs, and
+execution policy. Its id is derived from its canonical contents. Executing a
+plan after its contract or source identity changes must fail as stale rather
+than silently resolve a different request.
+
+A **run** is a durable execution instance. It contains target runs and remains
+queryable after a client disconnects. Execution status is separate from its
+terminal conclusion:
+
+    status: queued | running | completed
+    conclusion: success | failure | cancelled | timed_out | blocked | skipped
+
+`blocked` means the target could not start because a declared prerequisite,
+runner, or configuration value was unavailable. It is distinct from a command
+that ran and found invalid code.
+
+**Evidence** is the structured output of a target run: findings, log and
+artifact references, timestamps, exit information, source identity,
+configuration digest, input digest, worktree fingerprint, and, for a target that
+did not succeed, a bounded tail of its output. Raw
+logs remain available, but consumers must not need to parse human text to learn
+the target, result, affected files, or normalized findings.
+
+A **gate** was a policy over evidence evaluated by the removed `jig work`
+commands. Contracts through v8 still accept `[work]` gate configuration, but no
+command evaluates it; contract v9 removes `[work]`.
+
+An **adapter** discovers or contributes component and action defaults for a
+stack or delegated runner. Rust, Go, TypeScript, SQLx, Nx, Turborepo, and
+Dagger integrations are adapters. Core planning and execution do not branch on
+language.
+
+## Graph rules
+
+The component dependency graph and target execution graph are separate acyclic
+graphs; catalog loading rejects cycles in either graph.
+Component dependencies identify architectural relationships and help map
+changed files to affected components. Action dependencies determine ordering
+and concurrency for one run. A component dependency never implies that two
+actions depend on one another. For example, `api` may depend on `shared` while
+`api:test` and `shared:test` remain independent and run in parallel.
+
+Affected selection begins with changed paths, matches action inputs and
+component roots, includes declared repository-global inputs, and then follows
+only the explicitly configured dependent propagation policy. Every selected
+target records a stable reason such as `direct_input`, `component_dependency`,
+`unclaimed_input`, `action_dependency`, `profile`, or `explicit`.
+
+`--affected BASE` is a modifier over the ordinary candidate set: Jig first
+resolves the explicit selectors or profile (using the default profile when
+neither was supplied), then keeps candidates on affected components. Selection
+is deliberately component-granular: action inputs contribute to their
+component's combined path authority, and a path matching any of those inputs
+retains every candidate target on that component. Per-action inputs explain and
+scope component ownership; they do not independently prune sibling actions. It is
+valid for that filter to produce an empty no-op plan when there are no changes
+or when every claimed change belongs outside the candidate set. Only after filtering does
+Jig add declared action dependencies, so component dependency policy never
+silently becomes execution ordering.
+
+The changed-path set is the sorted union of committed changes from the merge
+base of `BASE` and `HEAD` plus staged, unstaged, untracked, and ignored
+`.env`/`.env.*` worktree paths whose containing directory is not itself ignored.
+An ignored dotenv has no committed baseline, so its presence is conservatively
+reported on every affected plan. Jig prunes wholly ignored directories so build
+products and dependency caches cannot enter source identity or turn every
+target precondition into a recursive generated-tree scan. A repository that
+intentionally keeps a dotenv under an otherwise ignored directory must unignore
+the containing path. Generated repositories counter the remaining unavoidable
+uncertainty with reviewed default ignore patterns while retaining observed
+dotenv contents in the source fingerprint; removing those defaults or declaring
+a dotenv as an explicit action input intentionally makes its presence keep the
+owning component's candidates. The complete `.agent/` harness and runtime tree
+is excluded and therefore cannot be used as a non-root component root or an
+explicit action input. Action input globs use validated, repository-relative
+forward-slash syntax. An input outside its component root
+is an explicit repository-global input. If no action input matches a changed
+path, Jig falls back to the most-specific containing component root. A root
+component (`root = "."`) with declared inputs is intentionally input-authoritative
+and does not receive this fallback. If no input or eligible component root
+claims a changed path, Jig fails closed by retaining every candidate with an
+`unclaimed_input` reason instead of silently treating the run as successful.
+Repositories can classify genuinely non-impacting paths with the reviewed
+`repository.affected_ignore` glob list. Ignore patterns are contract authority,
+cannot match `.jig.toml` or `scripts/jig`, and are applied before the fail-closed
+component-root ownership rule. An explicit action input takes precedence over
+an ignore so reviewed dependency authority cannot be shadowed.
+Dependent
+propagation follows reverse `depends_on` edges only while each source component
+opts into `propagate_affected_to_dependents`, and explanations retain the
+originating component and path.
+
+## Action safety and runners
+
+Every action declares an intent and effects independently:
+
+    intent: check | generate | serve | operate
+    effects: read_only | worktree | process | external
+
+`jig check` can select only read-only check actions. A generator or autofix
+produces a reviewable changeset and never silently edits the worktree through a
+read-only check. Long-running services use `jig dev`. Other declared actions
+use an action-specific command or `jig run`, which requires approval for worktree and external effects before execution.
+
+A runner is the checked-in implementation of an action. Contract v8 supports
+literal `argv`, explicit compatibility `shell`, and Jig-owned `native` runners.
+Argv launches a literal program directly; each ordered argument is a literal
+string or a reference to one declared bounded string. Missing optional values
+omit their positions; empty supplied values remain empty arguments. No binding
+can select the program, working directory, environment, or shell text. Shell
+references a checked-in `[commands]` key and accepts no generic arguments.
+Contracts 6–7 retain the historical implicit `command` runner. V8 render/update
+converts those choices to explicit shell and preserves authored argv/shell choices.
+All runners remain under Jig's effect, approval, lease, source, cancellation and
+result authority. A delegated runner may later pass an already resolved selection
+to an existing monorepo engine.
+
+Execution verifies the complete repository source before and after each
+started target so a read-only target cannot silently mutate inputs used by a
+later target. An adjacent read-only target reuses the preceding postcondition;
+concurrent read-only targets, worktree-mutating targets, and unobserved gaps
+take independent preconditions. Every run also holds a checkout-wide execution
+lease: safe read-only runs share it, while worktree, external, and otherwise
+effectful runs hold it exclusively from freshness validation through terminal
+execution. Every contract-v6 action declares at least one effect; an absent
+effect set is invalid because neither approval nor isolation may infer safety.
+Every contract-v6 manifest tool maps to exactly one owning action through
+`legacy_aliases`, so compatibility dispatch cannot fall back around the action
+contract. Contract-v6 compatibility aliases acquire the same lease from their
+owning action's effects, reload action and command authority after any wait,
+and retain the lease through result recording. If reloaded effects require a
+stronger lease, dispatch repeats acquisition before it runs. Independent
+read-only members of one execution layer use a bounded worker pool and bounded,
+backpressured event and outcome queues. The layer-entry source observation
+authorizes the initial worker cohort; every later queue claim takes a fresh
+precondition so a target cannot start against drift introduced while it was
+waiting. Effectful and fail-fast layers remain sequential. The execution phase therefore
+reports the actual fingerprint scan `count` and `elapsed_ms` as
+`source_observations` in structured check output. Sequential targets reuse safe
+adjacent observations, while a parallel layer takes an entry observation, one
+for each claim beyond the initial worker cohort, and a shared postcondition.
+
+For entirely read-only plans with both parallel work and dependencies, ordinary
+checks use a ready queue across the topological layers. A prerequisite releases
+its dependents after process cleanup, source validation, and durable result
+publication. An unrelated running check does not delay that release.
+Source observations cover completions already available to the coordinator;
+they do not wait for the other workers. A later source mutation fails the run
+and stops admission, while earlier validated results remain historical successes.
+
+One resource-only batch may run alongside these ordinary checks. Its members
+retain their shared source postcondition and hold their claims through durable
+publication. Admitted resource members and ordinary workers share eight
+execution slots; targets waiting for a resource claim reserve no slot.
+Resource members retain their slots until the wave releases its claims, and
+ordinary workers retain theirs through result publication. Simple chains,
+independent single-layer plans, effectful plans, and explicit fail-fast runs retain their existing
+execution paths. The persisted `execution_layers` describe dependency order;
+they do not impose a barrier on ordinary ready work in the parallel read-only
+case.
+
+## Human command-line experience
+
+The common path uses semantic verbs and one selector language:
+
+    jig check
+    jig check test
+    jig check api:test
+    jig check 'web:*'
+    jig check --affected origin/main
+    jig check --profile ci --explain
+
+    jig info component api
+    jig info target api:test
+    jig status run RUN_ID
+
+Bare `jig check` runs the workspace's default verification profile. An
+unqualified action name such as `test` selects that action across components.
+A qualified selector addresses an exact target or uses a simple `*` wildcard
+for either side. Named profiles are selected with `--profile`, not an ambiguous
+positional token. `--explain` resolves and prints the plan without execution.
+JSON output uses the same resolver as human CLI output.
+
+Affected planning is available only to component-native contract-v6
+repositories, where the required inputs and propagation policy are inspectable.
+Use `jig --json check --affected BASE --explain` to inspect the resolved plan and
+selection reasons without executing checks.
+
+Independent safe read-only checks run concurrently within each dependency
+layer, with at most eight target workers and deterministic result recording
+after the layer joins. Layers containing effectful actions remain sequential.
+All failures are collected by default so a developer or agent can repair a
+complete batch; `--fail-fast` is an explicit override that preserves strict
+stop-after-first-failure behavior by running sequentially. CI does not silently
+choose different targets; it selects a checked-in profile or the same explicit
+selectors.
+
+`jig info` is the static discovery surface for workspace, component, action,
+target, profile, and configuration provenance. `jig status` is the dynamic
+surface for local runs, recorded plans, loops, and repository state. The distinction
+prevents another overlapping inspection command.
+
+## Agent experience
+
+Agents use the same command-line interface as humans, with `--json` for structured output:
+
+- `jig info workspace`, `jig info targets`, and `jig info target ID` inspect the catalog.
+- `jig run --explain` previews a deterministic plan without starting execution.
+- `jig check` executes read-only checks; `jig run` executes other declared actions with explicit effect approval.
+- `jig status run ID` reads durable run results; foreground execution responds to cancellation signals.
+- `jig agent doctor` reports agent tooling readiness.
+
+Every effectful invocation is constrained by the checked-in action contract. Arguments are closed and effects are declared; execution verifies current contract and source authority. Jig never exposes a general agent-supplied shell command.
+
+## Authored configuration and resolved contract
+
+`.jig.toml` remains the human-authored configuration. Contract version 6 adds
+component, action, and profile configuration while retaining the strict unknown-
+field policy. `.agent/jig-contract.json` becomes the resolved, versioned
+intermediate representation consumed by the runtime and automation.
+
+Adapters run during `jig init`, `jig adopt`, and `jig update`. They may infer
+candidate components and actions from authoritative project files, but the
+resolved contract records each field's provenance as declared, inferred,
+inherited, or overridden. Runtime execution never performs hidden discovery
+that could change behavior without a reviewable contract diff.
+
+Contract versions 2 through 5 remain readable. For those contracts, the
+runtime synthesizes a `repo` component and maps each legacy manifest tool onto
+a compatible repo-scoped action. Existing command names and tool calls keep
+working. Contract version 6 templates emit native component and
+action records. Templates through contract version 8 also render target-aware
+`[[work.gates]]` entries, which are accepted but no longer evaluated; contract
+version 9 templates render no `[work]` section.
+
+The singular `backend_language` and legacy language command keys remain
+accepted for version 5 and earlier migrations. Version 6 does not use them as
+the source of runtime identity. Rust, Go, TypeScript, and SQL integrations
+contribute adapter metadata and component-scoped actions instead.
+
+## Evidence
+
+Run history records each target result with its run id, structured target,
+configuration digest, input digest, exit code, and normalized findings. A target
+that did not succeed also records a bounded tail of its stdout and stderr.
+Jig no longer writes or reads receipts; an existing `receipts.jsonl` is left in
+place as history. Loop occurrences record their own evidence under Git
+metadata, reported by `jig loop show`.
+
+Gate evaluation, agent-review gates, and structured work plans were removed
+with `jig work`, and `--plan-id` was removed with them.
+
+## Caching policy
+
+Affected selection is part of contract version 6 because it reduces work only
+after inputs and graph propagation are inspectable. Jig-level artifact caching
+is not part of this migration. Cargo, Go, package managers, Nx, Turborepo, and
+Dagger already provide stack-specific caches; duplicating those caches would
+expand Jig into a build system. The run model retains configuration and input
+digests so a future evidence-reuse policy can be added only after proving a
+product need and defining safe freshness semantics.
+
+Current target input digests conservatively include the committed non-`.agent/`
+source tree and the complete non-`.agent/` staged, unstaged, and untracked
+worktree projection together with the target's declared inputs. This safely
+invalidates evidence when relevant content changes but can also invalidate it
+for an unrelated source change. Commits containing only append-only `.agent/`
+state do not change the digests of the results they record. The digest
+identifies the evaluated source; it is not an artifact-cache key.
+
+## Implementation migration
+
+The implementation proceeds in eight independently testable and separately
+committed slices:
+
+1. Add `ComponentId`, `ActionId`, `TargetId`, `RunPlan`, and normalized result
+   DTOs alongside the legacy contract.
+2. Synthesize legacy tools as `repo` targets and preserve legacy aliases.
+3. Add component and target inspection, selector resolution, `--explain`, and a
+   useful bare `jig check`.
+4. Extend append-only receipts with run identity, target identity, contract and
+   input digests, and structured findings.
+5. Convert Rust, Go, and TypeScript feature metadata into adapter contributions
+   and remove the singular backend assumption from version 6 runtime identity.
+6. Migrate work gates to evidence requirements over targets or profiles while
+   retaining legacy tool gates.
+7. Expose catalog inspection, plan previews, execution, and durable run lookup through CLI JSON output.
+8. Add explainable affected selection after component inputs and both graphs
+   are available. Do not add a Jig artifact cache in this migration.
+
+Each slice must preserve versions 2 through 5, update generated templates and
+public documentation when its surface becomes observable, add focused tests,
+and keep the repository contract check passing.
+
+## Acceptance
+
+The migration is complete when a contract version 6 fixture containing at least
+a Go API and TypeScript web component can do all of the following:
+
+- list both components and their distinct `api:test` and `web:test` targets;
+- run bare `jig check` through a default profile;
+- resolve `jig check test`, `jig check api:test`, and an affected selection into
+  deterministic plans with selection reasons;
+- execute a plan and query a durable run with separate status and conclusion;
+- record target-aware receipts without changing old receipt deserialization;
+- satisfy a target-aware work gate only with current matching evidence;
+- expose structured inspection and execution through CLI JSON output; and
+- continue to execute a version 5 `jig.test` tool and legacy work gate without
+  changing their stable response fields.
+
+The full workspace format, strict Clippy, tests, generated fixture checks,
+contract check, and structured-work gates must pass through the freshly built
+development binary.
+
+Durable run lookup scans the complete active `runs.jsonl` stream for the
+requested identity so it can reject duplicate or out-of-order lifecycle roots;
+the cheap identity prefilter reduces decoding, not I/O. Operators should use
+run archival to bound that active journal rather than weakening validation with
+an early-stop index.
+
+## Design influences
+
+The separation between component and execution graphs follows the proven
+project/task distinction used by monorepo systems such as Nx. Scoped target
+addresses, affected selection, and dry-run plans follow the useful common core
+of Nx, Turborepo, and moon. Semantic `check`, `generate`, and service verbs plus
+typed effects follow Dagger's agent-oriented API direction. Structured status,
+conclusion, and findings follow the GitHub Checks model. These influences shape the interface; they do not make Jig depend on
+any of those products.

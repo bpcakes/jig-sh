@@ -1,1 +1,0 @@
-Phase 1: plan a targeted architecture fix for the runtime-to-CLI command dependency. Phase 2: implement neutral runtime command types and CLI conversion. Phase 3: run comprehensive review on all working changes. Phase 4: fix any actionable findings and repeat until clean.

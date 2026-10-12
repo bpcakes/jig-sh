@@ -1,0 +1,77 @@
+use ::<<[ module_name ]>>_http_common::ApiError;
+use async_trait::async_trait;
+use axum::{
+    extract::{Request, State},
+    http::{HeaderMap, Method, Uri},
+    middleware::Next,
+    response::Response,
+};
+use batter::axum::AdmittedRequest;
+
+/// Request metadata available to the application-owned authorization policy.
+#[derive(Clone, Debug)]
+pub struct AdminRequestContext {
+    pub method: Method,
+    pub uri: Uri,
+    pub headers: HeaderMap,
+}
+
+impl From<&Request> for AdminRequestContext {
+    fn from(request: &Request) -> Self {
+        Self {
+            method: request.method().clone(),
+            uri: request.uri().clone(),
+            headers: request.headers().clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdminAuthorizationError {
+    Unauthorized,
+    Forbidden,
+}
+
+/// Application-owned authentication and authorization policy for admin routes.
+///
+/// The authorizer may contain verification keys, a session store, or application
+/// services. Missing or unverifiable credentials must return `Unauthorized`.
+#[async_trait]
+pub trait AdminAuthorizer: Clone + Send + Sync + 'static {
+    async fn authorize(&self, request: &AdminRequestContext)
+    -> Result<(), AdminAuthorizationError>;
+}
+
+/// Safe startup policy: no matched admin route is accessible.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DenyAllAdminAuthorizer;
+
+#[async_trait]
+impl AdminAuthorizer for DenyAllAdminAuthorizer {
+    async fn authorize(
+        &self,
+        _request: &AdminRequestContext,
+    ) -> Result<(), AdminAuthorizationError> {
+        Err(AdminAuthorizationError::Unauthorized)
+    }
+}
+
+/// Route layer inside admission: authorization runs within the request
+/// deadline, after lifecycle admission and browser mutation checks.
+pub(crate) async fn require_admin_authorization<A: AdminAuthorizer>(
+    State(authorizer): State<A>,
+    admitted: AdmittedRequest,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let context = AdminRequestContext::from(&request);
+    let correlation_id = admitted.correlation_id();
+    authorizer
+        .authorize(&context)
+        .await
+        .map_err(|error| match error {
+            AdminAuthorizationError::Unauthorized => ApiError::unauthorized(Some(correlation_id)),
+            AdminAuthorizationError::Forbidden => ApiError::forbidden(Some(correlation_id)),
+        })?;
+    Ok(next.run(request).await)
+}

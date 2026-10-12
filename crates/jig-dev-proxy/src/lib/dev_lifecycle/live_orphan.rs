@@ -56,7 +56,7 @@ fn unconfirmed_cleanup_with_a_live_registered_app_stays_visible_and_fails_closed
                         && (warning.contains("is still live")
                             || warning.contains("could not be classified safely"))
                         && warning.contains("without signaling numeric PIDs")
-                        && warning.contains("jig dev status --json")
+                        && warning.contains("jig dev status --session ")
                         && warning.contains("independently verify and stop surviving app processes")
                 })
             })

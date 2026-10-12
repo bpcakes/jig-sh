@@ -1,1 +1,0 @@
-Separate quota and projection freshness, correct reset expiry, and preserve compact rows at supported terminal sizes.

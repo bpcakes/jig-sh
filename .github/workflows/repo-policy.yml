@@ -8,15 +8,25 @@ on:
       - "Cargo.lock"
       - "rust-toolchain"
       - "rust-toolchain.toml"
+      - ".clippy.toml"
+      - "clippy.toml"
+      - ".config/nextest.toml"
       - ".jig.toml"
+      - ".jig/source-runtime-version"
       - ".agent/jig-contract.json"
+      - "scripts/**"
+      - "templates/project/**"
+      - "templates/scaffolds/**"
+      - "examples/**"
+      - "tests/fixtures/**"
+      - ".cargo/**"
+      - ".github/workflows/rust-tests.yml"
       - ".jig/file-budget.toml"
-      - "scripts/jig"
-      - "scripts/install-jig.sh"
       - ".github/workflows/repo-policy.yml"
-      - ".beads/**"
-      - "scripts/beads-sync.py"
-      - "scripts/tests/test_beads_sync.py"
+      - ".beadroll.json"
+      - "AGENTS.md"
+      - "**/AGENTS.md"
+      - "agent-map.md"
   push:
     branches:
       - master
@@ -26,15 +36,25 @@ on:
       - "Cargo.lock"
       - "rust-toolchain"
       - "rust-toolchain.toml"
+      - ".clippy.toml"
+      - "clippy.toml"
+      - ".config/nextest.toml"
       - ".jig.toml"
+      - ".jig/source-runtime-version"
       - ".agent/jig-contract.json"
+      - "scripts/**"
+      - "templates/project/**"
+      - "templates/scaffolds/**"
+      - "examples/**"
+      - "tests/fixtures/**"
+      - ".cargo/**"
+      - ".github/workflows/rust-tests.yml"
       - ".jig/file-budget.toml"
-      - "scripts/jig"
-      - "scripts/install-jig.sh"
       - ".github/workflows/repo-policy.yml"
-      - ".beads/**"
-      - "scripts/beads-sync.py"
-      - "scripts/tests/test_beads_sync.py"
+      - ".beadroll.json"
+      - "AGENTS.md"
+      - "**/AGENTS.md"
+      - "agent-map.md"
   merge_group:
     types:
       - checks_requested
@@ -48,47 +68,69 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  beads-export:
-    name: Check Beads export privacy
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Test export guard
-        run: python3 -m unittest discover -s scripts/tests
-      - name: Check exported metadata
-        run: python3 scripts/beads-sync.py --check
-
-  file-budget:
-    name: Enforce repository file budgets (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+  clippy:
+    name: Rust lint and repository policy (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
+        include:
+          - os: ubuntu-latest
+            runner: ubuntu-latest
+            cache-key: clippy
+            timeout: 30
+          - os: macos-latest
+            runner: macos-latest
+            cache-key: clippy-macos
+            timeout: 45
+    env:
+      JIG_DEV_BIN: target/debug/jig
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          # File budgets need the event's comparison tree, including merge groups.
           fetch-depth: 0
+      - name: Select policy checks
+        id: scope
+        run: python3 scripts/ci/policy-scope.py
       - name: Install Rust toolchain
+        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
           cache: false
           rustflags: ""
+          components: clippy
+      - name: Cache Rust artifacts
+        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          # Cache all three command configurations from this job together.
+          shared-key: rust-${{ runner.os }}-${{ matrix.cache-key }}-combined-v1
       - name: Build current Jig binary
+        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
+        id: build
         run: cargo build -p jig-sh --bin jig --locked
+      - name: Check production vault features
+        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
+        run: |
+          python3 scripts/check-vault-production-features.py
+          python3 -m unittest discover -s scripts/tests -p 'test_vault_production_features.py'
+      - name: Test tracker triage adapter
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: python3 -m unittest discover -s scripts/tests -p 'test_bead_triage.py'
+      - name: Validate agent-map links and coverage
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.build.outcome == 'success' }}
+        run: scripts/jig check agent-map
       - name: Check repository file-budget policy
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
-          JIG_DEV_BIN: target/debug/jig
           JIG_EVENT_NAME: ${{ github.event_name }}
           JIG_PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
           JIG_PUSH_BEFORE: ${{ github.event.before }}
           JIG_MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          JIG_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           case "$JIG_EVENT_NAME" in
@@ -107,7 +149,27 @@ jobs:
                 --comparison-exact-tree "$JIG_MERGE_GROUP_BASE" \
                 --comparison-provenance explicit
               ;;
-            *)
-              scripts/jig check repo:file-budget
+            workflow_dispatch)
+              # Checkout fetches remote refs but creates only the selected local branch.
+              comparison_base="$(git merge-base HEAD "refs/remotes/origin/$JIG_DEFAULT_BRANCH")"
+              scripts/jig check repo:file-budget \
+                --comparison-exact-tree "$comparison_base" \
+                --comparison-provenance explicit
               ;;
           esac
+      - name: Run clippy
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.scope.outputs.rust != 'false' }}
+        run: scripts/jig check clippy
+      - name: Run no-default-features clippy
+        if: ${{ !cancelled() && steps.scope.outputs.rust != 'false' }}
+        run: cargo clippy -p jig-sh -p jig-bootstrap --no-default-features --all-targets --locked -- -D warnings
+      - name: Run serial dev proxy tests
+        if: ${{ !cancelled() && steps.scope.outputs.rust != 'false' }}
+        # Preserve the standard harness's process-global signal/trust coverage
+        # alongside the full workspace's process-per-test Nextest coverage.
+        env:
+          RUST_TEST_THREADS: "1"
+        run: cargo test -p jig-dev-proxy --locked
+      - name: Run dev proxy clippy
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        run: cargo clippy -p jig-dev-proxy --all-targets --locked -- -D warnings

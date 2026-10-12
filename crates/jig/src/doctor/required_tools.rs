@@ -1,0 +1,545 @@
+//! The required-tools check.
+
+use std::collections::HashSet;
+use std::ffi::OsStr;
+use std::path::Path;
+
+use jig_context::{RepoContext, repository_path};
+use serde_json::json;
+
+use super::cargo_sqlx::{cargo_sqlx_dispatch_issue, command_uses_cargo_sqlx};
+use super::check::{DoctorCheck, check};
+use super::environment::{DoctorEnvironment, DoctorProcessControl};
+use super::programs::{
+    ProgramPathLookup, ProgramPresence, RequiredProgram, program_presence, reported_program,
+    required_command_programs, resolve_program, search_path_is_cwd_independent,
+};
+use super::sqlx_driver::{SqlxDriver, SqlxDriverResolution, configured_sqlx_driver};
+use super::sqlx_driver_probe::{
+    SqlxDriverProbe, probe_sqlx_driver, sqlx_probe_style, trusted_sqlx_probe_executable,
+};
+
+#[cfg(test)]
+pub(super) fn required_tools_check_with_environment(
+    ctx: &RepoContext,
+    environment: &DoctorEnvironment,
+) -> DoctorCheck {
+    required_tools_check_with_environment_and_process_control(
+        ctx,
+        environment,
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+}
+
+fn resolve_required_program(
+    root: &Path,
+    program: &RequiredProgram,
+    captured_search_path: Option<&std::ffi::OsStr>,
+) -> ProgramPresence {
+    let search_path = match &program.path_lookup {
+        ProgramPathLookup::Explicit | ProgramPathLookup::Captured => captured_search_path,
+        ProgramPathLookup::CommandLocal(search_path) => Some(search_path.as_os_str()),
+        ProgramPathLookup::CapturedAfterCwdChange
+            if search_path_is_cwd_independent(captured_search_path) =>
+        {
+            captured_search_path
+        }
+        ProgramPathLookup::CapturedAfterCwdChange | ProgramPathLookup::Unverifiable => {
+            return ProgramPresence::Unverified;
+        }
+    };
+    resolve_program(root, &program.program, search_path)
+        .map_or(ProgramPresence::Missing, ProgramPresence::Present)
+}
+
+pub(super) fn required_tools_check_with_environment_and_process_control(
+    ctx: &RepoContext,
+    environment: &DoctorEnvironment,
+    process_control: DoctorProcessControl<'_>,
+) -> DoctorCheck {
+    let mut tools = Vec::new();
+    let mut missing = Vec::new();
+    let mut incompatible = Vec::new();
+    let mut indeterminate = Vec::new();
+    let mut remediation_driver = None;
+    let mut executable_reference_count = 0;
+    for command_key in ctx.required_commands() {
+        let command = match ctx.command_for_key(command_key) {
+            Ok(command) => command,
+            Err(error) => {
+                missing.push(format!("{command_key}: {error}"));
+                tools.push(json!({
+                    "command_key": command_key,
+                    "command": null,
+                    "program": null,
+                    "present": false,
+                    "detail": error.to_string(),
+                }));
+                continue;
+            }
+        };
+        let sqlx_driver = if command_key == "sqlx_check_command" && ctx.sqlx_enabled() {
+            configured_sqlx_driver(ctx.root(), command, environment.database_url.as_deref())
+        } else {
+            SqlxDriverResolution::Absent
+        };
+        let program_discovery = required_command_programs(ctx.root(), command);
+        let programs = &program_discovery.programs;
+        let inherited_shell_issue = environment.shell_environment_issue;
+        let cargo_sqlx_dispatch_issue = command_uses_cargo_sqlx(command)
+            .then(|| cargo_sqlx_dispatch_issue(ctx.root(), command, environment));
+        executable_reference_count += programs.len();
+        let mut sqlx_probes = HashSet::new();
+        let mut sqlx_resolution_recorded = false;
+        let mut probed_programs = if programs.is_empty()
+            && program_discovery.ambiguity.is_none()
+            && inherited_shell_issue.is_none()
+        {
+            vec![json!({
+                "program": null,
+                "present": true,
+                "detail": "No external executable required.",
+            })]
+        } else {
+            programs
+                .iter()
+                .map(|program_spec| {
+                    let program = &program_spec.program;
+                    let presence = resolve_required_program(
+                        ctx.root(),
+                        program_spec,
+                        environment.search_path.as_deref(),
+                    );
+                    let resolved = match &presence {
+                        ProgramPresence::Present(resolution) => Some(resolution),
+                        ProgramPresence::Missing | ProgramPresence::Unverified => None,
+                    };
+                    let (reported_program, redact_program) =
+                        reported_program(command_key, program);
+                    let (present, detail) = match &presence {
+                        ProgramPresence::Present(_) if redact_program => (
+                            Some(true),
+                            "A redacted command executable is present.".to_string(),
+                        ),
+                        ProgramPresence::Missing if redact_program => (
+                            Some(false),
+                            "A redacted command executable was not found.".to_string(),
+                        ),
+                        ProgramPresence::Present(resolution) => {
+                            let (present, detail) = program_presence(
+                                ctx.root(),
+                                &reported_program,
+                                Some(resolution.path.as_path()),
+                            );
+                            (Some(present), detail)
+                        }
+                        ProgramPresence::Missing => {
+                            let (present, detail) =
+                                program_presence(ctx.root(), &reported_program, None);
+                            (Some(present), detail)
+                        }
+                        ProgramPresence::Unverified => (
+                            None,
+                            if redact_program {
+                                "A redacted command executable could not be resolved safely because the configured Bash command may change the executable lookup context before this invocation."
+                                    .to_string()
+                            } else {
+                                format!(
+                                    "{reported_program} could not be resolved safely because the configured Bash command may change the executable lookup context before this invocation"
+                                )
+                            },
+                        ),
+                    };
+                    if present == Some(false) {
+                        missing.push(format!("{command_key}: {reported_program}"));
+                    }
+                    let mut report = json!({
+                        "program": reported_program,
+                        "present": present,
+                        "detail": detail,
+                    });
+
+                    let probe_style = sqlx_probe_style(program);
+                    if matches!(presence, ProgramPresence::Unverified) {
+                        let detail = format!(
+                            "{command_key}: {reported_program} executable lookup could not be verified because the configured Bash command may change the executable lookup context before this invocation"
+                        );
+                        if command_key == "sqlx_check_command"
+                            && (program_spec.cargo_sqlx_dispatch || probe_style.is_some())
+                        {
+                            sqlx_resolution_recorded = true;
+                            let probe_detail = format!(
+                                "{detail}; SQLx CLI capability probing was skipped; run `scripts/jig check sqlx`"
+                            );
+                            indeterminate.push(probe_detail.clone());
+                            report["driver_probe"] = match sqlx_driver {
+                                SqlxDriverResolution::Known(requirement) => json!({
+                                    "driver": requirement.driver.key(),
+                                    "source": requirement.source.key(),
+                                    "status": "unverified",
+                                    "compatible": null,
+                                    "detail": probe_detail,
+                                }),
+                                _ => json!({
+                                    "driver": null,
+                                    "source": null,
+                                    "status": "unverified",
+                                    "compatible": null,
+                                    "detail": probe_detail,
+                                }),
+                            };
+                        } else {
+                            indeterminate.push(detail);
+                        }
+                        return report;
+                    }
+                    let sqlx_inherited_shell_issue = (command_key == "sqlx_check_command"
+                        && present == Some(true)
+                        && (program_spec.cargo_sqlx_dispatch || probe_style.is_some()))
+                    .then_some(environment.shell_environment_issue)
+                    .flatten();
+                    if let Some(issue) = sqlx_inherited_shell_issue {
+                        let detail = format!(
+                            "{command_key}: SQLx CLI capability probing was skipped because inherited shell state ({}) can alter the configured Bash command; run `scripts/jig check sqlx`",
+                            issue.description(),
+                        );
+                        sqlx_resolution_recorded = true;
+                        report["driver_probe"] = json!({
+                            "driver": null,
+                            "source": null,
+                            "status": "unverified",
+                            "compatible": null,
+                            "detail": detail,
+                        });
+                        return report;
+                    }
+
+                    if program_spec.cargo_sqlx_dispatch {
+                        let reason = cargo_sqlx_dispatch_issue.unwrap_or(
+                            "Cargo subcommand dispatch cannot be verified without executing cargo",
+                        );
+                        let detail = format!(
+                            "{command_key}: cargo sqlx dispatch could not be verified ({reason}); run `scripts/jig check sqlx`"
+                        );
+                        if !sqlx_resolution_recorded {
+                            indeterminate.push(detail.clone());
+                        }
+                        sqlx_resolution_recorded = true;
+                        report["driver_probe"] = match sqlx_driver {
+                            SqlxDriverResolution::Known(requirement) => json!({
+                                "driver": requirement.driver.key(),
+                                "source": requirement.source.key(),
+                                "status": "unverified",
+                                "compatible": null,
+                                "detail": detail,
+                            }),
+                            _ => json!({
+                                "driver": null,
+                                "source": null,
+                                "status": "unverified",
+                                "compatible": null,
+                                "detail": detail,
+                            }),
+                        };
+                        return report;
+                    }
+
+                    if command_key == "sqlx_check_command" && present == Some(true) {
+                        match (probe_style, sqlx_driver) {
+                            (Some(probe_style), SqlxDriverResolution::Known(requirement)) => {
+                                let trusted_executable = resolved.as_ref().and_then(|resolution| {
+                                    trusted_sqlx_probe_executable(
+                                        ctx.root(),
+                                        program,
+                                        resolution,
+                                    )
+                                });
+                                let Some(executable) = trusted_executable else {
+                                    if !sqlx_resolution_recorded {
+                                        sqlx_resolution_recorded = true;
+                                        let detail = format!(
+                                            "{command_key}: SQLx CLI capability probing was skipped because the configured executable is not a trusted bare PATH command; run `scripts/jig check sqlx`"
+                                        );
+                                        indeterminate.push(detail.clone());
+                                        report["driver_probe"] = json!({
+                                            "driver": requirement.driver.key(),
+                                            "source": requirement.source.key(),
+                                            "status": "unverified",
+                                            "compatible": null,
+                                            "detail": detail,
+                                        });
+                                    }
+                                    return report;
+                                };
+                                if let Some(reason) = process_control.unavailable_reason {
+                                    let detail = format!(
+                                        "{command_key}: could not verify the {} driver in the SQLx CLI ({reason}); run `scripts/jig check sqlx`",
+                                        requirement.driver.label()
+                                    );
+                                    indeterminate.push(detail.clone());
+                                    sqlx_resolution_recorded = true;
+                                    report["driver_probe"] = json!({
+                                        "driver": requirement.driver.key(),
+                                        "source": requirement.source.key(),
+                                        "status": "unverified",
+                                        "compatible": null,
+                                        "detail": detail,
+                                    });
+                                    return report;
+                                }
+                                let probe_key = (executable.clone(), probe_style);
+                                if !sqlx_probes.insert(probe_key) {
+                                    return report;
+                                }
+                                let probe = probe_sqlx_driver(
+                                    &executable,
+                                    probe_style,
+                                    requirement.driver,
+                                    ctx.root(),
+                                    environment,
+                                    process_control.cancellation,
+                                );
+                                let (status, compatible, probe_detail) = match &probe {
+                                    SqlxDriverProbe::Compatible => (
+                                        "compatible",
+                                        Some(true),
+                                        format!(
+                                            "SQLx CLI supports the {}",
+                                            requirement.description()
+                                        ),
+                                    ),
+                                    SqlxDriverProbe::Incompatible => {
+                                        remediation_driver = Some(requirement.driver);
+                                        let detail = format!(
+                                            "{command_key}: SQLx CLI is installed but lacks the {}",
+                                            requirement.description()
+                                        );
+                                        incompatible.push(detail.clone());
+                                        ("missing_driver", Some(false), detail)
+                                    }
+                                    SqlxDriverProbe::Indeterminate(reason) => {
+                                        let detail = format!(
+                                            "{command_key}: could not verify the {} driver in the SQLx CLI ({reason}); run `scripts/jig check sqlx`",
+                                            requirement.driver.label()
+                                        );
+                                        indeterminate.push(detail.clone());
+                                        ("unverified", None, detail)
+                                    }
+                                };
+                                report["driver_probe"] = json!({
+                                    "driver": requirement.driver.key(),
+                                    "source": requirement.source.key(),
+                                    "status": status,
+                                    "compatible": compatible,
+                                    "detail": probe_detail,
+                                });
+                            }
+                            (Some(_), SqlxDriverResolution::Indeterminate(reason))
+                                if !sqlx_resolution_recorded =>
+                            {
+                                sqlx_resolution_recorded = true;
+                                let detail = format!(
+                                    "{command_key}: could not determine the required SQLx driver ({reason}); run `scripts/jig check sqlx`"
+                                );
+                                indeterminate.push(detail.clone());
+                                report["driver_probe"] = json!({
+                                    "driver": null,
+                                    "source": null,
+                                    "status": "unverified",
+                                    "compatible": null,
+                                    "detail": detail,
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    report
+                })
+                .collect()
+        };
+        if let Some(ambiguity) = program_discovery.ambiguity {
+            let detail = format!(
+                "{command_key}: executable discovery is incomplete because {}; the configured command must be run to verify its tools",
+                ambiguity.description(),
+            );
+            indeterminate.push(detail.clone());
+            probed_programs.push(json!({
+                "program": null,
+                "present": null,
+                "detail": detail,
+            }));
+        }
+        if let Some(issue) = inherited_shell_issue {
+            let detail = format!(
+                "{command_key}: command execution is unverified because inherited shell state ({}) can alter the configured Bash command",
+                issue.description(),
+            );
+            indeterminate.push(detail.clone());
+            probed_programs.push(json!({
+                "program": null,
+                "present": null,
+                "detail": detail,
+            }));
+        }
+        if command_key == "sqlx_check_command"
+            && !sqlx_resolution_recorded
+            && let SqlxDriverResolution::Indeterminate(reason) = sqlx_driver
+        {
+            let detail = format!(
+                "{command_key}: could not determine the required SQLx driver ({reason}); run `scripts/jig check sqlx`"
+            );
+            indeterminate.push(detail);
+        }
+        let any_missing = probed_programs
+            .iter()
+            .any(|program| program["present"].as_bool() == Some(false));
+        let any_unverified = probed_programs
+            .iter()
+            .any(|program| program["present"].is_null());
+        let command_present = if any_missing {
+            Some(false)
+        } else if any_unverified {
+            None
+        } else {
+            Some(true)
+        };
+        let reported_command = format!("<redacted: {command_key}>");
+        tools.push(json!({
+            "command_key": command_key,
+            "command": reported_command,
+            "command_redacted": true,
+            "programs": probed_programs,
+            "present": command_present,
+        }));
+    }
+
+    for action in ctx.action_specs() {
+        let jig_contract::ActionRunner::Argv {
+            program,
+            working_directory,
+            environment: runner_environment,
+            ..
+        } = &action.runner
+        else {
+            continue;
+        };
+        executable_reference_count += 1;
+        let (present, detail) = match repository_path::resolve_repository_working_directory(
+            ctx.root(),
+            working_directory.as_deref(),
+        ) {
+            Ok(cwd) => {
+                let search_path = runner_environment
+                    .get("PATH")
+                    .map(OsStr::new)
+                    .or(environment.search_path.as_deref())
+                    .unwrap_or_else(|| {
+                        OsStr::new(jig_repository::runners::DEFAULT_ARGV_SEARCH_PATH)
+                    });
+                let resolved = resolve_program(&cwd, program, Some(search_path));
+                program_presence(
+                    &cwd,
+                    program,
+                    resolved.as_ref().map(|resolved| resolved.path.as_path()),
+                )
+            }
+            Err(error) => (
+                false,
+                format!("invalid runner working directory: {error:#}"),
+            ),
+        };
+        if !present {
+            missing.push(format!("{}: {program}: {detail}", action.target));
+        }
+        tools.push(json!({
+            "target": action.target.to_string(),
+            "runner": "argv",
+            "command_key": null,
+            "command": null,
+            "programs": [{"program": program, "present": present, "detail": detail}],
+            "present": present,
+        }));
+    }
+
+    let ok = missing.is_empty() && incompatible.is_empty();
+    let status = match (missing.is_empty(), incompatible.is_empty()) {
+        (true, true) if indeterminate.is_empty() => "present",
+        (true, true) => "present_unverified",
+        (false, true) => "missing",
+        (true, false) => "incompatible",
+        (false, false) => "unavailable",
+    };
+    let checked_detail = format!(
+        "{} required command(s) checked; {} external executable reference(s) inspected",
+        tools.len(),
+        executable_reference_count
+    );
+    let detail = if ok && indeterminate.is_empty() {
+        checked_detail
+    } else if ok {
+        format!(
+            "{checked_detail}; Present but unverified: {}",
+            indeterminate.join(", ")
+        )
+    } else {
+        let mut details = Vec::new();
+        if !missing.is_empty() {
+            details.push(format!(
+                "Missing command executable(s): {}",
+                missing.join(", ")
+            ));
+        }
+        if !incompatible.is_empty() {
+            details.push(format!(
+                "Incompatible command executable(s): {}",
+                incompatible.join(", ")
+            ));
+        }
+        if !indeterminate.is_empty() {
+            details.push(format!(
+                "Unverified command executable(s): {}",
+                indeterminate.join(", ")
+            ));
+        }
+        details.join("; ")
+    };
+    let fix = required_tools_fix(
+        !missing.is_empty(),
+        !incompatible.is_empty(),
+        remediation_driver,
+    );
+
+    check("required_tools", "Required tools", true, ok, status, detail)
+        .with_optional_fix(fix.as_deref())
+        .with_data(json!({ "tools": tools }))
+}
+
+fn required_tools_fix(
+    has_missing: bool,
+    has_incompatible: bool,
+    driver: Option<SqlxDriver>,
+) -> Option<String> {
+    let mut steps = Vec::new();
+    if has_missing {
+        steps
+            .push("Install the missing executable or restore the missing repo script.".to_string());
+    }
+    if let Some(driver) = driver {
+        let action = if has_incompatible {
+            "Reinstall"
+        } else {
+            "Install"
+        };
+        steps.push(format!(
+            "{action} SQLx CLI with {} support (for example, `{}`).",
+            driver.label(),
+            driver.install_command()
+        ));
+    }
+    if steps.is_empty() {
+        return None;
+    }
+    steps.push("Then run `scripts/jig doctor`.".to_string());
+    Some(steps.join(" "))
+}

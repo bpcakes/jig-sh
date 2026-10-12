@@ -1,1 +1,0 @@
-Use jig to validate jig runtime changes through the repo-local harness.

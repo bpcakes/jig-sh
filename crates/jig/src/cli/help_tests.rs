@@ -50,7 +50,7 @@ fn top_level_help_describes_common_commands() {
     assert_help_contains(&help, "Report repo harness readiness");
     assert_help_contains(&help, "info");
     assert_help_contains(&help, "Summarize repo Jig configuration");
-    assert_help_contains(&help, "Manage structured work plans");
+    assert_help_omits(&help, "Manage structured work plans");
     assert_help_contains(&help, "Inspect or bootstrap local agent tooling");
     assert_help_contains(
         &help,
@@ -74,7 +74,6 @@ fn top_level_help_orders_commands_by_user_intent() {
         "  check ",
         "  status ",
         "  ui ",
-        "  work ",
         "  loop ",
         "  migration ",
         "  sqlx ",
@@ -83,7 +82,6 @@ fn top_level_help_orders_commands_by_user_intent() {
         "  agent ",
         "  agent-map ",
         "  state ",
-        "  mcp ",
     ];
 
     let mut previous = 0;
@@ -112,7 +110,7 @@ fn command_inventory_names_track_the_visible_root_surface() {
         .map(|command| command.get_name())
         .collect::<Vec<_>>();
 
-    let described_commands = crate::root_commands::ALL
+    let described_commands = jig_commands::root_commands::ALL
         .iter()
         .map(|command| command.name)
         .collect::<Vec<_>>();
@@ -129,17 +127,18 @@ fn top_level_help_includes_common_workflows() {
     assert_help_contains(&help, "jig info --commands");
     assert_help_contains(&help, "jig dev");
     assert_help_contains(&help, "jig check test");
-    assert_help_contains(&help, "jig work status");
+    assert_help_contains(&help, "jig state summary");
+    assert_help_omits(&help, "jig work");
 }
 
 #[test]
 fn top_level_help_groups_every_visible_command_by_user_intent() {
     let help = Cli::command().render_help().to_string();
 
-    for category in crate::root_commands::RootCommandCategory::ALL {
+    for category in jig_commands::root_commands::RootCommandCategory::ALL {
         assert_help_contains(&help, category.label());
     }
-    for command in crate::root_commands::ALL {
+    for command in jig_commands::root_commands::ALL {
         let group_line = help
             .lines()
             .find(|line| line.trim_start().starts_with(command.category.label()))
@@ -183,8 +182,7 @@ fn ui_help_describes_terminal_and_one_shot_modes_without_port() {
     assert_help_contains(&ui_help, "--refresh-seconds");
     assert_help_omits(&ui_help, "--status-refresh-seconds");
     assert_help_contains(&ui_help, "--timeline-limit");
-    assert_help_contains(&ui_help, "--plan");
-    assert_help_contains(&ui_help, "Open this plan's detail view");
+    assert_help_omits(&ui_help, "--plan");
     assert_help_contains(&ui_help, "jig ui --json");
     assert_help_omits(&ui_help, "--port");
     assert_help_omits(&ui_help, "loopback");
@@ -201,19 +199,7 @@ fn presets_help_includes_harness_only_automation_example() {
 }
 
 #[test]
-fn nested_help_describes_work_and_agent_commands() {
-    let work_help = Cli::command()
-        .find_subcommand_mut("work")
-        .unwrap()
-        .render_help()
-        .to_string();
-    assert_help_contains(&work_help, "start");
-    assert_help_contains(&work_help, "Start a structured work plan");
-    assert_help_contains(&work_help, "gates");
-    assert_help_contains(&work_help, "Show required gate status");
-    assert_help_contains(&work_help, "evidence");
-    assert_help_contains(&work_help, "Summarize receipt evidence");
-
+fn nested_help_describes_agent_commands() {
     let agent_help = Cli::command()
         .find_subcommand_mut("agent")
         .unwrap()
@@ -226,36 +212,6 @@ fn nested_help_describes_work_and_agent_commands() {
         &agent_help,
         "Register the configured Codex skills marketplace",
     );
-}
-
-#[test]
-fn work_start_help_includes_examples() {
-    let work_start_help = rendered_help(&["work", "start"]);
-    assert_help_contains(&work_start_help, "jig work start --title \"Add auth\"");
-    assert_help_contains(&work_start_help, "--print-plan-id");
-    assert_help_contains(&work_start_help, "plan_id=\"$(jig work start");
-}
-
-#[test]
-fn work_check_help_includes_examples() {
-    let work_check_help = rendered_help(&["work", "check"]);
-    assert_help_contains(&work_check_help, "jig work check --plan-id plan_abc123");
-    assert_help_contains(&work_check_help, "--tool jig.test");
-}
-
-#[test]
-fn work_evidence_help_includes_examples() {
-    let work_evidence_help = rendered_help(&["work", "evidence"]);
-    assert_help_contains(&work_evidence_help, "jig work evidence");
-    assert_help_contains(&work_evidence_help, "--plan-id plan_abc123");
-    assert_help_contains(&work_evidence_help, "changed paths covered");
-}
-
-#[test]
-fn work_finish_help_includes_examples() {
-    let work_finish_help = rendered_help(&["work", "finish"]);
-    assert_help_contains(&work_finish_help, "jig work finish --plan-id plan_abc123");
-    assert_help_contains(&work_finish_help, "--outcome success");
 }
 
 #[test]
@@ -276,7 +232,7 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_help, "Both concealed and text fields are encrypted");
     assert_help_contains(&vault_help, "jig vault init");
     assert_help_contains(&vault_help, "jig vault tui");
-    assert_help_contains(&vault_help, "jig vault migrate --to 2");
+    assert_help_contains(&vault_help, "jig vault migrate --to 3");
     assert_help_contains(
         &vault_help,
         "jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt",
@@ -304,10 +260,37 @@ fn vault_help_includes_quick_start_examples() {
         "jig vault backup restore --in ../ExampleProject-vault.backup",
     );
     assert_help_contains(&vault_help, "jig vault secret set api_token --value-prompt");
+    assert_help_contains(
+        &vault_help,
+        "jig vault run --env TOKEN=jig://Production/TOKEN -- command",
+    );
+    assert_help_contains(
+        &vault_help,
+        "vault run broker redacts every injected value of at least 4 bytes",
+    );
+
+    assert_help_contains(
+        &vault_help,
+        "operator to run passphrase-requiring commands in a terminal",
+    );
+    assert_help_omits(&vault_help, "scripts can set");
 
     let vault_init_help = rendered_help(&["vault", "init"]);
     assert_help_contains(&vault_init_help, "prompts twice for a new vault passphrase");
+    assert_help_contains(&vault_init_help, "operator chooses and enters it");
+    assert_help_contains(
+        &vault_init_help,
+        "Agents must ask the operator to run this command in a terminal",
+    );
     assert_help_contains(&vault_init_help, "jig vault init");
+    assert_help_contains(&vault_init_help, "Creates a version 3 vault");
+    assert_help_contains(&vault_init_help, "at least 16 UTF-8 bytes");
+    assert_help_omits(&vault_init_help, "export JIG_VAULT_PASSPHRASE");
+
+    let vault_status_help = rendered_help(&["vault", "status"]);
+    assert_help_contains(&vault_status_help, "unauthenticated public header");
+    assert_help_contains(&vault_status_help, "pending_transaction");
+    assert_help_contains(&vault_status_help, "detects rollback");
 
     let vault_tui_help = rendered_help(&["vault", "tui"]);
     assert_help_contains(&vault_tui_help, "keyboard-first full-screen vault manager");
@@ -328,10 +311,12 @@ fn vault_help_includes_quick_start_examples() {
     );
 
     let vault_migrate_help = rendered_help(&["vault", "migrate"]);
+    assert_help_contains(&vault_migrate_help, "jig vault migrate --to 3");
     assert_help_contains(&vault_migrate_help, "jig vault migrate --to 2");
     assert_help_contains(&vault_migrate_help, "--to <TO>");
     assert_help_contains(&vault_migrate_help, "version 1 vaults");
-    assert_help_contains(&vault_migrate_help, "old Jig rejects");
+    assert_help_contains(&vault_migrate_help, "downgrades are refused");
+    assert_help_contains(&vault_migrate_help, "Older Jig rejects");
 
     let vault_field_set_help = rendered_help(&["vault", "field", "set"]);
     assert_help_contains(&vault_field_set_help, "--text");
@@ -356,6 +341,7 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_exec_help, "Single quotes preserve");
     assert_help_contains(&vault_exec_help, "Within env-file values");
     assert_help_contains(&vault_exec_help, "older vault run command");
+    assert_help_contains(&vault_exec_help, "or jig:// references into a cleaned");
     assert_help_contains(&vault_exec_help, "Exec is transparent, not a sandbox");
     assert_help_contains(&vault_exec_help, "must follow --");
 
@@ -374,7 +360,21 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_passphrase_help, "JIG_VAULT_NEW_PASSPHRASE");
     assert_help_contains(
         &vault_passphrase_help,
+        "never set either variable themselves",
+    );
+    assert_help_contains(
+        &vault_passphrase_help,
         "never accepted as command-line arguments",
+    );
+    assert_help_contains(&vault_passphrase_help, "version 2 or 3 vault");
+    assert_help_contains(
+        &vault_passphrase_help,
+        "also rotates the data-encryption key",
+    );
+    assert_help_contains(&vault_passphrase_help, "Rotation is not");
+    assert_help_contains(
+        &vault_passphrase_help,
+        "finishes only with the new passphrase",
     );
 
     let vault_backup_create_help = rendered_help(&["vault", "backup", "create"]);
@@ -398,7 +398,12 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_backup_restore_help, "contract-v4 compatibility");
     assert_help_contains(&vault_backup_restore_help, "The target home must be absent");
     assert_help_contains(&vault_backup_restore_help, "--in -");
-    assert_help_contains(&vault_backup_restore_help, "currently Linux-only");
+    assert_help_contains(&vault_backup_restore_help, "supported on Linux and macOS");
+    assert_help_contains(&vault_backup_restore_help, "every other copy of that vault");
+    assert_help_contains(
+        &vault_backup_restore_help,
+        "passphrase the backup was created with",
+    );
 
     let vault_field_list_help = rendered_help(&["vault", "field", "list"]);
     assert_help_contains(&vault_field_list_help, "jig://ITEM");
@@ -406,6 +411,15 @@ fn vault_help_includes_quick_start_examples() {
     let vault_run_help = rendered_help(&["vault", "run"]);
     assert_help_contains(&vault_run_help, "--file");
     assert_help_contains(&vault_run_help, "jig vault run --file TOKEN_FILE=api_token");
+    assert_help_contains(&vault_run_help, "VAR=SECRET_NAME or VAR=jig://ITEM/FIELD");
+    assert_help_contains(
+        &vault_run_help,
+        "jig vault run --env TOKEN=jig://Production/TOKEN",
+    );
+    assert_help_contains(
+        &vault_run_help,
+        "every injected value of at least 4 bytes is masked",
+    );
 }
 
 #[test]
@@ -425,7 +439,7 @@ fn codex_help_distinguishes_homes_from_configuration_profiles() {
     assert_help_contains(&launch_help, "forwarded to Codex without shell parsing");
     assert_help_contains(&launch_help, "searchable terminal picker immediately");
     assert_help_contains(&launch_help, "details load in the background");
-    assert_help_contains(&launch_help, "+ marks the best projected outcome");
+    assert_help_contains(&launch_help, "◆ marks the best projected outcome");
     assert!(!launch_help.contains('★'), "{launch_help}");
     assert_help_contains(&launch_help, "work resolves as ~/.codex-work");
     assert_help_contains(&launch_help, "use ./work to select a relative directory");
@@ -512,7 +526,7 @@ fn init_help_explains_defaults_and_the_complete_strict_preset_family() {
 
 #[test]
 fn template_error_hint_uses_prompt_free_harness_only_init() {
-    assert!(TEMPLATE_ERROR_HINT.contains(
+    assert!(super::bootstrap_hints::TEMPLATE_ERROR_HINT.contains(
         "jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault"
     ));
 }
@@ -534,19 +548,12 @@ fn json_output_flag_is_discoverable() {
         "Print structured JSON results and errors; does not disable interactive prompts",
     );
 
-    let work_receipts_help = rendered_help(&["work", "receipts"]);
-    assert_help_contains(&work_receipts_help, "work receipts --failed-only");
-    assert_help_contains(&work_receipts_help, "--json");
-
-    let work_evidence_help = rendered_help(&["work", "evidence"]);
-    assert_help_contains(&work_evidence_help, "jig work evidence --json");
-
     let vault_run_help = rendered_help(&["vault", "run"]);
     assert_help_contains(&vault_run_help, "--json");
     assert_help_contains(&vault_run_help, "--file");
 
     assert_help_omits(&rendered_help(&["doctor"]), "--summary");
-    assert_help_omits(&rendered_help(&["work", "status"]), "--summary");
+    assert_help_omits(&rendered_help(&["state", "summary"]), "--summary");
     assert_help_omits(&rendered_help(&["agent", "doctor"]), "--summary");
 }
 
@@ -601,9 +608,9 @@ fn dev_help_describes_launch_and_session_management() {
 #[test]
 fn migration_help_includes_examples() {
     let migration_help = rendered_help(&["migration", "add"]);
-    assert_help_contains(&migration_help, "open structured work plan");
     assert_help_contains(&migration_help, "jig migration add create_users");
-    assert_help_contains(&migration_help, "--plan-id plan_abc123");
+    assert!(!migration_help.contains("--plan-id"));
+    assert!(!migration_help.contains("--no-receipt"));
 
     let sqlx_migration_help = rendered_help(&["sqlx", "migration", "add"]);
     assert_help_contains(&sqlx_migration_help, "jig migration add create_users");

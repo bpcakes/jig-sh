@@ -10,12 +10,31 @@ subscription-quota forecast, not a promise that a running session migrates or th
 provider, model, credit, or concurrency limits are satisfied. Existing per-account usage,
 projection, and recommendation behavior is unchanged.
 
-## Progress
+## Current integration
+
+Updated on October 12, 2026, against master `740673fa`. The implementation now
+lives in `jig-agents-tui`, uses the shared theme and wrapped details, reserves a
+second Codex header row in the current layout, and refreshes its cached forecast
+when inspection or refresh changes the cohort. Stale results offer `r` to refresh.
+The scenario models scheduled window resets; banked resets are explicitly excluded.
+Accounts without a reset time or duration remain outside the forecast, while their
+known per-account usage remains visible. Retired structured-work journals stay local.
+
+Current validation: all 161 `jig-agents-tui` tests pass, including refresh,
+nullable timing, and monochrome regressions. The five preflight checks passed:
+formatting, workspace Clippy, harness contract, file budgets, and the source
+runtime through the launcher.
+
+The sections below record the original September implementation. Their old gate
+commands and results are historical evidence; current checks follow
+[`docs/local-validation.md`](../../docs/local-validation.md).
+
+## Original progress
 
 - [x] Reconcile the worktree against the planning baseline `bed5af6e`.
 - [x] Define the forecast contract: cohort eligibility, provisional identity, capacity
       class, window schema, temporal origin, horizon, reset model, and outcome states.
-- [x] Implement the pure reset-aware engine in `crates/jig-codex-tui/src/model/fleet/simulation.rs`.
+- [x] Implement the pure reset-aware engine in `crates/jig-agents-tui/src/model/fleet/simulation.rs`.
 - [x] Wire `App::fleet_assessment_at` over the complete row set with a per-generation cache.
 - [x] Integrate the Codex-only header summary and detail-pane explanation.
 - [x] Add engine tests (`src/model/fleet/tests.rs`, `.../tests/timeline.rs`) and
@@ -94,7 +113,7 @@ relocation, then the feature.
 
 ## Decision Log
 
-Decisions below were made on September 16, 2026. None are superseded.
+Decisions below were made on September 16, 2026. The current integration above supersedes the picker and validation workflow details.
 
 - Decision: Add a fleet result and leave per-account results alone.
   Rationale: The fleet answers pool runway; account rows still choose a home and name a
@@ -169,8 +188,8 @@ Delivered against the acceptance criteria:
   phrased as an all-account result.
 - `App::fleet_assessment_at` reads `rows`, not `visible_indices()`, so search and selection
   cannot change the modeled pool.
-- Presentation uses the header's previously unused second row, so the supported 46x12
-  minimum and the wide and stacked layouts are unchanged.
+- Presentation reserves a second row only for the Codex forecast and follows the current
+  pane layout; the supported 46x12 minimum remains usable.
 
 Verification evidence: 125 `jig-codex-tui` tests pass, including analytically checked cases
 for pooled demand, staggered resets, allowance replacement, complementary cross-window

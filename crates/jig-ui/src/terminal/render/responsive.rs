@@ -128,7 +128,6 @@ fn draw_compact_content(frame: &mut Frame, area: Rect, app: &App) {
                 area,
             );
         }
-        Tab::Work => super::local::draw_compact_work(frame, area, app),
         Tab::Timeline => super::local::draw_compact_timeline(frame, area, app),
         Tab::Health => super::local::draw_compact_health(frame, area, app),
     }
@@ -140,10 +139,7 @@ fn compact_status_lines(app: &App) -> Vec<Line<'static>> {
     };
     vec![
         Line::from(format!("{} [{}]", status.repository.name, status.outcome)),
-        Line::from(format!(
-            "{} open plans · {} gate errors",
-            status.work.open_plans, status.work.gate_errors
-        )),
+        Line::from(format!("{} collection errors", status.errors.len())),
         Line::from(format!(
             "{} loop attempts · {} exhausted",
             status.loops.attempts, status.loops.exhausted_attempts
@@ -153,11 +149,10 @@ fn compact_status_lines(app: &App) -> Vec<Line<'static>> {
 
 fn compact_footer(app: &App) -> String {
     if app.detail_is_open() {
-        return super::local::detail_footer(app);
+        return super::local::detail_footer();
     }
     match app.tab {
         Tab::Status => "q quit | Tab views | r".to_string(),
-        Tab::Work => "q quit | Tab views | j/k | Enter | r".to_string(),
         Tab::Timeline => "q quit | Tab views | j/k | Enter | f/F | +/- rows | r".to_string(),
         Tab::Health => "q quit | Tab views | j/k | Enter | r".to_string(),
     }
@@ -170,20 +165,11 @@ fn micro_summary(app: &App) -> String {
     match app.tab {
         Tab::Status => app.status.as_ref().map_or_else(
             || "No status data".to_string(),
-            |status| {
-                format!(
-                    "{}: {} open plans",
-                    status.repository.name, status.work.open_plans
-                )
-            },
-        ),
-        Tab::Work => app.selected_work().map_or_else(
-            || "No plan selected".to_string(),
-            |plan| format!("Selected: {} {}", plan.display_plan_id, plan.title),
+            |status| format!("{}: {}", status.repository.name, status.outcome),
         ),
         Tab::Timeline => app.selected_timeline().map_or_else(
             || format!("No {} timeline rows", app.timeline_filter.label()),
-            |row| format!("{}: {}", row.kind.label(), row.primary),
+            |row| format!("Selected: {}", row.primary),
         ),
         Tab::Health => app.selected_health().map_or_else(
             || "No health item selected".to_string(),

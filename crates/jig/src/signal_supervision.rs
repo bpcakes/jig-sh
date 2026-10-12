@@ -1,5 +1,10 @@
 use anyhow::Result;
 
+#[cfg(unix)]
+pub(crate) mod session;
+#[cfg(unix)]
+pub(crate) use session::SignalSession;
+
 /// Runs one operation with an owned cancellation callback, then retires its session.
 pub(crate) fn supervise<T>(
     start_message: &'static str,
@@ -8,8 +13,7 @@ pub(crate) fn supervise<T>(
 ) -> Result<T> {
     #[cfg(all(unix, not(test)))]
     {
-        let session = crate::doctor::DoctorSignalSession::start()
-            .map_err(|_| anyhow::anyhow!(start_message))?;
+        let session = SignalSession::start().map_err(|_| anyhow::anyhow!(start_message))?;
         let cancellation = session.cancellation();
         let outcome = operation(Box::new(move || cancellation.cancelled()));
         finish(outcome, session.finish(), retirement_message)

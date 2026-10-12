@@ -6,15 +6,17 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 ## Start Here
 
 - Use this file for repo-wide defaults.
-- Open [agent-map.md](./agent-map.md) before backend work.
+- Use [agent-map.md](./agent-map.md) when you need help locating ownership guidance for backend work.
 - Read the nearest backend-level `AGENTS.md` before changing a package or crate when one exists.
-- Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
-- Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
-- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
-- For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
-- A plan captures an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; use `--gate <id>` only when deliberately force-running one gate.
+- Use `scripts/jig` for the typed repo contract; pass `--json` for agent automation.
+- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing, except operator-owned vault setup (see Vault).
+- Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
+
+- Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs.
+
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
+- Keep `.agent/state/runs.jsonl` as local execution history; do not stage or commit it.
 
 ## Compatibility And Cutovers
 
@@ -24,13 +26,27 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 
 
+## Vault
+
+- The vault behind `scripts/jig vault` and its passphrase are operator-owned. These rules override any Jig next step, such as from `scripts/jig doctor` or `scripts/jig info --commands`, that suggests vault setup.
+- Run only `scripts/jig vault status` and, when the operator has already provided `JIG_VAULT_PASSPHRASE` to the session, `scripts/jig vault exec --env-file REFS_FILE -- COMMAND` with the refs file the operator provided and the task's command. `scripts/jig vault run` with the operator's references is the constrained alternative for short non-interactive commands. Every other vault subcommand is operator-only.
+- `COMMAND` is the underlying task command itself. Never wrap `scripts/jig check`, `scripts/jig run`, or another Jig runner in `vault exec` or `vault run`: a failing target records its stdout and stderr in `.agent/state/runs.jsonl` outside vault redaction, so incidental failure output can persist an injected value.
+- Never pass `--home` or `--global` to vault commands, and never set `JIG_VAULT_HOME`.
+- Never delete, move, or edit the vault rollback witness in `~/.jig/vault-witness` or its journals, even to get past a rollback, fork, or pending-transaction error; report the error to the operator.
+- Never request, print, inspect, test, choose, store, or set the passphrase, including with `echo` or `printenv`. Run the command, and stop if it reports a missing passphrase or prompts for one.
+- Never create or edit refs files or add references. Copying the operator's refs file unchanged from the main checkout into a worktree is fine.
+- Never wrap commands that print, encode, or transmit injected values, and never write revealed values to files such as `.env.local`.
+- If a needed credential is unavailable, stop and ask the operator.
+
 ## Backend Defaults
 
 
 
 - Treat `.` as Rust crate roots.
 - Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
+
 - Keep transport logic thin and business logic in the owning crate.
+
 
 
 
@@ -44,15 +60,19 @@ No web apps are configured in `.jig.toml`.
 
 - `scripts/jig bootstrap`
 - `scripts/jig doctor`
+
 - `scripts/jig dev`
+
 - `scripts/jig check test`
 - `scripts/jig check fmt`
 
 
 - `scripts/jig check clippy`
 
-- `scripts/jig work status`
-- `scripts/jig work evidence`
+- `scripts/jig info targets`
+
+- `scripts/jig file-budget audit`
+
 
 
 
@@ -60,144 +80,71 @@ No web apps are configured in `.jig.toml`.
 
 ## Done Means
 
-- Run the relevant local verification for the area you changed.
-- For backend changes, finish with `scripts/jig check test`.
+- Validate the affected behavior with focused checks. Run broader suites when shared behavior, failures, or unresolved risks warrant them.
+- Once the affected behavior is verified, finish; repeat checks only for changed inputs or a concrete remaining concern.
 
 
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.
 
 ## Backend Guide Conventions
 
-When a backend package or crate has an `AGENTS.md`, use these sections:
+When a backend package or crate has an `AGENTS.md`, these sections are optional suggestions:
 
 - `## Purpose`
 - `## Key entrypoints`
 - `## Edit here for X`
 - `## Invariants`
 - `## Common commands`
+
+Use the structure that fits the area. Preserve ownership, entrypoints, invariants, and useful commands. Link to repository files when a reference must be checked. Run `scripts/jig check agent-guides` to validate local links and explicitly declared component guidance.
+
 <!-- END JIG MANAGED BLOCK -->
 
 ## Open-Source Fixture Hygiene
 
 - Never put names, paths, identifiers, or operational details from downstream, customer, or private projects in this repository.
 - Use unmistakably generic fixtures such as `ExampleProject`, `ExampleVault`, and `vault-consumer-fixture` in source, tests, documentation, plans, and generated evidence.
-- Check fixture and test names before running receipt-producing commands because repository paths can be captured in append-only state.
-- If an accidentally captured private identifier requires historical state redaction, treat the edit as an explicit privacy migration: preserve record IDs and every unaffected field, then append a durable decision naming the affected record IDs and the reason for redaction without repeating the removed text.
+- Check fixture and test names before running state-writing commands because repository paths can be captured in append-only state.
+- If an accidentally captured private identifier requires historical state redaction, treat the edit as an explicit privacy migration: preserve record IDs and every unaffected field, then record the affected record IDs and the reason for redaction in the commit message without repeating the removed text.
+
+## Splitting Oversized Rust Files
+
+- When a Rust file outgrows its file budget, split it into modules named for what they hold, with explicit imports and only the visibility callers need.
+- Never splice slices back with `include!` or name files by position (`part_NN.rs`, `tail.rs`, `*_parts/`): they share one namespace and escape `cargo fmt`. `scripts/check-rust-module-splits.py`, run by `scripts/check-rust-format.sh`, rejects both.
 
 ## Dogfooding This Harness
 
-This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, MCP, contract, and receipt paths that generated repos use.
+This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, contract, and run-history paths that generated repos use.
 
-When changing the `jig` runtime itself, build a dev binary and force the launcher to use it before running harness commands:
+Follow [local validation](docs/local-validation.md) to choose between focused checks, the preflight profile, and the full `verify` profile. For ordinary Rust changes, test with `scripts/jig check repo:source-affected-test`, which runs only the tests the change can affect; keep the full `verify` profile for broad changes before handoff.
 
-```sh
-cargo build -p jig-sh --bin jig
-export JIG_DEV_BIN=target/debug/jig
-```
+In this source checkout, `scripts/jig` uses the released runtime selected by `.jig/source-runtime-version`. Routine checks remain available while the source is changing or does not compile. Rust tests still compile and exercise the edited source.
 
-For substantial work, open structured work, run configured gates, then inspect gate status and receipts:
+Use the development entrypoint when validating behavior of the current `jig` implementation:
 
 ```sh
-plan_id="$(scripts/jig work start --title "Describe the work" --body "Validation plan." --print-plan-id)"
-
-scripts/jig work check --plan-id "$plan_id"
-scripts/jig work gates --plan-id "$plan_id"
-scripts/jig work evidence --plan-id "$plan_id"
-scripts/jig work receipts --plan-id "$plan_id"
-scripts/jig work status
+scripts/jig-dev check contract
+scripts/jig-dev --json info
 ```
 
-Do not rely on the repo-local cached `jig` binary for runtime changes unless you have intentionally refreshed it. `JIG_DEV_BIN` is the expected local-development cutover.
+`scripts/jig-dev` incrementally builds the workspace binary and passes the resulting executable through the normal launcher. It respects Cargo's configured target directory and fails if the build fails. No environment override is needed for routine development.
 
-<!-- bv-agent-instructions-v3 -->
+For runtime, launcher, template, or build configuration changes, use `scripts/jig check repo:source-runtime-check` when validating the current implementation through the launcher. The same target is available in the `verify` profile. `JIG_DEV_BIN` remains an explicit override for an already-built binary; its freshness is the caller's responsibility.
+
+The managed Vault rules protect the operator's vault. Vault tests in this source tree create their own throwaway vault homes, rollback witness roots, and test-only passphrases. When a manual check of edited vault behavior needs a vault, use a throwaway `--home` directory in a scratch location outside the repository with a test-support build, `cargo run --locked -p jig-sh --features jig-vault/test-utils -- vault ...`, which keeps the rollback witness beside that home. `scripts/jig-dev` and release builds record every format 3 vault they open, including a throwaway one, in the per-user witness `~/.jig/vault-witness`. Never use the operator's vault, witness, or passphrase.
+
+<!-- beadroll-agent-instructions-v1 -->
 
 ---
 
-## Beads Workflow Integration
+## Beadroll Workflow Integration
 
-This project uses [beads_rust](https://github.com/Dicklesworthstone/beads_rust) (`br`) for issue tracking and [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) (`bv`) for graph-aware triage. Issues are stored in `.beads/` and tracked in git. Current `br` workspaces normally export `.beads/issues.jsonl`; older `bd`/legacy workspaces may use `.beads/beads.jsonl`. `bv` auto-discovers the supported JSONL files, so agents should use `br`/`bv` commands instead of hard-coding a single filename.
+Use the [tracker workflow reference](docs/beads-workflow.md) when selecting tracked work or updating an existing task. Beadroll (`bead`) is authoritative; `.beadroll.json` pins the shared workspace and coordination remote. A direct request does not require creating an issue.
 
-### Using bv as an AI sidecar
+- Use `python3 scripts/bead-triage.py` for graph-aware selection: it syncs, exports to a temporary file, and runs `bv --robot-triage`. Never run bare `bv` (it starts an interactive TUI) or execute its generated `br`/`bd` commands.
+- Verify candidates with `bead show <id> --json` and `bead ready --json`, then `bead claim <id> --json`. Claims belong to the agent thread; a new session needs an explicit, justified takeover.
+- Use `bead` for every issue mutation. Writes publish to `refs/beads/journal` automatically; they do not commit code branches. Run `bead sync --json` before reading current remote state and before handoff; resolve unpublished events and pending ownership first.
+- Never run `br`/`bd`, recreate `.beads/`, or import an old snapshot into the live tracker. Historical plans and notes that prescribe those commands are superseded by this workflow.
+- Follow repository git policy for code changes. Tracker publication is part of authorized tracker mutations; it does not authorize pushing code.
 
-bv is a graph-aware triage engine for Beads projects. Instead of parsing .beads/issues.jsonl / .beads/beads.jsonl directly or hallucinating graph traversal, use robot flags for deterministic, dependency-aware outputs with precomputed metrics (PageRank, betweenness, critical path, cycles, HITS, eigenvector, k-core).
-
-**Scope boundary:** bv handles *what to work on* (triage, priority, planning). `br` handles creating, modifying, and closing beads.
-
-**CRITICAL: Use ONLY --robot-* flags. Bare bv launches an interactive TUI that blocks your session.**
-
-#### The Workflow: Start With Triage
-
-**`bv --robot-triage` is your single entry point.** It returns everything you need in one call:
-- `quick_ref`: at-a-glance counts + top 3 picks
-- `recommendations`: ranked actionable items with scores, reasons, unblock info
-- `quick_wins`: low-effort high-impact items
-- `blockers_to_clear`: items that unblock the most downstream work
-- `project_health`: status/type/priority distributions, graph metrics
-- `commands`: copy-paste shell commands for next steps
-
-```bash
-bv --robot-triage        # THE MEGA-COMMAND: start here
-bv --robot-next          # Minimal: just the single top pick + claim command
-
-# Token-optimized output (TOON) for lower LLM context usage:
-bv --robot-triage --format toon
-```
-
-Before claiming, verify current state with `br show <id> --json` or `br ready --json`. `recommendations` can include graph-important blocked or assigned work; only `quick_ref.top_picks` and non-empty `claim_command` fields represent claimable work.
-
-Check the triage output's `source_path` when older Beads exports coexist. If it selects a stale snapshot, use the current export reported by `br info`: `bv --db "$(br info --json | jq -r .jsonl_path)" --robot-triage`. Verify candidates against `br ready` afterward; a historical export can rank already-closed tasks.
-
-#### Other bv Commands
-
-| Command | Returns |
-|---------|---------|
-| `--robot-plan` | Parallel execution tracks with unblocks lists |
-| `--robot-priority` | Priority misalignment detection with confidence |
-| `--robot-insights` | Full metrics: PageRank, betweenness, HITS, eigenvector, critical path, cycles, k-core |
-| `--robot-alerts` | Stale issues, blocking cascades, priority mismatches |
-| `--robot-suggest` | Hygiene: duplicates, missing deps, label suggestions, cycle breaks |
-| `--robot-diff --diff-since <ref>` | Changes since ref: new/closed/modified issues |
-| `--robot-graph [--graph-format=json\|dot\|mermaid]` | Dependency graph export |
-
-#### Scoping & Filtering
-
-```bash
-bv --robot-plan --label backend              # Scope to label's subgraph
-bv --robot-insights --as-of HEAD~30          # Historical point-in-time
-bv --recipe actionable --robot-plan          # Pre-filter: ready to work (no blockers)
-bv --recipe high-impact --robot-triage       # Pre-filter: top PageRank scores
-```
-
-### br Commands for Issue Management
-
-```bash
-br ready --json                       # Show issues ready to work (no blockers)
-br list --status=open --json          # All open issues
-br show <id> --json                   # Full issue details with dependencies
-br create --title="..." --type=task --priority=2 --json
-br update <id> --status=in_progress --json
-br close <id> --reason="Completed" --json
-br close <id1> <id2> --reason="Completed" --json
-python3 scripts/beads-sync.py          # Clear machine-local paths, then export DB to JSONL
-```
-
-### Workflow Pattern
-
-1. **Triage**: Run `bv --robot-triage` to find the highest-impact actionable work
-2. **Claim**: Use `br update <id> --status=in_progress --json`
-3. **Work**: Implement the task
-4. **Complete**: Use `br close <id> --reason="Completed" --json`
-5. **Sync**: Run `python3 scripts/beads-sync.py` after Beads mutations so the JSONL export is current and contains no machine-local `source_repo_path` values. Repo configuration disables automatic export; do not bypass the helper with a direct flush. `python3 scripts/beads-sync.py --check` is the read-only CI guard.
-
-### Key Concepts
-
-- **Dependencies**: Issues can block other issues. `br ready --json` shows only unblocked work.
-- **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (use numbers 0-4, not words)
-- **Types**: task, bug, feature, epic, chore, docs, question
-- **Blocking**: `br dep add <issue> <depends-on>` to add dependencies
-
-### Git Policy
-
-`br` never commits or pushes. Follow this repository's own git instructions before staging, committing, or pushing. If the repository says "commit only when asked," that rule overrides any generic workflow advice.
-
-<!-- end-bv-agent-instructions -->
+<!-- end-beadroll-agent-instructions -->

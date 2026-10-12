@@ -12,12 +12,17 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
 
-use crate::ports::{is_any_jig_proxy_http, is_jig_proxy_http, is_port_free, is_tcp_listening};
+use crate::ports::{
+    ProxyCapabilities, is_any_jig_proxy_http, is_jig_proxy_http, is_port_free, is_tcp_listening,
+};
 use crate::state::{LockOutcome, StateStore};
 use crate::types::ProxySettings;
 
+use self::capability::{capability_pid_matches, checked_capabilities, runtime_generation_matches};
 use super::child_lifecycle::{terminate_and_reap_logged, try_wait_preserving_process_group};
 use super::cleanup::arm_owned_resources;
+
+mod capability;
 
 pub(super) const MAX_PROXY_LOG_BYTES: u64 = 2 * 1024 * 1024;
 const PROXY_START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -52,6 +57,14 @@ fn ensure_proxy_running_after_lock(
         LockOutcome::Acquired(false) => {}
         LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
     }
+    match store.runtime_files_present_interruptible(cancelled)? {
+        LockOutcome::Acquired(false) => {}
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        LockOutcome::Acquired(true) => bail!(
+            "Jig proxy readiness in state dir {} is unconfirmed while runtime records remain. Retry after the proxy stabilizes, or inspect `scripts/jig proxy list --state-dir PATH` and explicitly stop it with `scripts/jig proxy stop --state-dir PATH` using this state directory before starting again. Runtime records and shared certificates were preserved; no proxy was started or restarted.",
+            store.root().display(),
+        ),
+    }
     match ensure_no_unregistered_proxy_on_requested_port_interruptible(store, settings, cancelled)?
     {
         LockOutcome::Acquired(()) => {}
@@ -79,6 +92,9 @@ fn ensure_proxy_running_after_lock(
         .stderr(Stdio::from(log2));
     preserve_proxy_child_env(&mut command);
     command.env("JIG_PROXY_STATE_DIR", store.root());
+    for name in &settings.additional_dns_names {
+        command.arg("--certificate-dns-name").arg(name);
+    }
     if settings.https {
         command.arg("--https");
         if let Some(port) = settings.https_port {
@@ -378,29 +394,33 @@ fn detach_background_proxy(_command: &mut Command) {}
 
 #[cfg(test)]
 pub(super) fn proxy_ready(store: &StateStore, settings: &ProxySettings) -> Result<bool> {
-    let Some(http_port) = store.read_http_port()? else {
-        return Ok(false);
-    };
-    let Some(health_token) = store.read_health_token()? else {
-        return Ok(false);
-    };
-    let Some(health_pid) =
-        crate::ports::jig_proxy_http_pid("127.0.0.1", http_port, Some(&health_token))
-    else {
-        return Ok(false);
-    };
-    if store.read_pid()? != Some(health_pid) {
-        return Ok(false);
+    match proxy_ready_interruptible(store, settings, &|| false)? {
+        LockOutcome::Acquired(ready) => Ok(ready),
+        LockOutcome::Cancelled => unreachable!("uncancelled proxy readiness was cancelled"),
     }
-    ensure_requested_http_port(store, settings, http_port)?;
-    ensure_requested_https(store, settings)?;
-    Ok(true)
 }
 
 pub(super) fn proxy_ready_interruptible(
     store: &StateStore,
     settings: &ProxySettings,
     cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<bool>> {
+    proxy_ready_with_probe_policy(store, settings, cancelled, false)
+}
+
+pub(super) fn proxy_ready_for_monitor_interruptible(
+    store: &StateStore,
+    settings: &ProxySettings,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<bool>> {
+    proxy_ready_with_probe_policy(store, settings, cancelled, true)
+}
+
+fn proxy_ready_with_probe_policy(
+    store: &StateStore,
+    settings: &ProxySettings,
+    cancelled: &impl Fn() -> bool,
+    transient_as_miss: bool,
 ) -> Result<LockOutcome<bool>> {
     let http_port = match store.read_http_port_interruptible(cancelled)? {
         LockOutcome::Acquired(port) => port,
@@ -430,9 +450,51 @@ pub(super) fn proxy_ready_interruptible(
     }
     ensure_requested_http_port(store, settings, http_port)?;
     match ensure_requested_https_interruptible(store, settings, cancelled)? {
-        LockOutcome::Acquired(()) => Ok(LockOutcome::Acquired(true)),
-        LockOutcome::Cancelled => Ok(LockOutcome::Cancelled),
+        LockOutcome::Acquired(()) => {}
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
     }
+    let Some(capabilities) =
+        checked_capabilities(store, settings, http_port, &health_token, transient_as_miss)?
+    else {
+        return Ok(LockOutcome::Acquired(false));
+    };
+    if !capability_pid_matches(store, health_pid, capabilities.pid, transient_as_miss)? {
+        return Ok(LockOutcome::Acquired(false));
+    }
+    let generation = runtime_generation_matches(
+        store,
+        health_pid,
+        &health_token,
+        cancelled,
+        transient_as_miss,
+    )?;
+    if generation != LockOutcome::Acquired(true) {
+        return Ok(generation);
+    }
+    ensure_requested_capabilities(store, settings, capabilities)?;
+    Ok(LockOutcome::Acquired(true))
+}
+
+fn ensure_requested_capabilities(
+    store: &StateStore,
+    settings: &ProxySettings,
+    actual: ProxyCapabilities,
+) -> Result<()> {
+    if settings.lan == actual.lan
+        && (!settings.https || (actual.https && settings.http2 == actual.http2))
+    {
+        return Ok(());
+    }
+    bail!(
+        "A Jig proxy in state dir {} is already running with LAN={}, HTTPS={}, HTTP2={}, but this command requested LAN={}, HTTPS={}, HTTP2={}. Use matching listener flags, or explicitly stop and restart the shared proxy with `scripts/jig proxy stop --state-dir PATH` and `scripts/jig proxy start --state-dir PATH` using this state directory and the desired flags. No proxy was restarted.",
+        store.root().display(),
+        actual.lan,
+        actual.https,
+        actual.http2,
+        settings.lan,
+        settings.https,
+        settings.http2,
+    )
 }
 
 fn ensure_requested_http_port(
@@ -589,6 +651,11 @@ pub(super) const fn proxy_health_failed(misses: &mut u8, ready: bool) -> bool {
     *misses = misses.saturating_add(1);
     *misses >= PROXY_HEALTH_MISSES_BEFORE_STOP
 }
+
+#[cfg(test)]
+mod capability_tests;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod certificate_safety_tests;
 
 fn preserve_proxy_child_env(command: &mut Command) {
     for key in [

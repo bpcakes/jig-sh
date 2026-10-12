@@ -1,6 +1,4 @@
 use std::io::{ErrorKind, IsTerminal, Read};
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -9,14 +7,13 @@ use jig_vault::{
     InjectionTemplate, MAX_SECRET_VALUE_LEN, PreparedPrivateFile, SecretBytes, Vault, VaultExec,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::command::{
     VaultAuditCommand, VaultBackupCommand, VaultCommand, VaultExecRequest, VaultExecValue,
     VaultFieldCommand, VaultFieldListRequest, VaultFieldRemoveRequest, VaultFieldSetRequest,
     VaultImportCommand, VaultImportOnePasswordRequest, VaultInitRequest, VaultInjectRequest,
-    VaultMigrateRequest, VaultPassphraseCommand, VaultReadRequest, VaultRepoScope, VaultRunRequest,
+    VaultMigrateRequest, VaultPassphraseCommand, VaultReadRequest, VaultRunRequest,
     VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest,
     VaultSecretRemoveRequest, VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest,
 };
@@ -27,6 +24,8 @@ const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
 const VAULT_FILE_NAME: &str = "vault.json";
 
 mod lifecycle;
+mod recovery;
+mod scope;
 pub(super) mod tui;
 
 #[cfg(test)]
@@ -40,6 +39,7 @@ use lifecycle::{
     change_passphrase, create_backup, hidden_terminal_input_available, passphrase,
     prompt_zeroizing, restore_backup,
 };
+use scope::{scoped_vault_home, vault_base_home};
 type VaultResolver = fn(Option<PathBuf>) -> jig_vault::Result<Vault>;
 
 #[cfg(not(test))]
@@ -88,6 +88,7 @@ fn dispatch_with_resolver(command: VaultCommand, resolver: VaultResolver) -> Res
         },
         VaultCommand::Run(request) => run(request, resolver),
     }
+    .map_err(recovery::operator_guidance)
 }
 
 pub(crate) fn dispatch_raw(command: VaultCommand) -> Result<VaultRawOutcome> {
@@ -97,6 +98,7 @@ pub(crate) fn dispatch_raw(command: VaultCommand) -> Result<VaultRawOutcome> {
         VaultCommand::Read(request) => read_field(request).map(|()| VaultRawOutcome::Complete),
         _ => bail!("internal error: structured vault command reached the raw dispatcher"),
     }
+    .map_err(recovery::operator_guidance)
 }
 
 pub(crate) fn prepare_raw_input(command: &mut VaultCommand) -> Result<()> {
@@ -360,6 +362,10 @@ fn status(request: VaultStatusRequest) -> Result<Value> {
         "vault_home": status.root.display().to_string(),
         "exists": status.exists,
         "vault_file_exists": status.exists,
+        // Unauthenticated public-header discovery, never an integrity claim.
+        "format_version": status.format_version,
+        // An interrupted transaction finishes on any authenticated command.
+        "pending_transaction": status.pending_transaction,
     });
     add_vault_scope_fields(&mut output, &resolved);
     Ok(output)
@@ -626,6 +632,14 @@ struct ResolvedVaultRuntime {
     scope: &'static str,
     scope_id: Option<String>,
     repo_name: Option<String>,
+    main_checkout_root: Option<PathBuf>,
+    worktree_local_guidance: Option<String>,
+}
+
+pub(crate) fn preflight_scope(options: &VaultRuntimeOptions) -> Result<()> {
+    // Resolve metadata only; do not open or create a vault (including restore's
+    // absent destination) before command-specific preflight and capture.
+    resolve_vault_runtime(options).map(|_| ())
 }
 
 fn resolve_vault_runtime(options: &VaultRuntimeOptions) -> Result<ResolvedVaultRuntime> {
@@ -635,105 +649,39 @@ fn resolve_vault_runtime(options: &VaultRuntimeOptions) -> Result<ResolvedVaultR
             scope: "explicit-home",
             scope_id: None,
             repo_name: None,
+            main_checkout_root: None,
+            worktree_local_guidance: None,
         });
     }
 
     match &options.scope {
-        VaultScopeSelection::Repo(scope) => Ok(ResolvedVaultRuntime {
-            home: Some(scoped_vault_home(scope)?),
-            scope: "repo",
-            scope_id: Some(scope.scope_id.clone()),
-            repo_name: Some(scope.repo_name.clone()),
-        }),
+        VaultScopeSelection::Repo(scope) => {
+            let scoped = scoped_vault_home(scope)?;
+            Ok(ResolvedVaultRuntime {
+                home: Some(scoped.home),
+                scope: "repo",
+                scope_id: Some(scope.scope_id.clone()),
+                repo_name: Some(scope.repo_name.clone()),
+                main_checkout_root: scoped.main_checkout_root,
+                worktree_local_guidance: scoped.worktree_local_guidance,
+            })
+        }
         VaultScopeSelection::Global => Ok(ResolvedVaultRuntime {
             home: None,
             scope: "global",
             scope_id: None,
             repo_name: None,
+            main_checkout_root: None,
+            worktree_local_guidance: None,
         }),
         VaultScopeSelection::Auto => Ok(ResolvedVaultRuntime {
             home: None,
             scope: "legacy",
             scope_id: None,
             repo_name: None,
+            main_checkout_root: None,
+            worktree_local_guidance: None,
         }),
-    }
-}
-
-fn scoped_vault_home(scope: &VaultRepoScope) -> Result<PathBuf> {
-    if !crate::command::is_valid_vault_scope_id(&scope.scope_id) {
-        bail!("invalid repo vault scope id '{}'", scope.scope_id);
-    }
-    let scopes_home = vault_base_home()?.join("scopes");
-    let trusted_home = scopes_home.join(trusted_repo_scope_dir(scope)?);
-    let legacy_home = scopes_home.join(&scope.scope_id);
-    reject_legacy_repo_scope_cutover(scope, &trusted_home, &legacy_home)?;
-    Ok(trusted_home)
-}
-
-fn reject_legacy_repo_scope_cutover(
-    scope: &VaultRepoScope,
-    trusted_home: &Path,
-    legacy_home: &Path,
-) -> Result<()> {
-    if vault_file_exists(trusted_home)? || !vault_file_exists(legacy_home)? {
-        return Ok(());
-    }
-
-    bail!(
-        "legacy repo-scoped vault data exists at {}, but this Jig version now stores repo-scoped vaults in the trusted repo-local vault namespace at {} for '{}'. Refusing to treat the new namespace as empty. Move the legacy vault directory after confirming this checkout should own those secrets, or pass --home {} to inspect it explicitly",
-        legacy_home.display(),
-        trusted_home.display(),
-        scope.repo_name,
-        legacy_home.display()
-    );
-}
-
-fn vault_file_exists(home: &Path) -> Result<bool> {
-    let vault_file = home.join(VAULT_FILE_NAME);
-    match std::fs::symlink_metadata(&vault_file) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to inspect vault file {}", vault_file.display())),
-    }
-}
-
-fn trusted_repo_scope_dir(scope: &VaultRepoScope) -> Result<String> {
-    let repo_root = std::fs::canonicalize(&scope.repo_root).with_context(|| {
-        format!(
-            "failed to canonicalize repo root for vault scope: {}",
-            scope.repo_root.display()
-        )
-    })?;
-    let mut digest = Sha256::new();
-    digest.update(b"jig-vault-repo-scope-v2\0");
-    #[cfg(unix)]
-    digest.update(repo_root.as_os_str().as_bytes());
-    #[cfg(not(unix))]
-    digest.update(repo_root.to_string_lossy().as_bytes());
-    digest.update(b"\0");
-    digest.update(scope.scope_id.as_bytes());
-    Ok(format!("repo-{}", lower_hex(&digest.finalize())))
-}
-
-fn lower_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
-}
-
-fn vault_base_home() -> Result<PathBuf> {
-    match std::env::var_os(VAULT_HOME_ENV) {
-        Some(value) if value.is_empty() => bail!("{VAULT_HOME_ENV} must not be empty"),
-        Some(value) => Ok(PathBuf::from(value)),
-        None => Ok(dirs::home_dir()
-            .context("could not resolve home directory for Jig vault")?
-            .join(".jig/vault")),
     }
 }
 
@@ -741,6 +689,14 @@ fn add_vault_scope_fields(output: &mut Value, resolved: &ResolvedVaultRuntime) {
     output["vault_scope"] = json!(resolved.scope);
     output["vault_scope_id"] = json!(resolved.scope_id.as_deref());
     output["vault_repo_name"] = json!(resolved.repo_name.as_deref());
+    output["vault_main_checkout_root"] = json!(
+        resolved
+            .main_checkout_root
+            .as_ref()
+            .map(|root| root.display().to_string())
+    );
+    output["vault_worktree_local"] = json!(resolved.worktree_local_guidance.is_some());
+    output["vault_worktree_local_guidance"] = json!(resolved.worktree_local_guidance.as_deref());
 }
 
 fn parse_env_mappings(values: &[String]) -> Result<Vec<BrokeredEnv>> {
@@ -802,306 +758,4 @@ fn read_field_value_from_prompt() -> Result<SecretBytes> {
 }
 
 #[cfg(test)]
-mod tests {
-    use secrecy::SecretString;
-    use tempfile::tempdir;
-
-    use crate::test_env::{EnvVarGuard, lock_env};
-
-    use super::*;
-
-    #[test]
-    fn parses_env_mappings() {
-        let parsed = parse_env_mappings(&["TOKEN=api_token".into()]).unwrap();
-        assert_eq!(parsed[0].var().as_str(), "TOKEN");
-        assert_eq!(parsed[0].secret_name().as_str(), "api_token");
-    }
-
-    #[test]
-    fn rejects_invalid_env_mapping_shape() {
-        let error = parse_env_mappings(&["TOKEN".into()])
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("VAR=SECRET_NAME"));
-    }
-
-    #[test]
-    fn rejects_invalid_env_mapping_secret_name_before_unlock() {
-        let error = parse_env_mappings(&["TOKEN=bad secret".into()])
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("unsupported characters"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn parses_file_mappings() {
-        let parsed = parse_file_mappings(&["TOKEN_FILE=api_token".into()]).unwrap();
-        assert_eq!(parsed[0].var().as_str(), "TOKEN_FILE");
-        assert_eq!(parsed[0].secret_name().as_str(), "api_token");
-    }
-
-    #[cfg(not(unix))]
-    #[test]
-    fn rejects_file_mappings_on_non_unix() {
-        let error = parse_file_mappings(&["TOKEN_FILE=api_token".into()])
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("requires Unix-style owner-only temporary files"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rejects_invalid_file_mapping_shape() {
-        let error = parse_file_mappings(&["TOKEN_FILE".into()])
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("VAR=SECRET_NAME"));
-    }
-
-    #[test]
-    fn read_secret_value_rejects_oversized_input() {
-        let value = vec![b'x'; MAX_SECRET_VALUE_LEN + 1];
-        let error = read_secret_value(std::io::Cursor::new(value))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("larger than"));
-    }
-
-    #[test]
-    fn status_does_not_require_passphrase() {
-        let temp = tempdir().unwrap();
-        let home = temp.path().join("vault");
-        let output = status(VaultStatusRequest {
-            vault: VaultRuntimeOptions {
-                home: Some(home.clone()),
-                ..Default::default()
-            },
-        })
-        .unwrap();
-        assert_eq!(output["exists"], false);
-        assert_eq!(output["vault_file_exists"], false);
-        assert!(!home.exists());
-    }
-
-    #[test]
-    fn status_reports_existing_vault() {
-        let temp = tempdir().unwrap();
-        let home = temp.path().join("vault");
-        let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
-        vault
-            .init(&SecretString::from(
-                "correct horse battery staple".to_string(),
-            ))
-            .unwrap();
-        let output = status(VaultStatusRequest {
-            vault: VaultRuntimeOptions {
-                home: Some(home),
-                ..Default::default()
-            },
-        })
-        .unwrap();
-        assert_eq!(output["exists"], true);
-        assert_eq!(output["vault_file_exists"], true);
-    }
-
-    #[test]
-    fn field_list_reports_only_metadata_and_filters_by_item() {
-        let _env = lock_env();
-        let temp = tempdir().unwrap();
-        let home = temp.path().join("vault");
-        let passphrase = "correct horse battery staple";
-        let vault = Vault::resolve(Some(home.clone())).unwrap();
-        let passphrase = SecretString::from(passphrase.to_owned());
-        vault.init(&passphrase).unwrap();
-        vault
-            .set_field(
-                &passphrase,
-                "jig://Production/RESTIC_COMPRESSION".parse().unwrap(),
-                FieldKind::Text,
-                SecretBytes::new(b"false".to_vec()),
-            )
-            .unwrap();
-        vault
-            .set_field(
-                &passphrase,
-                "jig://Staging/ARRAY_APP_KEY".parse().unwrap(),
-                FieldKind::Concealed,
-                SecretBytes::new(b"test-key".to_vec()),
-            )
-            .unwrap();
-
-        set_captured_passphrase(SecretString::from(
-            "correct horse battery staple".to_owned(),
-        ))
-        .unwrap();
-        let output = list_fields(VaultFieldListRequest {
-            item: Some("jig://Production".parse().unwrap()),
-            vault: VaultRuntimeOptions {
-                home: Some(home),
-                ..Default::default()
-            },
-        })
-        .unwrap();
-
-        assert_eq!(output["command"], "vault field list");
-        assert_eq!(output["item"], "jig://Production");
-        assert_eq!(output["fields"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            output["fields"][0]["reference"],
-            "jig://Production/RESTIC_COMPRESSION"
-        );
-        assert_eq!(output["fields"][0]["kind"], "text");
-        assert_eq!(output["fields"][0]["value_len"], 5);
-        assert!(output["fields"][0].get("value").is_none());
-    }
-
-    #[test]
-    fn field_remove_reports_whether_a_field_existed() {
-        let _env = lock_env();
-        let temp = tempdir().unwrap();
-        let home = temp.path().join("vault");
-        let passphrase = SecretString::from("correct horse battery staple".to_owned());
-        let vault = Vault::resolve(Some(home.clone())).unwrap();
-        vault.init(&passphrase).unwrap();
-        vault
-            .set_field(
-                &passphrase,
-                "jig://Production/RESTIC_PASSWORD".parse().unwrap(),
-                FieldKind::Concealed,
-                SecretBytes::new(b"test-password".to_vec()),
-            )
-            .unwrap();
-
-        set_captured_passphrase(SecretString::from(
-            "correct horse battery staple".to_owned(),
-        ))
-        .unwrap();
-        let output = remove_field(VaultFieldRemoveRequest {
-            reference: "jig://Production/RESTIC_PASSWORD".parse().unwrap(),
-            vault: VaultRuntimeOptions {
-                home: Some(home.clone()),
-                ..Default::default()
-            },
-        })
-        .unwrap();
-        assert_eq!(output["removed"], true);
-
-        set_captured_passphrase(SecretString::from(
-            "correct horse battery staple".to_owned(),
-        ))
-        .unwrap();
-        let output = remove_field(VaultFieldRemoveRequest {
-            reference: "jig://Production/RESTIC_PASSWORD".parse().unwrap(),
-            vault: VaultRuntimeOptions {
-                home: Some(home),
-                ..Default::default()
-            },
-        })
-        .unwrap();
-        assert_eq!(output["removed"], false);
-    }
-
-    #[test]
-    fn migrate_reports_when_an_already_v2_vault_is_unchanged() {
-        let _env = lock_env();
-        let temp = tempdir().unwrap();
-        let home = temp.path().join("vault");
-        let passphrase = SecretString::from("correct horse battery staple".to_owned());
-        let vault = Vault::resolve(Some(home.clone())).unwrap();
-        vault.init(&passphrase).unwrap();
-
-        set_captured_passphrase(SecretString::from(
-            "correct horse battery staple".to_owned(),
-        ))
-        .unwrap();
-        let output = migrate(VaultMigrateRequest {
-            target_version: 2,
-            vault: VaultRuntimeOptions {
-                home: Some(home),
-                ..Default::default()
-            },
-        })
-        .unwrap();
-
-        assert_eq!(output["command"], "vault migrate");
-        assert_eq!(output["from_version"], 2);
-        assert_eq!(output["to_version"], 2);
-        assert_eq!(output["changed"], false);
-    }
-
-    #[test]
-    fn repo_scope_resolves_under_vault_base_home() {
-        let _env = lock_env();
-        let temp = tempdir().unwrap();
-        let base = temp.path().canonicalize().unwrap().join("vault-base");
-        let repo = temp.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        let _home = EnvVarGuard::set(VAULT_HOME_ENV, temp.path().join("vault-base"));
-
-        let output = status(VaultStatusRequest {
-            vault: VaultRuntimeOptions::repo("scope_123", "demo", &repo),
-        })
-        .unwrap();
-
-        assert_eq!(output["vault_scope"], "repo");
-        assert_eq!(output["vault_scope_id"], "scope_123");
-        assert_eq!(output["vault_repo_name"], "demo");
-        let vault_home = output["vault_home"].as_str().unwrap();
-        assert!(vault_home.starts_with(&base.join("scopes/repo-").display().to_string()));
-        assert!(!vault_home.ends_with("scope_123"));
-        assert!(!base.exists());
-    }
-
-    #[test]
-    fn legacy_repo_scope_vault_blocks_trusted_namespace_cutover_until_migrated() {
-        let _env = lock_env();
-        let temp = tempdir().unwrap();
-        let base = temp.path().join("vault-base");
-        let repo = temp.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        let _home = EnvVarGuard::set(VAULT_HOME_ENV, &base);
-        let legacy_home = base.join("scopes").join("legacy_scope");
-        let legacy_vault = Vault::resolve_for_test(Some(legacy_home.clone())).unwrap();
-        legacy_vault
-            .init(&SecretString::from(
-                "correct horse battery staple".to_string(),
-            ))
-            .unwrap();
-
-        let error = status(VaultStatusRequest {
-            vault: VaultRuntimeOptions::repo("legacy_scope", "demo", &repo),
-        })
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("legacy repo-scoped vault data exists"));
-        assert!(error.contains("trusted repo-local vault namespace"));
-        assert!(error.contains(&legacy_home.display().to_string()));
-    }
-
-    #[test]
-    fn copied_scope_id_does_not_reuse_another_repo_physical_vault_home() {
-        let _env = lock_env();
-        let temp = tempdir().unwrap();
-        let base = temp.path().join("vault-base");
-        let repo_a = temp.path().join("repo-a");
-        let repo_b = temp.path().join("repo-b");
-        std::fs::create_dir_all(&repo_a).unwrap();
-        std::fs::create_dir_all(&repo_b).unwrap();
-        let _home = EnvVarGuard::set(VAULT_HOME_ENV, &base);
-
-        let first = status(VaultStatusRequest {
-            vault: VaultRuntimeOptions::repo("copied_scope", "demo", &repo_a),
-        })
-        .unwrap();
-        let second = status(VaultStatusRequest {
-            vault: VaultRuntimeOptions::repo("copied_scope", "demo", &repo_b),
-        })
-        .unwrap();
-
-        assert_ne!(first["vault_home"], second["vault_home"]);
-        assert_eq!(first["vault_scope_id"], "copied_scope");
-        assert_eq!(second["vault_scope_id"], "copied_scope");
-    }
-}
+mod tests;

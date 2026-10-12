@@ -10,7 +10,8 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use jig_ui::dashboard::{PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS};
+use jig_context::CURRENT_CONTRACT_VERSION;
+use jig_dashboard::{RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION};
 use serde_json::Value;
 
 #[path = "shared/pty.rs"]
@@ -110,8 +111,8 @@ fn recorder_json_emits_one_local_snapshot() {
 
     assert_eq!(value["ok"], true);
     assert_eq!(value["command"], "ui");
-    assert_eq!(value["schema_version"], 1);
-    assert_eq!(value["snapshot_kind"], "recorder");
+    assert_eq!(value["schema_version"], RECORDER_SCHEMA_VERSION);
+    assert!(value.get("snapshot_kind").is_none());
     assert_eq!(value["timeline_limit"], 1);
     assert_exact_root_fields(&value, RECORDER_ROOT_FIELDS);
 }
@@ -129,52 +130,6 @@ fn both_interactive_entrypoints_share_the_terminal_requirement() {
     assert!(error.contains("`Jig dashboard` requires terminal input and output"));
     assert!(error.contains("jig ui --json"));
     assert!(error.contains("jig status --json"));
-}
-
-#[test]
-fn plan_json_uses_the_plan_schema_and_missing_plans_use_standard_errors() {
-    let root = fixture();
-    let started = jig(
-        root.path(),
-        &[
-            "work",
-            "start",
-            "--title",
-            "Example plan",
-            "--body",
-            "# Example plan",
-            "--print-plan-id",
-        ],
-    );
-    assert!(
-        started.status.success(),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&started.stdout),
-        String::from_utf8_lossy(&started.stderr)
-    );
-    let plan_id = String::from_utf8(started.stdout).unwrap();
-    let plan_id = plan_id.trim();
-
-    let value = one_json_document(&jig(root.path(), &["ui", "--plan", plan_id, "--json"]));
-    assert_eq!(value["command"], "ui");
-    assert_eq!(value["schema_version"], 1);
-    assert_eq!(value["snapshot_kind"], "plan");
-    assert_eq!(value["plan"]["plan_id"], plan_id);
-    assert_exact_root_fields(&value, PLAN_ROOT_FIELDS);
-
-    let missing = jig(root.path(), &["--json", "ui", "--plan", "plan_missing"]);
-    assert!(!missing.status.success());
-    assert_eq!(missing.status.code(), Some(1));
-    let error = one_error_document(&missing);
-    assert_eq!(error["ok"], false);
-    assert_eq!(error["command"], "ui");
-    assert_eq!(error["error"]["kind"], "command_failed");
-    assert!(
-        error["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("plan_missing")
-    );
 }
 
 fn one_error_document(output: &Output) -> Value {
@@ -236,14 +191,7 @@ fn json_refresh_flag_fails_as_usage_before_repository_loading() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_jig"))
         .env_remove("JIG_REPO_ROOT")
-        .args([
-            "--json",
-            "ui",
-            "--plan",
-            "plan_example",
-            "--timeline-limit",
-            "10",
-        ])
+        .args(["--json", "ui", "--plan", "plan_example"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -253,7 +201,7 @@ fn json_refresh_flag_fails_as_usage_before_repository_loading() {
         error["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("--timeline-limit")
+            .contains("--plan")
     );
 }
 
@@ -306,41 +254,27 @@ fn ui_json_repository_failures_keep_the_command_identity() {
 
 #[test]
 fn product_version_is_independent_of_the_runner_contract_epoch() {
-    assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.0");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let manifest: toml::Value =
+        toml::from_str(&fs::read_to_string(root.join("Cargo.toml")).unwrap()).unwrap();
+    assert_eq!(
+        manifest["workspace"]["package"]["version"].as_str(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
     let contract: Value =
         serde_json::from_slice(&fs::read(root.join(".agent/jig-contract.json")).unwrap()).unwrap();
-    assert_eq!(contract["contract_version"], 8);
+    assert_eq!(contract["contract_version"], CURRENT_CONTRACT_VERSION);
     let launcher = fs::read_to_string(root.join("scripts/jig")).unwrap();
-    assert!(launcher.contains("CONTRACT_VERSION=\"8\""));
+    assert!(launcher.contains(&format!("CONTRACT_VERSION=\"{CURRENT_CONTRACT_VERSION}\"")));
 }
 
 #[test]
-fn interactive_ui_starts_on_work_and_opens_the_requested_plan() {
+fn interactive_ui_starts_on_the_timeline() {
     let root = fixture();
-    let started = jig(
-        root.path(),
-        &[
-            "work",
-            "start",
-            "--title",
-            "Example plan detail",
-            "--body",
-            "# Example plan body",
-            "--print-plan-id",
-        ],
-    );
-    assert!(started.status.success());
-    let plan_id = String::from_utf8(started.stdout).unwrap();
 
-    let (mut master, mut child) = dashboard_child(root.path(), &["ui", "--plan", plan_id.trim()]);
+    let (mut master, mut child) = dashboard_child(root.path(), &["ui"]);
     let mut terminal_output = Vec::new();
-    wait_for_output(
-        &mut child,
-        &mut master,
-        &mut terminal_output,
-        plan_id.trim().as_bytes(),
-    );
+    wait_for_output(&mut child, &mut master, &mut terminal_output, b"Timeline");
     master.write_all(b"q").unwrap();
     let status = pty_support::wait_for_child_while_draining(
         &mut child,
@@ -350,11 +284,6 @@ fn interactive_ui_starts_on_work_and_opens_the_requested_plan() {
     )
     .expect("dashboard did not stop after q");
     assert!(status.success());
-    assert!(
-        terminal_output
-            .windows(b"Work".len())
-            .any(|window| window == b"Work")
-    );
     assert!(
         terminal_output
             .windows(b"\x1b[?1049l".len())

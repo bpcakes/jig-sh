@@ -1,1 +1,0 @@
-Convert generated web and admin apps to file-based TanStack Router with automatic code splitting; integrate route loaders with TanStack Query, explicit retries and route error handling; add Query ESLint rules and router integration tests; refresh embedded templates and validate fresh scaffolds.

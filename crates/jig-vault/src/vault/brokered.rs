@@ -5,13 +5,13 @@ use super::OpenVault;
 use crate::audit::AuditAction;
 use crate::broker::BrokeredRun;
 use crate::error::{
-    ClassifiedVaultError, classified_kind, classify_source, vault_error_from_anyhow,
+    ClassifiedVaultError, classified, classified_kind, classify_source, vault_error_from_anyhow,
 };
 use crate::run::{
     ResolvedBrokeredEnv, ResolvedBrokeredFile, ResolvedBrokeredRun, RunOutput, run_brokered,
 };
 use crate::store::VaultStore;
-use crate::{Result, VaultError, VaultErrorKind};
+use crate::{Result, SecretBytes, SecretName, VaultError, VaultErrorKind, VaultReference};
 
 struct PreparedBrokeredRun {
     handle: BrokeredRunHandle,
@@ -48,9 +48,13 @@ impl BrokeredRunHandle {
         if let Err(audit_error) = self.record_failure(store, stage) {
             return VaultError::from_anyhow(
                 kind,
-                error.context(format!(
-                    "brokered run failed; additionally failed to append failure audit event: {audit_error}"
-                )),
+                crate::error::context_with_secondary_recovery(
+                    error,
+                    &audit_error,
+                    format!(
+                        "brokered run failed; additionally failed to append failure audit event: {audit_error}"
+                    ),
+                ),
             );
         }
         VaultError::from_anyhow(kind, error)
@@ -167,9 +171,13 @@ fn brokered_failure_error_unlocked(
         return classify_source(
             kind,
             "brokered run failed; additionally failed to append failure audit event",
-            error.context(format!(
-                "additional audit failure while recording brokered run failure: {audit_error}"
-            )),
+            crate::error::context_with_secondary_recovery(
+                error,
+                &audit_error,
+                format!(
+                    "additional audit failure while recording brokered run failure: {audit_error}"
+                ),
+            ),
         );
     }
     error
@@ -179,19 +187,19 @@ fn resolve_brokered_run(vault: &OpenVault, request: BrokeredRun) -> AnyResult<Re
     let (command, env_mappings, file_mappings) = request.into_parts();
     let mut env = Vec::with_capacity(env_mappings.len());
     for mapping in env_mappings {
-        let (var, secret_name) = mapping.into_parts();
+        let (var, secret_name, reference) = mapping.into_parts();
         env.push(ResolvedBrokeredEnv {
             var,
-            value: vault.secret_value(&secret_name)?,
+            value: mapping_value(vault, &secret_name, reference.as_ref())?,
             secret_name,
         });
     }
     let mut files = Vec::with_capacity(file_mappings.len());
     for mapping in file_mappings {
-        let (var, secret_name) = mapping.into_parts();
+        let (var, secret_name, reference) = mapping.into_parts();
         files.push(ResolvedBrokeredFile {
             var,
-            value: vault.secret_value(&secret_name)?,
+            value: mapping_value(vault, &secret_name, reference.as_ref())?,
             secret_name,
         });
     }
@@ -200,4 +208,103 @@ fn resolve_brokered_run(vault: &OpenVault, request: BrokeredRun) -> AnyResult<Re
         env,
         files,
     })
+}
+
+/// Resolves one mapping, reporting a missing canonical reference in the
+/// `jig://ITEM/FIELD` spelling the caller used rather than its internal key.
+fn mapping_value(
+    vault: &OpenVault,
+    secret_name: &SecretName,
+    reference: Option<&VaultReference>,
+) -> AnyResult<SecretBytes> {
+    vault
+        .secret_value(secret_name)
+        .map_err(|error| match reference {
+            Some(reference) if classified_kind(&error) == Some(VaultErrorKind::NotFound) => {
+                classified(
+                    VaultErrorKind::NotFound,
+                    format!("vault field '{reference}' does not exist"),
+                )
+            }
+            _ => error,
+        })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::{BrokeredEnv, FieldKind, VaultWriteMode};
+
+    fn credential(text: &str) -> SecretString {
+        SecretString::from(text.to_owned())
+    }
+
+    #[test]
+    fn failed_broker_and_retained_audit_refusal_keep_integrity_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("ExampleVault"))).unwrap();
+        let passphrase = credential("correct horse battery staple");
+        store.init(&passphrase).unwrap();
+        let missing = temp
+            .path()
+            .join("ExampleMissingExecutable")
+            .to_string_lossy()
+            .into_owned();
+        let request = BrokeredRun::new(vec![missing], vec![]).unwrap();
+        let prepared = store.prepare_brokered_run(&passphrase, request).unwrap();
+        let envelope = std::fs::read(store.vault_path()).unwrap();
+        std::fs::write(store.audit_path(), b"").unwrap();
+        let process_error = run_brokered(prepared.resolved).unwrap_err();
+        let error = prepared.handle.failure_error(
+            &store,
+            "process",
+            VaultErrorKind::Process,
+            process_error,
+        );
+        assert_eq!(error.kind(), VaultErrorKind::Process);
+        assert_eq!(error.recovery(), Some(crate::VaultRecovery::Integrity));
+        assert!(error.message().contains("not anchored"));
+        assert_eq!(std::fs::read(store.vault_path()).unwrap(), envelope);
+        assert!(std::fs::read(store.audit_path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_brokered_run_prepared_before_a_rotation_records_its_outcome_after_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+        let old = credential("correct horse battery staple");
+        let new = credential("replacement passphrase for an in-flight broker");
+        store.init(&old).unwrap();
+        store
+            .write_field(
+                &old,
+                VaultReference::parse("jig://Example/TOKEN").unwrap(),
+                FieldKind::Concealed,
+                SecretBytes::new(b"brokered-value".to_vec()),
+                VaultWriteMode::Upsert,
+            )
+            .unwrap();
+        let request = BrokeredRun::new(
+            vec![
+                "sh".into(),
+                "-c".into(),
+                "test \"$TOKEN\" = brokered-value".into(),
+            ],
+            vec![BrokeredEnv::parse("TOKEN=jig://Example/TOKEN").unwrap()],
+        )
+        .unwrap();
+        let prepared = store.prepare_brokered_run(&old, request).unwrap();
+
+        store.change_passphrase_for_test(&old, &new).unwrap();
+
+        let output = run_brokered(prepared.resolved).unwrap();
+        assert_eq!(output.exit_status, 0, "{}", output.stderr);
+        prepared.handle.record_finish(&store, &output).unwrap();
+        let verification = store.verify_audit(&new).unwrap();
+        assert!(verification.event_count > 0);
+        let audit = store.read_audit_text().unwrap().unwrap();
+        let last: serde_json::Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
+        assert_eq!(last["action"], "brokered_run_finish");
+        assert!(!audit.contains("brokered-value"));
+    }
 }

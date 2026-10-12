@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn scheduled_repo_checkouts_are_serialized_and_not_reported_as_worktrees() {
@@ -73,8 +75,16 @@ fn dispatch_stops_after_repo_task_changes_the_authoritative_revision() {
     let bin = tempdir().unwrap();
     write_fixture_repo(temp.path());
     fs::create_dir_all(temp.path().join("tasks")).unwrap();
-    fs::write(temp.path().join("tasks/first.md"), "First authority prompt.\n").unwrap();
-    fs::write(temp.path().join("tasks/second.md"), "Original second prompt.\n").unwrap();
+    fs::write(
+        temp.path().join("tasks/first.md"),
+        "First authority prompt.\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("tasks/second.md"),
+        "Original second prompt.\n",
+    )
+    .unwrap();
     let base_config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
     let workflows = r#"
 [[loop.workflows]]
@@ -169,8 +179,7 @@ printf 'repo task complete\n'
     assert_eq!(output["repository_revision_changed"], true, "{output:#}");
     assert_eq!(output["actions"].as_array().unwrap().len(), 1, "{output:#}");
     assert_eq!(
-        output["actions"][0]["tick"]["actions"][0]["checkout"]["head_changed"],
-        true,
+        output["actions"][0]["tick"]["actions"][0]["checkout"]["head_changed"], true,
         "{output:#}"
     );
     assert!(!unexpected_second_worker.exists(), "{output:#}");

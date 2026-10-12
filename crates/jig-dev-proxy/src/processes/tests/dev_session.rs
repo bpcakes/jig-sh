@@ -90,7 +90,7 @@ fn confirmed_preflight_cleanup_clears_the_durable_obligation() {
     let sessions = store.snapshot_dev_state().unwrap().sessions;
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].cleanup_required);
-    assert!(!sessions[0].preflight_cleanup_pending);
+    assert_eq!(sessions[0].preflight_cleanup_pending, Some(false));
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -121,7 +121,7 @@ fn confirmed_preflight_cleanup_is_persisted_before_pending_interruption() {
     assert!(session.cleanup_is_confirmed());
     let sessions = store.snapshot_dev_state().unwrap().sessions;
     assert_eq!(sessions.len(), 1);
-    assert!(!sessions[0].preflight_cleanup_pending);
+    assert_eq!(sessions[0].preflight_cleanup_pending, Some(false));
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -160,7 +160,7 @@ fn failed_preflight_with_confirmed_cleanup_clears_the_durable_obligation() {
     assert!(session.cleanup_is_confirmed());
     let sessions = store.snapshot_dev_state().unwrap().sessions;
     assert_eq!(sessions.len(), 1);
-    assert!(!sessions[0].preflight_cleanup_pending);
+    assert_eq!(sessions[0].preflight_cleanup_pending, Some(false));
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -198,7 +198,7 @@ fn cancelled_preflight_with_confirmed_cleanup_clears_the_durable_obligation() {
     assert!(session.cleanup_is_confirmed());
     let sessions = store.snapshot_dev_state().unwrap().sessions;
     assert_eq!(sessions.len(), 1);
-    assert!(!sessions[0].preflight_cleanup_pending);
+    assert_eq!(sessions[0].preflight_cleanup_pending, Some(false));
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -262,7 +262,10 @@ fn unconfirmed_preflight_cleanup_retains_the_registered_session() {
     )
     .unwrap();
     let mut cleanup = session.begin_preflight_cleanup().unwrap();
-    assert!(store.snapshot_dev_state().unwrap().sessions[0].preflight_cleanup_pending);
+    assert_eq!(
+        store.snapshot_dev_state().unwrap().sessions[0].preflight_cleanup_pending,
+        Some(true)
+    );
 
     let error = finish_preflight_cleanup(
         &session,
@@ -281,7 +284,7 @@ fn unconfirmed_preflight_cleanup_retains_the_registered_session() {
     let sessions = store.snapshot_dev_state().unwrap().sessions;
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].cleanup_required);
-    assert!(sessions[0].preflight_cleanup_pending);
+    assert_eq!(sessions[0].preflight_cleanup_pending, Some(true));
     assert_eq!(sessions[0].phase, crate::state::DevSessionPhase::Orphaned);
 }
 

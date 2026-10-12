@@ -1,0 +1,177 @@
+# Repository Guidelines
+
+<!-- BEGIN JIG MANAGED BLOCK -->
+This repository uses the shared `jig.sh` workflow. Keep repo-local business rules and ownership guidance in [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] guides; keep generic agent workflow and repo policy here.
+
+## Start Here
+
+- Use this file for repo-wide defaults.
+- Use [agent-map.md](./agent-map.md) when you need help locating ownership guidance for [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
+- Read the nearest [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] `AGENTS.md` before changing a [% if rust_workspace_guidance_enabled %]crate[% else %]package or crate[% endif %] when one exists.
+- Use `scripts/jig` for the typed repo contract; pass `--json` for agent automation.
+- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing[% if vault.scope == "repo" %], except operator-owned vault setup (see Vault)[% endif %].
+- Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
+[% if file_budget_audit_available %]
+- Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs.
+[% endif %]
+- `jig-contract` validates Jig harness wiring, not the application's API contract.
+- Treat `.agent/state/*.jsonl` as append-only repo memory.
+- Keep `.agent/state/runs.jsonl` as local execution history; do not stage or commit it.
+
+## Compatibility And Cutovers
+
+- Prefer direct cutovers only for internal code-only changes that can ship in one coordinated deploy.
+- Preserve compatibility or stage rollouts for persisted database state, queued job types, public API contracts, bookmarked routes, webhook boundaries, or source-of-truth moves that can straddle deploys.
+[% if sqlx_enabled %]
+[% if rust_migration_layout == "flat_migrations" %]
+- Never overwrite an existing database migration; add a new forward-only migration instead.
+[% else %]
+- The migration tree contains complete versioned schema artifacts. Never overwrite a shipped version; add the next forward-only version and its repository-owned cutover artifact.
+[% endif %]
+[% else %]
+[% if go_postgres_enabled %]
+- Never overwrite an existing database migration; add a new forward-only migration instead.
+[% endif %]
+[% endif %]
+
+[% if vault.scope == "repo" -%]
+## Vault
+
+- The vault behind `scripts/jig vault` and its passphrase are operator-owned. These rules override any Jig next step, such as from `scripts/jig doctor` or `scripts/jig info --commands`, that suggests vault setup.
+- Run only `scripts/jig vault status` and, when the operator has already provided `JIG_VAULT_PASSPHRASE` to the session, `scripts/jig vault exec --env-file REFS_FILE -- COMMAND` with the refs file the operator provided and the task's command. `scripts/jig vault run` with the operator's references is the constrained alternative for short non-interactive commands. Every other vault subcommand is operator-only.
+- `COMMAND` is the underlying task command itself. Never wrap `scripts/jig check`, `scripts/jig run`, or another Jig runner in `vault exec` or `vault run`: a failing target records its stdout and stderr in `.agent/state/runs.jsonl` outside vault redaction, so incidental failure output can persist an injected value.
+- Never pass `--home` or `--global` to vault commands, and never set `JIG_VAULT_HOME`.
+- Never delete, move, or edit the vault rollback witness in `~/.jig/vault-witness` or its journals, even to get past a rollback, fork, or pending-transaction error; report the error to the operator.
+- Never request, print, inspect, test, choose, store, or set the passphrase, including with `echo` or `printenv`. Run the command, and stop if it reports a missing passphrase or prompts for one.
+- Never create or edit refs files or add references. Copying the operator's refs file unchanged from the main checkout into a worktree is fine.
+- Never wrap commands that print, encode, or transmit injected values, and never write revealed values to files such as `.env.local`.
+- If a needed credential is unavailable, stop and ask the operator.
+
+[% endif -%]
+## [% if rust_workspace_guidance_enabled %]Rust[% else %]Backend[% endif %] Defaults
+
+[% if go_backend_enabled %]
+- Treat `cmd/` as process entrypoints and `internal/` as private application packages.
+- Add package-level `AGENTS.md` files when a package has meaningful ownership, entrypoint, or invariant guidance that should travel with that package.
+- Keep transport logic thin and business logic in the owning package.
+- Keep the Huma API constructor free of database connections, listeners, and other process lifecycle work so `cmd/openapi` remains offline.
+[% if go_postgres_enabled %]
+- Embedded Goose migrations live under `internal/database/migrations/`; sqlc queries and committed generated code live under `internal/database/queries/` and `internal/database/sqlc/`.
+- Use pgxpool for application traffic and keep Goose's `database/sql` adapter short-lived.
+[% endif %]
+[% endif %]
+[% if rust_backend_enabled %]
+- Treat [% for root in rust_crate_roots %]`<<[ root ]>>`[% if not loop.last %], [% endif %][% endfor %] as Rust crate roots.
+- Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
+[% if not rust_workspace_guidance_enabled %]
+- Keep transport logic thin and business logic in the owning crate.
+[% endif %]
+[% endif %]
+[% if sqlx_enabled %]
+[% if rust_migration_layout == "flat_migrations" %]
+- SQL migrations live under `<<[ migration_dir ]>>`.
+[% else %]
+- Versioned SQL schema artifacts live under `<<[ migration_dir ]>>`; do not use `scripts/jig migration add` in this layout.
+[% endif %]
+- SQLx metadata is committed in `<<[ rust_sqlx_metadata_dir ]>>`.
+[% endif %]
+[% if sqlx_enabled %]
+- Keep transaction boundaries explicit and deterministic.
+[% endif %]
+
+## Frontend Defaults
+
+[% if frontend_apps | length > 0 -%]
+Configured web apps:
+
+[% for app in frontend_apps -%]
+- `<<[ app.name ]>>` in `<<[ app.dir ]>>`
+[% endfor %]
+
+Each configured app is expected to support `lint`, `typecheck`, `build:bundle`, and `test:coverage`.
+[% if application_contracts_enabled -%]
+Application contract freshness and public deployment boundaries have separate `scripts/check-webapps.sh application-contracts` and `scripts/check-webapps.sh public-artifacts` checks; `jig-contract` remains limited to Jig harness wiring.
+[% endif -%]
+`test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
+Run package scripts through `scripts/check-webapps.sh run-script <app-dir> <script>`.
+Keep registry, authentication, and install-script policy project-owned.
+For dependency installation details, see the [Jig frontend installation reference](https://github.com/bpcakes/jig-sh/blob/master/docs/adoption.md#frontend-dependency-installation).
+`[[frontend_apps]]` owns CI and coverage metadata; matching `[[dev.apps]]` entries own local development. Extra dev apps have no generated web CI. Replace legacy `dev_command` with `[dev]` and `[[dev.apps]]`.
+`kind` selects `vite` or `env-port`; `role` selects `spa`, `admin`, or `astro`.
+[% else -%]
+No web apps are configured in `.jig.toml`.
+[% endif %]
+
+## Preferred Commands
+
+- `scripts/jig bootstrap`
+- `scripts/jig doctor`
+[% if not rust_workspace_guidance_enabled %]
+- `scripts/jig dev`
+[% endif %]
+- `scripts/jig check test`
+- `scripts/jig check fmt`
+[% if go_backend_enabled %]
+- `scripts/jig check lint`
+[% endif %]
+[% if rust_backend_enabled %]
+- `scripts/jig check clippy`
+[% endif %]
+- `scripts/jig info targets`
+[% if file_budget_audit_available %]
+- `scripts/jig file-budget audit`
+[% endif %]
+[% if frontend_apps | length > 0 %]
+- `scripts/jig check typescript-lint`
+- `scripts/jig check typescript-typecheck`
+- `scripts/jig check typescript-build`
+- `scripts/jig check typescript-coverage`
+[% if application_contracts_enabled %]
+- `scripts/check-webapps.sh application-contracts`
+- `scripts/check-webapps.sh public-artifacts`
+[% endif %]
+[% endif %]
+[% if sqlx_enabled %]
+- `scripts/jig check sqlx`
+[% if schema_dump_enabled %]
+- `scripts/jig check schema`
+- `scripts/jig sqlx schema dump`
+[% endif %]
+[% if rust_migration_layout == "flat_migrations" %]
+- `scripts/jig migration add NAME`
+[% endif %]
+[% endif %]
+[% if go_postgres_enabled %]
+- `scripts/jig migration add NAME`
+- `scripts/jig check sqlc`
+[% endif %]
+- `scripts/jig check contract`
+
+## Done Means
+
+- Validate the affected behavior with focused checks. Run broader suites when shared behavior, failures, or unresolved risks warrant them.
+- Once the affected behavior is verified, finish; repeat checks only for changed inputs or a concrete remaining concern.
+[% if frontend_apps | length > 0 %]
+- For frontend changes, select the relevant `scripts/jig check typescript-*` checks.
+[% endif %]
+[% if sqlx_enabled %]
+- For SQLx or migration changes, run `scripts/jig check sqlx`.
+[% if schema_dump_enabled %]
+- For schema or schema-documentation changes, run `scripts/jig check schema`.
+[% endif %]
+[% endif %]
+- Review the generated diff for stale docs, policy drift, or missing dependent updates.
+
+## [% if rust_workspace_guidance_enabled %]Crate Guide[% else %]Backend Guide[% endif %] Conventions
+
+When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, [% if _jig.contract_version >= 9 %]these sections are optional suggestions:[% else %]use these sections:[% endif %]
+
+- `## Purpose`
+- `## Key entrypoints`
+- `## Edit here for X`
+- `## Invariants`
+- `## Common commands`
+[% if _jig.contract_version >= 9 %]
+Use the structure that fits the area. Preserve ownership, entrypoints, invariants, and useful commands. Link to repository files when a reference must be checked. Run `scripts/jig check agent-guides` to validate local links and explicitly declared component guidance.
+[% endif %]
+<!-- END JIG MANAGED BLOCK -->

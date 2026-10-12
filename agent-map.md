@@ -1,6 +1,7 @@
 # Agent Map
 
-Fast jump index for agent-facing guidance in this repository.
+Use this index when you need help locating the guide for an area.
+If the owning area is already clear, read its nearest guide directly.
 
 ## Root guide
 
@@ -8,22 +9,34 @@ Fast jump index for agent-facing guidance in this repository.
 
 ## Nested guides
 
-- [crates/jig-codex-tui](./crates/jig-codex-tui/AGENTS.md)
+- [crates/jig-agents](./crates/jig-agents/AGENTS.md)
+- [crates/jig-bootstrap](./crates/jig-bootstrap/AGENTS.md)
+- [crates/jig-agents-tui](./crates/jig-agents-tui/AGENTS.md)
+- [crates/jig-commands](./crates/jig-commands/AGENTS.md)
+- [crates/jig-context](./crates/jig-context/AGENTS.md)
 - [crates/jig-contract](./crates/jig-contract/AGENTS.md)
 - [crates/jig-core](./crates/jig-core/AGENTS.md)
+- [crates/jig-dashboard](./crates/jig-dashboard/AGENTS.md)
 - [crates/jig-dev-proxy](./crates/jig-dev-proxy/AGENTS.md)
+- [crates/jig-execution](./crates/jig-execution/AGENTS.md)
 - [crates/jig-features](./crates/jig-features/AGENTS.md)
 - [crates/jig-file-budget](./crates/jig-file-budget/AGENTS.md)
+- [crates/jig-git](./crates/jig-git/AGENTS.md)
 - [crates/jig-go](./crates/jig-go/AGENTS.md)
+- [crates/jig-loops](./crates/jig-loops/AGENTS.md)
 - [crates/jig-owned-process](./crates/jig-owned-process/AGENTS.md)
+- [crates/jig-policy](./crates/jig-policy/AGENTS.md)
+- [crates/jig-repository](./crates/jig-repository/AGENTS.md)
 - [crates/jig-rust](./crates/jig-rust/AGENTS.md)
 - [crates/jig-sqlx](./crates/jig-sqlx/AGENTS.md)
+- [crates/jig-state](./crates/jig-state/AGENTS.md)
 - [crates/jig-tui](./crates/jig-tui/AGENTS.md)
 - [crates/jig-typescript](./crates/jig-typescript/AGENTS.md)
 - [crates/jig-ui](./crates/jig-ui/AGENTS.md)
 - [crates/jig-vault-tui](./crates/jig-vault-tui/AGENTS.md)
 - [crates/jig-vault](./crates/jig-vault/AGENTS.md)
 - [crates/jig](./crates/jig/AGENTS.md)
+- [crates/jig/src/runtime/vault](./crates/jig/src/runtime/vault/AGENTS.md)
 
 ## Suggested usage pattern
 

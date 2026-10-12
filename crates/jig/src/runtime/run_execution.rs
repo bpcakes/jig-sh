@@ -4,28 +4,29 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
+use jig_context::repository_path::{
+    resolve_repository_working_directory, validate_runner_environment,
+};
 use jig_contract::{
     ActionEffect, ActionRunner, Finding, FindingSeverity, PlannedTarget, ResultParser,
     RunConclusion, RunPlan, RunStatus, TargetId, TargetRunResult,
 };
-use jig_owned_process::OwnedProcessTreeError;
-use serde::Serialize;
-use serde_json::{Value, json};
-
-use crate::context::RepoContext;
-use crate::execution::{
+use jig_execution::{
     CompletedExecutionPhase, ExecutionCancellation, ExecutionControl, ExecutionEvent,
     ExecutionObserver, ExecutionPhase, ExecutionStream, PhasePosition, SupervisedExecutionError,
     run_supervised_execution_command,
 };
-use crate::repository::{RepositoryCatalog, target_input_digest};
-use crate::repository_path::{resolve_repository_working_directory, validate_runner_environment};
+use jig_owned_process::OwnedProcessTreeError;
 #[cfg(test)]
-use crate::state::start_run;
-use crate::state::{
-    ReceiptInput, TargetReceiptMetadata, complete_run, mark_run_running, mark_target_started,
-    now_ms, record_target_receipt, record_target_result, run_by_id,
+use jig_state::start_run;
+use jig_state::{
+    complete_run, mark_run_running, mark_target_started, now_ms, record_target_result, run_by_id,
 };
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use jig_repository::{RepositoryCatalog, target_input_digest};
 
 use super::tool_execution::run_native_tool_with_control;
 use super::tool_execution::{NativeActionContext, run_prepared_native_action};
@@ -37,7 +38,7 @@ const REPOSITORY_EXECUTION_WAIT_MESSAGE: &[u8] =
 
 #[derive(Debug, Serialize)]
 pub(super) struct CheckRunExecution {
-    pub(super) run: crate::state::DurableRun,
+    pub(super) run: jig_state::DurableRun,
     pub(super) results: Vec<Value>,
     pub(super) failed_targets: Vec<TargetId>,
     pub(super) source_observations: SourceObservationMetrics,
@@ -50,9 +51,14 @@ pub(super) struct SourceObservationMetrics {
 }
 
 pub(super) struct ExecuteCheckRunRequest {
-    pub(super) work_plan_id: Option<String>,
-    pub(super) record_receipts: bool,
+    pub(super) alias_override: Option<ExecutionAliasOverride>,
     pub(super) fail_fast: bool,
+}
+
+pub(super) struct ExecutionAliasOverride {
+    pub(super) target: TargetId,
+    pub(super) tool_name: String,
+    pub(super) args: Value,
 }
 
 #[cfg(test)]
@@ -63,7 +69,7 @@ pub(super) fn execute_check_run(
     request: ExecuteCheckRunRequest,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckRunExecution> {
-    let (run, _lease) = start_check_run(ctx, catalog, plan, request.work_plan_id.clone())?;
+    let (run, _lease) = start_check_run(ctx, catalog, plan)?;
     execute_started_check_run(ctx, catalog, run, request, &|| Ok(cancelled()))
 }
 
@@ -114,62 +120,36 @@ pub(super) fn execute_freshly_planned_check_run(
     )
 }
 
-pub(super) fn execute_freshly_planned_check_run_without_lease_wait(
+pub(super) fn execute_freshly_planned_check_run_with_lease(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     plan: RunPlan,
     request: ExecuteCheckRunRequest,
     observer: &mut dyn ExecutionControl,
-) -> Result<CheckRunExecution> {
-    let repository_execution =
-        crate::state::acquire_repository_execution_lease_without_wait(ctx, &plan.effects)?;
-    execute_freshly_planned_check_run_with_lease(
-        ctx,
-        catalog,
-        plan,
-        request,
-        observer,
-        repository_execution,
-        false,
-    )
-}
-
-fn execute_freshly_planned_check_run_with_lease(
-    ctx: &RepoContext,
-    catalog: &RepositoryCatalog,
-    plan: RunPlan,
-    request: ExecuteCheckRunRequest,
-    observer: &mut dyn ExecutionControl,
-    repository_execution: crate::state::RepositoryExecutionLease,
+    repository_execution: jig_state::RepositoryExecutionLease,
     observe_durable_cancellation: bool,
 ) -> Result<CheckRunExecution> {
-    validate_prepared_work_plan_identity(&plan, request.work_plan_id.as_deref())?;
-    crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
+    jig_repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     // A nonempty run gets the same source check from its first target
     // precondition. An empty affected plan has no such target, so it must prove
     // freshness here before it can become a durable success.
     if plan.targets.is_empty() {
-        crate::repository::validate_run_plan_source(ctx, &plan)?;
-        crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
+        jig_repository::validate_run_plan_source(ctx, &plan)?;
+        jig_repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     }
     if observe_durable_cancellation && observer.cancelled() {
         bail!("Execution was cancelled before the run started");
     }
     let (run, _lease, cursor) = if observe_durable_cancellation {
-        let (run, lease, cursor) = crate::state::start_run_with_event_cursor_and_execution_lease(
+        let (run, lease, cursor) = jig_state::start_run_with_event_cursor_and_execution_lease(
             ctx,
             plan,
-            request.work_plan_id.clone(),
             repository_execution,
         )?;
         (run, lease, Some(cursor))
     } else {
-        let (run, lease) = crate::state::start_run_with_execution_lease(
-            ctx,
-            plan,
-            request.work_plan_id.clone(),
-            repository_execution,
-        )?;
+        let (run, lease) =
+            jig_state::start_run_with_execution_lease(ctx, plan, repository_execution)?;
         (run, lease, None)
     };
     let cancellation = cursor.map(|cursor| {
@@ -186,12 +166,12 @@ fn execute_freshly_planned_check_run_with_lease(
     execute_started_check_run_with_control(ctx, catalog, run, request, &mut control)
 }
 
-fn acquire_observed_repository_execution_lease(
+pub(super) fn acquire_observed_repository_execution_lease(
     ctx: &RepoContext,
     effects: &[ActionEffect],
     observer: &mut dyn ExecutionControl,
-) -> Result<crate::state::RepositoryExecutionLease> {
-    if let Some(lease) = crate::state::try_acquire_repository_execution_lease(ctx, effects)? {
+) -> Result<jig_state::RepositoryExecutionLease> {
+    if let Some(lease) = jig_state::try_acquire_repository_execution_lease(ctx, effects)? {
         return Ok(lease);
     }
     if observer.cancelled() {
@@ -208,7 +188,7 @@ fn acquire_observed_repository_execution_lease(
                 "repository execution was cancelled while waiting for another repository execution"
             );
         }
-        if let Some(lease) = crate::state::try_acquire_repository_execution_lease(ctx, effects)? {
+        if let Some(lease) = jig_state::try_acquire_repository_execution_lease(ctx, effects)? {
             return Ok(lease);
         }
         std::thread::sleep(REPOSITORY_EXECUTION_LEASE_POLL_INTERVAL);
@@ -220,67 +200,17 @@ pub(super) fn start_check_run(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     plan: RunPlan,
-    work_plan_id: Option<String>,
-) -> Result<(crate::state::DurableRun, crate::state::RunLease)> {
-    validate_prepared_work_plan_identity(&plan, work_plan_id.as_deref())?;
-    let repository_execution =
-        crate::state::acquire_repository_execution_lease(ctx, &plan.effects)?;
-    let plan = crate::repository::validate_run_plan(ctx, catalog, &plan)?;
-    crate::state::start_run_with_execution_lease(ctx, plan, work_plan_id, repository_execution)
+) -> Result<(jig_state::DurableRun, jig_state::RunLease)> {
+    let repository_execution = jig_state::acquire_repository_execution_lease(ctx, &plan.effects)?;
+    let plan = jig_repository::validate_run_plan(ctx, catalog, &plan)?;
+    jig_state::start_run_with_execution_lease(ctx, plan, repository_execution)
 }
 
-pub(super) fn start_check_run_with_event_cursor(
-    ctx: &RepoContext,
-    catalog: &RepositoryCatalog,
-    plan: RunPlan,
-    work_plan_id: Option<String>,
-) -> Result<(
-    crate::state::DurableRun,
-    crate::state::RunLease,
-    crate::state::RunEventCursor,
-)> {
-    validate_prepared_work_plan_identity(&plan, work_plan_id.as_deref())?;
-    let repository_execution =
-        crate::state::acquire_repository_execution_lease_without_wait(ctx, &plan.effects)?;
-    let plan = crate::repository::validate_run_plan(ctx, catalog, &plan)?;
-    crate::state::start_run_with_event_cursor_and_execution_lease(
-        ctx,
-        plan,
-        work_plan_id,
-        repository_execution,
-    )
-}
-
-fn validate_prepared_work_plan_identity(plan: &RunPlan, supplied: Option<&str>) -> Result<()> {
-    let mut prepared = plan
-        .targets
-        .iter()
-        .filter_map(|target| target.prepared_native_input.as_ref())
-        .map(|input| input.work_plan_id.as_deref());
-    let Some(expected) = prepared.next() else {
-        return Ok(());
-    };
-    if prepared.any(|candidate| candidate != expected) {
-        bail!(
-            "run plan '{}' contains inconsistent prepared work-plan identities",
-            plan.id
-        );
-    }
-    if expected != supplied {
-        bail!(
-            "run plan '{}' was prepared for work_plan_id {:?}, but execution supplied {:?}",
-            plan.id,
-            expected,
-            supplied
-        );
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 pub(super) fn execute_started_check_run(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    run: crate::state::DurableRun,
+    run: jig_state::DurableRun,
     request: ExecuteCheckRunRequest,
     cancelled: &dyn Fn() -> Result<bool>,
 ) -> Result<CheckRunExecution> {
@@ -291,7 +221,7 @@ pub(super) fn execute_started_check_run(
 fn execute_started_check_run_with_control(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    run: crate::state::DurableRun,
+    run: jig_state::DurableRun,
     request: ExecuteCheckRunRequest,
     control: &mut dyn RepositoryRunControl,
 ) -> Result<CheckRunExecution> {
@@ -320,7 +250,7 @@ fn terminalize_started_run<T>(
 fn execute_started_check_run_inner(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    run: crate::state::DurableRun,
+    run: jig_state::DurableRun,
     request: ExecuteCheckRunRequest,
     control: &mut dyn RepositoryRunControl,
 ) -> Result<CheckRunExecution> {
@@ -333,22 +263,39 @@ fn execute_started_check_run_inner(
     let mut stop_after_failure = false;
     let mut source_epoch =
         ExecutionSourceEpoch::from_plan(run.plan.source.worktree_fingerprint.clone());
-    let freshness = (request.record_receipts
-        && catalog.contract_version()
-            >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION)
-        .then(|| freshness::ExecutionFreshness::prepare(ctx, catalog, &run, control));
     let finisher = TargetFinisher {
-        freshness: freshness.as_ref(),
+        alias_override: request.alias_override.as_ref(),
         ctx,
         catalog,
         run: &run,
-        work_plan_id: run.work_plan_id.as_deref(),
-        record_receipts: request.record_receipts,
     };
     let target_count = run.plan.targets.len();
     let mut target_index = 0;
 
-    for layer in &run.plan.execution_layers {
+    let ready_dispatch = !request.fail_fast && has_parallel_dependencies(&run.plan);
+    if ready_dispatch {
+        execute_ready_read_only_targets(
+            &finisher,
+            control,
+            &mut source_epoch,
+            &mut |target, result, compatibility| {
+                record_finished_target(
+                    ctx,
+                    &run_id,
+                    target,
+                    result,
+                    compatibility,
+                    false,
+                    &mut conclusions,
+                    &mut failed_targets,
+                    &mut compatibility_results,
+                    &mut stop_after_failure,
+                )
+            },
+        )?;
+    }
+
+    for layer in run.plan.execution_layers.iter().filter(|_| !ready_dispatch) {
         let planned_layer = layer
             .iter()
             .map(|target| planned_target(&run.plan, target))
@@ -357,10 +304,7 @@ fn execute_started_check_run_inner(
             && !stop_after_failure
             && planned_layer.len() > 1
             && planned_layer.iter().all(|planned| {
-                planned.intent == jig_contract::ActionIntent::Check
-                    && planned.effects.contains(&ActionEffect::ReadOnly)
-                    && !planned.effects.contains(&ActionEffect::Worktree)
-                    && !planned.effects.contains(&ActionEffect::External)
+                is_parallel_read_only_check(planned)
                     && planned.depends_on.iter().all(|dependency| {
                         conclusions.get(dependency) == Some(&RunConclusion::Success)
                     })
@@ -376,6 +320,36 @@ fn execute_started_check_run_inner(
                 })
                 .collect::<Vec<_>>();
             target_index += positioned.len();
+            if planned_layer
+                .iter()
+                .any(|target| !target.resources.is_empty())
+            {
+                execute_resource_layer(
+                    &finisher,
+                    control,
+                    &mut source_epoch,
+                    parallel::ResourceCandidates {
+                        initial: &positioned,
+                        arrivals: None,
+                    },
+                    &parallel::ExecutionSlots::new(),
+                    &mut |target, result, compatibility, _fingerprint, _wave_number| {
+                        record_finished_target(
+                            ctx,
+                            &run_id,
+                            target,
+                            result,
+                            compatibility,
+                            request.fail_fast,
+                            &mut conclusions,
+                            &mut failed_targets,
+                            &mut compatibility_results,
+                            &mut stop_after_failure,
+                        )
+                    },
+                )?;
+                continue;
+            }
             let execution = execute_parallel_read_only_layer(
                 ctx,
                 catalog,
@@ -383,7 +357,6 @@ fn execute_started_check_run_inner(
                 control,
                 &mut source_epoch,
                 &positioned,
-                freshness.as_ref(),
             )?;
             for ((target_id, planned), outcome) in layer
                 .iter()
@@ -409,6 +382,7 @@ fn execute_started_check_run_inner(
         }
 
         for (target_id, planned) in layer.iter().zip(planned_layer) {
+            let mut resource_lease = None;
             target_index += 1;
             let dependency_failed = planned.depends_on.iter().any(|dependency| {
                 conclusions
@@ -451,10 +425,20 @@ fn execute_started_check_run_inner(
                         planned.target
                     )),
                 )?
-            } else if let Err(error) = crate::repository::validate_current_repository_authority(
-                ctx,
-                &run.plan.config_digest,
-            ) {
+            } else if !planned.resources.is_empty() {
+                let outcome = resources::execute_coordinated_target(
+                    &finisher,
+                    planned,
+                    control,
+                    &mut source_epoch,
+                    PhasePosition::new(target_index, target_count)
+                        .expect("planned target position must be valid"),
+                )?;
+                resource_lease = outcome.lease;
+                (outcome.result, outcome.compatibility)
+            } else if let Err(error) =
+                jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)
+            {
                 source_epoch.discard_reusable_observation();
                 let message = format!(
                     "target '{}' could not start because repository execution authority could not be verified: {error:#}",
@@ -473,7 +457,7 @@ fn execute_started_check_run_inner(
                 finisher.finish(
                     planned,
                     CompletedTargetCapture::now(None, capture),
-                    source_epoch.receipt_fingerprint(),
+                    source_epoch.observed_fingerprint(),
                 )?
             } else {
                 mark_target_started(ctx, &run_id, target_id.clone())?;
@@ -485,15 +469,7 @@ fn execute_started_check_run_inner(
                     PhasePosition::new(target_index, target_count)
                         .expect("planned target position must be valid"),
                 );
-                let capture = run_target_capture(
-                    ctx,
-                    catalog,
-                    &run_id,
-                    run.work_plan_id.as_deref(),
-                    planned,
-                    control,
-                    freshness.as_ref(),
-                );
+                let capture = run_target_capture(ctx, catalog, &run_id, planned, control);
                 let completed = CompletedTargetCapture::now(Some(started_at_ms), capture);
                 let (completed, fingerprint) =
                     source_epoch.finish_completed_target(ctx, planned, completed);
@@ -513,17 +489,28 @@ fn execute_started_check_run_inner(
                 &mut compatibility_results,
                 &mut stop_after_failure,
             )?;
+            // Keep the resource through durable result publication.
+            drop(resource_lease);
         }
     }
 
     if run.plan.targets.is_empty() {
-        crate::repository::validate_run_plan_source(ctx, &run.plan)?;
-        crate::repository::validate_current_repository_authority(ctx, &run.plan.config_digest)?;
+        jig_repository::validate_run_plan_source(ctx, &run.plan)?;
+        jig_repository::validate_current_repository_authority(ctx, &run.plan.config_digest)?;
     }
     let conclusion = aggregate_conclusion(conclusions.values().copied());
     complete_run(ctx, &run_id, conclusion)?;
     let source_observations = source_epoch.metrics();
-    debug_assert!(source_observations.count <= target_count.saturating_mul(2));
+    // A coordinated target can recheck a reusable proof, discover that its
+    // time boundary expired, then execute in a second wave with its own
+    // precondition and postcondition (without restarting its target budget).
+    let source_observation_bound = run
+        .plan
+        .targets
+        .iter()
+        .map(|target| if target.resources.is_empty() { 2 } else { 4 })
+        .sum();
+    debug_assert!(source_observations.count <= source_observation_bound);
     Ok(CheckRunExecution {
         run: run_by_id(ctx, &run_id)?,
         results: compatibility_results,
@@ -532,68 +519,31 @@ fn execute_started_check_run_inner(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn record_finished_target(
-    ctx: &RepoContext,
-    run_id: &str,
-    target_id: &TargetId,
-    result: TargetRunResult,
-    compatibility: Option<Value>,
-    fail_fast: bool,
-    conclusions: &mut BTreeMap<TargetId, RunConclusion>,
-    failed_targets: &mut Vec<TargetId>,
-    compatibility_results: &mut Vec<Value>,
-    stop_after_failure: &mut bool,
-) -> Result<()> {
-    let conclusion = result
-        .conclusion
-        .expect("finished target results always have a conclusion");
-    conclusions.insert(target_id.clone(), conclusion);
-    if matches!(
-        conclusion,
-        RunConclusion::Failure | RunConclusion::TimedOut | RunConclusion::Blocked
-    ) {
-        failed_targets.push(target_id.clone());
-        *stop_after_failure |= fail_fast;
-    }
-    record_target_result(ctx, run_id, result)?;
-    if let Some(compatibility) = compatibility {
-        compatibility_results.push(compatibility);
-    }
-    Ok(())
-}
-
 mod parallel;
 use parallel::*;
 
-pub(super) fn block_started_check_run(
-    ctx: &RepoContext,
-    run_id: &str,
-    error: &anyhow::Error,
-) -> Result<()> {
-    let message = format!("repository run worker stopped unexpectedly: {error:#}");
-    crate::state::block_nonterminal_run(ctx, run_id, &message)
-}
+pub(super) use target_result::block_started_check_run;
 
-fn planned_target<'a>(plan: &'a RunPlan, target: &TargetId) -> Result<&'a PlannedTarget> {
-    plan.targets
-        .iter()
-        .find(|planned| &planned.target == target)
-        .ok_or_else(|| anyhow::anyhow!("run plan references missing target '{target}'"))
-}
-
-use freshness::run_target_capture;
-
-fn run_target_capture_inner(
+fn run_target_capture(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     run_id: &str,
-    work_plan_id: Option<&str>,
     planned: &PlannedTarget,
     run_control: &mut dyn RepositoryRunControl,
 ) -> TargetCapture {
     let mut control = TargetExecutionControl::new(ctx, planned, run_control);
-    let capture = match &planned.runner {
+    run_target_with_control(ctx, catalog, run_id, planned, &mut control)
+}
+
+fn run_target_with_control(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    run_id: &str,
+    planned: &PlannedTarget,
+    control: &mut TargetExecutionControl<'_>,
+) -> TargetCapture {
+    let preflight = target::sqlx_migration_preflight(ctx, catalog, planned, control);
+    let capture = preflight.unwrap_or_else(|| match &planned.runner {
         ActionRunner::Command {
             command,
             working_directory,
@@ -609,7 +559,7 @@ fn run_target_capture_inner(
             command,
             working_directory.as_deref(),
             environment,
-            &mut control,
+            control,
         ),
         ActionRunner::Argv {
             program,
@@ -617,16 +567,18 @@ fn run_target_capture_inner(
             working_directory,
             environment,
         } => {
-            let command =
-                crate::repository::runners::argv_command(program, args, &planned.arguments);
+            let command = jig_repository::runners::argv_command(program, args, &planned.arguments);
             target::run_process_target(
                 ctx,
                 planned,
                 command,
                 working_directory.as_deref(),
                 environment,
-                &mut control,
+                control,
             )
+        }
+        ActionRunner::RustNextestV1 { .. } => {
+            rust_nextest::run_rust_nextest_target(ctx, planned, control)
         }
         ActionRunner::Native { operation, .. } if operation == jig_contract::tool::FILE_BUDGET => {
             match control.remaining() {
@@ -644,7 +596,6 @@ fn run_target_capture_inner(
                                 cancelled: &|| control.is_cancelled(),
                                 run_id,
                                 target: &planned.target,
-                                work_plan_id,
                             }) {
                                 Ok(result) => TargetCapture::from_native_action(result),
                                 Err(error) => {
@@ -679,44 +630,14 @@ fn run_target_capture_inner(
                 Err(error) => native_runner_error_capture(planned, operation, timeout, error),
             },
         },
-    };
+    });
     let capture = control
         .enforce_poll_health(capture)
         .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
     enforce_current_repository_authority(ctx, catalog.config_digest(), planned, capture)
 }
 
-fn native_runner_error_capture(
-    planned: &PlannedTarget,
-    operation: &str,
-    timeout: Duration,
-    error: anyhow::Error,
-) -> TargetCapture {
-    match error.downcast_ref::<OwnedProcessTreeError>() {
-        Some(OwnedProcessTreeError::TimedOut) => TargetCapture::stopped_after_start(
-            RunConclusion::TimedOut,
-            format!(
-                "native target '{}' exceeded its {timeout:?} timeout",
-                planned.target
-            ),
-        ),
-        Some(OwnedProcessTreeError::CancelledBeforeStart) => TargetCapture::not_started(
-            RunConclusion::Cancelled,
-            format!("native target '{}' was cancelled", planned.target),
-        ),
-        Some(OwnedProcessTreeError::Cancelled) => TargetCapture::stopped_after_start(
-            RunConclusion::Cancelled,
-            format!("native target '{}' was cancelled", planned.target),
-        ),
-        _ => TargetCapture::blocked(format!(
-            "native runner '{operation}' for target '{}' failed: {error:#}",
-            planned.target
-        ))
-        .with_maybe_executed(true),
-    }
-}
-
-mod freshness;
+mod resources;
 mod source_epoch;
 use source_epoch::*;
 
@@ -750,18 +671,22 @@ impl RepositoryRunControl for ObservedRunControl<'_> {
     }
 }
 
+#[cfg(test)]
 struct CancellationOnlyRunControl<'a> {
     cancelled: &'a dyn Fn() -> Result<bool>,
 }
 
+#[cfg(test)]
 impl ExecutionObserver for CancellationOnlyRunControl<'_> {}
 
+#[cfg(test)]
 impl RepositoryRunControl for CancellationOnlyRunControl<'_> {
     fn cancelled(&self) -> Result<bool> {
         (self.cancelled)()
     }
 }
 
+mod rust_nextest;
 mod target;
 use target::*;
 

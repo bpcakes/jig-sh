@@ -1,0 +1,207 @@
+# <<[ package_name ]>>
+
+Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAPI[% else %]Rust, Batter, Axum, React, and OpenAPI[% endif %] workspace.
+
+[% if backend_language != "go" %]
+The `batter` facade is a pinned Git dependency in `Cargo.toml` (not a registry
+release) that selects only the features this workspace uses: `axum`[% if db == "postgres" %], `sqlx`[% endif %][% if metrics == "otlp" %], `otlp`[% endif %][% if jobs == "runledger" %], `runledger`[% endif %].
+[% if db == "postgres" %]
+Database tests also pin `postgres-test-harness` to the revision that Batter's SQLx
+fixture support selects; upgrade both pins together.
+[% endif %]
+The services target Unix and require network access on the first build. Commit
+`Cargo.lock` after bootstrap; upgrade the Batter revision deliberately.
+
+`crates/<<[ package_name ]>>-runtime` owns protected startup, native signals, and
+resource cleanup through `batter::service::start`. `Startup::scoped` constrains
+initialization to stage metadata, cleanup reservation, and supported registration
+adapters. Startup has a shared 30-second budget, including database connection and
+migrations when enabled. HTTP handlers have a 10-second response construction
+budget; streaming bodies and WebSockets need separate limits. Shutdown drains for
+10 seconds, then allows 2 seconds for cancellation and 1 second for abort/reap
+before separately bounded cleanup. These policies are application-owned. Failed or
+incomplete cleanup makes the process exit unsuccessfully.
+
+Each HTTP surface assembles through Batter's sealed `HttpBoundary`: server
+correlation and one HTTP observer are outermost, probes sit outside admission, and
+lifecycle admission plus the request deadline wrap every documented route and the
+fallback. OpenAPI routers join through a route inventory derived from their own
+documents, so undocumented routes are never served. Handlers read the request's
+operation context and server-generated correlation ID from `AdmittedRequest`;
+inbound `x-request-id` headers are replaced. Shutdown phases share one first-stop
+clock; scheduling delay consumes the allowance. `jig dev` has a shorter,
+two-second SIGTERM grace period before force-killing the service process group.
+Slow requests can therefore be interrupted before Batter finishes draining or
+closing resources. To test the full shutdown budget, launch the built service binary
+directly and send it SIGTERM; production process managers must allow enough time
+for drain, cancellation, abort/reap, and cleanup.
+[% if db != "none" %]
+Database setup uses Batter's finite `Command` owner with 30 seconds for work and
+independently bounded pool cleanup, including after SIGINT/SIGTERM or migration
+failure. Migrations run on one leased connection that is retired on failure or
+cancellation. Cancellation does not roll back database creation or committed
+migrations.
+[% endif %]
+
+Public `/health/live` and `/health/ready` probes remain outside request admission.
+The separate admin service also exposes those operational probes; admin business
+routes remain denied until an application authorizer is supplied. Do not add business
+data to unauthenticated probes.
+[% if db != "none" %]Readiness combines the runtime lifecycle, a supervised PostgreSQL health
+monitor that probes the pool every five seconds, and the application's
+`application-state` readiness condition. A database outage turns readiness to 503
+within about ten seconds and recovers without a restart, while liveness stays 200.
+PostgreSQL pool construction registers local cleanup before an explicit bounded
+connectivity check; local closure does not roll back remote transactions or
+guarantee remote session termination.[% else %]Readiness combines the runtime lifecycle with the application's
+`application-state` readiness condition.[% endif %] Configuration is captured from the
+environment once into Batter settings;[% if db != "none" %] `DATABASE_URL` is a redacted secret, and[% endif %] settings errors name the variable without echoing its value. Change lifecycle budgets
+in the runtime crate and request policy in
+`crates/<<[ package_name ]>>-http-common/src/requests.rs`; these are source policies,
+not `.jig.toml` settings.
+[% if metrics == "otlp" %]
+
+### Metrics export
+
+Set `METRICS_OTLP_ENDPOINT` to an HTTP(S) URL ending in `/v1/metrics` to export
+Batter's bounded foundation metrics catalog (operations, admission decisions, task
+exits, cleanup, and shutdown) over OTLP/HTTP every ten seconds, with a bounded final
+export after shutdown. Without it nothing is installed and no collector is
+contacted. While export is enabled, ambient `OTEL_*` variables are rejected because
+the native builders would merge them. Export diagnostics are logged and never
+change the process exit code.
+[% endif %]
+[% if jobs == "runledger" %]
+
+### Background jobs
+
+`crates/<<[ package_name ]>>-jobs` holds Runledger job handlers, the job catalog,
+worker settings, and enqueue helpers. The public API process runs the worker as a
+Batter-supervised component: startup waits for native initialization, drain stops
+claiming work, and the database pool closes only after the worker settles. The
+admin API does not run a worker. Runledger's migration history is applied before
+the application's, in the same `_sqlx_migrations` table. Set `JOBS_WORKER_ID` for a
+stable worker identity; otherwise each process derives a unique one. Enqueue
+jobs with `batter::runledger::run_atomic` together with the application writes
+they depend on.
+[% endif %]
+[% endif %]
+
+## Quickstart
+
+Prerequisites: [% if backend_language == "go" %]Go 1.26 or newer[% else %]Rust 1.94 or newer[% endif %], Node <<[ node_version ]>> or newer, and <<[ package_manager ]>> (`<<[ package_manager_spec ]>>`).[% if db == "postgres" %] Disposable PostgreSQL integration tests also require Docker.[% endif %]
+
+```sh
+<<[ web_run_command ]>> bootstrap
+scripts/jig setup
+```
+
+`<<[ web_run_command ]>> bootstrap` runs `scripts/jig bootstrap`: it fetches backend dependencies and installs every frontend workspace dependency[% if backend_language == "go" %], then prepares sqlc and API client code from the local schemas[% endif %]. A fresh init intentionally has no lockfile, so do not start with `<<[ web_install_command ]>>`; frozen installation is only valid after bootstrap has created the first lock. Commit the generated [% if package_manager == "npm" %]`package-lock.json`[% elif package_manager == "pnpm" %]`pnpm-lock.yaml`[% elif package_manager == "yarn" %]`yarn.lock`[% else %]`bun.lock`[% endif %]. Bootstrap does not require a database or application/provider credentials and does not initialize a database. Private dependency registries may still require their own authentication.
+
+`scripts/jig setup` runs that same bootstrap, configures agent tooling, and verifies the harness with doctor. [% if db != "none" %]It leaves application database initialization to the explicit command below.[% endif %]
+
+[% if db != "none" %]
+Configure the application database, then initialize it explicitly:
+
+```sh
+[% if backend_language == "go" and go_backend_root != "." %]cp <<[ go_backend_root ]>>/.env.example <<[ go_backend_root ]>>/.env
+[% else %]cp .env.example .env
+[% endif %]```
+
+Edit `DATABASE_URL` in that `.env` file (or export it), then run:
+
+```sh
+<<[ web_run_command ]>> database:setup
+```
+
+This runs `bash scripts/setup-database.sh`, which creates the database if missing and applies migrations. The role in `DATABASE_URL` must already exist. Use an existing database that the role can access and migrate, or a role already authorized to create the database. Setup never creates roles or grants permissions. Run the same command on fresh checkouts before starting the application.
+
+[% endif %]
+```sh
+scripts/jig dev
+```
+
+Bootstrap commands, package scripts, and the database setup script are project-owned after init. Update and recopy preserve authored commands. For an older scaffold that initialized its database inside bootstrap, move that invocation to an explicit database setup script when adopting this workflow.
+
+If a web check reports missing or stale dependencies, run `scripts/check-webapps.sh bootstrap` from this directory.
+
+## Contracts
+
+The public[% if admin_api_enabled %] and admin[% endif %] OpenAPI contract[% if admin_api_enabled %]s have separate [% if backend_language == "go" %]Huma exporters[% else %]Rust exporters[% endif %] and generated TypeScript packages[% else %] has a [% if backend_language == "go" %]Huma exporter[% else %]Rust exporter[% endif %] and generated TypeScript package[% endif %]. Regenerate [% if admin_api_enabled %]them[% else %]it[% endif %] atomically and verify committed output with:
+
+```sh
+<<[ web_run_command ]>> contract:generate
+<<[ web_run_command ]>> contract:check
+```
+
+`contract:generate` stages all documents and clients before replacing committed files. `public:artifacts:check` proves that public frontend builds and the public server dependency graph contain no admin contract or client artifacts.
+
+The harness checks the same boundaries without hiding them inside broad TypeScript checks: `scripts/check-webapps.sh application-contracts` checks contract freshness, while `scripts/check-webapps.sh public-artifacts` builds each non-admin frontend and checks its public artifacts.
+
+[% if react_frontend_enabled %]
+## Frontend linting
+
+React applications share `eslint.config.shared.mjs`, which enables type-aware TypeScript linting, the React Hooks and TanStack Query recommended rules, and test-only Vitest and Testing Library rules. Package lint scripts reject warnings and stale ESLint suppressions. Use the cached package script during local iteration:
+
+```sh
+scripts/check-webapps.sh run-script <app-dir> lint:cached
+```
+
+Keep application-specific exceptions narrow. Product SPAs cannot import the admin API client, API client internals must be accessed through package entrypoints, components cannot import route modules, and modules under `src/domain` must remain independent of React and TanStack Router.
+
+[% endif %]
+
+[% if db == "postgres" %]
+## Disposable PostgreSQL test
+
+Run the database integration tests against a fresh PostgreSQL 18 container:
+
+```sh
+<<[ web_run_command ]>> test:postgres
+```
+
+The command binds PostgreSQL to a random loopback port and removes the container on exit.
+[% if backend_language == "go" %]
+It requires Docker and sets `TEST_DATABASE_URL` for the Go integration test, which checks database creation, application migrations, and generated queries against the disposable server.
+[% else %]
+Batter's fixture harness migrates one template database per migration fingerprint and gives each test its own clone, which it drops after the test even when the test fails. Set `POSTGRES_TEST_ADMIN_URL` to use an existing PostgreSQL 18 server whose role can create and drop databases instead.
+[% endif %]
+The tests never fall back to `DATABASE_URL`.
+
+[% endif %]
+[% if admin_api_enabled %]
+## Admin boundary
+
+The admin API is a separate binary and HTTP crate; it is not mounted by the public server. The generated admin binary explicitly uses `DenyAllAdminAuthorizer`, so admitted privileged requests return `401 Unauthorized` until you implement `AdminAuthorizer` and pass that implementation to `assemble` from `crates/<<[ package_name ]>>-admin-http` in the admin binary. The convenience `in_process` client uses an independent, approved lifecycle for tests, not production lifecycle wiring. Keep the admin listener private at the network/deployment layer as well.
+
+Every admin response, including probes and rejections, carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`. Mutating admin requests must carry `Sec-Fetch-Site: same-origin` and `x-admin-request: 1` before authorization runs; the admin panel's API client sends the marker, and browsers set Fetch Metadata. Non-browser admin clients must send both headers explicitly.
+
+Do not add credentials, secrets, or sensitive examples to `openapi/admin.json`, and do not publish the admin client with public frontend or documentation artifacts.
+
+[% endif %]
+## Common checks
+
+Select checks for the affected behavior; a routine change does not require running
+the entire list or opening a Jig work plan.
+[% if file_budget_policy_enabled %]`scripts/jig file-budget audit` provides standalone source-size diagnostics with no runs.
+[% endif %]
+
+```sh
+scripts/jig check test
+scripts/jig check fmt
+[% if backend_language == "go" %]scripts/jig check lint
+[% if db == "postgres" %]scripts/jig check sqlc
+[% endif %][% else %]
+scripts/jig check clippy
+[% endif %]
+scripts/jig check contract
+```
+
+[% if backend_language == "rust" %]
+The workspace enables Clippy's `cognitive_complexity` nursery lint with a threshold of 20 and its `mod_module_files` restriction lint to reject `mod.rs` module layouts. Clippy describes the complexity score as a heuristic rather than an objective measurement. The strict `scripts/jig check clippy` command checks all targets and features, treats all warnings as failures, and explicitly denies `mod_module_files`, so the layout policy still applies to feature-gated modules and if a workspace member forgets to inherit workspace lints. Clippy checks compiled workspace targets rather than every tracked Rust file or code selected only on another target platform. The root Cargo and Clippy configuration is project-owned after init, so adjust or remove this policy when it does not fit the codebase.
+
+[% endif %]
+
+Enabled frontend workspaces:[% for frontend in frontends %]
+
+- `<<[ frontend.dir ]>>` (`<<[ frontend.name ]>>`)[% endfor %]

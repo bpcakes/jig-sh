@@ -47,8 +47,27 @@ impl ExecutionSourceEpoch {
         }
     }
 
-    pub(super) fn receipt_fingerprint(&self) -> std::result::Result<String, String> {
+    pub(super) fn observed_fingerprint(&self) -> std::result::Result<String, String> {
         self.observed_fingerprint.clone()
+    }
+
+    pub(super) fn include_metrics(&mut self, metrics: SourceObservationMetrics) {
+        self.observation_count = self.observation_count.saturating_add(metrics.count);
+        self.observation_elapsed = self
+            .observation_elapsed
+            .saturating_add(Duration::from_millis(metrics.elapsed_ms));
+    }
+
+    pub(super) fn finish_read_only_completion(
+        &self,
+        planned: &PlannedTarget,
+        current: &std::result::Result<String, String>,
+        completed: CompletedTargetCapture,
+    ) -> CompletedTargetCapture {
+        completed.map_capture(|capture| match self.trusted_fingerprint.as_deref() {
+            Ok(expected) => enforce_declared_worktree_effect(planned, expected, current, capture),
+            Err(error) => block_for_unverifiable_effect_policy(planned, error, capture),
+        })
     }
 
     pub(super) fn discard_reusable_observation(&mut self) {
@@ -164,8 +183,16 @@ impl ExecutionSourceEpoch {
         ctx: &RepoContext,
         target_count: usize,
     ) -> std::result::Result<(), String> {
+        self.prepare_read_only_layer_with(target_count, || collect_execution_fingerprint(ctx))
+    }
+
+    pub(super) fn prepare_read_only_layer_with(
+        &mut self,
+        target_count: usize,
+        collect: impl FnOnce() -> std::result::Result<String, String>,
+    ) -> std::result::Result<(), String> {
         let trusted_fingerprint = self.trusted_fingerprint.clone()?;
-        let current = self.observe_with(|| collect_execution_fingerprint(ctx));
+        let current = self.observe_with(collect);
         self.observed_fingerprint = current.clone();
         match current {
             Ok(current) if current == trusted_fingerprint => Ok(()),
@@ -182,10 +209,36 @@ impl ExecutionSourceEpoch {
         &mut self,
         ctx: &RepoContext,
     ) -> std::result::Result<String, String> {
-        let current = self.observe_with(|| collect_execution_fingerprint(ctx));
+        self.observe_read_only_layer_postcondition_with(|| collect_execution_fingerprint(ctx))
+    }
+
+    pub(super) fn observe_ready_read_only_postcondition_with(
+        &mut self,
+        collect: impl FnOnce() -> std::result::Result<String, String>,
+    ) -> std::result::Result<String, String> {
+        let current = self.observe_read_only_layer_postcondition_with(collect);
+        // As in sequential execution, this checked completion can authorize
+        // the next adjacent read-only admission. The coordinator discards it
+        // before any wait or skipped target creates an unobserved gap.
+        self.reuse_observation_before_next_target = self.read_only_postcondition_matches(&current);
+        current
+    }
+
+    pub(super) fn observe_read_only_layer_postcondition_with(
+        &mut self,
+        collect: impl FnOnce() -> std::result::Result<String, String>,
+    ) -> std::result::Result<String, String> {
+        let current = self.observe_with(collect);
         self.observed_fingerprint = current.clone();
         self.discard_reusable_observation();
         current
+    }
+
+    pub(super) fn read_only_postcondition_matches(
+        &self,
+        current: &std::result::Result<String, String>,
+    ) -> bool {
+        matches!((self.trusted_fingerprint.as_ref(), current.as_ref()), (Ok(expected), Ok(actual)) if expected == actual)
     }
 
     pub(super) fn finish_started_read_only_layer_target(
@@ -217,7 +270,7 @@ impl ExecutionSourceEpoch {
             // still validating or spawning it. Preserve the trusted epoch
             // when execution definitely never began.
             self.discard_reusable_observation();
-            return (capture, self.receipt_fingerprint());
+            return (capture, self.observed_fingerprint());
         }
         let current = self.observe_with(collect);
         self.observed_fingerprint = current.clone();
@@ -256,7 +309,7 @@ impl ExecutionSourceEpoch {
 pub(super) fn collect_execution_fingerprint(
     ctx: &RepoContext,
 ) -> std::result::Result<String, String> {
-    crate::git_receipts::repository_source_snapshot(ctx.root())
+    jig_repository::source_identity::repository_source_snapshot(ctx.root())
         .map(|snapshot| snapshot.worktree_fingerprint)
         .map_err(|error| format!("{error:#}"))
 }
@@ -274,7 +327,7 @@ pub(super) fn block_for_unverifiable_effect_policy(
     capture.findings.push(finding(message, "effect_policy"));
     if capture.conclusion == RunConclusion::Success {
         capture.conclusion = RunConclusion::Blocked;
-        capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+        capture.envelope_exit_status = capture.envelope_exit_status.max(1);
     }
     capture
 }
@@ -304,7 +357,7 @@ pub(super) fn enforce_declared_worktree_effect(
             capture.findings.push(finding(message, "effect_policy"));
             if capture.conclusion == RunConclusion::Success {
                 capture.conclusion = RunConclusion::Failure;
-                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+                capture.envelope_exit_status = capture.envelope_exit_status.max(1);
             }
             capture
         }
@@ -330,7 +383,7 @@ fn enforce_read_only_layer_worktree_effect(
             capture.findings.push(finding(message, "effect_policy"));
             if capture.conclusion == RunConclusion::Success {
                 capture.conclusion = RunConclusion::Failure;
-                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+                capture.envelope_exit_status = capture.envelope_exit_status.max(1);
             }
             capture
         }
@@ -344,7 +397,7 @@ pub(super) fn enforce_current_repository_authority(
     planned: &PlannedTarget,
     mut capture: TargetCapture,
 ) -> TargetCapture {
-    let Err(error) = crate::repository::validate_current_repository_authority(ctx, expected_digest)
+    let Err(error) = jig_repository::validate_current_repository_authority(ctx, expected_digest)
     else {
         return capture;
     };
@@ -362,7 +415,7 @@ pub(super) fn enforce_current_repository_authority(
         .push(finding(message, "execution_authority"));
     if capture.conclusion == RunConclusion::Success {
         capture.conclusion = RunConclusion::Blocked;
-        capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+        capture.envelope_exit_status = capture.envelope_exit_status.max(1);
     }
     capture
 }

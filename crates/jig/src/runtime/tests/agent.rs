@@ -23,9 +23,6 @@ enabled = true
 
 [plugins."jig-typescript@jig-skills"]
 enabled = true
-
-[plugins."jig-exec-plans@jig-skills"]
-enabled = true
 "#,
     )
     .unwrap();
@@ -102,9 +99,6 @@ enabled = true
 enabled = true
 
 [plugins."jig-typescript@jig-skills"]
-enabled = true
-
-[plugins."jig-exec-plans@jig-skills"]
 enabled = true
 "#,
     )

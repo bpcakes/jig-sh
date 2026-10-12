@@ -1,0 +1,42 @@
+[package]
+name = "jig-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Append-only repository state, run history, and leases for Jig."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lib]
+name = "jig_state"
+
+[features]
+# Test clock, dashboard scan counters, and blocking lease helpers for
+# dependents' tests.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+flate2.workspace = true
+fs4.workspace = true
+jig-context.workspace = true
+jig-contract.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+time.workspace = true
+ulid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+jig-context = { workspace = true, features = ["test-support"] }
+wait-timeout.workspace = true
+
+[lints]
+workspace = true

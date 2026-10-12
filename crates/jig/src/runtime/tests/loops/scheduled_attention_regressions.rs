@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(unix)]
 #[test]
 fn scheduled_repo_task_blocks_after_leaving_the_shared_checkout_dirty() {
@@ -29,7 +31,7 @@ printf 'task complete\n' > "$out"
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();
 
-    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+    let first = jig_loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
 
     assert_eq!(first["status"], "needs_attention", "{first:#}");
     assert_eq!(first["needs_attention_count"], 1, "{first:#}");
@@ -47,118 +49,28 @@ printf 'task complete\n' > "$out"
         "the main repository is not a linked worktree: {first:#}"
     );
 
-    let second = crate::runtime::loops::dispatch_due_at(
-        &ctx,
-        dispatch_at.saturating_add(60_000),
-    )
-    .unwrap();
+    let second = jig_loops::dispatch_due_at(&ctx, dispatch_at.saturating_add(60_000)).unwrap();
 
     assert_eq!(second["status"], "needs_attention", "{second:#}");
     assert_eq!(second["executed_count"], 0, "{second:#}");
-    assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
+    assert_eq!(
+        second["actions"][0]["reason"],
+        "occurrence_requires_attention"
+    );
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
-}
-
-#[cfg(unix)]
-#[test]
-fn scheduled_repo_task_detects_receipt_history_rewrites() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let bin = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    configure_scheduled_task(&temp, "repo-task", "checkout = \"repo\"", false);
-    let receipts = temp.path().join(".agent/state/receipts.jsonl");
-    fs::write(&receipts, "{\"id\":\"receipt-seed\"}\n").unwrap();
-    git_ok(temp.path(), ["add", ".agent/state/receipts.jsonl"]);
-    git_ok(temp.path(), ["commit", "-m", "seed receipt history"]);
-    let codex_path = bin.path().join("codex-receipt-rewrite-stub.sh");
-    write_codex_stub(
-        &codex_path,
-        r#"#!/bin/sh
-set -eu
-out=""
-prev=""
-for arg in "$@"; do
-  if [ "$prev" = "-o" ]; then out="$arg"; fi
-  prev="$arg"
-done
-cat >/dev/null
-: > .agent/state/receipts.jsonl
-printf 'task complete\n' > "$out"
-"#,
-    );
-    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output =
-        crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
-
-    assert_eq!(output["status"], "needs_attention", "{output:#}");
-    let task = &output["actions"][0]["tick"]["actions"][0];
-    assert_eq!(task["checkout"]["dirty"], false, "{output:#}");
+    let task = &first["actions"][0]["tick"]["actions"][0];
+    let diagnostic = &task["checkout"]["diagnostics"];
+    assert_eq!(diagnostic["reasons"], json!(["application_changes"]));
     assert_eq!(
-        task["checkout"]["receipt_append_valid"], false,
-        "{output:#}"
+        diagnostic["observed_paths"],
+        json!(["scheduled-change.txt"])
     );
     assert!(
-        task["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("receipt history changed")),
-        "{output:#}"
+        diagnostic.get("parent_receipt_id").is_none(),
+        "{diagnostic:#}"
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn scheduled_repo_task_rejects_a_direct_schema_valid_receipt_append() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let bin = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    configure_scheduled_task(&temp, "repo-task", "checkout = \"repo\"", false);
-    let seed_ctx = RepoContext::load_from(temp.path()).unwrap();
-    crate::runtime::dispatch(
-        &seed_ctx,
-        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
-            workflow: Some("noop-status".into()),
-            lease_ttl_seconds: None,
-            max_attempts: None,
-            backoff_seconds: None,
-        })),
-    )
-    .unwrap();
-    git_ok(temp.path(), ["add", ".agent/state/receipts.jsonl"]);
-    git_ok(temp.path(), ["commit", "-m", "seed valid receipt history"]);
-    let codex_path = bin.path().join("codex-valid-receipt-forgery-stub.sh");
-    write_codex_stub(
-        &codex_path,
-        r#"#!/bin/sh
-set -eu
-cat >/dev/null
-seed=$(head -n 1 .agent/state/receipts.jsonl)
-printf '%s\n' "$seed" >> .agent/state/receipts.jsonl
-printf 'task complete\n'
-"#,
-    );
-    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
-
-    assert_eq!(output["status"], "needs_attention", "{output:#}");
-    let task = &output["actions"][0]["tick"]["actions"][0];
-    assert_eq!(task["checkout"]["dirty"], false, "{output:#}");
-    assert_eq!(
-        task["checkout"]["receipt_append_valid"],
-        false,
-        "{output:#}"
-    );
-    assert!(
-        task["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("only appended record")),
-        "{output:#}"
-    );
+    assert_eq!(task["worker"]["status"], "passed");
+    assert_eq!(task["output"], "task complete\n");
 }
 
 #[cfg(unix)]
@@ -185,7 +97,6 @@ fn timed_out_repo_task_keeps_corrupt_checkout_under_attention() {
 set -eu
 cat >/dev/null
 printf 'run\n' >> "$JIG_TEST_RUN_LOG"
-printf '{}\n' >> .agent/state/receipts.jsonl
 printf 'partial change\n' > partial-change.txt
 sleep 60
 "#,
@@ -195,18 +106,14 @@ sleep 60
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();
 
-    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+    let first = jig_loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
 
     assert_eq!(first["status"], "needs_attention", "{first:#}");
     let task = &first["actions"][0]["tick"]["actions"][0];
     assert_eq!(task["status"], "needs_attention", "{first:#}");
     assert_eq!(task["checkout"]["dirty"], true, "{first:#}");
-    assert_eq!(
-        task["checkout"]["receipt_append_valid"], false,
-        "{first:#}"
-    );
 
-    let second = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at + 60_000).unwrap();
+    let second = jig_loops::dispatch_due_at(&ctx, dispatch_at + 60_000).unwrap();
     assert_eq!(second["status"], "needs_attention", "{second:#}");
     assert_eq!(second["executed_count"], 0, "{second:#}");
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
@@ -287,23 +194,29 @@ esac
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();
 
-    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+    let first = jig_loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
 
     let action = &first["actions"][0];
     assert_eq!(first["status"], "needs_attention", "{first:#}");
     assert_eq!(first["needs_attention_count"], 1, "{first:#}");
     assert_eq!(action["status"], "needs_attention", "{first:#}");
     assert_eq!(action["occurrence"]["status"], "needs_attention");
-    assert!(action["occurrence"]["worker_receipt_id"].is_string());
+    assert_eq!(action["occurrence"]["worker_invoked"], true);
     let worktree = action["occurrence"]["worktree"]
         .as_str()
         .expect("ambiguous push must retain its diagnostic worktree");
     assert!(Path::new(worktree).exists());
     let operator_note = Path::new(worktree).join("operator-note.txt");
     fs::write(&operator_note, "preserve until acknowledgement\n").unwrap();
-    assert_eq!(action["tick"]["actions"][0]["attention_kind"], "ambiguous_push");
+    assert_eq!(
+        action["tick"]["actions"][0]["attention_kind"],
+        "ambiguous_push"
+    );
     assert_eq!(action["tick"]["actions"][0]["worktree_retained"], true);
-    assert_eq!(action["tick"]["actions"][0]["push"]["status"], "unconfirmed");
+    assert_eq!(
+        action["tick"]["actions"][0]["push"]["status"],
+        "unconfirmed"
+    );
     assert!(
         action["occurrence"]["error"]
             .as_str()
@@ -311,15 +224,14 @@ esac
         "{first:#}"
     );
 
-    let second = crate::runtime::loops::dispatch_due_at(
-        &ctx,
-        dispatch_at.saturating_add(60_000),
-    )
-    .unwrap();
+    let second = jig_loops::dispatch_due_at(&ctx, dispatch_at.saturating_add(60_000)).unwrap();
 
     assert_eq!(second["status"], "needs_attention", "{second:#}");
     assert_eq!(second["executed_count"], 0, "{second:#}");
-    assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
+    assert_eq!(
+        second["actions"][0]["reason"],
+        "occurrence_requires_attention"
+    );
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
     assert_eq!(
         fs::read_to_string(operator_note).unwrap(),
@@ -378,10 +290,8 @@ while :; do sleep 1; done
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
-    let _worker_started = EnvVarGuard::set(
-        "JIG_TEST_BRANCH_WORKER_STARTED",
-        worker_started.as_os_str(),
-    );
+    let _worker_started =
+        EnvVarGuard::set("JIG_TEST_BRANCH_WORKER_STARTED", worker_started.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();
     let repo_root = temp.path().to_path_buf();
@@ -395,10 +305,10 @@ while :; do sleep 1; done
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let ctx = RepoContext::load_from(&repo_root).unwrap();
-        crate::runtime::loops::revoke_lease_for_test(&ctx, "branch:codex/widgets").unwrap();
+        jig_loops::revoke_lease_for_test(&ctx, "branch:codex/widgets").unwrap();
     });
 
-    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+    let first = jig_loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
     revoker.join().unwrap();
 
     let dispatch_action = &first["actions"][0];
@@ -406,14 +316,17 @@ while :; do sleep 1; done
     assert_eq!(first["status"], "needs_attention", "{first:#}");
     assert_eq!(first["needs_attention_count"], 1, "{first:#}");
     assert_eq!(dispatch_action["occurrence"]["status"], "needs_attention");
-    assert_eq!(dispatch_action["tick"]["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        dispatch_action["tick"]["actions"].as_array().unwrap().len(),
+        1
+    );
     assert_eq!(
         worker_action["attention_kind"],
         "branch_lease_lost_after_start"
     );
     assert_eq!(worker_action["completed_status"], "needs_attention");
     assert_eq!(worker_action["worktree_retained"], true);
-    assert!(worker_action["worker_receipt_id"].is_string());
+    assert_eq!(worker_action["worker"]["kind"], "worker_run");
     let worktree = worker_action["worktree"]
         .as_str()
         .expect("cancelled worker must retain its worktree");
@@ -423,13 +336,12 @@ while :; do sleep 1; done
             .contains("partial scheduled repair")
     );
 
-    let second = crate::runtime::loops::dispatch_due_at(
-        &ctx,
-        dispatch_at.saturating_add(60_000),
-    )
-    .unwrap();
+    let second = jig_loops::dispatch_due_at(&ctx, dispatch_at.saturating_add(60_000)).unwrap();
     assert_eq!(second["executed_count"], 0, "{second:#}");
-    assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
+    assert_eq!(
+        second["actions"][0]["reason"],
+        "occurrence_requires_attention"
+    );
     assert!(
         fs::read_to_string(Path::new(worktree).join("src.rs"))
             .unwrap()
@@ -438,7 +350,7 @@ while :; do sleep 1; done
 }
 
 #[cfg(unix)]
-fn append_scheduled_pr_manager_workflow(root: &Path) {
+pub(super) fn append_scheduled_pr_manager_workflow(root: &Path) {
     let config = fs::read_to_string(root.join(".jig.toml")).unwrap();
     fs::write(
         root.join(".jig.toml"),
@@ -455,7 +367,7 @@ schedule = "* * * * *"
 }
 
 #[cfg(unix)]
-fn fixed_dispatch_time() -> u64 {
+pub(super) fn fixed_dispatch_time() -> u64 {
     u64::try_from(
         chrono::DateTime::parse_from_rfc3339("2026-08-30T12:34:30Z")
             .unwrap()

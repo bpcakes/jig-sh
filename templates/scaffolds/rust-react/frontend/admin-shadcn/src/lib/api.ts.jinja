@@ -11,6 +11,9 @@ import {
 
 publicApiClient.interceptors.error.use(normalizeApiError)
 adminApiClient.interceptors.error.use(normalizeApiError)
+// The admin API rejects mutating requests unless they carry this marker and
+// same-origin Fetch Metadata, which a cross-site page cannot forge.
+adminApiClient.setConfig({ headers: { "x-admin-request": "1" } })
 
 export { adminApiClient }
 export type AppStatus = AppStatusResponse

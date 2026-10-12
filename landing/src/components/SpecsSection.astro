@@ -10,8 +10,8 @@
     <div class="specs">
       <div class="row">
         <div class="k">Stacks</div>
-        <div class="v"><b>Rust-first today.</b> JavaScript / TypeScript web apps already supported alongside. Modular language adapters in flight so other stacks can plug in without forking the harness.</div>
-        <div class="s">roadmap</div>
+        <div class="v"><b>Rust and Go today.</b> JavaScript / TypeScript web apps are supported alongside the <code>rust-react</code> and <code>go-react</code> presets.</div>
+        <div class="s">supported</div>
       </div>
       <div class="row">
         <div class="k">Rust path</div>
@@ -20,7 +20,7 @@
       </div>
       <div class="row">
         <div class="k">Scaffold preset</div>
-        <div class="v"><code>jig init --preset rust-react --db postgres --frontends web,landing,admin</code> writes <b>apps/&lt;repo&gt;-api</b>, <b>crates/&lt;repo&gt;-core</b>, <b>crates/&lt;repo&gt;</b>, <b>crates/&lt;repo&gt;-test-support</b>, optional <b>crates/&lt;repo&gt;-db</b>, Vite React <b>web</b>, Astro <b>landing</b>, and <b>admin-panel</b>. Rust roots default to <code>apps</code> + <code>crates</code>.</div>
+        <div class="v"><code>jig init --preset rust-react --db postgres --frontends web,landing,admin</code> creates a Rust API workspace, Vite React <b>web</b>, Astro <b>landing</b>, and <b>admin-panel</b> with a separate admin API. Every new Rust application uses <b>Batter</b> for startup and shutdown, with a dedicated runtime crate, sealed lifecycle-aware HTTP boundaries, and database health in readiness; <code>--metrics otlp</code> and <code>--jobs runledger</code> add metrics export and a supervised job worker. Generated applications require Rust 1.94 on Unix and pinned Batter Git dependencies. Existing application source is not migrated by <code>jig update</code>.</div>
         <div class="s">greenfield</div>
       </div>
       <div class="row">
@@ -44,8 +44,8 @@
         <div class="s">gate</div>
       </div>
       <div class="row">
-        <div class="k">Work loop</div>
-        <div class="v"><b>scripts/jig work review</b>, <b>work refine</b>, <b>work gates</b>, <b>work receipts</b>, and <b>state archive</b> keep review findings, fixer loops, gate freshness, and receipt history inspectable.</div>
+        <div class="k">Local state</div>
+        <div class="v"><b>scripts/jig state summary</b>, <b>state diagnose</b>, and <b>state archive</b> keep run history inspectable and bounded. Diagnosis also reports the size and integrity of retained legacy journals.</div>
         <div class="s">workflow</div>
       </div>
       <div class="row">

@@ -1,16 +1,27 @@
 [workspace]
 members = [
     "crates/jig",
-    "crates/jig-codex-tui",
+    "crates/jig-agents",
+    "crates/jig-agents-tui",
+    "crates/jig-bootstrap",
+    "crates/jig-commands",
+    "crates/jig-context",
     "crates/jig-contract",
     "crates/jig-core",
+    "crates/jig-dashboard",
     "crates/jig-dev-proxy",
+    "crates/jig-execution",
     "crates/jig-features",
     "crates/jig-file-budget",
+    "crates/jig-git",
     "crates/jig-go",
+    "crates/jig-loops",
     "crates/jig-owned-process",
+    "crates/jig-policy",
+    "crates/jig-repository",
     "crates/jig-rust",
     "crates/jig-sqlx",
+    "crates/jig-state",
     "crates/jig-tui",
     "crates/jig-typescript",
     "crates/jig-ui",
@@ -29,7 +40,7 @@ repository = "https://github.com/bpcakes/jig-sh"
 homepage = "https://github.com/bpcakes/jig-sh"
 documentation = "https://github.com/bpcakes/jig-sh/tree/master/docs"
 rust-version = "1.88"
-version = "0.4.0"
+version = "0.8.1-dev"
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"
@@ -64,23 +75,34 @@ hmac = "0.12.1"
 http-body-util = "0.1.3"
 hyper = { version = "1.7.0", features = ["full"] }
 hyper-util = { version = "0.1.17", features = ["full"] }
-jig-dev-proxy = { path = "crates/jig-dev-proxy", version = "=0.4.0" }
-jig-contract = { path = "crates/jig-contract", version = "=0.4.0" }
-jig-codex-tui = { path = "crates/jig-codex-tui", version = "=0.4.0" }
-jig-core = { path = "crates/jig-core", version = "=0.4.0" }
-jig-features = { path = "crates/jig-features", version = "=0.4.0" }
-jig-file-budget = { path = "crates/jig-file-budget", version = "=0.4.0" }
-jig-go = { path = "crates/jig-go", version = "=0.4.0" }
-jig-owned-process = { path = "crates/jig-owned-process", version = "=0.4.0" }
-jig-rust = { path = "crates/jig-rust", version = "=0.4.0" }
-jig-sqlx = { path = "crates/jig-sqlx", version = "=0.4.0" }
-jig-tui = { path = "crates/jig-tui", version = "=0.4.0" }
-jig-typescript = { path = "crates/jig-typescript", version = "=0.4.0" }
-jig-ui = { path = "crates/jig-ui", version = "=0.4.0" }
-jig-vault = { path = "crates/jig-vault", version = "=0.4.0" }
-jig-vault-tui = { path = "crates/jig-vault-tui", version = "=0.4.0" }
-jsonschema = { version = "0.48.5", default-features = false }
+jig-agents = { path = "crates/jig-agents", version = "=0.8.1-dev" }
+jig-bootstrap = { path = "crates/jig-bootstrap", version = "=0.8.1-dev" }
+jig-dashboard = { path = "crates/jig-dashboard", version = "=0.8.1-dev" }
+jig-dev-proxy = { path = "crates/jig-dev-proxy", version = "=0.8.1-dev" }
+jig-commands = { path = "crates/jig-commands", version = "=0.8.1-dev" }
+jig-context = { path = "crates/jig-context", version = "=0.8.1-dev" }
+jig-contract = { path = "crates/jig-contract", version = "=0.8.1-dev" }
+jig-agents-tui = { path = "crates/jig-agents-tui", version = "=0.8.1-dev" }
+jig-core = { path = "crates/jig-core", version = "=0.8.1-dev" }
+jig-execution = { path = "crates/jig-execution", version = "=0.8.1-dev" }
+jig-features = { path = "crates/jig-features", version = "=0.8.1-dev" }
+jig-file-budget = { path = "crates/jig-file-budget", version = "=0.8.1-dev" }
+jig-git = { path = "crates/jig-git", version = "=0.8.1-dev" }
+jig-go = { path = "crates/jig-go", version = "=0.8.1-dev" }
+jig-loops = { path = "crates/jig-loops", version = "=0.8.1-dev" }
+jig-owned-process = { path = "crates/jig-owned-process", version = "=0.8.1-dev" }
+jig-policy = { path = "crates/jig-policy", version = "=0.8.1-dev" }
+jig-repository = { path = "crates/jig-repository", version = "=0.8.1-dev" }
+jig-rust = { path = "crates/jig-rust", version = "=0.8.1-dev" }
+jig-sqlx = { path = "crates/jig-sqlx", version = "=0.8.1-dev" }
+jig-state = { path = "crates/jig-state", version = "=0.8.1-dev" }
+jig-tui = { path = "crates/jig-tui", version = "=0.8.1-dev" }
+jig-typescript = { path = "crates/jig-typescript", version = "=0.8.1-dev" }
+jig-ui = { path = "crates/jig-ui", version = "=0.8.1-dev" }
+jig-vault = { path = "crates/jig-vault", version = "=0.8.1-dev" }
+jig-vault-tui = { path = "crates/jig-vault-tui", version = "=0.8.1-dev" }
 libc = "0.2.177"
+proc-macro2 = "1.0.106"
 rcgen = { version = "0.14", features = ["x509-parser"] }
 # Ratatui 0.29's `Rect::area` uses u32, but `Buffer::pos_of` still narrows cell
 # indices to u16 while diffing; TUI render areas must remain at most 65,535 cells.
@@ -114,3 +136,6 @@ unicode-normalization = "0.1.24"
 wait-timeout = "0.2.1"
 x509-parser = { version = "0.18.1", features = ["verify"] }
 zeroize = "1.8.2"
+# New-passphrase strength estimate (MIT, declares Rust 1.66). Default features
+# pull in derive_builder, which the vault does not use.
+zxcvbn = { version = "3.1.1", default-features = false }

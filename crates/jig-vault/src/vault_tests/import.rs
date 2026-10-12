@@ -394,10 +394,10 @@ fn planned_import_rejects_intervening_vault_state_without_audit_or_write() {
 }
 
 #[test]
-fn onepassword_import_save_fault_leaves_intent_ahead_and_retry_converges() {
+fn v2_onepassword_import_save_fault_leaves_intent_ahead_and_retry_converges() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    store.init(&passphrase()).unwrap();
+    init_v2(&store, &passphrase());
     let before_vault = store.read_vault_text().unwrap().unwrap();
     store.fail_next_vault_write_for_test();
 

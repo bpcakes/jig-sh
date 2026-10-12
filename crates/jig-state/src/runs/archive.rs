@@ -1,0 +1,367 @@
+use std::collections::BTreeSet;
+
+use anyhow::anyhow;
+
+use super::lifecycle::{RunLifecycleValidator, RunStreamValidator};
+use super::*;
+
+mod cutoff;
+use cutoff::parse_archive_before_ms;
+
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static CORRUPT_NEXT_RUN_ARCHIVE_AFTER_PUBLISH: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(super) fn corrupt_next_run_archive_after_publish() {
+    CORRUPT_NEXT_RUN_ARCHIVE_AFTER_PUBLISH.with(|corrupt| corrupt.set(true));
+}
+
+fn scan_run_archive_lifecycles(
+    path: &Path,
+    mut scan: impl FnMut(&mut dyn FnMut(RawJsonlRecord<'_>) -> Result<()>) -> Result<bool>,
+) -> Result<BTreeMap<String, RunLifecycleValidator>> {
+    let mut validator = RunStreamValidator::default();
+    let mut observe = |raw: RawJsonlRecord<'_>| {
+        let event = parse_run_event(raw, path)?;
+        validator.observe(&event)
+    };
+    if scan(&mut observe)? {
+        bail!(
+            "Refusing to archive {} because its final JSONL record is not newline-terminated",
+            path.display()
+        );
+    }
+    validator.finish()
+}
+
+pub fn validate_run_stream(path: &Path) -> Result<()> {
+    scan_run_archive_lifecycles(path, |observe| {
+        let report = scan_jsonl_raw(path, &|| false, &mut *observe)?;
+        Ok(report.unterminated_final_record)
+    })?;
+    Ok(())
+}
+
+pub fn ensure_run_stream_replaceable(
+    ctx: &RepoContext,
+    path: &Path,
+    guard: &JsonlWriteGuard,
+) -> Result<()> {
+    let lifecycles = scan_run_archive_lifecycles(path, |observe| {
+        let report = scan_jsonl_raw_locked(guard, path, &|| false, &mut *observe)?;
+        Ok(report.unterminated_final_record)
+    })?;
+    let nonterminal_run_ids = lifecycles
+        .iter()
+        .filter(|(_, lifecycle)| lifecycle.known_event_count() > 0 && !lifecycle.completed())
+        .map(|(run_id, _)| run_id.as_str())
+        .collect::<Vec<_>>();
+    if !nonterminal_run_ids.is_empty() {
+        let (preview, suffix) = run_id_preview(&nonterminal_run_ids);
+        bail!(
+            "Refusing to restore run state while {} nonterminal run(s) exist ({preview}{suffix}); wait for them to complete or cancel them before retrying",
+            nonterminal_run_ids.len()
+        );
+    }
+
+    // A restore is also a recovery path for a missing or externally damaged
+    // journal. In that case a live worker's stable lease may no longer have a
+    // corresponding queued event to discover above, so inspect every owned
+    // lease file as well as every lifecycle represented by current state.
+    let active_run_ids = active_run_lease_ids(ctx.root(), lifecycles.keys().cloned())?;
+    if !active_run_ids.is_empty() {
+        let active_run_id_refs = active_run_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let (preview, suffix) = run_id_preview(&active_run_id_refs);
+        bail!(
+            "Refusing to restore run state while {} active worker lease(s) remain ({preview}{suffix}); wait for the run workers to exit before retrying",
+            active_run_ids.len()
+        );
+    }
+    Ok(())
+}
+
+fn run_id_preview(run_ids: &[&str]) -> (String, String) {
+    let preview = run_ids
+        .iter()
+        .take(10)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let omitted = run_ids.len().saturating_sub(10);
+    let suffix = if omitted == 0 {
+        String::new()
+    } else {
+        format!(" (+{omitted} more)")
+    };
+    (preview, suffix)
+}
+
+fn reconcile_abandoned_runs_before_archive(ctx: &RepoContext, path: &Path) -> Result<usize> {
+    let lifecycles = scan_run_archive_lifecycles(path, |observe| {
+        let report = scan_jsonl_raw(path, &|| false, &mut *observe)?;
+        Ok(report.unterminated_final_record)
+    })?;
+    let nonterminal_run_ids = lifecycles
+        .into_iter()
+        .filter(|(_, lifecycle)| lifecycle.known_event_count() > 0 && !lifecycle.completed())
+        .map(|(run_id, _)| run_id)
+        .collect::<Vec<_>>();
+    nonterminal_run_ids
+        .into_iter()
+        .try_fold(0usize, |count, run_id| {
+            let run = reconcile_run_for_inspection(ctx, &run_id)?;
+            Ok(count.saturating_add(usize::from(run.result.status == RunStatus::Completed)))
+        })
+}
+
+fn validate_run_archive_artifact(
+    path: &Path,
+    artifact: &GzipWriteReport,
+    expected_event_count: usize,
+) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let (restored, restored_report) =
+        decompress_gzip_to_temp(path, parent, Some(artifact.uncompressed_bytes)).with_context(
+            || format!("Failed to verify published run archive {}", path.display()),
+        )?;
+    let lifecycles = scan_run_archive_lifecycles(restored.path(), |observe| {
+        let report = scan_jsonl_raw(restored.path(), &|| false, &mut *observe)?;
+        Ok(report.unterminated_final_record)
+    })
+    .with_context(|| {
+        format!(
+            "Failed to validate published run archive {}",
+            path.display()
+        )
+    })?;
+    let restored_event_count = lifecycles.values().try_fold(0usize, |count, lifecycle| {
+        count
+            .checked_add(lifecycle.event_count())
+            .context("Run archive event count overflow")
+    })?;
+    if restored_report.uncompressed_bytes != artifact.uncompressed_bytes
+        || restored_report.uncompressed_sha256 != artifact.uncompressed_sha256
+    {
+        bail!(
+            "Run archive content verification failed for {}; refusing to rewrite active state",
+            path.display()
+        );
+    }
+    if restored_event_count != expected_event_count {
+        bail!(
+            "Run archive event count mismatch for {}; expected {expected_event_count}, found {restored_event_count}; refusing to rewrite active state",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn validate_published_run_archive(
+    path: &Path,
+    artifact: GzipWriteReport,
+    expected_event_count: usize,
+) -> Result<GzipWriteReport> {
+    #[cfg(test)]
+    CORRUPT_NEXT_RUN_ARCHIVE_AFTER_PUBLISH.with(|corrupt| {
+        if corrupt.replace(false) {
+            fs::write(path, b"corrupt published run archive")?;
+        }
+        Ok::<_, io::Error>(())
+    })?;
+
+    match validate_run_archive_artifact(path, &artifact, expected_event_count) {
+        Ok(()) => Ok(artifact),
+        Err(error) => {
+            remove_invalid_gzip(path).with_context(|| {
+                format!(
+                    "{error:#}; additionally failed to remove invalid run archive {}",
+                    path.display()
+                )
+            })?;
+            Err(error)
+        }
+    }
+}
+
+pub fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Result<Value> {
+    ensure_state_layout(ctx)?;
+    let before_ms = parse_archive_before_ms(before)?;
+    let runs_path = ctx.state_file(RUNS_FILE);
+    // Apply mode is already a mutating operation, so recover runs whose stable
+    // worker lease proves that their process exited before writing a terminal
+    // event. Preview remains strictly read-only and reports such runs instead.
+    let abandoned_runs_reconciled = if dry_run {
+        0
+    } else {
+        reconcile_abandoned_runs_before_archive(ctx, &runs_path)?
+    };
+    let mut recovery_hint = None;
+    let mut archive_hint = None;
+    let result = with_jsonl_write_lock(&runs_path, |guard| {
+        let lifecycles = scan_run_archive_lifecycles(&runs_path, |observe| {
+            let report = scan_jsonl_raw_locked(guard, &runs_path, &|| false, &mut *observe)?;
+            Ok(report.unterminated_final_record)
+        })?;
+        let nonterminal_run_ids = lifecycles
+            .iter()
+            .filter(|(_, lifecycle)| lifecycle.known_event_count() > 0 && !lifecycle.completed())
+            .map(|(run_id, _)| run_id.as_str())
+            .collect::<Vec<_>>();
+        let nonterminal_runs = nonterminal_run_ids.len();
+        if nonterminal_runs > 0 {
+            let (preview, suffix) = run_id_preview(&nonterminal_run_ids);
+            bail!(
+                "Refusing to archive runs while {nonterminal_runs} nonterminal run(s) exist ({preview}{suffix}); wait for them to complete or cancel them before retrying"
+            );
+        }
+        let mut archived_run_ids = BTreeSet::new();
+        let mut active_run_leases_retained = 0usize;
+        let mut run_events_archived = 0usize;
+        for (run_id, lifecycle) in &lifecycles {
+            if lifecycle
+                .completed_at_ms()
+                .is_some_and(|ended| ended < before_ms)
+            {
+                if !run_lease_is_idle(ctx, run_id)? {
+                    // A worker may append its terminal event just before
+                    // releasing the lease. Retain that run until a later
+                    // archive so every supported host keeps one stable inode
+                    // for each process that can still hold the lease.
+                    active_run_leases_retained = active_run_leases_retained.saturating_add(1);
+                } else {
+                    archived_run_ids.insert(run_id.clone());
+                    run_events_archived =
+                        run_events_archived.saturating_add(lifecycle.event_count());
+                }
+            }
+        }
+
+        let runs_archived = archived_run_ids.len();
+        let runs_retained = lifecycles.len().saturating_sub(runs_archived);
+        let run_event_count_before = lifecycles.values().fold(0usize, |count, lifecycle| {
+            count.saturating_add(lifecycle.event_count())
+        });
+        // Lease files are non-authoritative cache state. Once a terminal run's
+        // lease is idle, no execution or inspection path opens it again. Remove
+        // it before rewriting the durable stream so a cleanup failure remains
+        // retryable without a partially completed archive.
+        let run_leases_pruned = if dry_run {
+            0
+        } else {
+            archived_run_ids.iter().try_fold(0usize, |count, run_id| {
+                Ok::<_, anyhow::Error>(
+                    count.saturating_add(usize::from(remove_run_lease(ctx, run_id)?)),
+                )
+            })?
+        };
+        let recovery_backup_path = if runs_archived > 0 && !dry_run {
+            Some(
+                crate::maintenance::create_runs_backup(
+                    ctx,
+                    &runs_path,
+                    "runs-archive-recovery",
+                    None,
+                )?
+                .0,
+            )
+        } else {
+            None
+        };
+        recovery_hint = recovery_backup_path.clone();
+        let archive_path = (runs_archived > 0 && !dry_run).then(|| {
+            ctx.root()
+                .join(".agent/.cache/state-archives")
+                .join(format!("runs-before-{before_ms}-{}.jsonl.gz", Ulid::new()))
+        });
+        archive_hint = archive_path.clone();
+        let artifact = match &archive_path {
+            Some(path) => {
+                let artifact = write_gzip_atomic(path, |writer| {
+                    let report = scan_jsonl_raw_locked(guard, &runs_path, &|| false, |raw| {
+                        let identity = parse_run_event_identity(raw, &runs_path)?;
+                        if archived_run_ids.contains(&identity.run_id) {
+                            writer.write_all(raw.bytes)?;
+                            writer.write_all(b"\n")?;
+                        }
+                        Ok(())
+                    })?;
+                    if report.unterminated_final_record {
+                        bail!("Run state changed to an unterminated stream during archive");
+                    }
+                    Ok(())
+                })?;
+                Some(validate_published_run_archive(
+                    path,
+                    artifact,
+                    run_events_archived,
+                )?)
+            }
+            None => None,
+        };
+
+        if !dry_run && runs_archived > 0 {
+            let rewrite = rewrite_jsonl_raw_locked(
+                guard,
+                &runs_path,
+                &|| false,
+                |raw| {
+                    let identity = parse_run_event_identity(raw, &runs_path)?;
+                    Ok(if archived_run_ids.contains(&identity.run_id) {
+                        RawJsonlRewrite::Drop
+                    } else {
+                        RawJsonlRewrite::Keep
+                    })
+                },
+                validate_run_stream,
+            )?;
+            if rewrite.dropped_records as usize != run_events_archived {
+                bail!(
+                    "Run archive selected {run_events_archived} events but rewrote {}",
+                    rewrite.dropped_records
+                );
+            }
+        }
+
+        Ok(json!({
+            "ok": true,
+            "command": "state archive",
+            "dry_run": dry_run,
+            "before": before,
+            "before_ms": before_ms,
+            "runs_source_path": ".agent/state/runs.jsonl",
+            "runs_archive_path": archive_path.map(|path| path.display().to_string()),
+            "runs_recovery_backup_path": recovery_backup_path
+                .map(|path| path.display().to_string()),
+            "run_event_count_before": run_event_count_before,
+            "run_events_archived": run_events_archived,
+            "runs_archived": runs_archived,
+            "runs_retained": runs_retained,
+            "active_run_leases_retained": active_run_leases_retained,
+            "abandoned_runs_reconciled": abandoned_runs_reconciled,
+            "run_leases_pruned": run_leases_pruned,
+            "runs_uncompressed_bytes": artifact.as_ref().map(|artifact| artifact.uncompressed_bytes),
+            "runs_compressed_bytes": artifact.as_ref().map(|artifact| artifact.compressed_bytes),
+            "runs_content_sha256": artifact.as_ref().map(|artifact| artifact.uncompressed_sha256.as_str()),
+            "writer_coordination_note": MAINTENANCE_WRITER_COORDINATION_NOTE,
+        }))
+    });
+    result.map_err(|error| {
+        let recovery = recovery_hint.as_ref().map_or_else(
+            || "no exact runs recovery backup was completed".into(),
+            |path| format!("exact runs recovery backup: {}", path.display()),
+        );
+        let archive = archive_hint.as_ref().map_or_else(
+            || "no run-event archive was completed".into(),
+            |path| format!("run-event archive: {}", path.display()),
+        );
+        anyhow!("{error:#}\nRun archive recovery context: {recovery}; {archive}")
+    })
+}

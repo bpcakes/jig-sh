@@ -1,5 +1,7 @@
+use super::*;
+
 #[test]
-fn loop_tick_noop_records_idle_receipt() {
+fn loop_tick_noop_records_idle_evidence() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -21,21 +23,14 @@ fn loop_tick_noop_records_idle_receipt() {
     assert_eq!(output["idle"], true);
     assert_eq!(output["workflow"]["kind"], "noop_status");
     assert_eq!(output["observed"]["repo"]["name"], "demo");
-    assert_eq!(output["observed"]["open_plan_count"], 1);
-    assert!(output["receipt_id"].as_str().is_some());
+    assert!(output["observed"].get("open_plan_count").is_none());
+    assert!(output.get("receipt_id").is_none());
 
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(LOOP_TICK_TOOL.into()),
-            failed_only: false,
-            limit: 10,
-        },
-    )
-    .unwrap();
-    assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
+    let shown =
+        crate::runtime::tests::common::loop_show(&ctx, output["occurrence_id"].as_str().unwrap());
+    assert_eq!(shown["occurrence"]["status"], "succeeded", "{shown:#}");
+    assert_eq!(shown["evidence"]["tick"]["status"], "idle");
+    assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 }
 
 #[test]
@@ -455,7 +450,7 @@ printf 'authoritative task result\n' > "$out"
     let action = &output["actions"][0];
     assert_eq!(output["ok"], false, "{output:#}");
     assert_eq!(action["status"], "failed");
-    assert!(action["worker_receipt_id"].is_string());
+    assert_eq!(action["worker"]["kind"], "worker_run");
     assert_eq!(action["output"], "authoritative task result\n");
     assert_eq!(action["provider_stdout"], "diagnostic task transcript\n");
     assert_eq!(action["checkout"]["retained"], true);
@@ -515,10 +510,8 @@ while :; do sleep 1; done
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
-    let _worker_started = EnvVarGuard::set(
-        "JIG_TEST_TASK_WORKER_STARTED",
-        worker_started.as_os_str(),
-    );
+    let _worker_started =
+        EnvVarGuard::set("JIG_TEST_TASK_WORKER_STARTED", worker_started.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let repo_root = temp.path().to_path_buf();
     let revoker = std::thread::spawn(move || {
@@ -531,7 +524,7 @@ while :; do sleep 1; done
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let ctx = RepoContext::load_from(&repo_root).unwrap();
-        crate::runtime::loops::revoke_lease_for_test(&ctx, "checkout:repo").unwrap();
+        jig_loops::revoke_lease_for_test(&ctx, "checkout:repo").unwrap();
     });
 
     let error = crate::runtime::dispatch(
@@ -600,15 +593,15 @@ fn loop_run_until_idle_stops_after_one_noop_tick() {
     #[derive(Default)]
     struct PhaseObserver(Vec<(String, usize, usize)>);
 
-    impl crate::execution::ExecutionObserver for PhaseObserver {
-        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+    impl jig_execution::ExecutionObserver for PhaseObserver {
+        fn event(&mut self, event: jig_execution::ExecutionEvent<'_>) {
             match event {
-                crate::execution::ExecutionEvent::PhaseStarted { label, position } => self.0.push((
+                jig_execution::ExecutionEvent::PhaseStarted { label, position } => self.0.push((
                     format!("started:{label}"),
                     position.current(),
                     position.total(),
                 )),
-                crate::execution::ExecutionEvent::PhaseFinished { label, .. } => {
+                jig_execution::ExecutionEvent::PhaseFinished { label, .. } => {
                     self.0.push((format!("finished:{label}"), 0, 0));
                 }
                 _ => {}
@@ -616,7 +609,7 @@ fn loop_run_until_idle_stops_after_one_noop_tick() {
         }
     }
 
-    impl crate::execution::ExecutionCancellation for PhaseObserver {}
+    impl jig_execution::ExecutionCancellation for PhaseObserver {}
 
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

@@ -12,7 +12,7 @@ import sys
 source = pathlib.Path(sys.argv[1]).read_text()
 name = re.escape(sys.argv[2])
 match = re.search(
-    rf'(?m)^[ \t]*(?:pub\(crate\)[ \t]+)?const[ \t]+{name}[ \t]*:[ \t]*&str[ \t]*=[ \t\r\n]*"([^"\n]*)"[ \t]*;',
+    rf'(?m)^[ \t]*(?:pub(?:\(crate\))?[ \t]+)?const[ \t]+{name}[ \t]*:[ \t]*&str[ \t]*=[ \t\r\n]*"([^"\n]*)"[ \t]*;',
     source,
 )
 if match:
@@ -36,8 +36,8 @@ if [[ -z "$launcher_contract_version" || "$launcher_contract_version" != "$manif
   echo "scripts/jig contract version ${launcher_contract_version:-<unreadable>} does not match .agent/jig-contract.json contract $manifest_contract_version." >&2
   exit 1
 fi
-rust_current_contract="$(sed -n 's/^pub(crate) const CURRENT_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig/src/context.rs")"
-rust_min_contract="$(sed -n 's/^pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig/src/context/runtime.rs")"
+rust_current_contract="$(sed -n 's/^pub const CURRENT_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig-context/src/lib.rs")"
+rust_min_contract="$(sed -n 's/^pub const MIN_SUPPORTED_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig-context/src/runtime.rs")"
 if [[ -z "$rust_min_contract" || -z "$rust_current_contract" \
   || "$manifest_contract_version" -lt "$rust_min_contract" \
   || "$manifest_contract_version" -gt "$rust_current_contract" ]]; then
@@ -67,8 +67,10 @@ if [[ -z "$launcher_global_flags" || -z "$rust_global_flags" \
   exit 1
 fi
 
+# The launcher's command lists are generated from the root command registry in
+# crates/jig/src/root_commands.rs; its unit tests compare that registry with
+# these markers. This check keeps each marker and its case arm in agreement.
 launcher_capability_subcommands="$(sed -n 's/^# jig-capability-only-subcommands://p' "$ROOT_DIR/scripts/jig")"
-rust_capability_subcommands="$(rust_string_const "$ROOT_DIR/crates/jig/src/cli.rs" LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS)"
 launcher_capability_case_subcommands="$(awk '
   /^[[:space:]]*# jig-capability-only-subcommands-begin$/ { capture = 1; next }
   capture {
@@ -82,15 +84,13 @@ launcher_capability_case_subcommands="$(awk '
     }
   }
 ' "$ROOT_DIR/scripts/jig")"
-if [[ -z "$launcher_capability_subcommands" || -z "$rust_capability_subcommands" \
-  || "$launcher_capability_subcommands" != "$rust_capability_subcommands" \
+if [[ -z "$launcher_capability_subcommands" \
   || "$launcher_capability_case_subcommands" != "$launcher_capability_subcommands" ]]; then
-  echo "Launcher capability-only subcommands '${launcher_capability_case_subcommands:-<unreadable>}' do not match its marker '${launcher_capability_subcommands:-<unreadable>}' and Clap's tested policy '${rust_capability_subcommands:-<unreadable>}' in crates/jig/src/cli.rs." >&2
+  echo "Launcher capability-only subcommands '${launcher_capability_case_subcommands:-<unreadable>}' do not match its marker '${launcher_capability_subcommands:-<unreadable>}'. Refresh both from the root command registry with JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launcher_command_lists." >&2
   exit 1
 fi
 
 launcher_repository_subcommands="$(sed -n 's/^# jig-repository-scope-subcommands://p' "$ROOT_DIR/scripts/jig")"
-rust_repository_subcommands="$(rust_string_const "$ROOT_DIR/crates/jig/src/cli.rs" LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS)"
 launcher_repository_case_subcommands="$(awk '
   /^[[:space:]]*# jig-repository-scope-subcommands-begin$/ { capture = 1; next }
   capture {
@@ -108,10 +108,9 @@ normalized_repository_marker="$(printf '%s\n' "$launcher_repository_subcommands"
 normalized_repository_case="$(
   printf '%s\n' "check,$launcher_repository_case_subcommands" | tr ',' '\n' | sort | paste -sd, -
 )"
-if [[ -z "$launcher_repository_subcommands" || -z "$rust_repository_subcommands" \
-  || "$launcher_repository_subcommands" != "$rust_repository_subcommands" \
+if [[ -z "$launcher_repository_subcommands" \
   || "$normalized_repository_case" != "$normalized_repository_marker" ]]; then
-  echo "Launcher repository-scoped subcommands '${launcher_repository_case_subcommands:-<unreadable>}' plus check do not match its marker '${launcher_repository_subcommands:-<unreadable>}' and Clap's tested policy '${rust_repository_subcommands:-<unreadable>}' in crates/jig/src/cli.rs." >&2
+  echo "Launcher repository-scoped subcommands '${launcher_repository_case_subcommands:-<unreadable>}' plus check do not match its marker '${launcher_repository_subcommands:-<unreadable>}'. Refresh both from the root command registry with JIG_REFRESH_LAUNCHER_COMMAND_LISTS=1 cargo test -p jig-sh --lib generated_launcher_command_lists." >&2
   exit 1
 fi
 
@@ -154,9 +153,9 @@ launcher_generated_marker="$(sed -n '/^# jig-generated-runtime-launcher:v[0-9][0
 installer_generated_marker="$(sed -n '/^# jig-generated-runtime-installer:v[0-9][0-9]*$/p' "$ROOT_DIR/scripts/install-jig.sh")"
 launcher_scope_marker="$(sed -n '/^# jig-runtime-repository-scope:v[0-9][0-9]*$/p' "$ROOT_DIR/scripts/jig")"
 installer_scope_marker="$(sed -n '/^# jig-runtime-repository-scope:v[0-9][0-9]*$/p' "$ROOT_DIR/scripts/install-jig.sh")"
-rust_launcher_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_artifacts.rs" GENERATED_RUNTIME_LAUNCHER_MARKER)"
-rust_installer_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_artifacts.rs" GENERATED_RUNTIME_INSTALLER_MARKER)"
-rust_scope_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_artifacts.rs" RUNTIME_REPOSITORY_SCOPE_MARKER)"
+rust_launcher_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig-bootstrap/src/runtime_artifacts.rs" GENERATED_RUNTIME_LAUNCHER_MARKER)"
+rust_installer_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig-bootstrap/src/runtime_artifacts.rs" GENERATED_RUNTIME_INSTALLER_MARKER)"
+rust_scope_marker="$(rust_string_const "$ROOT_DIR/crates/jig-bootstrap/src/runtime_artifacts.rs" RUNTIME_REPOSITORY_SCOPE_MARKER)"
 if [[ -z "$launcher_generated_marker" \
   || "$launcher_generated_marker" != "$rust_launcher_generated_marker" ]]; then
   echo "Launcher protocol marker '${launcher_generated_marker:-<unreadable>}' does not match Rust recognition marker '${rust_launcher_generated_marker:-<unreadable>}'." >&2
@@ -175,18 +174,18 @@ if [[ -z "$launcher_scope_marker" || -z "$installer_scope_marker" \
 fi
 
 installer_cache_layout="$(sed -n 's/^# jig-runtime-cache-layout://p' "$ROOT_DIR/scripts/install-jig.sh")"
-rust_cache_layout_value="$(rust_string_const "$ROOT_DIR/crates/jig/src/context.rs" INSTALLER_CACHE_LAYOUT_MARKER)"
+rust_cache_layout_value="$(rust_string_const "$ROOT_DIR/crates/jig-context/src/lib.rs" INSTALLER_CACHE_LAYOUT_MARKER)"
 if [[ -z "$rust_cache_layout_value" ]]; then
-  echo "Could not read INSTALLER_CACHE_LAYOUT_MARKER from crates/jig/src/context.rs." >&2
+  echo "Could not read INSTALLER_CACHE_LAYOUT_MARKER from crates/jig-context/src/lib.rs." >&2
   exit 1
 fi
 if [[ -z "$installer_cache_layout" \
   || "$installer_cache_layout" != "$rust_cache_layout_value" ]]; then
-  echo "Installer cache layout '${installer_cache_layout:-<unreadable>}' does not match Rust's shared layout '${rust_cache_layout_value:-<unreadable>}' in crates/jig/src/context.rs." >&2
+  echo "Installer cache layout '${installer_cache_layout:-<unreadable>}' does not match Rust's shared layout '${rust_cache_layout_value:-<unreadable>}' in crates/jig-context/src/lib.rs." >&2
   exit 1
 fi
 installer_cache_lock="$(sed -n 's/^# jig-runtime-cache-lock://p' "$ROOT_DIR/scripts/install-jig.sh")"
-rust_cache_lock="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_cache_lock.rs" INSTALLER_CACHE_LOCK_PROTOCOL_MARKER)"
+rust_cache_lock="$(rust_string_const "$ROOT_DIR/crates/jig-bootstrap/src/runtime_cache_lock.rs" INSTALLER_CACHE_LOCK_PROTOCOL_MARKER)"
 installer_lock_attempts="$(sed -n 's/^INSTALL_LOCK_ATTEMPTS=\([0-9][0-9]*\)$/\1/p' "$ROOT_DIR/scripts/install-jig.sh")"
 installer_lock_retry="$(sed -n 's/^INSTALL_LOCK_RETRY_SECONDS=\([0-9][0-9]*\)$/\1/p' "$ROOT_DIR/scripts/install-jig.sh")"
 installer_lock_from_values="directory-suffix=.lock;guard-suffix=.lock.guard;mechanism=os-exclusive+legacy-directory;record=owner-v1;attempts=$installer_lock_attempts;retry-seconds=$installer_lock_retry"
@@ -218,7 +217,7 @@ done
 for rust_lock_protocol_fragment in \
   'FileExt::try_lock_exclusive(&guard)' \
   'Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false)'; do
-  if ! grep -Fq "$rust_lock_protocol_fragment" "$ROOT_DIR/crates/jig/src/runtime_cache_lock.rs"; then
+  if ! grep -Fq "$rust_lock_protocol_fragment" "$ROOT_DIR/crates/jig-bootstrap/src/runtime_cache_lock.rs"; then
     echo "Rust cache-lock implementation is missing protocol fragment: $rust_lock_protocol_fragment" >&2
     exit 1
   fi
@@ -245,7 +244,7 @@ if [[ "$installer_source_checkout_cache_checks" != "2" ]]; then
 fi
 for contract_template in \
   "$ROOT_DIR/templates/project/.agent/jig-contract.json.jinja" \
-  "$ROOT_DIR/crates/jig/src/bootstrap/embedded_template_snapshots/.agent/jig-contract.json.jinja"
+  "$ROOT_DIR/crates/jig-bootstrap/src/embedded_template_snapshots/.agent/jig-contract.json.jinja"
 do
   if ! grep -Fxq '  "contract_version": <<[ _jig.contract_version ]>>,' "$contract_template"; then
     echo "$contract_template must render contract_version from _jig.contract_version." >&2
@@ -255,14 +254,14 @@ done
 
 if ! cmp -s \
   "$ROOT_DIR/templates/project/.agent/jig-contract.json.jinja" \
-  "$ROOT_DIR/crates/jig/src/bootstrap/embedded_template_snapshots/.agent/jig-contract.json.jinja"
+  "$ROOT_DIR/crates/jig-bootstrap/src/embedded_template_snapshots/.agent/jig-contract.json.jinja"
 then
   echo "Generated and embedded contract-manifest templates drifted." >&2
   exit 1
 fi
 
 legacy_cutoff="$(sed -n 's/^LEGACY_VERSION_LOCK_CUTOFF=\([0-9][0-9]*\)$/\1/p' "$ROOT_DIR/scripts/install-jig.sh")"
-rust_last_locked="$(sed -n 's/^pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig/src/context.rs")"
+rust_last_locked="$(sed -n 's/^pub const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig-context/src/lib.rs")"
 if [[ -z "$legacy_cutoff" || -z "$rust_last_locked" \
   || "$legacy_cutoff" -ne $((rust_last_locked + 1)) ]]; then
   echo "Installer legacy cutoff ${legacy_cutoff:-<unreadable>} does not follow Rust's last version-locked contract ${rust_last_locked:-<unreadable>}." >&2
@@ -309,7 +308,7 @@ fi
 
 if ! cmp -s \
   "$ROOT_DIR/templates/project/scripts/jig.jinja" \
-  "$ROOT_DIR/crates/jig/src/bootstrap/embedded_template_snapshots/scripts/jig.jinja"
+  "$ROOT_DIR/crates/jig-bootstrap/src/embedded_template_snapshots/scripts/jig.jinja"
 then
   echo "Generated and embedded launcher templates drifted." >&2
   exit 1
@@ -325,7 +324,7 @@ fi
 
 if ! cmp -s \
   "$ROOT_DIR/templates/project/scripts/install-jig.sh.jinja" \
-  "$ROOT_DIR/crates/jig/src/bootstrap/embedded_template_snapshots/scripts/install-jig.sh.jinja"
+  "$ROOT_DIR/crates/jig-bootstrap/src/embedded_template_snapshots/scripts/install-jig.sh.jinja"
 then
   echo "Generated and embedded installer templates drifted." >&2
   exit 1

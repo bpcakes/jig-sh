@@ -1,1 +1,0 @@
-Characterize incremental progress delivery and parallel target state, refactor ownership boundaries, fix reviewed regressions, and run focused plus repository gates.

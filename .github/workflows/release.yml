@@ -37,9 +37,16 @@ concurrency:
 jobs:
   release:
     name: Publish release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     if: ${{ github.event.inputs.backfill_v0_1_0 != 'true' }}
+    env:
+      RELEASE_VALIDATION_RECEIPT: ${{ github.workspace }}/target/release-validation
+      ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
+      JIG_FIXTURE_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/fixture-builds
+      JIG_GENERATED_RUST_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/generated-rust-builds
     # This environment must stay protected with required reviewers because it
     # grants the OIDC token used for crates.io Trusted Publishing.
     environment: crates-io
@@ -78,6 +85,14 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: release-fixtures-v3
+          cache-directories: |
+            ${{ env.JIG_FIXTURE_TARGET_DIR }}
+            ${{ env.JIG_GENERATED_RUST_TARGET_DIR }}
+
+      - name: Start the systemd user manager
+        run: bash scripts/ci/setup-user-systemd.sh
 
       - name: Configure release git identity
         run: |
@@ -95,12 +110,15 @@ jobs:
           version="$RELEASE_VERSION_INPUT"
           if [[ -z "$version" ]]; then
             current_version="$(scripts/release.sh version)"
-            if ! git rev-parse --verify --quiet "refs/tags/v$current_version" >/dev/null; then
+            if [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev$ ]]; then
+              version="$(scripts/release.sh next-version "$RELEASE_BUMP")"
+            elif ! git rev-parse --verify --quiet "refs/tags/v$current_version" >/dev/null; then
               echo "Cargo.toml is already prepared for untagged v$current_version." >&2
               echo "Rerun with version=$current_version to resume a prepared release, or tag/publish/restore it before auto-bumping." >&2
               exit 1
+            else
+              version="$(scripts/release.sh next-version "$RELEASE_BUMP")"
             fi
-            version="$(scripts/release.sh next-version "$RELEASE_BUMP")"
           else
             echo "Explicit version supplied; ignoring bump=$RELEASE_BUMP."
           fi
@@ -156,11 +174,6 @@ jobs:
             echo "No release prep diff; continuing explicit-version resume."
           fi
 
-      - name: Validate prepared release
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: ALLOW_DIRTY=1 scripts/release.sh check "$VERSION"
-
       - name: Commit release prep
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -175,14 +188,12 @@ jobs:
       - name: Validate committed release
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
         run: scripts/release.sh check "$VERSION"
 
       - name: Create local tag
         if: ${{ github.event.inputs.dry_run != 'true' && steps.version.outputs.tag_exists != 'true' }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
         run: scripts/release.sh tag "$VERSION"
 
       - name: Stop before remote side effects
@@ -210,13 +221,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TAG_EXISTS: ${{ steps.version.outputs.tag_exists }}
           CARGO_REGISTRY_TOKEN: ${{ steps.crates.outputs.token }}
-          ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
         run: |
           # scripts/release.sh publish pushes the tag only after all crates publish.
           # If a publish step fails, rerun this workflow with the explicit version.
           missing_crates=()
           if [[ "$TAG_EXISTS" == "true" ]]; then
-            for crate in jig-dev-proxy jig-sh; do
+            for crate in jig-contract jig-core jig-dashboard jig-file-budget jig-git jig-owned-process jig-rust jig-sqlx jig-typescript jig-go jig-features jig-commands jig-vault jig-dev-proxy jig-context jig-execution jig-state jig-repository jig-policy jig-bootstrap jig-tui jig-vault-tui jig-agents-tui jig-ui jig-agents jig-loops jig-sh; do
               status=""
               for attempt in 1 2; do
                 status="$(curl --max-time 20 -sS -o "/tmp/${crate}-crate-version.json" -w '%{http_code}' \
@@ -258,6 +268,52 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: scripts/release.sh github "$VERSION"
+
+      - name: Advance default branch to the next development version
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Run history is ignored local state; preserve it during the bump.
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "Unexpected working-tree changes before the development bump." >&2
+            git status --short >&2
+            exit 1
+          fi
+          git fetch origin "$DEFAULT_BRANCH"
+          git rebase "origin/$DEFAULT_BRANCH"
+
+          next_version="$(scripts/release.sh next-version patch)-dev"
+          scripts/release.sh prepare-development "$next_version"
+          scripts/release.sh stage
+          if git diff --cached --quiet; then
+            echo "Default branch is already at development version $next_version."
+          else
+            git commit -m "Begin v$next_version development"
+          fi
+
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$DEFAULT_BRANCH"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "Default branch kept advancing; failed to push the development bump after $attempt attempts." >&2
+              exit 1
+            fi
+            echo "Default branch advanced during the development bump; rebasing and retrying ($attempt/3)." >&2
+            git fetch origin "$DEFAULT_BRANCH"
+            git rebase "origin/$DEFAULT_BRANCH"
+          done
+
+  binaries:
+    needs: release
+    if: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.backfill_v0_1_0 != 'true' }}
+    uses: ./.github/workflows/release-binaries.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
+    permissions:
+      contents: write
 
   backfill-v0-1-0:
     name: Backfill v0.1.0 GitHub Release

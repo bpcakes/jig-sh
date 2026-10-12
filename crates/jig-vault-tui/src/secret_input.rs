@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use jig_vault::{MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN, SecretBytes};
+use jig_vault::{MAX_SECRET_VALUE_LEN, SecretBytes};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use zeroize::Zeroizing;
@@ -70,13 +70,11 @@ impl SecretInput {
         self.bytes.as_slice() == other.bytes.as_slice()
     }
 
+    /// Early feedback only: delegates to the core policy, which init and
+    /// passphrase change enforce again authoritatively.
     pub(crate) fn validate_new_vault_passphrase(&self) -> Result<(), String> {
-        if self.len() < MIN_MASTER_PASSPHRASE_LEN {
-            return Err(format!(
-                "New vault passphrases must contain at least {MIN_MASTER_PASSPHRASE_LEN} bytes."
-            ));
-        }
-        Ok(())
+        jig_vault::validate_new_vault_passphrase_bytes(self.bytes.as_slice())
+            .map_err(|error| error.message().to_owned())
     }
 
     pub(crate) fn take(&mut self) -> SecretBytes {

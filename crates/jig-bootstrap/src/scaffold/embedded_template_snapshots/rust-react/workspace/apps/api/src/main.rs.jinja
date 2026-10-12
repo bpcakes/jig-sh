@@ -1,0 +1,215 @@
+use std::process::ExitCode;
+
+use ::<<[ module_name ]>> as app_crate;
+use ::<<[ module_name ]>>_http as app_http_crate;
+use ::<<[ module_name ]>>_runtime as runtime;
+use anyhow::Context;
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    load_dotenv();
+    init_tracing();
+    install_panic_hook();
+
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(error = ?error, "API server failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn load_dotenv() {
+    match dotenvy::dotenv() {
+        Ok(_) => {}
+        Err(dotenvy::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!("warning: failed to load .env: {error}"),
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
+[% if db_enabled %]
+    let command = parse_command()?;
+[% else %]
+    parse_command()?;
+[% endif %]
+    let config = app_crate::AppConfig::from_env().context("Failed to load application config")?;
+[% if db_enabled %]
+    if command == Command::BootstrapDatabase {
+        let created = runtime::bootstrap_database(config)
+            .await
+            .context("Failed to bootstrap the database")?;
+        if created {
+            tracing::info!("created database and applied migrations");
+        } else {
+            tracing::info!("database already exists; applied migrations");
+        }
+        return Ok(());
+    }
+[% endif %]
+[% if jobs_enabled %]
+    runtime::serve_with_jobs(config, app_http_crate::assemble).await
+[% else %]
+    runtime::serve(config, app_http_crate::assemble).await
+[% endif %]
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Command {
+    Serve,
+[% if db_enabled %]
+    BootstrapDatabase,
+[% endif %]
+}
+
+fn parse_command() -> anyhow::Result<Command> {
+    let mut arguments = std::env::args_os().skip(1);
+    match (arguments.next(), arguments.next()) {
+        (None, None) => Ok(Command::Serve),
+[% if db_enabled %]
+        (Some(argument), None) if argument == "--bootstrap-database" => {
+            Ok(Command::BootstrapDatabase)
+        }
+[% endif %]
+        (Some(argument), trailing) => anyhow::bail!(
+            "unexpected API argument {argument:?}{}",
+            if trailing.is_some() {
+                " (and trailing arguments)"
+            } else {
+                ""
+            }
+        ),
+        (None, Some(_)) => {
+            unreachable!("an iterator cannot yield a second argument without a first")
+        }
+    }
+}
+
+fn init_tracing() {
+    #[allow(clippy::useless_concat)]
+    let default_filter = concat!(
+        // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
+        "<<[ module_name ]>>=info,",
+        "<<[ module_name ]>>_api=info,",
+        "batter=info,batter_axum=info",
+[% if jobs_enabled %]
+        ",runledger=info",
+[% endif %]
+    );
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            // If you rename the application library or API binary, update this filter too.
+            std::env::var("RUST_LOG").unwrap_or_else(|_| default_filter.into()),
+        )
+        .init();
+}
+
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        tracing::error!(panic = %panic_info, "application panic");
+        default_hook(panic_info);
+    }));
+}
+[% if not db_enabled %]
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::Read,
+        process::{Command as ProcessCommand, Stdio},
+        time::Duration,
+    };
+    use tokio::net::TcpListener;
+
+    const BIND_FAILURE_CHILD: &str = "JIG_NO_DB_BIND_FAILURE_CHILD";
+    const BIND_FAILURE_TEST: &str = "tests::production_serve_reports_bind_failure";
+
+    #[tokio::test]
+    async fn production_serve_reports_bind_failure() {
+        if std::env::var_os(BIND_FAILURE_CHILD).is_some() {
+            let config = app_crate::AppConfig::from_env().expect("test bind address is valid");
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                runtime::serve(config, app_http_crate::assemble),
+            )
+            .await
+            .expect("serve should fail the occupied bind instead of hanging");
+            let error = result.expect_err("the production serve entrypoint must reject the bind");
+            let display = error.to_string();
+            assert!(
+                display.contains("startup failed at http.bind"),
+                "bind failure should retain its production startup stage: {display}"
+            );
+            assert!(
+                error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<std::io::Error>().is_some()),
+                "bind failure should retain its I/O cause: {display}"
+            );
+            return;
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener for the occupied address");
+        let bind_addr = listener
+            .local_addr()
+            .expect("read the occupied listener address")
+            .to_string();
+        let mut child = ProcessCommand::new(
+            std::env::current_exe().expect("locate the generated API test executable"),
+        )
+        .args(["--exact", BIND_FAILURE_TEST, "--nocapture"])
+        .env(BIND_FAILURE_CHILD, "1")
+        .env("BIND_ADDR", &bind_addr)
+        .env_remove("HOST")
+        .env_remove("PORT")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn an isolated production bind-failure test");
+        let status =
+            match tokio::time::timeout(Duration::from_secs(5), wait_for_child(&mut child)).await {
+                Ok(status) => status.expect("wait for the production bind-failure child"),
+                Err(_) => {
+                    let kill = child.kill();
+                    let wait = child.wait();
+                    panic!("production bind-failure child timed out; kill={kill:?}, wait={wait:?}");
+                }
+            };
+        let mut stdout = String::new();
+        child
+            .stdout
+            .take()
+            .expect("capture child stdout")
+            .read_to_string(&mut stdout)
+            .expect("read child stdout");
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .expect("capture child stderr")
+            .read_to_string(&mut stderr)
+            .expect("read child stderr");
+        drop(listener);
+        assert!(
+            status.success(),
+            "isolated production bind-failure test failed: status={status}, stdout={stdout}, stderr={stderr}"
+        );
+    }
+
+    async fn wait_for_child(
+        child: &mut std::process::Child,
+    ) -> std::io::Result<std::process::ExitStatus> {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+[% endif %]

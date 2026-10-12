@@ -1,10 +1,23 @@
 use serde::{Deserialize, Serialize};
 
+pub mod cargo;
 pub mod freshness;
 pub mod recovery;
 pub mod repository;
+pub mod resources;
 pub mod run;
+pub mod rust_focus;
 
+pub use resources::ExecutionResourceV1;
+pub use rust_focus::{
+    PreparedRustInputV1, RustFeaturesV1, RustFocusV1, RustNextestConfigV1, RustScopeDispositionV1,
+    RustTargetV1,
+};
+
+pub use cargo::{
+    CargoImpactContextV1, CargoImpactDispositionV1, CargoImpactReasonV1, CargoImpactV1,
+    CargoPackageImpactV1, CargoRuntimeTestFilterV1, CargoTargetImpactV1,
+};
 pub use repository::{
     ActionArgumentSpec, ActionEffect, ActionId, ActionInputsPolicy, ActionIntent, ActionRunner,
     ActionSourceState, ActionSpec, ArgvValue, ComponentId, ComponentSpec, FieldProvenance,
@@ -17,7 +30,8 @@ pub use run::{
     FindingSeverity, NativeActionResult, PlannedTarget, PolicyPreparationFailureV1,
     PolicyPreparationV1, PolicySourceV1, PreparedDiagnosticV1, PreparedNativeInputV1,
     ResolvedComparisonV1, RunConclusion, RunPlan, RunResult, RunStatus, SelectionReason,
-    SourceIdentity, StrictInventoryFallbackV1, StrictInventoryReasonV1, TargetRunResult,
+    SourceIdentity, StrictInventoryFallbackV1, StrictInventoryReasonV1, TargetOutputTailV1,
+    TargetRunResult,
 };
 
 pub mod kind {
@@ -27,25 +41,14 @@ pub mod kind {
 
 pub mod tool {
     pub const BOOTSTRAP: &str = "jig.bootstrap";
-    pub const AGENT_DOCTOR: &str = "jig.agent_doctor";
     pub const CLIPPY: &str = "jig.clippy";
     pub const CONTRACT_CHECK: &str = "jig.contract_check";
-    pub const DECISIONS_ADD: &str = "jig.decisions_add";
     pub const FMT_CHECK: &str = "jig.fmt_check";
     pub const FILE_BUDGET: &str = "jig.file_budget";
     pub const LINT: &str = "jig.lint";
     pub const MIGRATION_ADD: &str = "jig.migration_add";
-    pub const INSPECT: &str = "jig.inspect";
-    pub const PLAN_RUN: &str = "jig.plan_run";
-    pub const EXECUTE_RUN: &str = "jig.execute_run";
-    pub const CANCEL_RUN: &str = "jig.cancel_run";
-    pub const PLANS_APPEND: &str = "jig.plans_append";
-    pub const PLANS_CLOSE: &str = "jig.plans_close";
-    pub const PLANS_OPEN: &str = "jig.plans_open";
     pub const SCHEMA_CHECK: &str = "jig.schema_check";
     pub const SCHEMA_DUMP: &str = "jig.schema_dump";
-    pub const SESSION_END: &str = "jig.session_end";
-    pub const SESSION_START: &str = "jig.session_start";
     pub const SQLX_CHECK: &str = "jig.sqlx_check";
     pub const SQLC_CHECK: &str = "jig.sqlc_check";
     pub const TEST: &str = "jig.test";
@@ -54,18 +57,6 @@ pub mod tool {
     pub const TYPESCRIPT_COVERAGE: &str = "jig.typescript_coverage";
     pub const TYPESCRIPT_LINT: &str = "jig.typescript_lint";
     pub const TYPESCRIPT_TYPECHECK: &str = "jig.typescript_typecheck";
-    pub const WORK_APPEND: &str = "jig.work_append";
-    pub const WORK_CHECK: &str = "jig.work_check";
-    pub const WORK_DECIDE: &str = "jig.work_decide";
-    pub const WORK_FINISH: &str = "jig.work_finish";
-    pub const WORK_GATES: &str = "jig.work_gates";
-    pub const WORK_EVIDENCE: &str = "jig.work_evidence";
-    pub const WORK_GOAL: &str = "jig.work_goal";
-    pub const WORK_REFINE: &str = "jig.work_refine";
-    pub const WORK_REVIEW: &str = "jig.work_review";
-    pub const WORK_RECEIPTS: &str = "jig.work_receipts";
-    pub const WORK_START: &str = "jig.work_start";
-    pub const WORK_STATUS: &str = "jig.work_status";
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

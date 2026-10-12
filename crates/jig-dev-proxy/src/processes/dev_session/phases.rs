@@ -21,16 +21,16 @@ pub(super) fn prepare_proxy_for_apps(
     ensure_process_routes_supported()?;
     validate_process_routes(settings, specs)?;
     preflight_process_routes(store, specs, interrupt_requested)?;
+    lock_outcome_or_interruption(
+        ensure_proxy_running_interruptible(store, settings, current_exe, cancelled)?,
+        interrupt_requested,
+    )?;
     let hostnames = specs
         .iter()
         .filter(|spec| spec.proxy)
         .map(|spec| spec.hostname.clone())
         .collect::<Vec<_>>();
     prepare_certs_for_hosts_interruptible(settings, &hostnames, interrupt_requested)?;
-    lock_outcome_or_interruption(
-        ensure_proxy_running_interruptible(store, settings, current_exe, cancelled)?,
-        interrupt_requested,
-    )?;
     Ok(true)
 }
 
@@ -202,7 +202,9 @@ pub(super) fn monitor_dev_session(
         }
         if outcome.first_exit.is_none() && uses_proxy && Instant::now() >= next_proxy_health_check {
             next_proxy_health_check = Instant::now() + PROXY_HEALTH_CHECK_INTERVAL;
-            let proxy_is_ready = match proxy_ready_interruptible(store, settings, cancelled) {
+            let proxy_is_ready = match proxy_ready_for_monitor_interruptible(
+                store, settings, cancelled,
+            ) {
                 Ok(LockOutcome::Acquired(ready)) => ready,
                 Ok(LockOutcome::Cancelled) => {
                     let Some(reason) = interrupt_requested() else {

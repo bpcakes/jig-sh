@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn parses_proxy_run_command() {
     let cli = Cli::try_parse_from([
@@ -119,6 +121,11 @@ fn assert_vault_root_commands() {
             assert_eq!(opts.to, 2);
             assert_eq!(opts.vault.home, Some(PathBuf::from("/tmp/jig-vault")));
         }
+        other => panic!("expected vault migrate command, got {other:?}"),
+    }
+    let migrate_latest = Cli::try_parse_from(["jig", "vault", "migrate", "--to", "3"]).unwrap();
+    match migrate_latest.command {
+        CommandKind::Vault(VaultCommand::Migrate(opts)) => assert_eq!(opts.to, 3),
         other => panic!("expected vault migrate command, got {other:?}"),
     }
 }
@@ -409,7 +416,8 @@ fn parses_vault_commands() {
 #[test]
 fn rejects_invalid_vault_field_inputs_during_clap_parsing() {
     for args in [
-        vec!["jig", "vault", "migrate", "--to", "3"],
+        vec!["jig", "vault", "migrate", "--to", "1"],
+        vec!["jig", "vault", "migrate", "--to", "4"],
         vec!["jig", "vault", "migrate", "--to", "two"],
         vec!["jig", "vault", "field", "list", "jig://Production/extra"],
         vec!["jig", "vault", "field", "set", "jig://Production"],
@@ -696,6 +704,41 @@ fn parses_hidden_proxy_no_http2_runtime_flag() {
         CommandKind::Proxy(ProxyCommand::Start(opts)) => {
             assert!(opts.foreground);
             assert!(opts.proxy.no_http2);
+        }
+        other => panic!("expected proxy start command, got {other:?}"),
+    }
+}
+
+#[test]
+fn private_certificate_scope_requires_foreground_and_preserves_names() {
+    assert!(
+        Cli::try_parse_from([
+            "jig",
+            "proxy",
+            "start",
+            "--certificate-dns-name",
+            "exampleproject.test",
+        ])
+        .is_err()
+    );
+    let cli = Cli::try_parse_from([
+        "jig",
+        "proxy",
+        "start",
+        "--foreground",
+        "--certificate-dns-name",
+        "*.exampleproject.test",
+        "--certificate-dns-name",
+        "exampleproject.test",
+    ])
+    .unwrap();
+    match cli.command {
+        CommandKind::Proxy(ProxyCommand::Start(opts)) => {
+            let request = crate::command::ProxyStartRequest::from(opts);
+            assert_eq!(
+                request.certificate_dns_name,
+                ["*.exampleproject.test", "exampleproject.test"]
+            );
         }
         other => panic!("expected proxy start command, got {other:?}"),
     }

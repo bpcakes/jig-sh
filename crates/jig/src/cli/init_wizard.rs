@@ -3,13 +3,14 @@ use std::io::{self, BufRead, IsTerminal, Write};
 
 use anyhow::{Context, Result, bail};
 
-use crate::bootstrap::{
-    self, InitOpts, ScaffoldDb, ScaffoldFrontend, ScaffoldPreset, parse_scaffold_frontend,
+use jig_bootstrap::{
+    self, InitOpts, ScaffoldDb, ScaffoldFrontend, ScaffoldJobs, ScaffoldMetrics, ScaffoldPreset,
+    parse_scaffold_frontend,
 };
 
 pub(super) fn prepare_init_interaction(
     opts: &mut InitOpts,
-) -> Result<bootstrap::PreparedInitAnswers> {
+) -> Result<jig_bootstrap::PreparedInitAnswers> {
     let mut prepared = prepare_init_answers(opts)?;
     prepared.move_effective_to(&mut opts.answers)?;
     let terminals_available = io::stdin().is_terminal() && io::stderr().is_terminal();
@@ -51,7 +52,7 @@ fn prepare_init_interaction_with_io<R: BufRead, W: Write>(
     opts: &mut InitOpts,
     input: &mut R,
     output: &mut W,
-) -> Result<bootstrap::PreparedInitAnswers> {
+) -> Result<jig_bootstrap::PreparedInitAnswers> {
     let mut prepared = prepare_init_answers(opts)?;
     prepared.move_effective_to(&mut opts.answers)?;
     let policy = InitInteractionPolicy::resolve(opts, true);
@@ -65,7 +66,7 @@ fn prepare_init_interaction_with_terminal<R: BufRead, W: Write>(
     terminals_available: bool,
     input: &mut R,
     output: &mut W,
-) -> Result<bootstrap::PreparedInitAnswers> {
+) -> Result<jig_bootstrap::PreparedInitAnswers> {
     let mut prepared = prepare_init_answers(opts)?;
     prepared.move_effective_to(&mut opts.answers)?;
     let policy = InitInteractionPolicy::resolve(opts, terminals_available);
@@ -73,8 +74,8 @@ fn prepare_init_interaction_with_terminal<R: BufRead, W: Write>(
     Ok(prepared)
 }
 
-fn prepare_init_answers(opts: &InitOpts) -> Result<bootstrap::PreparedInitAnswers> {
-    bootstrap::prepare_init_answers_for_interaction(&opts.answers).map_err(|error| {
+fn prepare_init_answers(opts: &InitOpts) -> Result<jig_bootstrap::PreparedInitAnswers> {
+    jig_bootstrap::prepare_init_answers_for_interaction(&opts.answers).map_err(|error| {
         if let Some(preset @ (ScaffoldPreset::RustLibrary | ScaffoldPreset::RustCli)) =
             opts.scaffold.preset
         {
@@ -113,7 +114,7 @@ impl InitInteractionPolicy {
 
 fn prepare_merged_init_interaction<R: BufRead, W: Write>(
     opts: &mut InitOpts,
-    prepared: &mut bootstrap::PreparedInitAnswers,
+    prepared: &mut jig_bootstrap::PreparedInitAnswers,
     policy: InitInteractionPolicy,
     input: &mut R,
     output: &mut W,
@@ -243,11 +244,7 @@ fn guide_project_shape<R: BufRead, W: Write>(
         print_project_shape_header(output, &metadata)?;
     }
     if needs_database {
-        opts.scaffold.db = Some(prompt_database(
-            input,
-            output,
-            preset == ScaffoldPreset::GoReact,
-        )?);
+        opts.scaffold.db = Some(prompt_database(input, output)?);
     }
     if needs_frontends {
         opts.scaffold.frontends = prompt_frontends(input, output, &metadata)?;
@@ -255,6 +252,19 @@ fn guide_project_shape<R: BufRead, W: Write>(
     if preset.requires_go_module() && opts.answers.go_module.is_none() {
         let default = default_go_module_for_init(opts);
         opts.answers.go_module = Some(prompt_go_module(input, output, &default)?);
+    }
+    // Optional service add-ons are offered only while the wizard is already
+    // guiding the project shape, so explicit flag invocations stay prompt-free.
+    let guided = printed_header || needs_database || needs_frontends;
+    if guided && preset.supports_metrics() && opts.scaffold.metrics.is_none() {
+        opts.scaffold.metrics = Some(prompt_metrics(input, output)?);
+    }
+    if guided
+        && preset.supports_jobs()
+        && opts.scaffold.db == Some(ScaffoldDb::Postgres)
+        && opts.scaffold.jobs.is_none()
+    {
+        opts.scaffold.jobs = Some(prompt_jobs(input, output)?);
     }
     Ok(())
 }
@@ -325,29 +335,53 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
     }
 }
 
-fn prompt_database<R: BufRead, W: Write>(
-    input: &mut R,
-    output: &mut W,
-    go_backend: bool,
-) -> Result<ScaffoldDb> {
+fn prompt_database<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Result<ScaffoldDb> {
     loop {
         let answer = prompt_line(
             input,
             output,
-            if go_backend {
-                "Database? [none/postgres] (none): "
-            } else {
-                "Database? [none/postgres/sqlite] (none): "
-            },
+            "Database? [none/postgres] (none): ",
             "none",
             "database choice",
         )?;
         match answer.as_str() {
             "1" | "none" | "no" => return Ok(ScaffoldDb::None),
             "2" | "postgres" | "postgresql" => return Ok(ScaffoldDb::Postgres),
-            "3" | "sqlite" if !go_backend => return Ok(ScaffoldDb::Sqlite),
-            _ if go_backend => writeln!(output, "  Enter none or postgres.")?,
-            _ => writeln!(output, "  Enter none, postgres, or sqlite.")?,
+            _ => writeln!(output, "  Enter none or postgres.")?,
+        }
+    }
+}
+
+fn prompt_metrics<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Result<ScaffoldMetrics> {
+    loop {
+        let answer = prompt_line(
+            input,
+            output,
+            "Metrics export? [none/otlp] (none): ",
+            "none",
+            "metrics choice",
+        )?;
+        match answer.as_str() {
+            "1" | "none" | "no" => return Ok(ScaffoldMetrics::None),
+            "2" | "otlp" => return Ok(ScaffoldMetrics::Otlp),
+            _ => writeln!(output, "  Enter none or otlp.")?,
+        }
+    }
+}
+
+fn prompt_jobs<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Result<ScaffoldJobs> {
+    loop {
+        let answer = prompt_line(
+            input,
+            output,
+            "Background jobs? [none/runledger] (none): ",
+            "none",
+            "background jobs choice",
+        )?;
+        match answer.as_str() {
+            "1" | "none" | "no" => return Ok(ScaffoldJobs::None),
+            "2" | "runledger" => return Ok(ScaffoldJobs::Runledger),
+            _ => writeln!(output, "  Enter none or runledger.")?,
         }
     }
 }
@@ -456,7 +490,7 @@ fn default_go_module_for_init(opts: &InitOpts) -> String {
         .as_deref()
         .or_else(|| opts.path.file_name().and_then(|value| value.to_str()))
         .unwrap_or("app");
-    bootstrap::default_go_module(repo_name)
+    jig_bootstrap::default_go_module(repo_name)
 }
 
 fn prompt_go_module<R: BufRead, W: Write>(
@@ -467,7 +501,7 @@ fn prompt_go_module<R: BufRead, W: Write>(
     let prompt = format!("Go module [{default}] (for example github.com/acme/my-app): ");
     loop {
         let module = prompt_value(input, output, &prompt, default, "Go module")?;
-        match bootstrap::validate_go_module(&module) {
+        match jig_bootstrap::validate_go_module(&module) {
             Ok(()) => return Ok(module),
             Err(error) => writeln!(output, "  {error}")?,
         }

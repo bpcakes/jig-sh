@@ -15,16 +15,16 @@ pub(in crate::runtime) fn run_native_tool_with_control(
     let output = match jig_features::native_tool_kind(tool_name)
         .ok_or_else(|| anyhow!("Unsupported native tool: {tool_name}"))?
     {
-        NativeToolKind::ContractCheck => Ok(crate::policy::contract_check(ctx)),
+        NativeToolKind::ContractCheck => Ok(jig_policy::contract_check(ctx)),
         NativeToolKind::MigrationAdd => {
             let name = args_value
                 .get(args::NAME)
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("{} requires a name argument", tool::MIGRATION_ADD))?;
-            crate::policy::migration_add(ctx, name)
+            jig_policy::migration_add(ctx, name)
         }
         NativeToolKind::SchemaCheck => {
-            crate::policy::schema_check_with_control(ctx, target, timeout, cancelled)
+            jig_policy::schema_check_with_control(ctx, target, timeout, cancelled)
         }
         _ => bail!("Unsupported native tool kind for {tool_name}"),
     }?;
@@ -62,19 +62,18 @@ fn run_native_tool(
         .ok_or_else(|| anyhow!("Unsupported native tool: {operation}"))?
     {
         NativeToolKind::ContractCheck => {
-            Ok(NativeToolRun::Completed(crate::policy::contract_check(ctx)))
+            Ok(NativeToolRun::Completed(jig_policy::contract_check(ctx)))
         }
         NativeToolKind::MigrationAdd => {
             let name = args_value
                 .get(args::NAME)
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("{} requires a name argument", tool::MIGRATION_ADD))?;
-            crate::policy::migration_add(ctx, name).map(NativeToolRun::Completed)
+            jig_policy::migration_add(ctx, name).map(NativeToolRun::Completed)
         }
         NativeToolKind::SchemaCheck => {
-            match crate::policy::schema_check_with_observer_and_timeout(
-                ctx, target, timeout, observer,
-            ) {
+            match jig_policy::schema_check_with_observer_and_timeout(ctx, target, timeout, observer)
+            {
                 Ok(output) => Ok(NativeToolRun::Completed(output)),
                 Err(ExecutionCommandError::CancelledBeforeStart) => {
                     Ok(NativeToolRun::CancelledBeforeStart)
@@ -122,8 +121,6 @@ pub(super) fn execute_native_tool(
     ctx: &RepoContext,
     invocation: NativeToolInvocation<'_>,
     args: Value,
-    plan_id: Option<String>,
-    options: ManifestToolExecutionOptions,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
@@ -133,20 +130,12 @@ pub(super) fn execute_native_tool(
         target,
         timeout_seconds,
     } = invocation;
-    let started = now_ms();
     if observer.cancelled() {
-        return cancelled_native_tool_outcome(
-            ctx,
-            CancelledNativeToolRequest {
-                tool_name,
-                args,
-                plan_id,
-                options,
-                started,
-                before_start: true,
-            },
-            observer,
-        );
+        return cancelled_native_tool_outcome(CancelledNativeToolRequest {
+            tool_name,
+            args,
+            before_start: true,
+        });
     }
     let phase = ExecutionPhase::start(observer, tool_name, position);
     let timeout = timeout_seconds
@@ -162,58 +151,20 @@ pub(super) fn execute_native_tool(
     let output = match output? {
         NativeToolRun::Completed(output) => output,
         NativeToolRun::CancelledBeforeStart => {
-            return cancelled_native_tool_outcome(
-                ctx,
-                CancelledNativeToolRequest {
-                    tool_name,
-                    args,
-                    plan_id,
-                    options,
-                    started,
-                    before_start: true,
-                },
-                observer,
-            );
+            return cancelled_native_tool_outcome(CancelledNativeToolRequest {
+                tool_name,
+                args,
+                before_start: true,
+            });
         }
         NativeToolRun::Cancelled => {
-            return cancelled_native_tool_outcome(
-                ctx,
-                CancelledNativeToolRequest {
-                    tool_name,
-                    args,
-                    plan_id,
-                    options,
-                    started,
-                    before_start: false,
-                },
-                observer,
-            );
+            return cancelled_native_tool_outcome(CancelledNativeToolRequest {
+                tool_name,
+                args,
+                before_start: false,
+            });
         }
     };
-    let ended = now_ms();
-
-    let receipt_result = maybe_record_receipt(
-        ctx,
-        options.record_receipt,
-        ReceiptInput {
-            tool_name,
-            args: args.clone(),
-            invoked_command_key: None,
-            plan_id,
-            started_at_ms: started,
-            ended_at_ms: ended,
-            exit_status: output.exit_status,
-            stdout: &output.stdout,
-            stderr: &output.stderr,
-            evidence: None,
-            session_override: None,
-            collect_git_metadata: options.collect_git_metadata,
-            collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-            worktree_fingerprint_override: None,
-        },
-        &|| observer.cancelled(),
-    );
-
     let tool_failure = tool_failure_message(
         tool_name,
         None,
@@ -221,8 +172,7 @@ pub(super) fn execute_native_tool(
         &output.stdout,
         &output.stderr,
     );
-    let receipt_id =
-        receipt_id_for_failure_mode(options.failure_mode, tool_failure, receipt_result)?;
+    fail_on_tool_failure(tool_failure)?;
 
     tool_response_value(ToolExecutionResponse {
         ok: true,
@@ -234,7 +184,6 @@ pub(super) fn execute_native_tool(
             stdout: output.stdout,
             stderr: output.stderr,
         },
-        receipt_id,
     })
     .map(ManifestToolExecutionOutcome::Completed)
 }
@@ -242,60 +191,21 @@ pub(super) fn execute_native_tool(
 struct CancelledNativeToolRequest<'a> {
     pub(super) tool_name: &'a str,
     args: Value,
-    plan_id: Option<String>,
-    options: ManifestToolExecutionOptions,
-    started: u64,
     before_start: bool,
 }
 
 fn cancelled_native_tool_outcome(
-    ctx: &RepoContext,
     request: CancelledNativeToolRequest<'_>,
-    observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
     let CancelledNativeToolRequest {
         tool_name,
         args,
-        plan_id,
-        options,
-        started,
         before_start,
     } = request;
     let message = if before_start {
         format!("Native tool {tool_name} was cancelled before it started")
     } else {
         format!("Native tool {tool_name} was cancelled")
-    };
-    let receipt_id = if before_start {
-        None
-    } else {
-        let evidence = serde_json::json!({
-            "kind": "supervised_command",
-            "schema_version": 1,
-            "status": "cancelled",
-            "error": message,
-        });
-        maybe_record_receipt(
-            ctx,
-            options.record_receipt,
-            ReceiptInput {
-                tool_name,
-                args: args.clone(),
-                invoked_command_key: None,
-                plan_id,
-                started_at_ms: started,
-                ended_at_ms: now_ms(),
-                exit_status: 1,
-                stdout: "",
-                stderr: &message,
-                evidence: Some(evidence),
-                session_override: None,
-                collect_git_metadata: options.collect_git_metadata,
-                collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-                worktree_fingerprint_override: None,
-            },
-            &|| observer.cancelled(),
-        )?
     };
     let response = tool_response_value(ToolExecutionResponse {
         ok: true,
@@ -307,51 +217,13 @@ fn cancelled_native_tool_outcome(
             stdout: String::new(),
             stderr: message,
         },
-        receipt_id,
     })?;
     Ok(ManifestToolExecutionOutcome::Cancelled(response))
 }
 
-fn receipt_id_or_preserve_tool_error(
-    tool_failure: Option<String>,
-    receipt_result: Result<Option<String>>,
-) -> Result<Option<String>> {
-    if let Some(tool_failure) = tool_failure {
-        match receipt_result {
-            Ok(Some(receipt_id)) => bail!("{tool_failure}\nreceipt: {receipt_id}"),
-            Ok(None) => bail!("{tool_failure}"),
-            Err(receipt_error) => {
-                bail!("{tool_failure}\nreceipt recording also failed:\n{receipt_error:#}")
-            }
-        }
-    } else {
-        receipt_result
-    }
-}
-
-fn receipt_id_or_preserve_receipt_recording_context(
-    tool_failure: Option<String>,
-    receipt_result: Result<Option<String>>,
-) -> Result<Option<String>> {
-    match (tool_failure, receipt_result) {
-        (Some(tool_failure), Err(receipt_error)) => {
-            bail!("{tool_failure}\nreceipt recording also failed:\n{receipt_error:#}")
-        }
-        (_, receipt_result) => receipt_result,
-    }
-}
-
-pub(super) fn receipt_id_for_failure_mode(
-    failure_mode: ToolFailureMode,
-    tool_failure: Option<String>,
-    receipt_result: Result<Option<String>>,
-) -> Result<Option<String>> {
-    match failure_mode {
-        ToolFailureMode::FailFast => {
-            receipt_id_or_preserve_tool_error(tool_failure, receipt_result)
-        }
-        ToolFailureMode::CollectResult => {
-            receipt_id_or_preserve_receipt_recording_context(tool_failure, receipt_result)
-        }
+pub(super) fn fail_on_tool_failure(tool_failure: Option<String>) -> Result<()> {
+    match tool_failure {
+        Some(tool_failure) => bail!("{tool_failure}"),
+        None => Ok(()),
     }
 }

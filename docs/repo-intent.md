@@ -10,9 +10,7 @@ The core idea is to turn a repository into an operating environment for coding a
 
 - repo-wide and crate-level agent guidance
 - a typed `scripts/jig` CLI for repo-local commands
-- an MCP server exposing a bounded repository inspection and execution model to clients
-- append-only session, plan, receipt, and decision state under `.agent/`
-- required work gates evaluated from plan-linked receipts
+- append-only run history under `.agent/` and per-occurrence loop evidence under Git metadata
 - native agent tooling checks for client-side Jig skills
 - policy scripts and CI workflows that keep the generated contract honest
 
@@ -20,11 +18,11 @@ In short: `jig.sh` is a harness for making agentic software work repeatable, ins
 
 ## What Is Certain
 
-The README says this repo is a "Reusable harness for making Rust application repos operable by coding agents, including SQLx/Postgres backends and tooling-only Rust repos, with optional web apps."
+The README says this repo is a harness that keeps coding agents on contract across supported Rust, Go, and TypeScript repository shapes.
 
 The harness was extracted from the durable parts of an existing application workflow. The extracted pieces are generic agent guidance, a stable command contract, repo policy scripts, GitHub Actions workflows, a template sync flow, and the Rust `jig` runtime.
 
-Generated or adopted repos receive assets such as `.jig.toml`, `.mcp.json`, `AGENTS.md`, `agent-map.md`, `.agent/PLANS.md`, `.agent/jig-contract.json`, scripts, and workflows.
+Generated or adopted repos receive assets such as `.jig.toml`, `AGENTS.md`, `agent-map.md`, `.agent/jig-contract.json`, scripts, and workflows.
 
 Full harnesses also seed the authored `.jig/file-budget.toml` policy once and
 generate a repository-wide native `repo:file-budget` action. The policy is not
@@ -32,26 +30,25 @@ a template-managed path, so later renders preserve local policy and catalog
 choices. Exact generated legacy Rust LOC checkers migrate through retained
 native proof before retirement; modified copies remain project-owned.
 
-Generated repos use `scripts/jig` as the execution backend. In contract v6 and later, `scripts/jig mcp` exposes the resolved repository catalog through bounded inspect, plan, execute, and cancel operations. Contracts v2 through v5 retain their declared command tools over MCP.
+Generated repos use `scripts/jig` as the execution backend. In contract v6 and later, `scripts/jig info`, `scripts/jig run --explain`, and `scripts/jig run` expose the repository catalog, planning, and execution. Agents use `--json` for structured output. Contracts v2 through v5 retain their declared command tools through CLI compatibility aliases.
 
 The runtime is implemented in `crates/jig`. Its main responsibilities are:
 
 - bootstrap flows: `jig init`, `jig adopt`, and `jig update`
 - command-backed tool execution
-- MCP protocol handling over stdio
-- append-only runtime state for sessions, plans, receipts, and decisions
+- append-only run history and loop occurrence evidence
 - agent tooling doctor/bootstrap commands for Codex-side Jig skills
-- receipt metadata collection, including git changed paths and diff stats
+- repository source identity for run input digests
 
-The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 8`, with explicit components, actions, profiles, adapter provenance, literal argv and explicit shell runners, compatibility `jig.*` aliases, typed native configuration, declared bounded string arguments, target-local matching for non-empty action inputs, and versioned target receipt freshness with original dependency proof and inherited expiry. Input policies default to whole-repository. Audited command actions may set `source_state = "worktree"` when their results depend only on working-file content, allowing receipts to survive staging and commits of unchanged checked files; the default `git` policy retains Git placement and HEAD/branch authority. Native checks retain their Git and comparison dependencies. Contracts v6/v7 retain their released command behavior; v6 keeps component-aggregate matching, and versions 2 through 5 remain readable through the legacy repository projection.
+The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 9`, with explicit components, actions, profiles, adapter provenance, literal argv and explicit shell runners, compatibility `jig.*` aliases, typed native configuration, declared bounded string arguments, target-local matching for non-empty action inputs, and `inputs_policy`/`source_state` input declarations. Contract v9 retires `[work]` and declares Beads ownership with `[repository] tracker = "beads"`; refreshes to v9 migrate legacy Beads metadata and report dropped work settings. Input policies default to whole-repository. Audited command actions may declare `source_state = "worktree"` when their results depend only on working-file content; the default `git` policy declares Git placement and HEAD/branch authority. Native checks retain their Git and comparison dependencies. Jig validates and reports these declarations but no longer records target freshness or check receipts; checks record their results in run history. Contract v8 input declarations remain supported, and pinned pre-v9 templates retain legacy tracker metadata. Contracts v6/v7 retain their released command behavior; v6 keeps component-aggregate matching, and versions 2 through 5 remain readable through the legacy repository projection.
 
-Runtime memory tools are intentionally not part of `.agent/jig-contract.json`. They are runtime-owned conveniences exposed by the CLI and MCP server.
+Runtime-owned commands such as `state`, `status`, and `agent doctor` are intentionally not part of `.agent/jig-contract.json`. They are conveniences exposed by the CLI.
 
 The root `AGENTS.md` is block-managed during adoption and update. Existing repo-specific content outside the Jig managed block is preserved.
 
-Crate-level `AGENTS.md` files are project-owned. `jig.sh` validates required sections for crate guides that exist, but it does not require or generate placeholder crate guides.
+Crate-level `AGENTS.md` files are project-owned. Contracts v2–v8 validate required sections for existing backend guides. Contract v9 validates local references and explicitly declared owner guides; suggested headings are advisory. Missing optional guides do not require placeholders. See the [public guide policy contract](public-contract.md) for details.
 
-The template deliberately avoids generating application code, crate guides, or schema dump implementations. Those remain owned by the consumer repository.
+The harness template does not generate application code unless a scaffold preset is selected. Crate-level `AGENTS.md` files and schema dump implementations remain project-owned.
 
 The repo dogfoods itself. This checkout is both the `jig` source tree and an adopted `jig` harness repo, and the root `AGENTS.md` instructs agents to validate runtime changes by building a dev binary and running through `scripts/jig` with `JIG_DEV_BIN`.
 
@@ -63,8 +60,7 @@ The repo appears to be designing for a future where agents work repeatedly insid
 - a clear command contract
 - machine-readable tool definitions
 - a way to run checks without guessing project conventions
-- required gates that stop work from finishing without evidence
-- durable traces of plans, decisions, and command results
+- durable traces of command results
 - compatibility rules so generated tooling can evolve without surprising downstream repos
 
 The strongest product thesis visible in the code is:
@@ -83,7 +79,7 @@ A shorter product phrasing is:
 
 The template source metadata is a trust boundary. In generated or adopted repos, `scripts/install-jig.sh` may install from the exact `_commit` recorded in `.jig.toml` when that value is a hex git revision, so changing `_src_path` or `_commit` is equivalent to changing the source used to install the repo-local Jig runtime.
 
-`crates/jig/src/bootstrap.rs` and its submodules implement template application:
+`crates/jig-bootstrap` implements template application:
 
 - `init` renders the harness into a new destination and initializes git.
 - `adopt` renders the harness into an existing repo while preserving repo-owned root `AGENTS.md` content.
@@ -96,54 +92,51 @@ preserves concurrent foreign writes for manual resolution. Adoption's
 file-budget preview is read-only and refuses write mode when legacy debt needs a
 human-authored waiver.
 
-`crates/jig/src/runtime.rs` dispatches CLI and MCP tool calls. Repository execution resolves a checked-in target to its configured command or closed native runner, records target-attributed receipts, and returns structured results. Legacy contracts still resolve their manifest tool to a command key and retain the previous response shape.
+`crates/jig/src/runtime.rs` dispatches CLI commands. Repository execution resolves a checked-in target to its configured command or closed native runner, records each target's result in run history, and returns structured results. Legacy contracts still resolve their manifest tool to a command key and retain the previous response shape.
 
 `crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It does not load repositories or own runtime aggregation policy.
 
-`crates/jig/src/status.rs` owns read-only aggregation of local Git, structured work, gate, lease, and attempt state.
+`crates/jig/src/status.rs` owns read-only aggregation of local Git, lease, and attempt state.
 
-`crates/jig-ui` owns the unified interactive terminal application used by both `scripts/jig ui` and `scripts/jig status --tui`. Its typed `DashboardSource` boundary carries local recorder and plan-detail snapshots without exposing `RepoContext`, state storage, or runtime policy. The CLI adapter in `crates/jig/src/ui.rs` and `crates/jig/src/ui/source/` owns repository collection and status aggregation. The TUI is read-only: it does not write receipts, fetch remotes, run actions, or launch agents.
+`crates/jig-ui` owns the unified interactive terminal application used by both `scripts/jig ui` and `scripts/jig status --tui`. Its typed `DashboardSource` boundary carries local recorder and status snapshots without exposing `RepoContext`, state storage, or runtime policy. The CLI adapter in `crates/jig/src/ui.rs` and `crates/jig/src/ui/source/` owns repository collection and status aggregation. The TUI is read-only: it does not write state, fetch remotes, run actions, or launch agents.
 
-`crates/jig-tui` owns terminal-safe display text plus the raw-mode, alternate-screen, cursor-restoration, actionable-key, and cooperative-worker foundations shared by terminal interfaces. `crates/jig-codex-tui` builds the searchable Codex-home picker on that base behind an `InspectionSource` trait. The adapter in `crates/jig/src/cli/codex_run.rs` supplies exact discovered paths and streams normalized account and usage updates from the runtime's bounded app-server inspection pool; the presentation crate does not read authentication files or launch Codex itself.
+`crates/jig-tui` owns terminal-safe display text plus the raw-mode, alternate-screen, cursor-restoration, actionable-key, and cooperative-worker foundations shared by terminal interfaces. `crates/jig-agents-tui` builds the searchable Claude and Codex home picker on that base behind an `InspectionSource` trait. The adapter in `crates/jig/src/cli/codex/run.rs` supplies exact discovered paths and streams normalized account and usage updates from the runtime's bounded app-server inspection pool; the presentation crate does not read authentication files or launch Codex itself.
 
-`crates/jig-dev-proxy` implements the Jig local development proxy used by `scripts/jig dev` and `scripts/jig proxy ...`. It is split from `crates/jig` so route storage, HTTP/HTTPS forwarding, certificates, service files, LAN mode, workspace discovery, and process supervision remain testable without depending on the broader CLI, MCP, receipt, or template runtime.
+`crates/jig-dev-proxy` implements the Jig local development proxy used by `scripts/jig dev` and `scripts/jig proxy ...`. It is split from `crates/jig` so route storage, HTTP/HTTPS forwarding, certificates, service files, LAN mode, workspace discovery, and process supervision remain testable without depending on the broader CLI, state, or template runtime.
 
-The canonical `scripts/jig ui` entrypoint starts on Work, while `scripts/jig status --tui` starts the same application on Status. Both use one local refresh domain that publishes repository status and recorder state as one epoch. One-shot `jig ui --json` and `jig ui --plan PLAN_ID --json` use bounded recorder schema 1 without starting the terminal application. The retired browser transport has no replacement server or HTTP compatibility layer.
+The canonical `scripts/jig ui` entrypoint starts on Timeline, while `scripts/jig status --tui` starts the same application on Status. Both use one local refresh domain that publishes repository status and recorder state as one epoch. One-shot `jig ui --json` uses bounded recorder schema 4, built from run history, without starting the terminal application. The retired browser transport has no replacement server or HTTP compatibility layer.
 
-`crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract, MCP, and work-receipt runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
+`crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract and check runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 
-`crates/jig/src/mcp.rs` is a minimal MCP stdio server. For contract v6 and later it lists four closed repository operations with strict input and output schemas plus bounded runtime memory tools; contracts v2 through v5 list their manifest execution tools. The transport surface stays fixed for the server lifetime, while catalog inspection, planning, and execution reload current repository authority before reusing the same planner, executor, and append-only state as the CLI.
+`crates/jig-state` stores append-only JSONL records:
 
-`crates/jig/src/state/` stores append-only JSONL records:
+- `runs.jsonl`: accepted immutable plans and folded execution lifecycle events, including each target's conclusion and the output tail of a target that did not succeed
+Repositories from earlier runtimes may also keep `receipts.jsonl`,
+`sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl`. Jig no longer writes or
+reads them; `state diagnose` still reports their size and integrity.
 
-- `sessions.jsonl`: session start/end events and write-time summaries; recent-session references inside new summaries are shallow so history cannot recurse
-- `plans.jsonl`: plan open/append/close events
-- `receipts.jsonl`: tool execution evidence with bounded output and changed-path previews
-- `decisions.jsonl`: structured decision records
-- `runs.jsonl`: accepted immutable plans and folded execution lifecycle events
+Loop occurrences record one evidence document each under
+`<git-dir>/jig/loop/evidence/`, beside the protected schedule ledger and outside
+the checkout; `jig loop show` reports it. That evidence follows the occurrence
+history's retention rather than being append-only.
 
 Normal writes append to these streams. Explicit maintenance uses streaming,
-validated whole-file rewrites: session compaction creates an exact recovery
-backup under ignored `.agent/.cache/state-backups/`, and state archiving writes
-old receipt records plus, when explicitly requested, completed run-event groups
-as separate compressed cold streams under ignored
-`.agent/.cache/state-archives/`. Explicit receipt exports
-go only to the caller-selected path. None of these operations rewrite Git
-history.
-
-The current session pointer is cache state, not part of the durable JSONL record model.
+validated whole-file rewrites: state archiving writes completed run-event groups
+to a compressed cold stream under ignored `.agent/.cache/state-archives/`, after
+an exact recovery backup under ignored `.agent/.cache/state-backups/`. Neither
+operation rewrites Git history.
 
 ## Design Principles Visible In The Code
 
-**Agent-first discoverability.** `agent-map.md`, root `AGENTS.md`, crate `AGENTS.md`, MCP tool descriptors, and `.agent/jig-contract.json` all reduce the need for an agent to guess where to start.
+**Agent-first discoverability.** `agent-map.md`, root `AGENTS.md`, crate `AGENTS.md`, and `.agent/jig-contract.json` all reduce the need for an agent to guess where to start.
 
-**The Jig binary is the portable backend.** `scripts/jig` is the stable human-, CI-, agent-, and MCP-friendly execution layer.
+**The Jig binary is the portable backend.** `scripts/jig` is the stable human-, CI-, and agent-friendly execution layer.
 
-**Typed surfaces over shell conventions.** `scripts/jig` returns JSON, validates tool names against a manifest, records receipts, and exposes MCP schemas. Agents get structured results instead of scraping terminal output.
+**Typed surfaces over shell conventions.** `scripts/jig` returns JSON, validates tool names against a manifest, and records run history. Agents get structured results instead of scraping terminal output.
 
 **Compatibility is explicit.** Public execution tools are governed by `contract_version`. Breaking changes require a contract version bump, and downstream clients are expected to discover available tools instead of assuming optional SQLx/schema support.
 
-**Runtime memory is append-only by default and locally repairable.** State files are written as JSONL, readers tolerate missing files, and application code should not edit records in place. Runtime-owned diagnostics, compaction, restore, archive, and export commands provide the bounded maintenance path.
+**Runtime memory is append-only by default and locally repairable.** State files are written as JSONL, readers tolerate missing files, and application code should not edit records in place. Runtime-owned `state diagnose`, `state archive`, and `state restore` commands provide the bounded maintenance path.
 
 **Repo-specific ownership stays local.** The harness provides workflow and policy defaults, while application code, business rules, crate ownership, and schema dump details stay with the downstream repo.
 
@@ -154,13 +147,13 @@ a useful starting point without granting future templates deletion or
 replacement authority over `.jig/file-budget.toml`, action replacements,
 aliases, or profile membership.
 
-**Dogfooding matters.** Runtime changes are expected to be validated through the same `scripts/jig` launcher, MCP contract, and receipt paths generated repos use.
+**Dogfooding matters.** Runtime changes are expected to be validated through the same `scripts/jig` launcher, contract, and run-history paths generated repos use.
 
-**Rust-first, but not only backend code.** The current scope is Cargo workspaces, Rust checks, optional SQLx/Postgres behavior, and optional Bun-based web apps.
+**Supported stacks, not a universal framework.** Generated defaults cover Cargo workspaces, Go modules, optional SQLx/Postgres or Goose, and Bun-based web apps for the configured presets.
 
 ## What This Repo Is Not Trying To Be
 
-It is not an application framework. It does not generate app code or domain models.
+It is not an application framework. Scaffold presets write starter code once; that code becomes project-owned and Jig does not migrate domain models.
 
 It is not a project task runner monopoly. Existing project scripts remain project-owned; Jig standardizes the agent-facing command surface.
 
@@ -168,7 +161,7 @@ It is not a global agent memory system. The state is repo-local and runtime-owne
 
 It is not trying to centralize business ownership. Crate-level guidance and application-specific commands stay project-owned.
 
-It is not currently a general polyglot generated harness. The generated defaults assume Cargo workspaces, Rust formatting/clippy/tests, optional SQLx, and Bun for configured web apps.
+It is not a universal application framework. Generated defaults cover the published presets: Cargo workspaces, Go modules, optional SQLx or Goose, and Bun for configured web apps.
 
 ## How Agents Should Approach This Repo
 
@@ -177,13 +170,13 @@ Start with root `AGENTS.md`, then `agent-map.md`, then the nearest crate guide.
 For runtime changes, read `crates/jig/AGENTS.md` and use its entrypoint map:
 
 - CLI shape: `crates/jig/src/cli.rs`
-- command, legacy make, and MCP dispatch: `crates/jig/src/runtime.rs`
-- MCP protocol: `crates/jig/src/mcp.rs`
-- sessions/plans/receipts/decisions: `crates/jig/src/state.rs` and `crates/jig/src/state/`
-- bootstrap and template rendering: `crates/jig/src/bootstrap.rs` and `crates/jig/src/bootstrap/`
+- command and legacy make dispatch: `crates/jig/src/runtime.rs`
+- run history and state maintenance: `crates/jig-state/`
+- loops, occurrence evidence, and `loop show`: `crates/jig-loops/`
+- bootstrap and template rendering: `crates/jig-bootstrap/`
 - generated outputs: `templates/project/`
 
-When changing the public contract, update the manifest template, runtime dispatch, MCP exposure, generated scripts/docs, and tests together.
+When changing the public contract, update the manifest template, runtime dispatch, generated scripts/docs, and tests together.
 
 When changing generated repo behavior, validate with fixture rendering. The broad fixture check is:
 
@@ -195,5 +188,5 @@ When changing runtime behavior, build a dev binary and dogfood through the launc
 
 ```sh
 cargo build -p jig-sh --bin jig
-JIG_DEV_BIN=target/debug/jig scripts/jig work status
+JIG_DEV_BIN=target/debug/jig scripts/jig state summary
 ```

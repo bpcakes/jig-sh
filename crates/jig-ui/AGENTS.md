@@ -2,31 +2,30 @@
 
 ## Purpose
 
-`crates/jig-ui` contains the unified read-only terminal dashboard used by `jig ui` and `jig status --tui`. The owning `jig-sh` CLI supplies typed recorder, plan, and status snapshots through the `DashboardSource` boundary.
+`crates/jig-ui` contains the unified read-only terminal dashboard used by `jig ui` and `jig status --tui`. The owning `jig-sh` CLI supplies typed recorder and status snapshots through the `DashboardSource` boundary defined in [jig-dashboard](../jig-dashboard/AGENTS.md).
 
 ## Key entrypoints
 
-- `src/lib.rs`: public dashboard and terminal module boundary.
-- `src/dashboard.rs`: bounded snapshot contracts and the typed source interface.
+- `src/lib.rs`: public terminal module boundary.
 - `src/terminal.rs`: dashboard options and public TUI entrypoint.
-- `src/terminal/model.rs`: four-tab application state and typed view projection.
+- `src/terminal/model.rs`: three-tab (Status, Timeline, Health) application state and typed view projection.
 - `src/terminal/render.rs`: Ratatui layout, widgets, colors, and responsive presentation.
 - `src/terminal/runtime.rs`: terminal lifecycle, scheduling, refresh workers, and cancellation.
 
 ## Edit here for X
 
-- Change recorder/status/plan wire contracts or bounds: `src/dashboard/`.
+- Change recorder/status wire contracts or bounds: [jig-dashboard](../jig-dashboard/AGENTS.md).
 - Change tabs, navigation, selection preservation, filters, or detail state: `src/terminal/model/`.
 - Change terminal layout or presentation: `src/terminal/render/`.
 - Change refresh timing, preemption, keyboard events, or terminal cleanup: `src/terminal/runtime/`.
-- Change how repository state, gates, or loops become snapshots: `crates/jig/src/ui/source/`, not this crate.
+- Change how repository state, run history, or loops become snapshots: `crates/jig/src/ui/source/`, not this crate.
 
 ## Invariants
 
-- Keep this crate independent from `RepoContext`, state storage, runtime policy, MCP, and templates.
+- Keep this crate independent from `RepoContext`, state storage, runtime policy, and templates.
 - Consume repository data only through `DashboardSource`; do not read `.agent/state` directly.
 - Keep every rendered collection and text field within its declared bound, preserving explicit omission counts.
-- Keep the dashboard read-only. It must not mutate state, record receipts, fetch remotes, or execute displayed remediation commands.
+- Keep the dashboard read-only. It must not mutate state, append run history or other state records, fetch remotes, or execute displayed remediation commands.
 - Never overlap refresh workers. Cancellation must reach the typed source, and the worker must be joined before terminal restoration.
 - Restore raw mode, alternate-screen state, and cursor visibility on every ordinary return or unwind.
 - Use explicit text in addition to color for all statuses.

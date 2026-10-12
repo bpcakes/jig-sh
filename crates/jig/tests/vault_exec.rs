@@ -1,8 +1,10 @@
 #![cfg(unix)]
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use jig_vault::{FieldKind, FieldMutation, SecretBytes, Vault, VaultReference};
 use secrecy::SecretString;
@@ -119,6 +121,64 @@ fn exec_inherits_and_overrides_environment_streams_redacted_output_and_passes_st
             .windows(b"argv-audit-marker".len())
             .any(|part| part == b"argv-audit-marker")
     );
+}
+
+#[test]
+fn exec_streams_both_prompts_before_the_child_receives_input() {
+    let (temp, home, _vault) = initialized_vault();
+    let env_file = temp.path().join("exec.env");
+    write_env_file(&env_file);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .args(["vault", "exec", "--env-file"])
+        .arg(&env_file)
+        .arg("--home")
+        .arg(&home)
+        .args([
+            "--",
+            "sh",
+            "-c",
+            "printf 'token=%s ready> ' \"$TOKEN\"; printf 'stderr ready> ' >&2; read input",
+        ])
+        .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    std::thread::scope(|scope| {
+        let (sender, receiver) = mpsc::channel();
+        for (mut reader, expected) in [
+            (
+                Box::new(stdout) as Box<dyn Read + Send>,
+                b"token=[REDACTED] ready> ".as_slice(),
+            ),
+            (
+                Box::new(stderr) as Box<dyn Read + Send>,
+                b"stderr ready> ".as_slice(),
+            ),
+        ] {
+            let sender = sender.clone();
+            scope.spawn(move || {
+                let mut bytes = vec![0; expected.len()];
+                let result = reader.read_exact(&mut bytes).map(|()| bytes == expected);
+                sender.send(result).unwrap();
+            });
+        }
+        let first = receiver.recv_timeout(Duration::from_secs(10));
+        let second = receiver.recv_timeout(Duration::from_secs(10));
+        // Release the child even on failure so reader threads can finish.
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"continue\n")
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(first.expect("first prompt was buffered").unwrap());
+        assert!(second.expect("second prompt was buffered").unwrap());
+    });
 }
 
 #[test]

@@ -7,7 +7,7 @@ use std::fs;
 use tempfile::tempdir;
 
 fn discoverable_command_names() -> Vec<&'static str> {
-    crate::root_commands::ALL
+    jig_commands::root_commands::ALL
         .iter()
         .map(|command| command.name)
         .collect()
@@ -29,6 +29,9 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
             home: Some("/tmp/vault".into()),
             scope: Some("repo".into()),
             scope_id: Some("scope_1".into()),
+            main_checkout_root: None,
+            worktree_local: false,
+            format_version: None,
             error: None,
         },
         &agent,
@@ -66,7 +69,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
     for heading in [
         "Get started:",
         "Develop:",
-        "Structured work:",
+        "Workflows:",
         "Project data:",
         "Local services:",
         "Agent and automation:",
@@ -180,7 +183,7 @@ marketplaces = []
         }))
         .write();
     write_full_launcher(temp.path());
-    fs::write(temp.path().join(".mcp.json"), "{not json").unwrap();
+
     let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
     let launcher = temp.path().join("scripts/jig").display().to_string();
     let agent = json!({
@@ -197,6 +200,9 @@ marketplaces = []
             home: Some("/tmp/vault".into()),
             scope: Some("repo".into()),
             scope_id: Some("scope_1".into()),
+            main_checkout_root: None,
+            worktree_local: false,
+            format_version: None,
             error: None,
         },
         &agent,
@@ -234,15 +240,22 @@ marketplaces = []
         "needs_setup",
         "codex_marketplace_unregistered",
     );
-    assert_eq!(command_by_name(&output, "mcp")["status"], "ready");
-    assert_eq!(command_by_name(&output, "mcp")["reason_code"], Value::Null);
+    assert!(
+        output["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|command| command["name"] != "mcp")
+    );
     assert_eq!(
         command_by_name(&output, "agent")["next_step"],
         format!("Run `{launcher} agent bootstrap`.")
     );
     assert_eq!(
         command_by_name(&output, "vault")["next_step"],
-        format!("Run `{launcher} vault init`.")
+        format!(
+            "Operator step: run `{launcher} vault init` in a terminal; it prompts for a new vault passphrase. Agents should ask the operator and never choose or handle the passphrase."
+        )
     );
     assert!(
         command_by_name(&output, "bootstrap")["next_step"]
@@ -271,6 +284,9 @@ enabled = false
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
+            worktree_local: false,
+            format_version: None,
             error: None,
         },
         &agent,
@@ -292,6 +308,9 @@ fn command_inventory_without_repo_context_keeps_onboarding_commands_available() 
                 home: Some("/tmp/vault".into()),
                 scope: Some("legacy".into()),
                 scope_id: None,
+                main_checkout_root: None,
+                worktree_local: false,
+                format_version: None,
                 error: None,
             },
             jig: "jig".into(),
@@ -313,15 +332,7 @@ fn command_inventory_without_repo_context_keeps_onboarding_commands_available() 
     for name in ["init", "presets", "adopt", "doctor", "codex", "claude"] {
         assert_eq!(command_by_name(&output, name)["status"], "ready", "{name}");
     }
-    for name in [
-        "update",
-        "bootstrap",
-        "setup",
-        "info",
-        "check",
-        "loop",
-        "mcp",
-    ] {
+    for name in ["update", "bootstrap", "setup", "info", "check", "loop"] {
         assert_command_status(&output, name, "needs_setup", "repo_context_unavailable");
     }
     assert!(
@@ -350,7 +361,7 @@ fn command_inventory_without_repo_context_keeps_onboarding_commands_available() 
     for heading in [
         "Get started:",
         "Develop:",
-        "Structured work:",
+        "Workflows:",
         "Project data:",
         "Local services:",
         "Agent and automation:",
@@ -432,6 +443,9 @@ fn tolerant_fallback_uses_recovered_context_only_for_tolerant_workflows() {
                 home: Some("/tmp/vault".into()),
                 scope: Some("repo".into()),
                 scope_id: Some("scope_1".into()),
+                main_checkout_root: None,
+                worktree_local: false,
+                format_version: None,
                 error: None,
             },
             jig: command_prefix(&context),
@@ -468,6 +482,9 @@ fn context_free_inventory_prioritizes_compiled_dev_availability() {
                 home: None,
                 scope: None,
                 scope_id: None,
+                main_checkout_root: None,
+                worktree_local: false,
+                format_version: None,
                 error: None,
             },
             jig: "jig".into(),
@@ -656,6 +673,9 @@ fn command_inventory_marks_dev_and_proxy_unavailable_without_feature() {
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
+            worktree_local: false,
+            format_version: None,
             error: None,
         },
         &json!({ "ok": true }),
@@ -697,6 +717,9 @@ fn command_inventory_marks_indeterminate_local_capabilities_unavailable() {
             home: None,
             scope: None,
             scope_id: None,
+            main_checkout_root: None,
+            worktree_local: false,
+            format_version: None,
             error: Some("vault failed".into()),
         },
         &agent,

@@ -1,1 +1,0 @@
-Centralize generated backend authorities, fix reviewed workflow and address handling gaps, and add executable scaffold regression coverage.

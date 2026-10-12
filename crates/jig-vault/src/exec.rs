@@ -252,6 +252,16 @@ pub fn is_vault_passphrase_env(name: &str) -> bool {
     env_names_equal(name, VAULT_PASSPHRASE_ENV) || env_names_equal(name, VAULT_NEW_PASSPHRASE_ENV)
 }
 
+/// Keeps both reserved passphrase variables out of a Jig-owned helper process
+/// even when it runs before a vault command has captured and cleared them.
+pub fn withhold_vault_passphrase(
+    command: &mut std::process::Command,
+) -> &mut std::process::Command {
+    command
+        .env_remove(VAULT_PASSPHRASE_ENV)
+        .env_remove(VAULT_NEW_PASSPHRASE_ENV)
+}
+
 fn comparable_env_name(name: &str) -> String {
     name.to_owned()
 }
@@ -294,6 +304,22 @@ pub(crate) fn redactor_from_concealed_values(values: &[&[u8]]) -> Result<Streami
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jig_owned_helpers_never_forward_reserved_vault_passphrases() {
+        let mut command = std::process::Command::new("git");
+        command.env(VAULT_PASSPHRASE_ENV, "test-only-reserved-current");
+
+        withhold_vault_passphrase(&mut command);
+
+        let removed = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        assert!(removed.contains(&std::ffi::OsStr::new(VAULT_PASSPHRASE_ENV)));
+        assert!(removed.contains(&std::ffi::OsStr::new(VAULT_NEW_PASSPHRASE_ENV)));
+    }
 
     fn var(name: &str) -> EnvVarName {
         EnvVarName::parse(name).unwrap()

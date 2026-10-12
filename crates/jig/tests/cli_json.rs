@@ -19,7 +19,7 @@ use fs4::fs_std::FileExt;
 use serde_json::{Value, json};
 use support::tempdir;
 
-#[path = "cli_json_parts/cognitive_helpers.rs"]
+#[path = "cli_json/cognitive_helpers.rs"]
 mod cognitive_helpers;
 use cognitive_helpers::*;
 
@@ -33,6 +33,14 @@ fn jig() -> Command {
 }
 
 fn write_v6_failing_test_repo(root: &Path) {
+    write_v6_command_test_repo(root, r"printf 'tests failed\n' >&2; exit 7");
+}
+
+/// Writes a committed v6 repository whose `api:test` target runs `command`
+/// through Bash. The command is embedded in a TOML multi-line literal string,
+/// so it may contain single quotes and backslashes but not `'''`.
+fn write_v6_command_test_repo(root: &Path, command: &str) {
+    assert!(!command.contains("'''"));
     fs::create_dir_all(root.join(".agent")).unwrap();
     fs::create_dir_all(root.join("api")).unwrap();
     fs::write(root.join("api/example.rs"), "pub fn example() {}\n").unwrap();
@@ -44,7 +52,7 @@ repo_name = "ExampleProject"
 default_branch = "main"
 
 [commands]
-api_test_command = "printf 'tests failed\n' >&2; exit 7"
+api_test_command = '''__API_TEST_COMMAND__'''
 
 [repository]
 default_check_profile = "verify"
@@ -63,7 +71,8 @@ inputs = ["api/**"]
 [[repository.profiles]]
 id = "verify"
 targets = [{ component = "api", action = "test" }]
-"#,
+"#
+        .replace("__API_TEST_COMMAND__", command),
     )
     .unwrap();
     fs::write(
@@ -198,6 +207,9 @@ mod checks;
 #[cfg(unix)]
 #[path = "cli_json/foreground_cancellation.rs"]
 mod foreground_cancellation;
+#[cfg(unix)]
+#[path = "cli_json/workflow_recovery.rs"]
+mod workflow_recovery;
 
 #[test]
 fn info_commands_exposes_versioned_json_and_grouped_human_output() {
@@ -246,7 +258,6 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
             "file-budget",
             "status",
             "ui",
-            "work",
             "loop",
             "migration",
             "sqlx",
@@ -257,7 +268,6 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
             "claude",
             "agent-map",
             "state",
-            "mcp",
         ]
     );
     let sqlx = structured["commands"]
@@ -604,8 +614,10 @@ fn forbidden_rust_library_answers_fail_before_template_vault_and_publication() {
     assert!(!destination.exists());
 }
 
-include!("cli_json_parts/rust_cli.rs");
-include!("cli_json_parts/rust_only_acceptance.rs");
+#[path = "cli_json/rust_cli.rs"]
+mod rust_cli;
+#[path = "cli_json/rust_only_acceptance.rs"]
+mod rust_only_acceptance;
 
 #[test]
 fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
@@ -650,12 +662,13 @@ fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
     }
 }
 
-#[path = "cli_json_parts/info_commands_edge_cases.rs"]
+#[path = "cli_json/info_commands_edge_cases.rs"]
 mod info_commands_edge_cases;
 mod support;
 use info_commands_edge_cases::*;
 
-include!("cli_json_parts/loop_commands.rs");
+#[path = "cli_json/loop_commands.rs"]
+mod loop_commands;
 
 #[path = "cli_json/adoption_components.rs"]
 mod adoption_components;

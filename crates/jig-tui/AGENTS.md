@@ -14,15 +14,15 @@
 - Change shared worker cancellation or joining behavior: `src/lib.rs` in `CooperativeWorker`.
 - Change terminal-safe text handling: `src/lib.rs` in `sanitize_text`.
 - Change unified dashboard interaction: `crates/jig-ui/`.
-- Change Codex-picker interaction: `crates/jig-codex-tui/`.
+- Change Claude/Codex home-picker interaction: `crates/jig-agents-tui/`.
 - Change Vault-manager interaction: `crates/jig-vault-tui/`.
 
 ## Invariants
 
-- Restore raw mode, alternate-screen state, and cursor visibility on every ordinary return and unwind.
+- Restore raw mode, alternate-screen state, cursor visibility, and any bracketed-paste or mouse mode a session enabled on every ordinary return and unwind, including a failed start.
 - Direct output must remain an immediate borrowed writer, be erased before Ratatui resumes, and be cleared again during session drop so unwind cannot leave the alternate screen populated.
 - A `CooperativeWorker` must signal cancellation and join its owned thread before drop returns.
-- Keep this crate free of repository, Codex, state, process-launch, and MCP policy.
+- Keep this crate free of repository, Codex, state, process-launch, and runtime policy.
 - Feature-specific crates own event mappings and rendering; this crate owns only reusable mechanics.
 
 ## Common commands
@@ -30,5 +30,5 @@
 - `cargo test -p jig-tui`
 - `cargo clippy -p jig-tui --all-targets -- -D warnings`
 - `cargo test -p jig-ui`
-- `cargo test -p jig-codex-tui`
+- `cargo test -p jig-agents-tui`
 - `cargo test -p jig-vault-tui`

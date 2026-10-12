@@ -14,10 +14,6 @@
 
 [% if rust_backend_enabled %]# Rust
 target/
-
-# Default local SQLite database and transient sidecars
-/<<[ repo_name | replace("-", "_") ]>>.db
-/<<[ repo_name | replace("-", "_") ]>>.db-*
 [% endif %]
 [% if go_backend_enabled %]# Go
 *.test
@@ -42,7 +38,8 @@ build/
 .contract-stage-*/
 .contract-client-stage-*/
 
-# Jig local runtime data. Keep durable agent memory tracked.
+# Jig local runtime data and execution history.
+.agent/state/runs.jsonl
 .agent/.cache/*
 !.agent/.cache/.gitignore
 .agent/runtime/

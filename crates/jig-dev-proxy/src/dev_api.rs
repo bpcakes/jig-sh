@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde_json::{Value, json};
+use std::path::PathBuf;
 
 use crate::types::{AppRunSpec, DevRequest, DevStatusRequest, DevStopRequest};
 use crate::{
@@ -48,6 +49,30 @@ pub fn dev(request: DevRequest) -> Result<Value> {
 /// be resolved, read, validated, or pruned safely.
 pub fn dev_status(request: DevStatusRequest) -> Result<Value> {
     dev_sessions::status(request)
+}
+
+/// Reports all registered development sessions without resolving a repository.
+pub fn dev_status_all(state_dir: Option<PathBuf>) -> Result<Value> {
+    dev_sessions::status_all(state_dir)
+}
+
+/// Reports one exact development session without resolving a repository.
+pub fn dev_status_session(session_id: &str, state_dir: Option<PathBuf>) -> Result<Value> {
+    dev_sessions::status_session(session_id, state_dir)
+}
+
+/// Retires eligible metadata for one exact session without stopping processes.
+pub fn dev_recover_session(session_id: &str, state_dir: Option<PathBuf>) -> Result<Value> {
+    dev_sessions::recover_session(session_id, state_dir)
+}
+
+/// Stops one exact session using authenticated supervisor control, if live.
+pub fn dev_stop_session(
+    session_id: &str,
+    state_dir: Option<PathBuf>,
+    forget_ambiguous_orphans: bool,
+) -> Result<Value> {
+    dev_sessions::stop_session(session_id, state_dir, forget_ambiguous_orphans)
 }
 
 /// Requests a supervised development session to stop.

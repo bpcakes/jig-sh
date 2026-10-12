@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$ROOT_DIR/scripts/release-validation.sh"
+
 PACKAGE_NAME="jig-sh"
 # Publish workspace library crates before the CLI; cargo publish strips path
 # dependencies, so every exact-version internal crate must exist on crates.io
@@ -9,19 +11,30 @@ PACKAGE_NAME="jig-sh"
 PUBLISH_PACKAGE_NAMES=(
   "jig-contract"
   "jig-core"
+  "jig-dashboard"
   "jig-file-budget"
+  "jig-git"
   "jig-owned-process"
   "jig-rust"
   "jig-sqlx"
   "jig-typescript"
   "jig-go"
   "jig-features"
+  "jig-commands"
   "jig-vault"
   "jig-dev-proxy"
+  "jig-context"
+  "jig-execution"
+  "jig-state"
+  "jig-repository"
+  "jig-policy"
+  "jig-bootstrap"
   "jig-tui"
   "jig-vault-tui"
-  "jig-codex-tui"
+  "jig-agents-tui"
   "jig-ui"
+  "jig-agents"
+  "jig-loops"
   "$PACKAGE_NAME"
 )
 BIN_NAME="jig"
@@ -48,6 +61,7 @@ print_usage() {
 Usage:
   scripts/release.sh check [VERSION]
   scripts/release.sh prepare [VERSION]
+  scripts/release.sh prepare-development VERSION
   scripts/release.sh notes [VERSION]
   scripts/release.sh stage
   scripts/release.sh tag [VERSION]
@@ -59,6 +73,9 @@ Usage:
 Commands:
   check     Run the full local release validation and cargo publish dry run.
   prepare   Update workspace package versions and CHANGELOG.md for VERSION.
+  prepare-development
+            Update workspace package versions to a VERSION ending in -dev without
+            changing CHANGELOG.md.
   notes     Generate or replace the CHANGELOG.md section for VERSION.
   stage     Stage files updated by release-prepare.
   tag       Run release validation, then create annotated tag vVERSION.
@@ -71,6 +88,8 @@ Commands:
 VERSION defaults to the package version from Cargo metadata.
 
 Set ALLOW_DIRTY=1 only with `check` to validate working-tree release tooling before committing it.
+CI may set RELEASE_VALIDATION_RECEIPT to reuse a successful committed-tree check
+within the same GitHub Actions job and run attempt. Missing or stale evidence fails closed.
 EOF
 }
 
@@ -90,19 +109,30 @@ crate_dir_for_package() {
   case "$1" in
     jig-contract) printf '%s\n' "crates/jig-contract" ;;
     jig-core) printf '%s\n' "crates/jig-core" ;;
+    jig-dashboard) printf '%s\n' "crates/jig-dashboard" ;;
     jig-file-budget) printf '%s\n' "crates/jig-file-budget" ;;
+    jig-git) printf '%s\n' "crates/jig-git" ;;
     jig-owned-process) printf '%s\n' "crates/jig-owned-process" ;;
     jig-rust) printf '%s\n' "crates/jig-rust" ;;
     jig-sqlx) printf '%s\n' "crates/jig-sqlx" ;;
     jig-typescript) printf '%s\n' "crates/jig-typescript" ;;
     jig-go) printf '%s\n' "crates/jig-go" ;;
     jig-features) printf '%s\n' "crates/jig-features" ;;
+    jig-commands) printf '%s\n' "crates/jig-commands" ;;
     jig-vault) printf '%s\n' "crates/jig-vault" ;;
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
+    jig-context) printf '%s\n' "crates/jig-context" ;;
+    jig-execution) printf '%s\n' "crates/jig-execution" ;;
+    jig-state) printf '%s\n' "crates/jig-state" ;;
+    jig-repository) printf '%s\n' "crates/jig-repository" ;;
+    jig-policy) printf '%s\n' "crates/jig-policy" ;;
+    jig-bootstrap) printf '%s\n' "crates/jig-bootstrap" ;;
     jig-tui) printf '%s\n' "crates/jig-tui" ;;
     jig-vault-tui) printf '%s\n' "crates/jig-vault-tui" ;;
-    jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;
+    jig-agents-tui) printf '%s\n' "crates/jig-agents-tui" ;;
     jig-ui) printf '%s\n' "crates/jig-ui" ;;
+    jig-agents) printf '%s\n' "crates/jig-agents" ;;
+    jig-loops) printf '%s\n' "crates/jig-loops" ;;
     jig-sh) printf '%s\n' "crates/jig" ;;
     *)
       echo "Unknown publish package: $1" >&2
@@ -228,33 +258,13 @@ elif bump == "minor":
     minor += 1
     patch = 0
 elif bump == "patch":
-    patch += 1
+    if "-" not in version:
+        patch += 1
 else:
     raise SystemExit("Bump must be major, minor, or patch.")
 
 print(f"{major}.{minor}.{patch}")
 PY
-}
-
-require_clean_tree() {
-  local status
-
-  if [[ "${ALLOW_DIRTY:-}" == "1" ]]; then
-    echo "ALLOW_DIRTY=1 set; skipping clean working tree requirement." >&2
-    return 0
-  fi
-
-  status="$(git status --short --untracked-files=all)"
-  if [[ "${ALLOW_RELEASE_RUN_JOURNAL_DIRTY:-}" == "1" && "$status" == " M .agent/state/runs.jsonl" ]]; then
-    echo "ALLOW_RELEASE_RUN_JOURNAL_DIRTY=1 set; allowing the ephemeral release-check run journal." >&2
-    return 0
-  fi
-
-  if [[ -n "$status" ]]; then
-    echo "Working tree is not clean. Commit or discard changes before releasing." >&2
-    printf '%s\n' "$status" >&2
-    exit 1
-  fi
 }
 
 require_version_consistency() {
@@ -522,6 +532,19 @@ release_prepare() {
   echo "Prepared release files for $PACKAGE_NAME v$version."
 }
 
+release_prepare_development() {
+  local version="$1"
+
+  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev$ ]]; then
+    echo "Development version must be MAJOR.MINOR.PATCH-dev, got '$version'." >&2
+    exit 2
+  fi
+  update_version_files "$version"
+  run cargo metadata --format-version 1 --no-deps >/dev/null
+
+  echo "Prepared workspace development version $version."
+}
+
 release_github() {
   local version="$1"
   local tag="v$version"
@@ -633,10 +656,10 @@ run_ci_checks() {
   local base_ref
 
   run cargo build -p jig-sh --bin jig --locked
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check fmt --no-receipt
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check clippy --no-receipt
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check test-locked --no-receipt
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check contract --no-receipt
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check fmt
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check clippy
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check test-locked
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check contract
 
   if git rev-parse --verify origin/master >/dev/null 2>&1; then
     base_ref="$(git merge-base HEAD origin/master)"
@@ -647,14 +670,13 @@ run_ci_checks() {
   fi
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check repo:file-budget \
     --comparison-exact-tree "$base_ref" \
-    --comparison-provenance explicit \
-    --no-receipt
+    --comparison-provenance explicit
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-map
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-guides
   check_launcher_template
 }
 
-release_check() {
+run_release_checks() {
   local version="$1"
   local package_name
   local dependency_status
@@ -703,7 +725,7 @@ release_tag() {
     exit 1
   fi
 
-  release_check "$version"
+  require_release_validation "$version"
 
   run git tag -a "$tag" -m "$PACKAGE_NAME $tag"
   echo "Created tag $tag. release-publish will push it to origin after all crates publish successfully."
@@ -766,7 +788,7 @@ release_publish() {
     exit 1
   fi
 
-  release_check "$version"
+  require_release_validation "$version"
   local package_name
   for package_name in "${PUBLISH_PACKAGE_NAMES[@]}"; do
     publish_package_if_missing "$package_name" "$version"
@@ -791,6 +813,13 @@ case "$command" in
   prepare)
     version="$(release_version "$@")" || exit $?
     release_prepare "$version"
+    ;;
+  prepare-development)
+    if [[ $# -ne 1 ]]; then
+      usage
+    fi
+    version="$(normalize_version "$1")" || exit $?
+    release_prepare_development "$version"
     ;;
   notes)
     version="$(release_version "$@")" || exit $?

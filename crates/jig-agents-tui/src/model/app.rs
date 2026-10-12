@@ -1,0 +1,405 @@
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    time::Instant,
+};
+
+use jig_tui::{ListViewportState, PreparedFuzzyText, sanitize_text};
+use ratatui::layout::Rect;
+
+use super::{
+    Details, ExitState, Focus, HomeRow, Inspection,
+    fleet::{self, FleetAssessment, FleetForecast},
+    unix_timestamp_now,
+};
+use crate::{Home, HomeUpdate};
+
+/// Where the last frame drew the list rows and the details, so a mouse event
+/// can be mapped to what was on screen.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct HitAreas {
+    /// The whole list panel, for the wheel.
+    pub(crate) list: Option<Rect>,
+    /// The rows themselves, below the column header.
+    pub(crate) rows: Option<ListRows>,
+    pub(crate) details: Option<Rect>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ListRows {
+    pub(crate) area: Rect,
+    pub(crate) row_height: u16,
+    /// The first visible home's position among the visible homes.
+    pub(crate) offset: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct App {
+    pub(crate) subscription_buckets: Vec<String>,
+    pub(crate) title: String,
+    pub(crate) static_configuration: bool,
+    /// Opted into explicitly by the Codex picker. Other providers and configuration views
+    /// keep their existing per-account presentation unchanged.
+    pub(crate) codex_fleet_forecast: bool,
+    pub(crate) rows: Vec<HomeRow>,
+    pub(crate) selected: Option<usize>,
+    pub(crate) filter: String,
+    pub(crate) searching: bool,
+    pub(crate) focus: Focus,
+    pub(crate) detail_scroll: u16,
+    detail_scroll_limit: Cell<u16>,
+    list_viewport: ListViewportState,
+    pub(crate) completed: usize,
+    pub(crate) inspection_finished: bool,
+    /// At least one refresh has started since the picker opened.
+    pub(crate) refreshed: bool,
+    pub(crate) inspection_error: Option<String>,
+    inspection_error_messages: HashSet<String>,
+    pub(crate) discovery_warnings: Vec<String>,
+    pub(crate) tick: usize,
+    pub(crate) exit_state: Option<ExitState>,
+    /// Bumped whenever inspection changes the row set's usage facts, so the fleet forecast
+    /// is recomputed once per generation instead of once per frame.
+    fleet_generation: usize,
+    fleet_forecast: RefCell<Option<(usize, FleetForecast)>>,
+    hit_areas: Cell<HitAreas>,
+    /// The home last clicked and when, to recognize a double click.
+    pub(crate) last_click: Option<(usize, Instant)>,
+}
+
+impl App {
+    pub(crate) fn new(title: &str, homes: Vec<Home>, discovery_warnings: Vec<String>) -> Self {
+        let selected = homes
+            .iter()
+            .position(|home| home.current)
+            .or((!homes.is_empty()).then_some(0));
+        Self {
+            subscription_buckets: Vec::new(),
+            title: sanitize_text(title),
+            static_configuration: false,
+            codex_fleet_forecast: false,
+            rows: homes.into_iter().map(HomeRow::new).collect(),
+            selected,
+            filter: String::new(),
+            searching: false,
+            focus: Focus::Homes,
+            detail_scroll: 0,
+            detail_scroll_limit: Cell::new(0),
+            list_viewport: ListViewportState::default(),
+            completed: 0,
+            inspection_finished: false,
+            refreshed: false,
+            inspection_error: None,
+            inspection_error_messages: HashSet::new(),
+            discovery_warnings: discovery_warnings
+                .into_iter()
+                .map(|warning| sanitize_text(&warning))
+                .collect(),
+            tick: 0,
+            exit_state: None,
+            fleet_generation: 0,
+            fleet_forecast: RefCell::new(None),
+            hit_areas: Cell::new(HitAreas::default()),
+            last_click: None,
+        }
+    }
+
+    /// A Codex picker with background inspection, for tests.
+    #[cfg(test)]
+    pub(crate) fn codex(homes: Vec<Home>, discovery_warnings: Vec<String>) -> Self {
+        let mut app = Self::new("Codex Home Picker", homes, discovery_warnings);
+        app.subscription_buckets = vec![fleet::CODEX_SUBSCRIPTION_BUCKET.into()];
+        app.codex_fleet_forecast = true;
+        app
+    }
+
+    pub(crate) fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub(crate) fn visible_indices(&self) -> Vec<usize> {
+        if self.filter.is_empty() {
+            return (0..self.rows.len()).collect();
+        }
+        let filter = PreparedFuzzyText::new(&self.filter);
+        let mut matches = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| row.match_score(&filter).map(|score| (score, index)))
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|(score, index)| (*score, *index));
+        matches.into_iter().map(|(_, index)| index).collect()
+    }
+
+    pub(crate) fn selected_row(&self) -> Option<&HomeRow> {
+        self.selected.and_then(|index| self.rows.get(index))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn selected_path(&self) -> Option<std::path::PathBuf> {
+        self.selected_row().map(|row| row.home.path.clone())
+    }
+
+    pub(crate) fn best_projection_index_at(&self, now: u64) -> Option<usize> {
+        let mut best: Option<(usize, f64)> = None;
+        for index in self.visible_indices() {
+            let row = &self.rows[index];
+            let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation()
+            else {
+                continue;
+            };
+            if best.is_none_or(|(_, best_score)| recommendation.score > best_score) {
+                best = Some((index, recommendation.score));
+            }
+        }
+        best.map(|(index, _)| index)
+    }
+
+    /// Whether this picker forecasts a collective Codex quota outlook.
+    ///
+    /// Only a Codex subscription picker opts in. Claude, static configurations, and
+    /// providers without subscription semantics keep their existing presentation.
+    pub(crate) fn fleet_forecast_enabled(&self) -> bool {
+        self.codex_fleet_forecast && !self.static_configuration
+    }
+
+    /// Collective quota forecast across every discovered home.
+    ///
+    /// This deliberately reads `rows` rather than `visible_indices()`: a search filter
+    /// changes what is displayed, never the account pool being forecast. `now` only affects
+    /// freshness and countdown presentation, never the modeled timeline.
+    pub(crate) fn fleet_assessment_at(&self, now: u64) -> Option<FleetAssessment> {
+        if !self.fleet_forecast_enabled() {
+            return None;
+        }
+        let mut cached = self.fleet_forecast.borrow_mut();
+        if cached
+            .as_ref()
+            .is_none_or(|(generation, _)| *generation != self.fleet_generation)
+        {
+            *cached = Some((self.fleet_generation, fleet::forecast(&self.rows)));
+        }
+        cached.as_ref().map(|(_, forecast)| forecast.assess_at(now))
+    }
+
+    pub(crate) fn apply_update(&mut self, update: HomeUpdate) {
+        self.apply_update_at(update, unix_timestamp_now());
+    }
+
+    pub(crate) fn apply_update_at(&mut self, update: HomeUpdate, observed_at: u64) {
+        let Some(row) = self.rows.get_mut(update.index) else {
+            self.record_inspection_error(&format!(
+                "inspection returned unknown home index {}",
+                update.index
+            ));
+            return;
+        };
+        if !row.reported {
+            row.reported = true;
+            self.completed += 1;
+        }
+        row.refreshing = false;
+        row.set_inspection(Inspection::Ready(Details::from_value(
+            update.details,
+            observed_at,
+            &self.subscription_buckets,
+        )));
+        self.fleet_generation = self.fleet_generation.wrapping_add(1);
+        self.reconcile_selection();
+    }
+
+    pub(crate) fn finish_inspection(&mut self, error: Option<String>) {
+        self.inspection_finished = true;
+        if let Some(error) = error {
+            self.record_inspection_error(&error);
+        }
+        for row in &mut self.rows {
+            // A row the refresh did not reach keeps its previous sample.
+            row.refreshing = false;
+            if matches!(row.inspection(), Inspection::Loading) {
+                row.set_inspection(Inspection::Unavailable);
+            }
+        }
+        self.fleet_generation = self.fleet_generation.wrapping_add(1);
+    }
+
+    /// Inspection can run again once the previous round has finished.
+    pub(crate) fn can_refresh(&self) -> bool {
+        !self.static_configuration && self.inspection_finished && self.exit_state.is_none()
+    }
+
+    /// Starts a new inspection round. Rows keep their previous sample, marked
+    /// as refreshing, until their new one arrives.
+    pub(crate) fn begin_refresh(&mut self) {
+        self.fleet_generation = self.fleet_generation.wrapping_add(1);
+        self.refreshed = true;
+        self.inspection_finished = false;
+        self.completed = 0;
+        self.inspection_error = None;
+        self.inspection_error_messages.clear();
+        for row in &mut self.rows {
+            row.reported = false;
+            match row.inspection() {
+                Inspection::Ready(_) => row.refreshing = true,
+                Inspection::Unavailable => row.set_inspection(Inspection::Loading),
+                Inspection::Loading => {}
+            }
+        }
+    }
+
+    pub(crate) fn move_selection(&mut self, delta: isize) {
+        let visible = self.visible_indices();
+        if visible.is_empty() {
+            self.selected = None;
+            return;
+        }
+        let position = self
+            .selected
+            .and_then(|selected| visible.iter().position(|index| *index == selected))
+            .unwrap_or(0);
+        let next = position.saturating_add_signed(delta).min(visible.len() - 1);
+        let selected = Some(visible[next]);
+        if self.selected != selected {
+            self.detail_scroll = 0;
+        }
+        self.selected = selected;
+    }
+
+    /// Selects a visible home directly, as a click does.
+    pub(crate) fn select(&mut self, index: usize) {
+        if self.selected != Some(index) {
+            self.detail_scroll = 0;
+        }
+        self.selected = Some(index);
+    }
+
+    pub(crate) fn hit_areas(&self) -> HitAreas {
+        self.hit_areas.get()
+    }
+
+    pub(crate) fn set_hit_areas(&self, update: impl FnOnce(&mut HitAreas)) {
+        let mut areas = self.hit_areas.get();
+        update(&mut areas);
+        self.hit_areas.set(areas);
+    }
+
+    pub(crate) fn move_to_edge(&mut self, end: bool) {
+        let visible = self.visible_indices();
+        let selected = if end {
+            visible.last().copied()
+        } else {
+            visible.first().copied()
+        };
+        if self.selected != selected {
+            self.detail_scroll = 0;
+        }
+        self.selected = selected;
+    }
+
+    pub(crate) fn push_filter(&mut self, character: char) {
+        if !character.is_control() {
+            self.filter.push(character);
+            self.reset_list_viewport();
+            self.select_best_filter_match();
+        }
+    }
+
+    pub(crate) fn pop_filter(&mut self) {
+        self.filter.pop();
+        self.reset_list_viewport();
+        self.select_best_filter_match();
+    }
+
+    pub(crate) fn clear_filter(&mut self) {
+        self.filter.clear();
+        self.reset_list_viewport();
+        self.reconcile_selection();
+    }
+
+    pub(crate) fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            Focus::Homes => Focus::Details,
+            Focus::Details => Focus::Homes,
+        };
+    }
+
+    pub(crate) fn begin_exit(&mut self, exit_state: ExitState) {
+        self.exit_state = Some(exit_state);
+    }
+
+    pub(crate) fn scroll_details(&mut self, delta: i16) {
+        let max_scroll = self.detail_scroll_limit.get();
+        self.detail_scroll = self
+            .detail_scroll
+            .min(max_scroll)
+            .saturating_add_signed(delta)
+            .min(max_scroll);
+    }
+
+    pub(crate) fn move_details_to_edge(&mut self, end: bool) {
+        self.detail_scroll = if end {
+            self.detail_scroll_limit.get()
+        } else {
+            0
+        };
+    }
+
+    pub(crate) fn set_detail_scroll_limit(&self, max_scroll: u16) {
+        self.detail_scroll_limit.set(max_scroll);
+    }
+
+    pub(crate) fn list_offset_for_viewport(&self, height: u16) -> usize {
+        self.list_viewport.offset_for_height(height)
+    }
+
+    pub(crate) fn set_list_offset(&self, offset: usize) {
+        self.list_viewport.set_offset(offset);
+    }
+
+    fn reset_list_viewport(&self) {
+        self.list_viewport.reset();
+    }
+
+    fn record_inspection_error(&mut self, error: &str) {
+        let error = sanitize_text(error);
+        if !self.inspection_error_messages.insert(error.clone()) {
+            return;
+        }
+        match &mut self.inspection_error {
+            Some(existing) => {
+                existing.push_str("; ");
+                existing.push_str(&error);
+            }
+            None => self.inspection_error = Some(error),
+        }
+    }
+
+    fn reconcile_selection(&mut self) {
+        let visible = self.visible_indices();
+        if !self
+            .selected
+            .is_some_and(|selected| visible.contains(&selected))
+        {
+            let selected = visible.first().copied();
+            if self.selected != selected {
+                self.reset_list_viewport();
+            }
+            self.selected = selected;
+            self.detail_scroll = 0;
+        }
+    }
+
+    fn select_best_filter_match(&mut self) {
+        if self.filter.is_empty() {
+            self.reconcile_selection();
+            return;
+        }
+        let selected = self.visible_indices().first().copied();
+        if self.selected != selected {
+            self.detail_scroll = 0;
+            self.reset_list_viewport();
+        }
+        self.selected = selected;
+    }
+}

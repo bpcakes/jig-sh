@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -12,11 +14,22 @@ use crate::types::Route;
 
 use super::{ensure_private_state_file_permissions, open_read_no_follow_maybe_missing};
 
-const VERSION: u32 = 1;
+const LEGACY_VERSION: u32 = 1;
+pub(super) const COMPLETE_EVIDENCE_VERSION: u32 = 2;
 pub(super) const FILE_NAME: &str = "dev-sessions.json";
 const STATE_FILE_FALLBACK: &str = "jig-dev-sessions-state";
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 const MAX_DEV_SESSIONS_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_BEFORE_REPLACE_ONCE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_session_write_once() {
+    FAIL_BEFORE_REPLACE_ONCE.with(|flag| flag.set(true));
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct DevProcessIdentity {
@@ -60,11 +73,11 @@ pub(crate) struct DevSessionApp {
     pub(crate) target_port: Option<u16>,
     // A missing v1 field is legacy evidence, not proof that no spawn occurred.
     // `spawn_evidence` deliberately maps this default to `Untracked`.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub(crate) spawn_state_tracked: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub(crate) spawn_pending: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub(crate) process: Option<DevProcessIdentity>,
 }
 
@@ -133,10 +146,10 @@ pub(crate) struct DevSessionRecord {
     pub(crate) updated_at_ms: u64,
     #[serde(default)]
     pub(crate) cleanup_required: bool,
-    // Older v1 writers can omit this narrower obligation. The retained
-    // `cleanup_required` flag and untracked app evidence remain fail-closed.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub(crate) preflight_cleanup_pending: bool,
+    // Missing v1 evidence is unknown, not a confirmed absence. An old writer
+    // can drop this field while retaining otherwise complete spawn evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) preflight_cleanup_pending: Option<bool>,
     pub(crate) supervisor: DevProcessIdentity,
     pub(crate) control: DevSessionControl,
     pub(crate) apps: Vec<DevSessionApp>,
@@ -146,6 +159,11 @@ pub(crate) struct DevSessionRecord {
 pub(crate) struct DevStateSnapshot {
     pub(crate) sessions: Vec<DevSessionRecord>,
     pub(crate) routes: Vec<Route>,
+}
+
+pub(super) struct DevSessionsState {
+    pub(super) version: u32,
+    pub(super) sessions: Vec<DevSessionRecord>,
 }
 
 #[derive(Deserialize)]
@@ -161,8 +179,15 @@ struct DevSessionsDocument<'a> {
 }
 
 pub(super) fn read_from_path(path: &Path) -> Result<Vec<DevSessionRecord>> {
+    Ok(read_document_from_path(path)?.sessions)
+}
+
+pub(super) fn read_document_from_path(path: &Path) -> Result<DevSessionsState> {
     let Some(mut file) = open_read_no_follow_maybe_missing(path)? else {
-        return Ok(Vec::new());
+        return Ok(DevSessionsState {
+            version: LEGACY_VERSION,
+            sessions: Vec::new(),
+        });
     };
     ensure_private_state_file_permissions(path, &file)?;
     file.seek(SeekFrom::Start(0))?;
@@ -183,24 +208,83 @@ pub(super) fn read_from_path(path: &Path) -> Result<Vec<DevSessionRecord>> {
     if text.trim().is_empty() {
         bail!("Jig development sessions file {} is empty", path.display());
     }
+    // Deserialize modeled fields before using Value for v2 presence checks.
+    // Typed deserialization rejects duplicate keys; Value would keep the last
+    // duplicate and could erase a session or a cleanup obligation.
     let document = serde_json::from_str::<DevSessionsDocumentOwned>(&text)
         .context("Failed to parse Jig development sessions")?;
-    if document.version != VERSION {
+    if !matches!(document.version, LEGACY_VERSION | COMPLETE_EVIDENCE_VERSION) {
         bail!(
             "Unsupported Jig development sessions version {}",
             document.version
         );
     }
+    if document.version == COMPLETE_EVIDENCE_VERSION {
+        let raw: serde_json::Value =
+            serde_json::from_str(&text).context("Failed to parse Jig development sessions")?;
+        validate_complete_evidence(&raw)?;
+    }
     validate_records(&document.sessions)?;
-    Ok(document.sessions)
+    Ok(DevSessionsState {
+        version: document.version,
+        sessions: document.sessions,
+    })
 }
 
-pub(super) fn write_to_path(path: &Path, sessions: &[DevSessionRecord]) -> Result<()> {
+fn validate_complete_evidence(raw: &serde_json::Value) -> Result<()> {
+    let sessions = raw
+        .get("sessions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            anyhow::anyhow!("Version 2 Jig development sessions need a sessions array")
+        })?;
+    for (index, session) in sessions.iter().enumerate() {
+        for key in ["cleanup_required", "preflight_cleanup_pending"] {
+            if !session.get(key).is_some_and(serde_json::Value::is_boolean) {
+                bail!("Version 2 Jig development session {index} requires boolean {key}");
+            }
+        }
+        let apps = session
+            .get("apps")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Version 2 Jig development session {index} needs an apps array")
+            })?;
+        for (app_index, app) in apps.iter().enumerate() {
+            for key in ["spawn_state_tracked", "spawn_pending"] {
+                if !app.get(key).is_some_and(serde_json::Value::is_boolean) {
+                    bail!(
+                        "Version 2 Jig development session {index} app {app_index} requires boolean {key}"
+                    );
+                }
+            }
+            if app.get("process").is_none() {
+                bail!(
+                    "Version 2 Jig development session {index} app {app_index} requires process evidence"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn write_to_path(
+    path: &Path,
+    version: u32,
+    sessions: &[DevSessionRecord],
+) -> Result<()> {
+    if !matches!(version, LEGACY_VERSION | COMPLETE_EVIDENCE_VERSION) {
+        bail!("Unsupported Jig development sessions version {version}");
+    }
+    if version == COMPLETE_EVIDENCE_VERSION
+        && sessions
+            .iter()
+            .any(|session| session.preflight_cleanup_pending.is_none())
+    {
+        bail!("Version 2 Jig development sessions cannot contain unknown preflight evidence");
+    }
     validate_records(sessions)?;
-    let document = serde_json::to_vec_pretty(&DevSessionsDocument {
-        version: VERSION,
-        sessions,
-    })?;
+    let document = serde_json::to_vec_pretty(&DevSessionsDocument { version, sessions })?;
     let document_len = u64::try_from(document.len()).unwrap_or(u64::MAX);
     let persisted_len = document_len.saturating_add(1);
     if persisted_len > MAX_DEV_SESSIONS_FILE_BYTES {
@@ -215,6 +299,10 @@ pub(super) fn write_to_path(path: &Path, sessions: &[DevSessionRecord]) -> Resul
     file.write_all(b"\n")?;
     file.sync_data()?;
     drop(file);
+    #[cfg(test)]
+    if FAIL_BEFORE_REPLACE_ONCE.with(|flag| flag.replace(false)) {
+        bail!("injected development-session write failure before replace");
+    }
     file_ops::replace_file(&tmp, path)
 }
 
@@ -237,7 +325,7 @@ pub(super) fn validate_records(sessions: &[DevSessionRecord]) -> Result<()> {
                 session.session_id
             );
         }
-        if session.preflight_cleanup_pending && !session.cleanup_required {
+        if session.preflight_cleanup_pending == Some(true) && !session.cleanup_required {
             bail!(
                 "Jig development session '{}' has pending preflight cleanup without requiring cleanup",
                 session.session_id
@@ -350,10 +438,6 @@ fn validate_apps(session: &DevSessionRecord) -> Result<()> {
         }
     }
     Ok(())
-}
-
-const fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 fn validate_process_identity(label: &str, identity: &DevProcessIdentity) -> Result<()> {

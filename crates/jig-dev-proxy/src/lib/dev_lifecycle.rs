@@ -10,6 +10,8 @@ use crate::{
 };
 
 mod assertions;
+mod automatic_recovery;
+mod diagnostic_tests;
 use assertions::*;
 
 #[test]
@@ -109,6 +111,8 @@ fn dev_lifecycle_commands_are_non_mutating_and_structured_without_state() {
             "repo_root": repo_root,
             "state_dir": state_dir,
             "running": false,
+            "activity": "none",
+            "cleanup_required": false,
             "sessions": [],
         })
     );
@@ -176,6 +180,8 @@ fn dev_status_is_repo_scoped_and_does_not_expose_control_credentials() {
     assert_eq!(own["ok"], true);
     assert_eq!(own["command"], "dev status");
     assert_eq!(own["running"], true);
+    assert_eq!(own["activity"], "verified");
+    assert_eq!(own["cleanup_required"], false);
     assert_eq!(own["sessions"].as_array().unwrap().len(), 1);
     assert_eq!(own["sessions"][0]["status"], "starting");
     assert_eq!(own["sessions"][0]["control_alive"], true);
@@ -190,39 +196,12 @@ fn dev_status_is_repo_scoped_and_does_not_expose_control_credentials() {
         "status output must not disclose the private control token"
     );
     assert_eq!(other["running"], false);
+    assert_eq!(other["activity"], "none");
+    assert_eq!(other["cleanup_required"], false);
     assert_eq!(other["sessions"], json!([]));
 
     drop(runtime);
     assert!(store.snapshot_dev_state().unwrap().sessions.is_empty());
-}
-
-#[test]
-fn same_repo_conflict_recommends_dev_lifecycle_commands() {
-    let temp = tempdir().unwrap();
-    let state_dir = temp.path().join("proxy-state");
-    let store = StateStore::resolve(Some(state_dir)).unwrap();
-    let spec = lifecycle_spec(temp.path(), "web", "web.demo.localhost", false);
-    let runtime = dev_sessions::DevSessionRuntime::start(
-        store.clone(),
-        "demo",
-        temp.path(),
-        std::slice::from_ref(&spec),
-        false,
-    )
-    .unwrap();
-
-    let error =
-        dev_sessions::DevSessionRuntime::start(store.clone(), "demo", temp.path(), &[spec], false)
-            .err()
-            .expect("overlapping same-repo session is rejected")
-            .to_string();
-
-    assert!(error.contains("from this repository"));
-    assert!(error.contains("jig dev stop"));
-    assert!(error.contains("jig dev --replace"));
-    assert_eq!(store.snapshot_dev_state().unwrap().sessions.len(), 1);
-
-    drop(runtime);
 }
 
 #[test]
@@ -312,55 +291,6 @@ fn same_app_name_in_different_repositories_does_not_conflict() {
 }
 
 #[test]
-fn replace_refuses_cross_repo_route_ownership() {
-    let temp = tempdir().unwrap();
-    let repo_a = temp.path().join("repo-a");
-    let repo_b = temp.path().join("repo-b");
-    std::fs::create_dir_all(&repo_a).unwrap();
-    std::fs::create_dir_all(&repo_b).unwrap();
-    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
-    let runtime = dev_sessions::DevSessionRuntime::start(
-        store.clone(),
-        "one",
-        &repo_a,
-        &[lifecycle_spec(&repo_a, "web", "shared.localhost", true)],
-        false,
-    )
-    .unwrap();
-
-    let error = dev_sessions::DevSessionRuntime::start(
-        store.clone(),
-        "two",
-        &repo_b,
-        &[lifecycle_spec(
-            &repo_b,
-            "frontend",
-            "shared.localhost",
-            true,
-        )],
-        true,
-    )
-    .err()
-    .expect("cross-repository route replacement is rejected")
-    .to_string();
-
-    assert!(error.contains("live Jig dev session"));
-    assert!(error.contains("cross-repository ownership"));
-    assert!(error.contains("shared.localhost"));
-    assert!(
-        error.contains(
-            &std::fs::canonicalize(&repo_a)
-                .unwrap()
-                .display()
-                .to_string()
-        )
-    );
-    assert_eq!(store.snapshot_dev_state().unwrap().sessions.len(), 1);
-
-    drop(runtime);
-}
-
-#[test]
 fn replace_refuses_an_unregistered_live_process_route() {
     if !state::process_start_tokens_supported() {
         return;
@@ -400,6 +330,8 @@ fn replace_refuses_an_unregistered_live_process_route() {
 
     assert!(error.contains("not attributable to a registered Jig dev session"));
     assert!(error.contains("will not terminate an unregistered or ad-hoc process"));
+    assert!(error.contains("jig proxy prune --state-dir PATH"));
+    assert!(error.contains(&store.root().display().to_string()));
     assert!(error.contains(&owner_pid.to_string()));
     assert!(error.contains("127.0.0.1:4005"));
     assert_eq!(store.read_routes(false).unwrap().len(), 1);
@@ -726,14 +658,14 @@ fn unconfirmed_preflight_cleanup_blocks_ordinary_stop_and_replacement() {
         Ok(_) => panic!("replacement unexpectedly retired unconfirmed preflight cleanup"),
         Err(error) => error,
     };
-    assert!(
-        replacement
-            .to_string()
-            .contains("Could not replace the existing Jig dev session safely")
-    );
     let persisted = store.snapshot_dev_state().unwrap();
     assert_eq!(persisted.sessions.len(), 1);
-    assert!(persisted.sessions[0].preflight_cleanup_pending);
+    assert_eq!(persisted.sessions[0].preflight_cleanup_pending, Some(true));
+    let replacement_message = replacement.to_string();
+    assert!(replacement_message.contains("Could not replace the existing Jig dev session safely"));
+    assert!(replacement_message.contains(&persisted.sessions[0].session_id));
+    assert!(replacement_message.contains(&state_dir.display().to_string()));
+    assert!(replacement_message.contains("jig dev status --state-dir PATH"));
 
     let forgotten = dev_stop(
         DevStopRequest::new("demo", temp.path().to_path_buf(), Some(state_dir))
@@ -1169,6 +1101,21 @@ fn failed_replacement_preserves_recoveries_completed_before_the_failure() {
         })
         .unwrap();
 
+    let before = store.snapshot_dev_state().unwrap();
+    let retired_id = before
+        .sessions
+        .iter()
+        .find(|session| session.apps[0].name == "web")
+        .unwrap()
+        .session_id
+        .clone();
+    let blocked_id = before
+        .sessions
+        .iter()
+        .find(|session| session.apps[0].name == "admin")
+        .unwrap()
+        .session_id
+        .clone();
     let error = dev_sessions::DevSessionRuntime::start(
         store.clone(),
         "demo",
@@ -1191,6 +1138,10 @@ fn failed_replacement_preserves_recoveries_completed_before_the_failure() {
             .unwrap()
             .contains("admin")
     );
+    let message = failed["error"]["message"].as_str().unwrap();
+    assert!(message.contains(&format!("blocking session IDs: {blocked_id}")));
+    assert!(!message.contains(&retired_id));
+    assert!(message.contains(&store.root().display().to_string()));
 
     let snapshot = store.snapshot_dev_state().unwrap();
     assert_eq!(snapshot.sessions.len(), 1);
@@ -1198,7 +1149,7 @@ fn failed_replacement_preserves_recoveries_completed_before_the_failure() {
 }
 
 #[test]
-fn cancelled_replacement_preserves_recoveries_completed_before_cancellation() {
+fn interrupted_launch_preserves_all_atomic_recoveries() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
     let web_spec = lifecycle_spec(temp.path(), "web", "web.demo.localhost", false);
@@ -1228,41 +1179,28 @@ fn cancelled_replacement_preserves_recoveries_completed_before_cancellation() {
         })
         .unwrap();
 
-    let sessions_path = store.root().join("dev-sessions.json");
-    let cancel_after_first_recovery = || {
-        std::fs::read_to_string(&sessions_path)
-            .ok()
-            .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
-            .and_then(|document| document["sessions"].as_array().map(Vec::len))
-            == Some(1)
-    };
-    let outcome = dev_sessions::DevSessionRuntime::start_interruptible(
+    let runtime = dev_sessions::DevSessionRuntime::start(
         store.clone(),
         "demo",
         temp.path(),
         &[web_spec, admin_spec],
-        true,
-        &cancel_after_first_recovery,
+        false,
     )
     .unwrap();
-    let recoveries = match outcome {
-        dev_sessions::DevSessionStartOutcome::Cancelled(recoveries) => recoveries,
-        dev_sessions::DevSessionStartOutcome::Claimed(_) => {
-            panic!("replacement must observe cancellation after the first recovery")
-        }
-    };
-    let output = dev_api::normalize_dev_result(Err(dev_outcome::with_recovery_notices(
-        processes::interruption_error(processes::TerminationReason::requested_stop()),
-        recoveries,
-    )))
+    let output = dev_api::normalize_dev_result(processes::finalize_claimed_dev_session_result(
+        Err(processes::interruption_error(
+            processes::TerminationReason::requested_stop(),
+        )),
+        &runtime,
+    ))
     .unwrap();
 
     assert_eq!(output["stopped"], true);
-    assert_eq!(output["recoveries"].as_array().unwrap().len(), 1);
+    assert_eq!(output["recoveries"].as_array().unwrap().len(), 2);
     assert_eq!(
         store.snapshot_dev_state().unwrap().sessions.len(),
         1,
-        "the cancellation must happen between the two orphan recoveries"
+        "both old claims retire atomically before the new session is registered"
     );
 }
 

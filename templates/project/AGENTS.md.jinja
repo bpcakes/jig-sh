@@ -6,15 +6,17 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 ## Start Here
 
 - Use this file for repo-wide defaults.
-- Open [agent-map.md](./agent-map.md) before [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
+- Use [agent-map.md](./agent-map.md) when you need help locating ownership guidance for [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
 - Read the nearest [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] `AGENTS.md` before changing a [% if rust_workspace_guidance_enabled %]crate[% else %]package or crate[% endif %] when one exists.
-- Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
-- Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
-- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
-- For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
-- A plan captures an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; use `--gate <id>` only when deliberately force-running one gate.
+- Use `scripts/jig` for the typed repo contract; pass `--json` for agent automation.
+- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing[% if vault.scope == "repo" %], except operator-owned vault setup (see Vault)[% endif %].
+- Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
+[% if file_budget_audit_available %]
+- Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs.
+[% endif %]
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
+- Keep `.agent/state/runs.jsonl` as local execution history; do not stage or commit it.
 
 ## Compatibility And Cutovers
 
@@ -32,6 +34,20 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 [% endif %]
 [% endif %]
 
+[% if vault.scope == "repo" -%]
+## Vault
+
+- The vault behind `scripts/jig vault` and its passphrase are operator-owned. These rules override any Jig next step, such as from `scripts/jig doctor` or `scripts/jig info --commands`, that suggests vault setup.
+- Run only `scripts/jig vault status` and, when the operator has already provided `JIG_VAULT_PASSPHRASE` to the session, `scripts/jig vault exec --env-file REFS_FILE -- COMMAND` with the refs file the operator provided and the task's command. `scripts/jig vault run` with the operator's references is the constrained alternative for short non-interactive commands. Every other vault subcommand is operator-only.
+- `COMMAND` is the underlying task command itself. Never wrap `scripts/jig check`, `scripts/jig run`, or another Jig runner in `vault exec` or `vault run`: a failing target records its stdout and stderr in `.agent/state/runs.jsonl` outside vault redaction, so incidental failure output can persist an injected value.
+- Never pass `--home` or `--global` to vault commands, and never set `JIG_VAULT_HOME`.
+- Never delete, move, or edit the vault rollback witness in `~/.jig/vault-witness` or its journals, even to get past a rollback, fork, or pending-transaction error; report the error to the operator.
+- Never request, print, inspect, test, choose, store, or set the passphrase, including with `echo` or `printenv`. Run the command, and stop if it reports a missing passphrase or prompts for one.
+- Never create or edit refs files or add references. Copying the operator's refs file unchanged from the main checkout into a worktree is fine.
+- Never wrap commands that print, encode, or transmit injected values, and never write revealed values to files such as `.env.local`.
+- If a needed credential is unavailable, stop and ask the operator.
+
+[% endif -%]
 ## [% if rust_workspace_guidance_enabled %]Rust[% else %]Backend[% endif %] Defaults
 
 [% if go_backend_enabled %]
@@ -73,19 +89,15 @@ Configured web apps:
 [% endfor %]
 
 Each configured app is expected to support `lint`, `typecheck`, `build:bundle`, and `test:coverage`.
-Structured work uses four atomic path-aware gates per app; repository-wide TypeScript checks remain available for an intentional full-matrix run.
 [% if application_contracts_enabled -%]
-Application contract freshness and public deployment boundaries have separate `application-contracts` and `public-artifacts` work gates; `jig-contract` remains limited to Jig harness wiring.
+Application contract freshness and public deployment boundaries have separate `scripts/check-webapps.sh application-contracts` and `scripts/check-webapps.sh public-artifacts` checks; `jig-contract` remains limited to Jig harness wiring.
 [% endif -%]
 `test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
-Jig validates those scripts during adoption; generated web CI validates them again before running.
-Generated install steps select the package-manager project from workspace membership, not root-lock presence: npm, pnpm, Bun, and Yarn Classic members use the root project, while standalone apps and nested Yarn Berry projects use their app-local project.
-Generated npm installs pin real writes, lock creation, workspace participation, platform packages, executable links, and all dependency classes despite ambient install-shaping variables; registry/authentication, dependency layout, peer resolution, and install-script approval remain project-owned.
-Run package-local scripts through `scripts/check-webapps.sh run-script <app-dir> <script>` for the generated execution boundary; generated web and browser-E2E workflows do this for every package script. For npm it pins the exact current package and required-script behavior despite ambient npm selectors; explicit app environment plus registry, authentication, layout, peer, and lifecycle policy remain project-owned.
-The dependency checker supports stock macOS Bash 3.2, treats Yarn authority-enumeration failures as hard errors, and follows Bash-owned worker-job identity after an interrupted `wait` rather than probing a reaped PID.
-Dependency readiness treats a missing, empty, or exact cache-only real `node_modules` root equivalently. It ignores only real top-level tool-cache directories (`.cache`, `.vite`, `.vite-temp`, and `.tmp`) plus a regular `.DS_Store`; unknown entries, nested/type-replaced cache names, package entries, metadata, symlinks, and launchers remain attested.
-`[[frontend_apps]]` keeps CI, coverage, and semantic role metadata; generated `[[dev.apps]]` drives `scripts/jig dev` and takes precedence for local dev settings. When both sections are present, Jig requires a matching dev app name and dir for every frontend app. `kind` selects `vite` versus `env-port`; `role` selects `spa`, `admin`, or `astro` without guessing from the directory name. Extra `[[dev.apps]]` entries without `[[frontend_apps]]` are treated as dev-only and are not covered by generated web CI.
-Remove legacy `dev_command` keys; local dev now runs through `[dev]` and `[[dev.apps]]`.
+Run package scripts through `scripts/check-webapps.sh run-script <app-dir> <script>`.
+Keep registry, authentication, and install-script policy project-owned.
+For dependency installation details, see the [Jig frontend installation reference](https://github.com/bpcakes/jig-sh/blob/master/docs/adoption.md#frontend-dependency-installation).
+`[[frontend_apps]]` owns CI and coverage metadata; matching `[[dev.apps]]` entries own local development. Extra dev apps have no generated web CI. Replace legacy `dev_command` with `[dev]` and `[[dev.apps]]`.
+`kind` selects `vite` or `env-port`; `role` selects `spa`, `admin`, or `astro`.
 [% else -%]
 No web apps are configured in `.jig.toml`.
 [% endif %]
@@ -105,8 +117,10 @@ No web apps are configured in `.jig.toml`.
 [% if rust_backend_enabled %]
 - `scripts/jig check clippy`
 [% endif %]
-- `scripts/jig work status`
-- `scripts/jig work evidence`
+- `scripts/jig info targets`
+[% if file_budget_audit_available %]
+- `scripts/jig file-budget audit`
+[% endif %]
 [% if frontend_apps | length > 0 %]
 - `scripts/jig check typescript-lint`
 - `scripts/jig check typescript-typecheck`
@@ -135,26 +149,29 @@ No web apps are configured in `.jig.toml`.
 
 ## Done Means
 
-- Run the relevant local verification for the area you changed.
-- For [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] changes, finish with `scripts/jig check test`.
+- Validate the affected behavior with focused checks. Run broader suites when shared behavior, failures, or unresolved risks warrant them.
+- Once the affected behavior is verified, finish; repeat checks only for changed inputs or a concrete remaining concern.
 [% if frontend_apps | length > 0 %]
-- For frontend changes, run the relevant `scripts/jig check typescript-*` gates.
+- For frontend changes, select the relevant `scripts/jig check typescript-*` checks.
 [% endif %]
 [% if sqlx_enabled %]
 - For SQLx or migration changes, run `scripts/jig check sqlx`.
 [% if schema_dump_enabled %]
-- For schema-doc-enabled repos, run `scripts/jig check schema`.
+- For schema or schema-documentation changes, run `scripts/jig check schema`.
 [% endif %]
 [% endif %]
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.
 
 ## [% if rust_workspace_guidance_enabled %]Crate Guide[% else %]Backend Guide[% endif %] Conventions
 
-When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, use these sections:
+When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, [% if _jig.contract_version >= 9 %]these sections are optional suggestions:[% else %]use these sections:[% endif %]
 
 - `## Purpose`
 - `## Key entrypoints`
 - `## Edit here for X`
 - `## Invariants`
 - `## Common commands`
+[% if _jig.contract_version >= 9 %]
+Use the structure that fits the area. Preserve ownership, entrypoints, invariants, and useful commands. Link to repository files when a reference must be checked. Run `scripts/jig check agent-guides` to validate local links and explicitly declared component guidance.
+[% endif %]
 <!-- END JIG MANAGED BLOCK -->

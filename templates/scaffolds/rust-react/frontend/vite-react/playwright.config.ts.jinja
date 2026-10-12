@@ -29,22 +29,7 @@ const globalTimeout = readPositiveInteger(
   "E2E_GLOBAL_TIMEOUT_MS",
   defaultCiGlobalTimeout,
 );
-[% if db == "sqlite" %]
-const configuredDatabaseUrl = readOptionalEnvironmentVariable("E2E_DATABASE_URL");
-const defaultDatabasePath = ".agent/tmp/<<[ e2e_database_name ]>>.sqlite";
-const databaseUrl =
-  configuredDatabaseUrl ?? `sqlite:${defaultDatabasePath}`;
-const backendCommands = [
-  "cargo run --locked -p <<[ repo_name ]>>-api -- --bootstrap-database",
-  "cargo run --locked -p <<[ repo_name ]>>-api",
-];
-if (!configuredDatabaseUrl) {
-  backendCommands.unshift(
-    `node -e "const fs=require('node:fs');fs.mkdirSync('.agent/tmp',{recursive:true});for(const suffix of ['','-shm','-wal','-journal'])fs.rmSync('${defaultDatabasePath}'+suffix,{force:true})"`,
-  );
-}
-const backendCommand = backendCommands.join(" && ");
-[% elif db == "postgres" %]
+[% if db == "postgres" %]
 const configuredDatabaseUrl = readOptionalEnvironmentVariable("E2E_DATABASE_URL");
 const databaseUrl =
   configuredDatabaseUrl ??

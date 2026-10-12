@@ -2,160 +2,22 @@ use std::io::Write;
 
 use anyhow::Result;
 
-use self::agent::{format_agent_bootstrap_summary, format_agent_doctor_summary};
-use self::codex::{
-    format_codex_homes_summary, format_codex_launch_summary, format_codex_resume_summary,
-};
-pub(super) use self::doctor::format_doctor_summary;
-pub(super) use self::info::format_info_summary;
-use self::loops::{
-    format_loop_acknowledge_occurrence_summary, format_loop_clear_attempt_summary,
-    format_loop_dispatch_summary, format_loop_run_summary, format_loop_status_summary,
-    format_loop_tick_summary,
-};
-use self::state::{
-    format_state_archive_summary, format_state_compact_summary, format_state_diagnose_summary,
-    format_state_export_summary, format_state_restore_summary, format_state_summary,
-};
-use self::vault::{format_vault_generic_summary, format_vault_run_summary};
-use self::work::{
-    format_work_append_summary, format_work_check_summary, format_work_decide_summary,
-    format_work_evidence_summary, format_work_finish_summary, format_work_gates_summary,
-    format_work_goal_summary, format_work_receipts_summary, format_work_refine_summary,
-    format_work_review_summary, format_work_start_plan_id, format_work_start_summary,
-    format_work_status_summary,
-};
+pub(super) mod command_display;
+pub(super) mod usage;
 
-mod agent;
-mod claude;
-mod codex;
-mod command_display;
-mod dev;
-mod doctor;
-mod info;
-mod loops;
-mod state;
-mod status;
-mod usage;
-mod vault;
-mod work;
+/// Renders a command's JSON result for people. Each command passes its own
+/// renderer to [`emit`]; family renderers live in `cli/<family>/render.rs`,
+/// and this module keeps only the formatting several commands share.
+pub(super) type Render = fn(&serde_json::Value) -> String;
 
-pub(super) enum HumanOutput {
-    Doctor,
-    Setup,
-    Info,
-    Status,
-    RunStatus,
-    VaultRun,
-    VaultGeneric,
-    AgentDoctor,
-    AgentBootstrap,
-    ClaudeHomes,
-    ClaudeLaunch,
-    CodexHomes,
-    CodexLaunch,
-    CodexResume,
-    WorkCheck,
-    WorkGates,
-    WorkEvidence,
-    WorkReview,
-    WorkRefine,
-    WorkStart,
-    WorkStartPlanId,
-    WorkGoal,
-    WorkAppend,
-    WorkDecide,
-    WorkFinish,
-    WorkReceipts,
-    WorkStatus,
-    Check,
-    RepositoryRun,
-    ToolExecution,
-    AgentMapGenerate,
-    MigrationAdd,
-    LoopTick,
-    LoopDispatch,
-    LoopStatus,
-    LoopRun,
-    LoopClearAttempt,
-    LoopAcknowledgeOccurrence,
-    StateSummary,
-    StateDiagnose,
-    StateCompact,
-    StateRestore,
-    StateExport,
-    StateArchive,
-    Dev,
-    DevStatus,
-    DevStop,
-    Proxy,
-}
-
-pub(super) fn emit(
-    json_output: bool,
-    human_output: HumanOutput,
-    value: &serde_json::Value,
-) -> Result<()> {
+pub(super) fn emit(json_output: bool, render: Render, value: &serde_json::Value) -> Result<()> {
     if json_output {
         return print_json(value);
     }
-    print_text(&render_human(human_output, value)?)
+    print_text(&render(value))
 }
 
-fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<String> {
-    Ok(match human_output {
-        HumanOutput::Doctor => format_doctor_summary(value),
-        HumanOutput::Setup => format_setup_summary(value),
-        HumanOutput::Info => format_info_summary(value),
-        HumanOutput::Status => status::format_summary(value),
-        HumanOutput::RunStatus => format_run_status_summary(value),
-        HumanOutput::VaultRun => format_vault_run_summary(value),
-        HumanOutput::VaultGeneric => format_vault_generic_summary(value),
-        HumanOutput::AgentDoctor => format_agent_doctor_summary(value),
-        HumanOutput::AgentBootstrap => format_agent_bootstrap_summary(value),
-        HumanOutput::ClaudeHomes => claude::homes_summary(value),
-        HumanOutput::ClaudeLaunch => claude::launch_summary(value),
-        HumanOutput::CodexHomes => format_codex_homes_summary(value),
-        HumanOutput::CodexLaunch => format_codex_launch_summary(value),
-        HumanOutput::CodexResume => format_codex_resume_summary(value),
-        HumanOutput::WorkCheck => format_work_check_summary(value),
-        HumanOutput::WorkGates => format_work_gates_summary(value),
-        HumanOutput::WorkEvidence => format_work_evidence_summary(value),
-        HumanOutput::WorkReview => format_work_review_summary(value),
-        HumanOutput::WorkRefine => format_work_refine_summary(value),
-        HumanOutput::WorkStart => format_work_start_summary(value),
-        HumanOutput::WorkStartPlanId => format_work_start_plan_id(value)?,
-        HumanOutput::WorkGoal => format_work_goal_summary(value),
-        HumanOutput::WorkAppend => format_work_append_summary(value),
-        HumanOutput::WorkDecide => format_work_decide_summary(value),
-        HumanOutput::WorkFinish => format_work_finish_summary(value),
-        HumanOutput::WorkReceipts => format_work_receipts_summary(value),
-        HumanOutput::WorkStatus => format_work_status_summary(value),
-        HumanOutput::Check => format_check_output(value),
-        HumanOutput::RepositoryRun => format_repository_execution_summary(value, "Run", "run"),
-        HumanOutput::ToolExecution => format_tool_execution_summary(value),
-        HumanOutput::AgentMapGenerate => format_agent_map_generate_summary(value),
-        HumanOutput::MigrationAdd => format_migration_add_summary(value),
-        HumanOutput::LoopTick => format_loop_tick_summary(value),
-        HumanOutput::LoopDispatch => format_loop_dispatch_summary(value),
-        HumanOutput::LoopStatus => format_loop_status_summary(value),
-        HumanOutput::LoopRun => format_loop_run_summary(value),
-        HumanOutput::LoopClearAttempt => format_loop_clear_attempt_summary(value),
-        HumanOutput::LoopAcknowledgeOccurrence => format_loop_acknowledge_occurrence_summary(value),
-        HumanOutput::StateSummary => format_state_summary(value),
-        HumanOutput::StateDiagnose => format_state_diagnose_summary(value),
-        HumanOutput::StateCompact => format_state_compact_summary(value),
-        HumanOutput::StateRestore => format_state_restore_summary(value),
-        HumanOutput::StateExport => format_state_export_summary(value),
-        HumanOutput::StateArchive => format_state_archive_summary(value),
-        HumanOutput::Dev => format_dev_summary(value),
-        HumanOutput::DevStatus => format_dev_status_summary(value),
-        HumanOutput::DevStop => format_dev_stop_summary(value),
-        HumanOutput::Proxy => format_proxy_summary(value),
-    })
-}
-
-fn format_check_output(value: &serde_json::Value) -> String {
+pub(super) fn format_check_output(value: &serde_json::Value) -> String {
     if value.get("plan").is_some() {
         format_check_summary(value)
     } else {
@@ -165,6 +27,10 @@ fn format_check_output(value: &serde_json::Value) -> String {
 
 fn format_check_summary(value: &serde_json::Value) -> String {
     format_repository_execution_summary(value, "Check", "check")
+}
+
+pub(super) fn format_repository_run_summary(value: &serde_json::Value) -> String {
+    format_repository_execution_summary(value, "Run", "run")
 }
 
 fn format_repository_execution_summary(
@@ -181,6 +47,7 @@ fn format_repository_execution_summary(
             format!("  Targets: {targets}"),
         ];
         append_planned_targets(&mut lines, plan);
+        append_cargo_impact_summary(&mut lines, plan);
         lines.push("  No commands executed (--explain).".into());
         lines.push("  full plan: rerun with --json".into());
         return lines.join("\n");
@@ -277,38 +144,48 @@ fn append_planned_targets(lines: &mut Vec<String>, plan: &serde_json::Value) {
     }
 }
 
-fn structured_target_text(value: &serde_json::Value) -> String {
+fn append_cargo_impact_summary(lines: &mut Vec<String>, plan: &serde_json::Value) {
+    let Some(impacts) = plan["cargo_impacts"].as_array() else {
+        return;
+    };
+    if impacts.is_empty() {
+        return;
+    }
+    lines.push(
+        "  Cargo candidate build scope (configured target selection remains authoritative):".into(),
+    );
+    for impact in impacts {
+        let component = impact["component"].as_str().unwrap_or("<unknown>");
+        let disposition = impact["disposition"].as_str().unwrap_or("unavailable");
+        let packages = impact["build_packages"]
+            .as_array()
+            .map(|packages| {
+                packages
+                    .iter()
+                    .filter_map(|package| package["selector"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|packages| !packages.is_empty())
+            .unwrap_or_else(|| "none recorded".to_owned());
+        lines.push(format!(
+            "  - {component}: {disposition}; packages: {packages}"
+        ));
+        if let Some(targets) = impact["test_targets"].as_array()
+            && !targets.is_empty()
+        {
+            lines.push(format!(
+                "      test-enabled Cargo targets: {}",
+                targets.len()
+            ));
+        }
+    }
+}
+
+pub(super) fn structured_target_text(value: &serde_json::Value) -> String {
     let component = value["component"].as_str().unwrap_or("?");
     let action = value["action"].as_str().unwrap_or("?");
     format!("{component}:{action}")
-}
-
-fn format_run_status_summary(value: &serde_json::Value) -> String {
-    let result = &value["result"];
-    let run_id = result["run_id"].as_str().unwrap_or("<unknown>");
-    let plan_id = result["plan_id"].as_str().unwrap_or("<unknown>");
-    let status = result["status"].as_str().unwrap_or("unknown");
-    let conclusion = result["conclusion"].as_str();
-    let state = conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
-    let mut lines = vec![
-        format!("Run {run_id}: {state}"),
-        format!("  Plan: {plan_id}"),
-    ];
-    if let Some(targets) = result["targets"].as_array() {
-        for target in targets {
-            let address = structured_target_text(&target["target"]);
-            let status = target["status"].as_str().unwrap_or("unknown");
-            let conclusion = target["conclusion"].as_str();
-            let state =
-                conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
-            let receipt = target["receipt_id"]
-                .as_str()
-                .map_or_else(String::new, |id| format!(", receipt {id}"));
-            lines.push(format!("  - {address}: {state}{receipt}"));
-        }
-    }
-    lines.push("  full report: rerun with --json".into());
-    lines.join("\n")
 }
 
 pub(super) fn print_json(value: &serde_json::Value) -> Result<()> {
@@ -322,7 +199,7 @@ pub(super) fn print_json(value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-fn print_text(text: &str) -> Result<()> {
+pub(super) fn print_text(text: &str) -> Result<()> {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     handle.write_all(text.as_bytes())?;
@@ -408,9 +285,6 @@ pub(super) fn format_tool_execution_summary(value: &serde_json::Value) -> String
         format!("{tool}: {}", if ok { "ok" } else { "failed" }),
         format!("  Exit: {exit_status}"),
     ];
-    if let Some(receipt) = value_str(value, "receipt_id") {
-        lines.push(format!("  Receipt: {receipt}"));
-    }
     append_policy_check_details(&mut lines, value);
     if let Some(preview) = tool_output_preview(value) {
         lines.push(format!("  Output: {preview}"));
@@ -420,6 +294,49 @@ pub(super) fn format_tool_execution_summary(value: &serde_json::Value) -> String
 }
 
 fn append_policy_check_details(lines: &mut Vec<String>, value: &serde_json::Value) {
+    if let Some(diagnostics) = value["diagnostics"].as_array() {
+        for (severity, label) in [
+            ("error", "Errors"),
+            ("warning", "Warnings"),
+            ("info", "Unverified references"),
+        ] {
+            let selected = diagnostics
+                .iter()
+                .filter(|d| d["severity"] == severity)
+                .collect::<Vec<_>>();
+            if !selected.is_empty() {
+                lines.push(format!("  {label}: {}", selected.len()));
+                if severity == "info" {
+                    continue;
+                }
+                for diagnostic in selected.iter().take(5) {
+                    let mut location = value_str(diagnostic, "guide")
+                        .unwrap_or("guide")
+                        .to_string();
+                    if let Some(line) = value_u64(diagnostic, "line") {
+                        location.push_str(&format!(":{line}"));
+                    }
+                    if let Some(component) = value_str(diagnostic, "component") {
+                        location.push_str(&format!(" (component {component}"));
+                        if let Some(reference) = value_str(diagnostic, "reference") {
+                            location.push_str(&format!(", guidance {reference}"));
+                        }
+                        location.push(')');
+                    }
+                    let description = format!(
+                        "{location}: {}: {}",
+                        value_str(diagnostic, "code").unwrap_or("diagnostic"),
+                        value_str(diagnostic, "message").unwrap_or("")
+                    );
+                    lines.push(format!(
+                        "  - {}",
+                        concise_preview(&jig_tui::sanitize_text(&description), 220)
+                    ));
+                }
+            }
+        }
+    }
+
     if let Some(count) = value_u64(value, "guide_count") {
         lines.push(format!("  Guides: {count}"));
     }
@@ -488,9 +405,6 @@ pub(super) fn format_migration_add_summary(value: &serde_json::Value) -> String 
         format!("Migration add: {}", if ok { "ok" } else { "failed" }),
         format!("  Name: {name}"),
     ];
-    if let Some(receipt) = value_str(value, "receipt_id") {
-        lines.push(format!("  Receipt: {receipt}"));
-    }
     if let Some(preview) = tool_output_preview(value) {
         lines.push(format!("  Output: {preview}"));
     }
@@ -498,73 +412,11 @@ pub(super) fn format_migration_add_summary(value: &serde_json::Value) -> String 
     lines.join("\n")
 }
 
-pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
-    dev::format_dev_summary(value)
-}
-
-pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
-    dev::format_dev_status_summary(value)
-}
-
-pub(super) fn format_dev_stop_summary(value: &serde_json::Value) -> String {
-    dev::format_dev_stop_summary(value)
-}
-
-pub(super) fn format_proxy_summary(value: &serde_json::Value) -> String {
-    if value_bool(value, "interrupted").unwrap_or(false) {
-        let signal = value_str(value, "termination_signal").unwrap_or("signal");
-        let mut lines = vec![format!("Proxy: stopped ({signal})")];
-        if let Some(app) = value_str(value, "app") {
-            lines.push(format!("  App: {app}"));
-        }
-        lines.push("  full report: rerun with --json".into());
-        return lines.join("\n");
-    }
-
-    let ok = value_bool(value, "ok").unwrap_or(false);
-    let mut lines = vec![format!("Proxy: {}", if ok { "ok" } else { "failed" })];
-    if let Some(running) = value_bool(value, "running") {
-        lines.push(format!("  Running: {}", if running { "yes" } else { "no" }));
-    }
-    if let Some(pid) = value_i64(value, "pid") {
-        lines.push(format!("  PID: {pid}"));
-    }
-    if let Some(http) = value_u64(value, "http_port") {
-        lines.push(format!("  HTTP port: {http}"));
-    }
-    if let Some(https) = value_u64(value, "https_port") {
-        lines.push(format!("  HTTPS port: {https}"));
-    }
-    if let Some(hostname) = value_str(value, "hostname") {
-        lines.push(format!("  Hostname: {hostname}"));
-    }
-    if let Some(app) = value_str(value, "app") {
-        lines.push(format!("  App: {app}"));
-    }
-    if let Some(routes) = value["routes"].as_array() {
-        lines.push(format!("  Routes: {}", routes.len()));
-    }
-    if let Some(path) = value_str(value, "path") {
-        lines.push(format!("  Path: {path}"));
-    }
-    if let Some(state_dir) = value_str(value, "state_dir") {
-        lines.push(format!("  State: {state_dir}"));
-    }
-    if let Some(warning) = value_str(value, "warning")
-        .or_else(|| value_str(value, "trust_warning"))
-        .or_else(|| value_str(value, "note"))
-    {
-        lines.push(format!("  Note: {warning}"));
-    }
-    lines.push("  full report: rerun with --json".into());
-    lines.join("\n")
-}
-
-fn concise_preview(preview: &str, max_chars: usize) -> String {
+pub(super) fn concise_preview(preview: &str, max_chars: usize) -> String {
     concise_preview_with_truncation(preview, max_chars).0
 }
 
-fn concise_preview_with_truncation(preview: &str, max_chars: usize) -> (String, bool) {
+pub(super) fn concise_preview_with_truncation(preview: &str, max_chars: usize) -> (String, bool) {
     let trimmed = preview.trim();
     if trimmed.chars().count() <= max_chars {
         return (trimmed.to_string(), false);
@@ -585,22 +437,21 @@ fn concise_preview_with_truncation(preview: &str, max_chars: usize) -> (String, 
     (truncated, true)
 }
 
-fn value_str<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+pub(super) fn value_str<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(serde_json::Value::as_str)
 }
 
-fn value_bool(value: &serde_json::Value, key: &str) -> Option<bool> {
+pub(super) fn value_bool(value: &serde_json::Value, key: &str) -> Option<bool> {
     value.get(key).and_then(serde_json::Value::as_bool)
 }
 
-fn value_i64(value: &serde_json::Value, key: &str) -> Option<i64> {
+pub(super) fn value_i64(value: &serde_json::Value, key: &str) -> Option<i64> {
     value.get(key).and_then(serde_json::Value::as_i64)
 }
 
-fn value_u64(value: &serde_json::Value, key: &str) -> Option<u64> {
+pub(super) fn value_u64(value: &serde_json::Value, key: &str) -> Option<u64> {
     value.get(key).and_then(serde_json::Value::as_u64)
 }
 
 #[cfg(test)]
-#[path = "output_tests.rs"]
 mod tests;

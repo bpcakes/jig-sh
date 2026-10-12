@@ -1,30 +1,31 @@
 use anyhow::{Result, bail};
+use jig_context::RepoContext;
 use serde_json::{Value, json};
 
-use super::output::{HumanOutput, emit};
+use super::output::{self, emit};
 use super::structured_error::require_json_ok;
 use crate::command::{
-    AgentBootstrapRequest, AgentCommand, CheckCommand, RuntimeCommand, ToolRequest,
+    AgentBootstrapRequest, AgentCommand, CheckCommand, NamedCheck, RuntimeCommand,
 };
-use crate::{context::RepoContext, doctor, runtime};
+use crate::{doctor, runtime};
 
 pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     let ctx = RepoContext::load()?;
-    let progress = crate::progress::CliProgress::for_human_output("setup", json_output);
+    let progress = jig_execution::progress::CliProgress::for_human_output("setup", json_output);
     progress.header("prepare repository and agent tooling");
     #[cfg(all(unix, not(test)))]
-    let signal_session = doctor::DoctorSignalSession::start().map_err(|_| {
+    let signal_session = crate::signal_supervision::SignalSession::start().map_err(|_| {
         anyhow::anyhow!("Setup was not started because signal supervision is unavailable")
     })?;
     #[cfg(all(unix, not(test)))]
     let cancellation = signal_session.cancellation();
     #[cfg(all(unix, not(test)))]
     let mut observer =
-        crate::progress::CliExecutionObserver::with_cancellation(json_output, move || {
+        jig_execution::progress::CliExecutionObserver::with_cancellation(json_output, move || {
             cancellation.cancelled()
         });
     #[cfg(any(not(unix), test))]
-    let mut observer = crate::progress::CliExecutionObserver::for_human_output(json_output);
+    let mut observer = jig_execution::progress::CliExecutionObserver::for_human_output(json_output);
     let outcome = run_setup_with_progress(
         || {
             #[cfg(all(unix, not(test)))]
@@ -44,7 +45,7 @@ pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     );
     let output = outcome?;
     progress.done("setup complete");
-    emit(json_output, HumanOutput::Setup, &output)?;
+    emit(json_output, output::format_setup_summary, &output)?;
     require_json_ok(true, &output)
 }
 
@@ -71,7 +72,7 @@ fn run_setup_with_progress(
     next_phase("doctor before");
     let doctor_before = run_doctor()?;
     next_phase("dependency bootstrap");
-    let bootstrap = dispatch(RuntimeCommand::Bootstrap(ToolRequest::default()))?;
+    let bootstrap = dispatch(RuntimeCommand::Bootstrap)?;
 
     next_phase("agent readiness");
     let agent_before = dispatch(RuntimeCommand::Agent(AgentCommand::Doctor))?;
@@ -99,8 +100,8 @@ fn run_setup_with_progress(
     next_phase("agent verification");
     let agent_after = dispatch(RuntimeCommand::Agent(AgentCommand::Doctor))?;
     next_phase("contract verification");
-    let contract = dispatch(RuntimeCommand::Check(CheckCommand::Contract(
-        ToolRequest::default(),
+    let contract = dispatch(RuntimeCommand::Check(CheckCommand::Named(
+        NamedCheck::CONTRACT,
     )))?;
     next_phase("doctor after");
     let doctor_after = run_doctor()?;
@@ -167,7 +168,7 @@ mod tests {
             |command| {
                 let mut calls = dispatch_calls.borrow_mut();
                 Ok(match command {
-                    RuntimeCommand::Bootstrap(_) => {
+                    RuntimeCommand::Bootstrap => {
                         calls.push("bootstrap");
                         json!({ "ok": true })
                     }
@@ -190,7 +191,7 @@ mod tests {
                         *dispatch_agent_ready.borrow_mut() = true;
                         json!({ "ok": true })
                     }
-                    RuntimeCommand::Check(CheckCommand::Contract(_)) => {
+                    RuntimeCommand::Check(CheckCommand::Named(NamedCheck::CONTRACT)) => {
                         calls.push("check contract");
                         json!({ "ok": true })
                     }
@@ -236,7 +237,7 @@ mod tests {
             || Ok(json!({ "ok": true })),
             |command| {
                 Ok(match command {
-                    RuntimeCommand::Bootstrap(_) => json!({ "ok": true }),
+                    RuntimeCommand::Bootstrap => json!({ "ok": true }),
                     RuntimeCommand::Agent(AgentCommand::Doctor) => {
                         let call = agent_doctor_calls.get();
                         agent_doctor_calls.set(call + 1);
@@ -263,7 +264,9 @@ mod tests {
                         registered.push(request.marketplace.unwrap());
                         json!({ "ok": true })
                     }
-                    RuntimeCommand::Check(CheckCommand::Contract(_)) => json!({ "ok": true }),
+                    RuntimeCommand::Check(CheckCommand::Named(NamedCheck::CONTRACT)) => {
+                        json!({ "ok": true })
+                    }
                     _ => panic!("unexpected setup command"),
                 })
             },

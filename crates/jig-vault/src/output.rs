@@ -34,7 +34,8 @@ pub struct PrivateFilePrecondition {
 }
 
 struct VaultOutputPolicy {
-    store: VaultStore,
+    // Boxed so a retained precondition stays small inside command values.
+    store: Box<VaultStore>,
     operation_label: &'static str,
 }
 
@@ -91,7 +92,7 @@ impl PreparedPrivateFile {
         operation_label: &'static str,
     ) -> Result<PrivateFilePrecondition> {
         let vault_output = VaultOutputPolicy {
-            store,
+            store: Box::new(store),
             operation_label,
         };
         vault_output.validate(destination)?;

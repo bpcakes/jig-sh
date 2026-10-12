@@ -1,1 +1,0 @@
-Clarify that generated Clippy warnings are gate-enforced heuristic policy, document clippy.toml ownership and init collision semantics, add exact preset coverage, exercise existing-file behavior, run generated Rust/React through strict Clippy, and prove threshold violations fail.

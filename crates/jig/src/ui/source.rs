@@ -1,11 +1,10 @@
 use std::sync::{Arc, Mutex};
 
-use jig_ui::dashboard::{
-    DashboardSource, PlanBasis, PlanSnapshotResult, RecorderEpochId, RecorderMode, RecorderRefresh,
-    RecorderRequest, SourceError,
+use jig_dashboard::{
+    DashboardSource, RecorderEpochId, RecorderMode, RecorderRefresh, RecorderRequest, SourceError,
 };
 
-use crate::context::RepoContext;
+use jig_context::RepoContext;
 
 mod epoch;
 
@@ -15,10 +14,9 @@ use epoch::MAX_AGGREGATION_KEYS;
 
 /// Repository-backed dashboard source. The retained epoch is replaced only
 /// after a complete publishable collection and the mutex is never held during
-/// repository, state, loop, or gate work.
+/// repository, state, or loop work.
 pub(crate) struct RepoDashboardSource {
     context: RepoContext,
-    freshness_timeout_ms: Option<u64>,
     state: Mutex<SourceState>,
 }
 
@@ -31,17 +29,11 @@ impl RepoDashboardSource {
     pub(crate) fn new(context: RepoContext) -> Self {
         Self {
             context,
-            freshness_timeout_ms: None,
             state: Mutex::new(SourceState {
                 last_epoch_id: None,
                 retained: None,
             }),
         }
-    }
-
-    pub(crate) fn with_freshness_timeout(mut self, timeout_ms: Option<u64>) -> Self {
-        self.freshness_timeout_ms = timeout_ms;
-        self
     }
 
     fn allocate_epoch(&self) -> Result<RecorderEpochId, SourceError> {
@@ -73,8 +65,7 @@ impl RepoDashboardSource {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Arc<LocalObservationEpoch>, SourceError> {
         let id = self.allocate_epoch()?;
-        LocalObservationEpoch::collect(context, id, cancelled, self.freshness_timeout_ms)
-            .map(Arc::new)
+        LocalObservationEpoch::collect(context, id, cancelled).map(Arc::new)
     }
 
     fn collect_and_retain(
@@ -127,38 +118,6 @@ impl DashboardSource for RepoDashboardSource {
             recorder: epoch.recorder(request.timeline_limit)?,
             status_local: epoch.status_local(),
         })
-    }
-
-    fn plan(
-        &self,
-        basis: PlanBasis,
-        plan_id: String,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<PlanSnapshotResult, SourceError> {
-        let epoch = match basis {
-            PlanBasis::RecorderEpoch(id) => {
-                let Some(epoch) = self.retained_epoch()? else {
-                    return Ok(PlanSnapshotResult::StaleRecorderEpoch);
-                };
-                if epoch.id() != id {
-                    return Ok(PlanSnapshotResult::StaleRecorderEpoch);
-                }
-                epoch
-            }
-            PlanBasis::Fresh => {
-                let current = crate::runtime::refreshed_repository_context(&self.context)
-                    .map_err(|error| epoch::collection_error(error, cancelled))?;
-                let id = self.allocate_epoch()?;
-                return LocalObservationEpoch::fresh_plan(
-                    &current,
-                    id,
-                    &plan_id,
-                    cancelled,
-                    self.freshness_timeout_ms,
-                );
-            }
-        };
-        epoch.plan(&plan_id, cancelled)
     }
 }
 

@@ -1,1 +1,0 @@
-Phase 1: plan a feature registry that removes hardcoded tool and command ownership. Phase 2: implement registry-backed contract/runtime/tool metadata plus TypeScript gate foundation. Phase 3: run comprehensive review. Phase 4: fix findings or finish.

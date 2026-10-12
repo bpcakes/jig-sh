@@ -2,16 +2,20 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use jig_codex_tui::{ConfigurationHome, Home, HomeUpdate, InspectionSource};
+use jig_agents::agent_provider::{
+    AgentProvider, Discovery, HomeInspection, InspectionMode, PreparedLaunch,
+};
+use jig_agents_tui::{ConfigurationHome, Home, HomeUpdate, InspectionSource};
 
-use super::output::{HumanOutput, emit};
-use crate::agent_provider::{AgentProvider, Discovery, HomeInspection, PreparedLaunch};
+use super::output::{Render, emit};
+
+mod automatic;
 
 pub(super) fn homes<P: AgentProvider>(
     provider: &P,
     usage: bool,
     json: bool,
-    output: HumanOutput,
+    output: Render,
 ) -> Result<()> {
     if usage && !P::METADATA.usage {
         bail!(
@@ -20,9 +24,9 @@ pub(super) fn homes<P: AgentProvider>(
         );
     }
     let progress = if !json && (usage || P::METADATA.inspect_on_list) {
-        crate::progress::CliProgress::new(P::METADATA.homes_command)
+        jig_execution::progress::CliProgress::new(P::METADATA.homes_command)
     } else {
-        crate::progress::CliProgress::disabled(P::METADATA.homes_command)
+        jig_execution::progress::CliProgress::disabled(P::METADATA.homes_command)
     };
     progress.header(format!("inspect local {} homes", P::METADATA.name));
     let report = super::home_picker::supervise(|cancelled| {
@@ -43,15 +47,22 @@ pub(super) fn launch<P: AgentProvider>(
     provider: &P,
     home: Option<&Path>,
     args: &[OsString],
+    auto_select: bool,
     dry_run: bool,
     json: bool,
-    output: HumanOutput,
+    output: Render,
 ) -> Result<()> {
     validate_launch::<P>(dry_run, json)?;
+    if auto_select {
+        if home.is_some() {
+            bail!("--auto cannot be combined with HOME");
+        }
+        return automatic::launch(provider, args, dry_run, json, output);
+    }
     let home = match home {
         Some(path) => provider.resolve(path)?,
         None if json => bail!(
-            "Pass a {} HOME when using --json; use `jig {} homes --json` to list homes",
+            "Pass a {} HOME or --auto when using --json; use `jig {} homes --json` to list homes",
             P::METADATA.name,
             P::METADATA.command
         ),
@@ -79,7 +90,7 @@ pub(super) fn finish<P: AgentProvider>(
     mut prepared: PreparedLaunch,
     dry_run: bool,
     json: bool,
-    output: HumanOutput,
+    output: Render,
 ) -> Result<()> {
     if dry_run {
         return emit(json, output, &prepared.report);
@@ -94,13 +105,13 @@ fn select<P: AgentProvider>(provider: &P) -> Result<Option<P::Home>> {
     jig_tui::require_terminal(
         &command,
         &format!(
-            "pass HOME explicitly (see `jig {} homes`)",
+            "pass HOME explicitly or use --auto (see `jig {} homes`)",
             P::METADATA.command
         ),
     )?;
     select_with(provider, |entries, source, warnings| {
         super::home_picker::supervise(|cancelled| {
-            jig_codex_tui::select_provider_with_cancellation(
+            jig_agents_tui::select_provider_with_cancellation(
                 &format!("{} Home Picker", P::METADATA.name),
                 &command,
                 entries,
@@ -125,7 +136,7 @@ fn select_with<P: AgentProvider>(
         choices,
         warnings,
         inspection,
-    } = provider.discover()?;
+    } = provider.discover(InspectionMode::Interactive)?;
     let (selections, entries): (Vec<_>, Vec<_>) = choices
         .into_iter()
         .map(|choice| {

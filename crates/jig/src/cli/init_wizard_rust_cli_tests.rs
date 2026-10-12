@@ -16,7 +16,7 @@ fn init_opts(args: &[&str]) -> InitOpts {
     }
 }
 
-fn prepare(opts: &mut InitOpts) -> Result<bootstrap::PreparedInitAnswers> {
+fn prepare(opts: &mut InitOpts) -> Result<jig_bootstrap::PreparedInitAnswers> {
     prepare_init_interaction_with_io(opts, &mut Cursor::new(Vec::<u8>::new()), &mut Vec::new())
 }
 

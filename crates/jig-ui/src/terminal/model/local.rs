@@ -1,33 +1,24 @@
 use time::OffsetDateTime;
 
-use crate::dashboard::{
-    AppliedLimit, BoundedRows, BoundedText, DecisionTimelineRow, ExhaustedAttempt, Failure,
-    GateObservation, GatesObservation, HarnessObservation, LoopAttempt, LoopLease, LoopObservation,
-    LoopStateError, LoopWorkflow, OpenPlan, PlanSummary, ReceiptTimelineRow, RecorderCounts,
-    RecorderEpochId, RecorderLimits, RecorderSnapshot, ScheduledOccurrence, SessionTimelineRow,
-    SnapshotError, TimelineRow, ToolStat,
+use jig_dashboard::{
+    AppliedLimit, BoundedRows, BoundedText, ExhaustedAttempt, Failure, HarnessObservation,
+    LoopAttempt, LoopLease, LoopObservation, LoopStateError, LoopWorkflow, RecorderEpochId,
+    RecorderLimits, RecorderSnapshot, ScheduledOccurrence, SnapshotError, TargetStat, TimelineRow,
 };
 
 use super::sanitize_text;
 
-mod gates;
 mod health;
-pub(crate) use gates::GateSetView;
-use gates::RemediationView;
 use health::health_items;
 
 #[derive(Clone, Debug)]
 pub(crate) struct LocalDashboard {
-    pub(crate) schema_version: u64,
     pub(crate) generated_at_ms: u64,
     pub(crate) epoch_id: RecorderEpochId,
     pub(crate) repo: LocalRepositoryView,
     pub(crate) harness: LocalHarnessView,
-    pub(crate) current_session_id: Option<String>,
-    pub(crate) counts: RecorderCounts,
-    pub(crate) work: Vec<WorkPlanView>,
     pub(crate) failures: Vec<FailureView>,
-    pub(crate) tools: Vec<ToolView>,
+    pub(crate) targets: Vec<TargetView>,
     pub(crate) health: Vec<HealthItemView>,
     pub(crate) timeline: Vec<TimelineItemView>,
     pub(crate) timeline_limit: usize,
@@ -42,35 +33,25 @@ impl From<RecorderSnapshot> for LocalDashboard {
             .sort_by_key(|failure| std::cmp::Reverse(failure.ended_at_ms));
         snapshot
             .timeline
-            .sort_by_key(|row| std::cmp::Reverse(timeline_timestamp(row)));
+            .sort_by_key(|row| std::cmp::Reverse(row.timestamp_ms));
         let failures = snapshot
             .failures
             .into_iter()
             .map(FailureView::from)
             .collect::<Vec<_>>();
-        let tools = snapshot
-            .tool_stats
+        let targets = snapshot
+            .target_stats
             .into_iter()
-            .map(ToolView::from)
+            .map(TargetView::from)
             .collect::<Vec<_>>();
-        let mut work = snapshot
-            .open_plans
-            .into_iter()
-            .map(WorkPlanView::from)
-            .collect::<Vec<_>>();
-        work.extend(snapshot.history.into_iter().map(WorkPlanView::from));
-        let health = health_items(&failures, &tools, snapshot.loops.as_ref());
+        let health = health_items(&failures, &targets, snapshot.loops.as_ref());
         Self {
-            schema_version: snapshot.schema_version,
             generated_at_ms: snapshot.generated_at_ms,
             epoch_id: snapshot.epoch_id,
             repo: snapshot.repo.into(),
             harness: snapshot.harness.into(),
-            current_session_id: snapshot.current_session_id.as_deref().map(sanitize_text),
-            counts: snapshot.counts,
-            work,
             failures,
-            tools,
+            targets,
             health,
             timeline: snapshot
                 .timeline
@@ -84,15 +65,6 @@ impl From<RecorderSnapshot> for LocalDashboard {
     }
 }
 
-fn timeline_timestamp(row: &TimelineRow) -> Option<u64> {
-    match row {
-        TimelineRow::Receipt(row) => row.timestamp_ms,
-        TimelineRow::Plan(row) => row.timestamp_ms,
-        TimelineRow::Session(row) => row.timestamp_ms,
-        TimelineRow::Decision(row) => row.timestamp_ms,
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct LocalRepositoryView {
     pub(crate) name: String,
@@ -103,8 +75,8 @@ pub(crate) struct LocalRepositoryView {
     pub(crate) detached: bool,
 }
 
-impl From<crate::dashboard::RepositoryObservation> for LocalRepositoryView {
-    fn from(repo: crate::dashboard::RepositoryObservation) -> Self {
+impl From<jig_dashboard::RepositoryObservation> for LocalRepositoryView {
+    fn from(repo: jig_dashboard::RepositoryObservation) -> Self {
         Self {
             name: sanitize_text(&repo.name),
             default_branch: sanitize_text(&repo.default_branch),
@@ -136,153 +108,33 @@ impl From<HarnessObservation> for LocalHarnessView {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkState {
-    Open,
-    Closed,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct WorkPlanView {
-    pub(crate) plan_id: String,
-    pub(crate) display_plan_id: String,
-    pub(crate) title: String,
-    pub(crate) state: WorkState,
-    pub(crate) state_label: String,
-    pub(crate) opened_at: String,
-    pub(crate) closed_at: String,
-    pub(crate) resolution: Option<String>,
-    pub(crate) duration: String,
-    pub(crate) baseline_ref: Option<String>,
-    pub(crate) baseline_oid: Option<String>,
-    pub(crate) baseline_error: Option<String>,
-    pub(crate) gates: Option<GateSummarySetView>,
-    pub(crate) gates_error: Option<String>,
-}
-
-impl From<OpenPlan> for WorkPlanView {
-    fn from(plan: OpenPlan) -> Self {
-        Self {
-            display_plan_id: sanitize_text(&plan.plan_id),
-            plan_id: plan.plan_id,
-            title: sanitize_text(&plan.title),
-            state: WorkState::Open,
-            state_label: "open".to_string(),
-            opened_at: format_timestamp(plan.opened_at_ms),
-            closed_at: "—".to_string(),
-            resolution: None,
-            duration: "—".to_string(),
-            baseline_ref: plan.baseline_ref.as_deref().map(sanitize_text),
-            baseline_oid: plan.baseline_oid.as_deref().map(sanitize_text),
-            baseline_error: plan.baseline_error.as_deref().map(sanitize_text),
-            gates: plan.gates.map(Into::into),
-            gates_error: plan.gates_error.as_deref().map(sanitize_text),
-        }
-    }
-}
-
-impl From<PlanSummary> for WorkPlanView {
-    fn from(plan: PlanSummary) -> Self {
-        Self {
-            display_plan_id: sanitize_text(&plan.plan_id),
-            plan_id: plan.plan_id,
-            title: sanitize_text(&plan.title),
-            state: WorkState::Closed,
-            state_label: sanitize_text(&plan.state),
-            opened_at: format_timestamp(plan.opened_at_ms),
-            closed_at: format_timestamp(plan.closed_at_ms),
-            resolution: plan.resolution.as_deref().map(sanitize_text),
-            duration: format_duration(plan.duration_ms),
-            baseline_ref: plan.baseline_ref.as_deref().map(sanitize_text),
-            baseline_oid: plan.baseline_oid.as_deref().map(sanitize_text),
-            baseline_error: plan.baseline_error.as_deref().map(sanitize_text),
-            gates: None,
-            gates_error: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct GateSummarySetView {
-    pub(crate) overall: String,
-    pub(crate) gates: Vec<GateSummaryView>,
-    pub(crate) limit: LimitView,
-}
-
-impl From<GatesObservation> for GateSummarySetView {
-    fn from(gates: GatesObservation) -> Self {
-        Self {
-            overall: sanitize_text(&gates.overall),
-            limit: LimitView::from_rows(&gates.gates),
-            gates: gates
-                .gates
-                .items()
-                .iter()
-                .map(GateSummaryView::from)
-                .collect(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct GateSummaryView {
-    pub(crate) id: String,
-    pub(crate) subject: String,
-    pub(crate) status: String,
-    pub(crate) freshness: String,
-    pub(crate) ended_at: String,
-}
-
-impl From<&GateObservation> for GateSummaryView {
-    fn from(gate: &GateObservation) -> Self {
-        Self {
-            id: sanitize_text(&gate.id),
-            subject: gate
-                .tool
-                .as_deref()
-                .or(gate.skill.as_deref())
-                .map(sanitize_text)
-                .unwrap_or_else(|| "—".to_string()),
-            status: sanitize_text(&gate.status),
-            freshness: gate
-                .freshness
-                .as_deref()
-                .map(sanitize_text)
-                .unwrap_or_else(|| "—".to_string()),
-            ended_at: format_timestamp(gate.ended_at_ms),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct FailureView {
-    pub(crate) id: String,
-    pub(crate) display_id: String,
-    pub(crate) tool: String,
-    pub(crate) display_plan_id: Option<String>,
+    pub(crate) identity: String,
+    pub(crate) run_id: String,
+    pub(crate) target: String,
     pub(crate) ended_at: String,
-    pub(crate) exit_status: i64,
-    pub(crate) stderr: TextView,
+    pub(crate) outcome: String,
+    pub(crate) output: TextView,
 }
 
 impl From<Failure> for FailureView {
     fn from(failure: Failure) -> Self {
         Self {
-            display_id: sanitize_text(&failure.id),
-            id: failure.id,
-            tool: sanitize_text(&failure.tool_name),
-            display_plan_id: failure.plan_id.as_deref().map(sanitize_text),
+            identity: format!("failure:{}:{}", failure.run_id, failure.target),
+            run_id: sanitize_text(&failure.run_id),
+            target: sanitize_text(&failure.target),
             ended_at: format_timestamp(failure.ended_at_ms),
-            exit_status: failure.exit_status,
-            stderr: failure.stderr_preview.into(),
+            outcome: outcome_label(Some(&failure.conclusion), failure.exit_code),
+            output: failure.output_tail.into(),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ToolView {
-    pub(crate) raw_tool: String,
-    pub(crate) tool: String,
+pub(crate) struct TargetView {
+    pub(crate) raw_target: String,
+    pub(crate) target: String,
     pub(crate) runs: u64,
     pub(crate) failures: u64,
     pub(crate) last_status: String,
@@ -290,82 +142,49 @@ pub(crate) struct ToolView {
     pub(crate) average: String,
 }
 
-impl From<ToolStat> for ToolView {
-    fn from(tool: ToolStat) -> Self {
+impl From<TargetStat> for TargetView {
+    fn from(stat: TargetStat) -> Self {
         Self {
-            tool: sanitize_text(&tool.tool),
-            raw_tool: tool.tool,
-            runs: tool.runs,
-            failures: tool.failures,
-            last_status: if tool.last_exit_status == 0 {
-                "pass".to_string()
-            } else {
-                format!("exit {}", tool.last_exit_status)
-            },
-            last_ended_at: format_timestamp(Some(tool.last_ended_at_ms)),
-            average: format_duration(Some(tool.avg_duration_ms)),
+            target: sanitize_text(&stat.target),
+            raw_target: stat.target,
+            runs: stat.runs,
+            failures: stat.failures,
+            last_status: outcome_label(stat.last_conclusion.as_deref(), None),
+            last_ended_at: format_timestamp(Some(stat.last_ended_at_ms)),
+            average: format_duration(Some(stat.avg_duration_ms)),
         }
+    }
+}
+
+/// Explicit text for a target outcome, so no status relies on color alone.
+fn outcome_label(conclusion: Option<&str>, exit_code: Option<i64>) -> String {
+    let conclusion = conclusion.map_or_else(|| "unfinished".to_string(), sanitize_text);
+    match exit_code {
+        Some(code) if conclusion != "success" => format!("{conclusion} (exit {code})"),
+        _ => conclusion,
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TimelineFilter {
     All,
-    Receipts,
     Failures,
-    Plans,
-    Sessions,
-    Decisions,
 }
 
 impl TimelineFilter {
-    pub(crate) const ALL: [Self; 6] = [
-        Self::All,
-        Self::Receipts,
-        Self::Failures,
-        Self::Plans,
-        Self::Sessions,
-        Self::Decisions,
-    ];
+    pub(crate) const ALL: [Self; 2] = [Self::All, Self::Failures];
 
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::All => "all",
-            Self::Receipts => "receipts",
             Self::Failures => "failures",
-            Self::Plans => "plans",
-            Self::Sessions => "sessions",
-            Self::Decisions => "decisions",
         }
     }
 
     pub(crate) fn matches(self, row: &TimelineItemView) -> bool {
         match self {
             Self::All => true,
-            Self::Receipts => row.kind == TimelineKind::Receipt,
-            Self::Failures => row.kind == TimelineKind::Receipt && row.failed_receipt,
-            Self::Plans => row.kind == TimelineKind::Plan,
-            Self::Sessions => row.kind == TimelineKind::Session,
-            Self::Decisions => row.kind == TimelineKind::Decision,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TimelineKind {
-    Receipt,
-    Plan,
-    Session,
-    Decision,
-}
-
-impl TimelineKind {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Receipt => "receipt",
-            Self::Plan => "plan",
-            Self::Session => "session",
-            Self::Decision => "decision",
+            Self::Failures => row.failed,
         }
     }
 }
@@ -374,170 +193,53 @@ impl TimelineKind {
 pub(crate) struct TimelineItemView {
     pub(crate) identity: String,
     pub(crate) display_identity: String,
-    pub(crate) kind: TimelineKind,
     pub(crate) timestamp: String,
-    pub(crate) plan_id: Option<String>,
     pub(crate) primary: String,
     pub(crate) secondary: String,
-    pub(crate) failed_receipt: bool,
+    pub(crate) failed: bool,
     pub(crate) detail: DetailDocument,
 }
 
 impl From<TimelineRow> for TimelineItemView {
     fn from(row: TimelineRow) -> Self {
-        match row {
-            TimelineRow::Receipt(row) => receipt_timeline(row),
-            TimelineRow::Plan(row) => {
-                let mut lines = vec![
-                    field("Event", &row.event),
-                    field("Plan", &row.plan_id),
-                    field("Record", &row.id),
-                ];
-                push_optional(&mut lines, "Title", row.title.as_deref());
-                push_optional(&mut lines, "Resolution", row.resolution.as_deref());
-                timeline_view(TimelineDraft {
-                    identity: row.stable_identity,
-                    kind: TimelineKind::Plan,
-                    timestamp_ms: row.timestamp_ms,
-                    plan_id: Some(row.plan_id.clone()),
-                    primary: format!(
-                        "{} {}",
-                        sanitize_text(&row.event),
-                        sanitize_text(&row.plan_id)
-                    ),
-                    secondary: row.title.as_deref().map(sanitize_text).unwrap_or_default(),
-                    failed_receipt: false,
-                    detail: DetailDocument::new("Plan event", lines),
-                })
-            }
-            TimelineRow::Session(row) => session_timeline(row),
-            TimelineRow::Decision(row) => decision_timeline(row),
+        let failed = matches!(
+            row.conclusion.as_deref(),
+            Some("failure" | "timed_out" | "blocked")
+        );
+        let outcome = outcome_label(row.conclusion.as_deref(), row.exit_code);
+        let mut lines = vec![
+            field("Run", &row.run_id),
+            field("Target", &row.target),
+            field("Status", &row.status),
+            format!("Conclusion: {outcome}"),
+            format!(
+                "Exit: {}",
+                row.exit_code
+                    .map_or_else(|| "—".to_string(), |code| code.to_string())
+            ),
+            format!("Started: {}", format_timestamp(row.started_at_ms)),
+            format!("Ended: {}", format_timestamp(row.ended_at_ms)),
+            format!("Duration: {}", format_duration(row.duration_ms)),
+        ];
+        if let Some(count) = row.finding_count {
+            lines.push(format!("Findings: {count}"));
         }
-    }
-}
-
-fn receipt_timeline(row: ReceiptTimelineRow) -> TimelineItemView {
-    let failed = row.exit_status != 0;
-    let mut lines = vec![
-        field("Receipt", &row.id),
-        field("Tool", &row.tool_name),
-        format!("Exit: {}", row.exit_status),
-        format!("Started: {}", format_timestamp(row.started_at_ms)),
-        format!("Ended: {}", format_timestamp(row.ended_at_ms)),
-        format!("Duration: {}", format_duration(row.duration_ms)),
-    ];
-    push_optional(
-        &mut lines,
-        "Command key",
-        row.invoked_command_key.as_deref(),
-    );
-    push_optional(&mut lines, "Plan", row.plan_id.as_deref());
-    push_optional(&mut lines, "Session", row.session_id.as_deref());
-    push_optional(&mut lines, "Diff", row.diff_summary.as_deref());
-    if let Some(count) = row.changed_path_count {
-        lines.push(format!("Changed paths: {count}"));
-    }
-    if let Some(stderr) = row.stderr_preview {
-        append_text(&mut lines, "Stderr", &stderr.into());
-    }
-    timeline_view(TimelineDraft {
-        identity: row.stable_identity,
-        kind: TimelineKind::Receipt,
-        timestamp_ms: row.timestamp_ms,
-        plan_id: row.plan_id,
-        primary: format!(
-            "{} {}",
-            sanitize_text(&row.tool_name),
-            if failed {
-                format!("exit {}", row.exit_status)
-            } else {
-                "pass".to_string()
-            }
-        ),
-        secondary: row
-            .diff_summary
-            .as_deref()
-            .map(sanitize_text)
-            .unwrap_or_default(),
-        failed_receipt: failed,
-        detail: DetailDocument::new("Receipt event", lines),
-    })
-}
-
-fn session_timeline(row: SessionTimelineRow) -> TimelineItemView {
-    let mut lines = vec![
-        field("Session", &row.session_id),
-        field("Event", &row.event),
-        field("Record", &row.id),
-    ];
-    push_optional(&mut lines, "Outcome", row.outcome.as_deref());
-    timeline_view(TimelineDraft {
-        identity: row.stable_identity,
-        kind: TimelineKind::Session,
-        timestamp_ms: row.timestamp_ms,
-        plan_id: None,
-        primary: format!(
-            "{} {}",
-            sanitize_text(&row.event),
-            sanitize_text(&row.session_id)
-        ),
-        secondary: row
-            .outcome
-            .as_deref()
-            .map(sanitize_text)
-            .unwrap_or_default(),
-        failed_receipt: false,
-        detail: DetailDocument::new("Session event", lines),
-    })
-}
-
-fn decision_timeline(row: DecisionTimelineRow) -> TimelineItemView {
-    let rationale: TextView = row.rationale.into();
-    let mut lines = vec![
-        field("Decision", &row.id),
-        field("Title", &row.title),
-        field("Selected", &row.selected_option),
-    ];
-    push_optional(&mut lines, "Plan", row.plan_id.as_deref());
-    append_text(&mut lines, "Rationale", &rationale);
-    timeline_view(TimelineDraft {
-        identity: row.stable_identity,
-        kind: TimelineKind::Decision,
-        timestamp_ms: row.timestamp_ms,
-        plan_id: row.plan_id,
-        primary: format!(
-            "{} → {}",
-            sanitize_text(&row.title),
-            sanitize_text(&row.selected_option)
-        ),
-        secondary: rationale.lines.join(" · "),
-        failed_receipt: false,
-        detail: DetailDocument::new("Decision event", lines),
-    })
-}
-
-struct TimelineDraft {
-    identity: String,
-    kind: TimelineKind,
-    timestamp_ms: Option<u64>,
-    plan_id: Option<String>,
-    primary: String,
-    secondary: String,
-    failed_receipt: bool,
-    detail: DetailDocument,
-}
-
-fn timeline_view(draft: TimelineDraft) -> TimelineItemView {
-    TimelineItemView {
-        display_identity: sanitize_text(&draft.identity),
-        identity: draft.identity,
-        kind: draft.kind,
-        timestamp: format_timestamp(draft.timestamp_ms),
-        plan_id: draft.plan_id,
-        primary: draft.primary,
-        secondary: draft.secondary,
-        failed_receipt: draft.failed_receipt,
-        detail: draft.detail,
+        if let Some(output) = row.output_tail {
+            append_text(&mut lines, "Output tail", &output.into());
+        }
+        TimelineItemView {
+            display_identity: sanitize_text(&row.stable_identity),
+            identity: row.stable_identity,
+            timestamp: format_timestamp(row.timestamp_ms),
+            primary: format!("{} {outcome}", sanitize_text(&row.target)),
+            secondary: format!(
+                "{} · {}",
+                format_duration(row.duration_ms),
+                sanitize_text(&row.run_id)
+            ),
+            failed,
+            detail: DetailDocument::new("Target result", lines),
+        }
     }
 }
 
@@ -618,20 +320,16 @@ impl LimitView {
 
 #[derive(Clone, Debug)]
 pub(crate) struct LocalLimitsView {
-    pub(crate) open_plans: LimitView,
-    pub(crate) history: LimitView,
     pub(crate) failures: LimitView,
-    pub(crate) tools: LimitView,
+    pub(crate) targets: LimitView,
     pub(crate) timeline: LimitView,
 }
 
 impl From<RecorderLimits> for LocalLimitsView {
     fn from(limits: RecorderLimits) -> Self {
         Self {
-            open_plans: limits.open_plans.into(),
-            history: limits.history.into(),
             failures: limits.failures.into(),
-            tools: limits.tool_stats.into(),
+            targets: limits.target_stats.into(),
             timeline: limits.timeline.into(),
         }
     }
@@ -693,13 +391,6 @@ pub(crate) fn format_duration(duration_ms: Option<u64>) -> String {
         Some(ms) if ms < 60_000 => format!("{:.1}s", ms as f64 / 1_000.0),
         Some(ms) => format!("{}m {}s", ms / 60_000, (ms % 60_000) / 1_000),
     }
-}
-
-pub(super) fn sanitize_rows(rows: &BoundedRows<String>) -> Vec<String> {
-    rows.items()
-        .iter()
-        .map(|value| sanitize_text(value))
-        .collect()
 }
 
 fn field(label: &str, value: &str) -> String {

@@ -3,6 +3,9 @@ use jig_contract::{
     FeatureDescriptor, NativeToolDescriptor, NativeToolKind, RepositoryAdapterDescriptor, tool,
 };
 
+mod migrations;
+pub use migrations::{MigrationVersionConflict, migration_version_conflicts};
+
 const MIGRATION_ADD_COMMAND: &str = "migration_add_command";
 const SCHEMA_CHECK_COMMAND: &str = "schema_check_command";
 const SCHEMA_DUMP_COMMAND: &str = "schema_dump_command";

@@ -88,7 +88,7 @@ fn direct_file_budget_json_uses_stable_exits_and_creates_no_durable_state() {
 
     let authored = jig()
         .current_dir(repo.path())
-        .args(["check", "repo:file-budget", "--no-receipt", "--json"])
+        .args(["check", "repo:file-budget", "--json"])
         .output()
         .unwrap();
     assert_authored_file_budget(&authored);
@@ -102,7 +102,6 @@ fn direct_file_budget_json_uses_stable_exits_and_creates_no_durable_state() {
             &before,
             "--comparison-provenance",
             "push_before",
-            "--no-receipt",
             "--json",
         ])
         .output()
@@ -145,7 +144,7 @@ fn repository_check_prints_lease_contention_before_the_lease_is_released() {
     let stderr = File::create(&stderr_path).unwrap();
     let mut child = jig()
         .current_dir(repo.path())
-        .args(["check", "api:test", "--no-receipt"])
+        .args(["check", "api:test"])
         .stdout(Stdio::null())
         .stderr(Stdio::from(stderr))
         .spawn()
@@ -198,15 +197,22 @@ fn external_check_selectors_accept_global_json_and_help_after_the_selector() {
     let payload: Value = serde_json::from_slice(&json_output.stdout).unwrap();
     assert_eq!(payload["run"]["conclusion"], "failure");
 
-    let help = jig()
-        .current_dir(repo.path())
-        .args(["check", "api:test", "--help"])
-        .output()
-        .unwrap();
-    assert!(help.status.success());
-    let help = String::from_utf8_lossy(&help.stdout);
-    assert!(help.contains("Run configured project checks"), "{help}");
-    assert!(!help.contains("unknown check option"), "{help}");
+    for flags in [
+        &["--help"][..],
+        &["--json", "--help"][..],
+        &["--help", "--json"][..],
+    ] {
+        let help = jig()
+            .current_dir(repo.path())
+            .args(["check", "api:test"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert!(help.status.success(), "{flags:?}: {help:?}");
+        let help = String::from_utf8_lossy(&help.stdout);
+        assert!(help.contains("Run configured project checks"), "{help}");
+        assert!(!help.contains("unknown check option"), "{help}");
+    }
 }
 
 #[test]
@@ -218,6 +224,13 @@ fn json_mode_wraps_usage_and_pre_output_command_errors() {
     assert_eq!(usage["ok"], false);
     assert_eq!(usage["error"]["kind"], "usage");
     assert_eq!(usage["exit_status"], 2);
+    assert!(
+        usage["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unrecognized subcommand 'work'"),
+        "{usage:#}"
+    );
 
     let repo = tempdir().unwrap();
     let command = jig()
@@ -283,38 +296,8 @@ fn json_mode_classifies_output_mode_conflicts_as_usage_errors() {
     for args in [
         vec!["--json", "status", "--tui"],
         vec!["status", "--tui", "--json"],
-        vec![
-            "--json",
-            "work",
-            "start",
-            "--title",
-            "test",
-            "--print-plan-id",
-        ],
-        vec![
-            "work",
-            "--json",
-            "start",
-            "--title",
-            "test",
-            "--print-plan-id",
-        ],
-        vec![
-            "work",
-            "start",
-            "--json",
-            "--title",
-            "test",
-            "--print-plan-id",
-        ],
-        vec![
-            "work",
-            "start",
-            "--title",
-            "test",
-            "--print-plan-id",
-            "--json",
-        ],
+        vec!["--json", "ui", "--refresh-seconds", "5"],
+        vec!["ui", "--refresh-seconds", "5", "--json"],
     ] {
         let output = jig().args(args).output().unwrap();
         assert_eq!(output.status.code(), Some(2));
@@ -324,15 +307,6 @@ fn json_mode_classifies_output_mode_conflicts_as_usage_errors() {
         assert_eq!(output["error"]["kind"], "usage");
         assert_eq!(output["exit_status"], 2);
     }
-}
-
-#[test]
-fn mcp_parse_errors_keep_stdout_reserved_for_protocol_frames() {
-    let output = jig().args(["mcp", "--json", "--bogus"]).output().unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--bogus'"));
 }
 
 #[test]
@@ -363,7 +337,7 @@ fn foreground_run_json_failure_and_human_explain_use_run_output() {
 
     let result = jig()
         .current_dir(repo.path())
-        .args(["run", "api:test", "--json", "--no-receipt"])
+        .args(["run", "api:test", "--json"])
         .output()
         .unwrap();
     assert!(!result.status.success());
@@ -374,6 +348,56 @@ fn foreground_run_json_failure_and_human_explain_use_run_output() {
     assert_eq!(output["run"]["targets"][0]["exit_code"], 7);
     assert!(output["run"]["targets"][0]["receipt_id"].is_null());
     assert!(!repo.path().join(".agent/state/receipts.jsonl").exists());
+}
+
+#[test]
+fn non_vault_targets_do_not_inherit_reserved_vault_passphrase_variables() {
+    // The target fails with a distinct status unless both reserved variables
+    // are absent, the withheld marker matches the expectation, and an ordinary
+    // variable still flows through.
+    const COMMAND: &str = r#"[ -z "${JIG_VAULT_PASSPHRASE+x}" ] && [ -z "${JIG_VAULT_NEW_PASSPHRASE+x}" ] || exit 86; [ "${JIG_VAULT_PASSPHRASE_WITHHELD-unset}" = "$JIG_TEST_EXPECTED_MARKER" ] || exit 87; [ "${JIG_TEST_ORDINARY_ENV-}" = preserved ] || exit 88"#;
+    const CURRENT: &str = "test-only-reserved-current";
+    const NEW: &str = "test-only-reserved-new";
+
+    for (reserved, expected_marker) in [(true, "1"), (false, "unset")] {
+        for args in [
+            ["check", "api:test", "--json"],
+            ["run", "api:test", "--json"],
+        ] {
+            // A fresh repository keeps every case from reusing a receipt.
+            let repo = tempdir().unwrap();
+            write_v6_command_test_repo(repo.path(), COMMAND);
+            let mut command = jig();
+            command
+                .current_dir(repo.path())
+                .args(args)
+                .env_remove("JIG_VAULT_PASSPHRASE")
+                .env_remove("JIG_VAULT_NEW_PASSPHRASE")
+                .env_remove("JIG_VAULT_PASSPHRASE_WITHHELD")
+                .env("JIG_TEST_EXPECTED_MARKER", expected_marker)
+                .env("JIG_TEST_ORDINARY_ENV", "preserved");
+            if reserved {
+                command
+                    .env("JIG_VAULT_PASSPHRASE", CURRENT)
+                    .env("JIG_VAULT_NEW_PASSPHRASE", NEW);
+            }
+
+            let output = command.output().unwrap();
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let label =
+                format!("{args:?} reserved={reserved}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            assert!(output.status.success(), "{label}");
+            let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(payload["run"]["conclusion"], "success", "{label}");
+            assert_eq!(payload["run"]["targets"][0]["exit_code"], 0, "{label}");
+            for value in [CURRENT, NEW] {
+                assert!(!stdout.contains(value), "{label}");
+                assert!(!stderr.contains(value), "{label}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -405,4 +429,20 @@ fn foreground_run_inventory_is_ready_on_v6_and_v7() {
         assert_eq!(run["status"], "ready");
         assert!(run["reason_code"].is_null());
     }
+}
+
+#[test]
+fn removed_mcp_command_reports_a_structured_usage_error() {
+    let output = jig().args(["--json", "mcp"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["kind"], "usage");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unrecognized subcommand 'mcp'")
+    );
 }

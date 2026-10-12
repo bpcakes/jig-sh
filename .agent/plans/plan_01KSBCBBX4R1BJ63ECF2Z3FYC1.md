@@ -1,1 +1,0 @@
-Plan, implement, review, and verify repo-scoped Jig vault behavior for init/adopt and vault commands.

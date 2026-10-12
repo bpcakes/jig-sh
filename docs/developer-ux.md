@@ -1,10 +1,10 @@
 # Developer UX
 
-Jig is designed to make a repository feel immediately operable to a developer, an agent, or a CI job without requiring any of them to rediscover the same local conventions. The core UX promise is simple: after a repo is initialized or adopted, `scripts/jig` becomes the stable front door for setup, checks, local development, work evidence, agent readiness, and selected machine-local secrets.
+Jig is designed to make a repository feel immediately operable to a developer, an agent, or a CI job without requiring any of them to rediscover the same local conventions. The core UX promise is simple: after a repo is initialized or adopted, `scripts/jig` becomes the stable front door for setup, checks, local development, check evidence, agent readiness, and selected machine-local secrets.
 
 This workflow is supported on Linux and macOS hosts. See [Platform Support](platform-support.md) for the CI guarantee, unsupported-host policy, and feature-specific limits.
 
-That front door is intentionally repo-local. Developers do not need to remember whether a project uses a root Cargo workspace, SQLx metadata, a Vite frontend, a custom schema dump, or a particular MCP command. The repo records those decisions in `.jig.toml` and `.agent/jig-contract.json`, and the generated launcher accepts a runtime only after it validates the repository contract and requested build profile.
+That front door is intentionally repo-local. Developers do not need to remember whether a project uses a root Cargo workspace, SQLx metadata, a Vite frontend, a custom schema dump, or a particular check command. The repo records those decisions in `.jig.toml` and `.agent/jig-contract.json`, and the generated launcher accepts a runtime only after it validates the repository contract and requested build profile.
 
 ## First Contact
 
@@ -13,9 +13,9 @@ Jig splits the first-run experience into two cases:
 - `jig init` creates a new repository with the harness already present, optionally with generated starter application code from a preset.
 - `jig adopt` adds the harness to an existing repository while preserving project-owned files and guidance.
 
-Both flows generate the same core assets: `.jig.toml`, `scripts/jig`, `.mcp.json`, root agent guidance, `agent-map.md`, `.agent/PLANS.md`, `.agent/jig-contract.json`, scripts, and CI workflows. Existing root `AGENTS.md` content is preserved; Jig only manages the marked block between the Jig comments. Existing root `Makefile` content also remains project-owned, because generated commands are routed through `scripts/jig`. For loop-only onboarding on an existing repo, `jig adopt . --minimal` renders `.jig.toml` plus `.agent/` scaffolding (contract, plans, state, cache ignore rules, and block-managed gitignore/gitattributes) without scripts, workflows, or agent context files.
+Both flows generate the same core assets: `.jig.toml`, `scripts/jig`, root agent guidance, `agent-map.md`, `.agent/jig-contract.json`, scripts, and CI workflows. Existing root `AGENTS.md` content is preserved; Jig only manages the marked block between the Jig comments. Existing root `Makefile` content also remains project-owned, because generated commands are routed through `scripts/jig`. For loop-only onboarding on an existing repo, `jig adopt . --minimal` renders `.jig.toml` plus `.agent/` scaffolding (contract, state, cache ignore rules, and block-managed gitignore/gitattributes) without scripts, workflows, or agent context files.
 
-The entry commands are intentionally separate. Start a new repo with `jig init`; add Jig to a repo that already exists with `jig adopt .`, which previews by default and applies only when re-run with `--write`. A bare terminal `jig init /path/to/new-repo` guides the project shape using the same five descriptions as `jig presets`; only the Rust React and Go React application choices continue to database and frontend questions. `--defaults` skips only the project-shape wizard and fills omitted shape choices with Rust React, no database, and `web`; initial vault setup can still request a passphrase unless `JIG_VAULT_PASSPHRASE` or `--no-vault` is used. `--no-input` skips the wizard but requires a complete explicit shape and never prompts for a vault passphrase. Non-terminal init follows the strict behavior unless `--defaults` is supplied. `harness-only`, `rust-library`, and `rust-cli` are complete when named explicitly and reject application-shape flags. Use `--preset harness-only --no-input --no-vault` for an unattended full harness without starter project code. An answers file with `harness_footprint = "minimal"` is itself a complete harness-only shape in every interaction mode and rejects Rust/database/frontend scaffold choices. Global `--json` only selects output format and never changes these interaction rules.
+The entry commands are intentionally separate. Start a new repo with `jig init`; add Jig to a repo that already exists with `jig adopt .`, which previews by default and applies only when re-run with `--write`. A bare terminal `jig init /path/to/new-repo` guides the project shape using the same five descriptions as `jig presets`; only the Rust React and Go React application choices continue to database and frontend questions. `--defaults` skips only the project-shape wizard and fills omitted shape choices with Rust React, no database, and `web`; initial vault setup can still request a passphrase unless `--no-vault` is used or the operator provides `JIG_VAULT_PASSPHRASE`. `--no-input` skips the wizard but requires a complete explicit shape and never prompts for a vault passphrase. Non-terminal init follows the strict behavior unless `--defaults` is supplied. `harness-only`, `rust-library`, and `rust-cli` are complete when named explicitly and reject application-shape flags. Use `--preset harness-only --no-input --no-vault` for an unattended full harness without starter project code. An answers file with `harness_footprint = "minimal"` is itself a complete harness-only shape in every interaction mode and rejects Rust/database/frontend scaffold choices. Global `--json` only selects output format and never changes these interaction rules.
 
 The practical result is that a new contributor can start with a small command set:
 
@@ -47,7 +47,7 @@ Adoption is optimized for low surprise:
 - `jig adopt` previews by default; `--write` applies the reviewed render after confirmation unless `--defaults` or `--no-input` is supplied, and records an undo-oriented cache receipt with backups for overwritten managed files.
 - Template-managed files are not overwritten during `jig update` unless the caller passes `--force`.
 - `.jig.toml` rejects unknown keys so stale answers and typos fail early.
-- Local template dogfooding can use embedded templates from an unreleased binary by default, an explicit committed template source for checkout metadata, or an explicit VCS ref for remote template code. Template edits must refresh the checked-in embedded snapshot with `JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh`.
+- Local template dogfooding can use embedded templates from an unreleased binary by default, an explicit committed template source for checkout metadata, or an explicit VCS ref for remote template code. Template edits must refresh the checked-in embedded snapshot with `JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-bootstrap`.
 
 This makes the adoption path friendly to established repositories. Jig adds an operating harness around the repo instead of trying to reorganize the application.
 
@@ -59,7 +59,7 @@ For greenfield repositories, `jig init` gives developers an immediate typed cont
 jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
 ```
 
-For the guided path, run `jig init /path/to/new-repo` from a terminal. Choose `rust-react`, `go-react`, `harness-only`, `rust-library`, or `rust-cli`. The application path then asks for its supported database and frontend selection: Go also asks for a module import path and supports `none`/`postgres` plus `web`/`landing`; Rust React additionally supports SQLite and `admin`. The harness-only and Rust-only paths ask no database or frontend questions. Jig resolves the answers file first, prompts only for missing choices, treats a stored minimal footprint as harness-only, validates incompatible shapes, and completes project-shape validation before asking for the initial vault passphrase or creating the destination.
+For the guided path, run `jig init /path/to/new-repo` from a terminal. Choose `rust-react`, `go-react`, `harness-only`, `rust-library`, or `rust-cli`. The application path then asks for its supported database and frontend selection: both application presets support `none`/`postgres`; Go also asks for a module import path and supports `web`/`landing`, while Rust React additionally supports `admin`. The harness-only and Rust-only paths ask no database or frontend questions. Jig resolves the answers file first, prompts only for missing choices, treats a stored minimal footprint as harness-only, validates incompatible shapes, and completes project-shape validation before asking for the initial vault passphrase or creating the destination.
 
 For a new Rust repository without an application stack, use one of the explicit Rust-only presets:
 
@@ -84,14 +84,16 @@ scripts/jig check test
 
 Setup creates `Cargo.lock`; commit it for either preset so locked checks and CI share the resolution. The root/member Cargo manifests, root `clippy.toml`, seed source, crate guide, and scaffold README are generated once and become project-owned. `jig update` maintains the harness without rewriting them. Root guidance talks about the Rust workspace and crate ownership, and neither preset configures or recommends `scripts/jig dev`.
 
-When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, HTTP boundary crate for Axum handlers and middleware, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass:
+When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, Batter runtime crate, HTTP boundary and shared middleware crates, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass. An admin frontend also gets a separate admin API and HTTP crate. `--metrics otlp` adds Batter's OTLP metrics export, and `--jobs runledger` (with `--db postgres`) adds a jobs crate whose Runledger worker runs supervised in the API process; both default to `none`. See [Rust applications on Batter](rust-applications.md) for lifecycle ownership and deployment limits:
 
 ```sh
 jig presets
 jig init /path/to/new-repo \
   --preset rust-react \
   --db postgres \
-  --frontends web,landing,admin
+  --frontends web,landing,admin \
+  --metrics otlp \
+  --jobs runledger
 ```
 
 The Go + React preset creates a Go 1.26 module with chi/Huma HTTP boundaries, an offline Huma OpenAPI exporter, and the same generated React/client workspace. PostgreSQL adds pgxpool, embedded Goose migrations, sqlc queries, and checked-in generated code:
@@ -104,7 +106,7 @@ jig init /path/to/new-repo \
   --frontends web
 ```
 
-Generated Go checks are `scripts/jig check fmt`, `lint`, `test`, `test-locked`, and PostgreSQL-only `sqlc`. The public TypeScript client is regenerated transactionally from Huma OpenAPI with Hey API. SQLite and the separate privileged admin boundary remain intentionally unsupported by `go-react` and fail before files are published.
+Generated Go checks are `scripts/jig check fmt`, `lint`, `test`, `test-locked`, and PostgreSQL-only `sqlc`. The public TypeScript client is regenerated transactionally from Huma OpenAPI with Hey API. SQLite is not a scaffold option, and the separate privileged admin boundary remains intentionally unsupported by `go-react`.
 
 Generated React Node-side typings stay in the same major and at or below the minor version of the generated minimum Node runtime.
 
@@ -112,11 +114,11 @@ Generated React Node-side typings stay in the same major and at or below the min
 
 The canonical shorthands are `web`, `landing`, and `admin`; the compatible aliases `marketing` / `astro` and `admin-panel` resolve to the same scaffold families without a custom-name confirmation. Any other bare value remains supported as a custom frontend name, but interactive init displays the resolved app kind and directory before asking for confirmation. Non-interactive init includes the same notice in its summary. Supplying `name:spa`, `name:admin`, or `name:astro` makes custom intent explicit and needs no confirmation. The Rust + React backend owns the case-insensitive dev identity `api` and its `JIG_DEV_API_*` environment contract, so frontend names must use another identity such as `api-client`.
 
-The generated root is a private JavaScript workspace with `.node-version`, pinned package-manager metadata, and one root lockfile. Applicable Node-version authorities must be bounded real regular files reached through stable in-repository directories and contain exactly one token; malformed, empty, multiline, special, or symlinked authorities fail instead of falling back. CI synthesizes the pinned version only when every applicable authority is truly absent and writes that fallback under runner-owned temporary storage, never through `.node-version`. Fresh Yarn scaffolds select the `node-modules` linker. The package `bootstrap` script and `scripts/jig bootstrap` share one dependency entrypoint; neither requires application database/provider credentials or initializes a database. `scripts/jig setup` uses the same bootstrap before verifying agent tooling and the harness. Initialize a database explicitly with the package `database:setup` script or `bash scripts/setup-database.sh`. Export a nonempty `DATABASE_URL` or configure the backend `.env` first; an empty or unrelated `.env` fails the guard. Database setup creates or concurrently reuses the configured database and applies migrations using the existing role's authority, without creating roles or granting permissions. Both Rust and Go scaffolds use this separation; Go bootstrap also prepares sqlc and API client code from local schemas without database access. Bootstrap performs one dependency install in the package-manager-authoritative workspace scope and records a versioned fingerprint of every authoritative manifest/config/patch plus structural proof of node-modules, complete Yarn PnP companions, or a genuinely dependency-free package. Every in-memory SQLite pool retains one non-retiring connection so its database survives for the pool lifetime; private-cache URLs additionally restrict the pool to one checkout, while shared-cache URLs retain concurrent connections. Yarn Classic fingerprints the runtime's effective configuration, environment overrides, cache, version, platform, and path, then stamps the exclusive artifact Yarn actually produced; its PnP proof attests referenced external-cache packages while local workspace source edits remain independent of dependency readiness. Berry readiness uses Yarn's effective linker, cache, install-state, unplugged, data, and ESM-loader paths; only archives and unplugged packages referenced by the PnP runtime state are attested, so unrelated additions to a shared global cache do not invalidate the repo. npm installs neutralize inherited settings that would skip writes, locks, workspace members, platform packages, or executable links while retaining the repository's install-script approval policy. The checker remains compatible with stock macOS Bash 3.2, treats Yarn authority-enumeration errors as hard failures, and follows Bash-owned job identity after an interrupted worker wait. Every generated web/E2E package script re-enters its configured app through the checker, so CI cannot bypass those scope and authority checks. `scripts/jig dev` requires that exact state before launching any app; replacing an install directory, loader, PnP data/cache, or authoritative workspace input invalidates readiness. A verified live install worker remains authoritative even if its calling wrapper dies, while stale owners are recovered and unverifiable owners fail closed after a bounded wait. App `dev` scripts perform no install or other network mutation. Commit the selected lockfile. Every generated Rust/React workspace requires Rust 1.94 or newer. The app crate parses typed `AppConfig` once at startup and passes it into `AppState`; the API binary optionally loads `.env` with `dotenvy`, then initializes tracing and panic logging. Its default filter enables both the library target and the generated `<module>_api` binary target, so startup and failure diagnostics remain visible without `RUST_LOG`; the HTTP crate owns request IDs, request tracing, handlers, and `/health/live` plus `/health/ready`. When `--db` is selected, startup requires `DATABASE_URL`, connects the DB crate, runs migrations, and only reports readiness after DB initialization succeeds. Database Rust/React scaffolds pin SQLx 0.9 and use `.sqlx`; Doctor requires the SQLx CLI to match the dependency's major/minor line. Adopted repositories with another metadata layout must provide a compatible project-owned check command. A generated SPA's Playwright suite starts that real API on isolated ports and sets `HOST`, `PORT`, and `BIND_ADDR` together, so inherited local bind variables cannot redirect the managed backend. PostgreSQL E2E uses an Ubuntu runner because its GitHub Actions service container requires Linux; other generated jobs retain the configured repository runner. Its production-source coverage include is broad enough that new untested feature and API modules affect the gate; test/setup/entrypoint/generated-UI exclusions remain explicit. The generated `.jig.toml` wires those apps into `scripts/jig dev` and the TypeScript/web check gates, records each app's execution `kind` and semantic `role`, defaults Rust roots to `apps` and `crates`, uses `bun` unless a package manager is supplied, and leaves schema dumps disabled until the project provides a command. Generated workflow jobs select Bash explicitly for repository-owned shell commands. Use `--frontends` as the canonical multi-app form; repeat `--frontend name[:kind]` for one-off additions.
+The generated root is a private JavaScript workspace with `.node-version`, pinned package-manager metadata, and one root lockfile. Applicable Node-version authorities must be bounded real regular files reached through stable in-repository directories and contain exactly one token; malformed, empty, multiline, special, or symlinked authorities fail instead of falling back. CI synthesizes the pinned version only when every applicable authority is truly absent and writes that fallback under runner-owned temporary storage, never through `.node-version`. Fresh Yarn scaffolds select the `node-modules` linker. The package `bootstrap` script and `scripts/jig bootstrap` share one dependency entrypoint; neither requires application database/provider credentials or initializes a database. `scripts/jig setup` uses the same bootstrap before verifying agent tooling and the harness. Initialize a database explicitly with the package `database:setup` script or `bash scripts/setup-database.sh`. Export a nonempty `DATABASE_URL` or configure the backend `.env` first; an empty or unrelated `.env` fails the guard. Database setup creates or concurrently reuses the configured database and applies migrations using the existing role's authority, without creating roles or granting permissions. Both Rust and Go scaffolds use this separation; Go bootstrap also prepares sqlc and API client code from local schemas without database access. Bootstrap performs one dependency install in the package-manager-authoritative workspace scope and records a versioned fingerprint of every authoritative manifest/config/patch plus structural proof of node-modules, complete Yarn PnP companions, or a genuinely dependency-free package. Yarn Classic fingerprints the runtime's effective configuration, environment overrides, cache, version, platform, and path, then stamps the exclusive artifact Yarn actually produced; its PnP proof attests referenced external-cache packages while local workspace source edits remain independent of dependency readiness. Berry readiness uses Yarn's effective linker, cache, install-state, unplugged, data, and ESM-loader paths; only archives and unplugged packages referenced by the PnP runtime state are attested, so unrelated additions to a shared global cache do not invalidate the repo. npm installs neutralize inherited settings that would skip writes, locks, workspace members, platform packages, or executable links while retaining the repository's install-script approval policy. The checker remains compatible with stock macOS Bash 3.2, treats Yarn authority-enumeration errors as hard failures, and follows Bash-owned job identity after an interrupted worker wait. Every generated web/E2E package script re-enters its configured app through the checker, so CI cannot bypass those scope and authority checks. `scripts/jig dev` requires that exact state before launching any app; replacing an install directory, loader, PnP data/cache, or authoritative workspace input invalidates readiness. A verified live install worker remains authoritative even if its calling wrapper dies, while stale owners are recovered and unverifiable owners fail closed after a bounded wait. App `dev` scripts perform no install or other network mutation. Commit the selected lockfile. Every generated Rust/React workspace requires Rust 1.94 or newer. The app crate parses typed `AppConfig` once at startup and passes it into `AppState`; the API binary optionally loads `.env` with `dotenvy`, then initializes tracing and panic logging. Its default filter enables both the library target and the generated `<module>_api` binary target, so startup and failure diagnostics remain visible without `RUST_LOG`; the HTTP crate owns request IDs, request tracing, handlers, and `/health/live` plus `/health/ready`. When `--db` is selected, startup requires `DATABASE_URL`, connects the DB crate, runs migrations, and only reports readiness after DB initialization succeeds. Database Rust/React scaffolds pin SQLx 0.9 and use `.sqlx`; Doctor requires the SQLx CLI to match the dependency's major/minor line. Adopted repositories with another metadata layout must provide a compatible project-owned check command. A generated SPA's Playwright suite starts that real API on isolated ports and sets `HOST`, `PORT`, and `BIND_ADDR` together, so inherited local bind variables cannot redirect the managed backend. PostgreSQL E2E uses an Ubuntu runner because its GitHub Actions service container requires Linux; other generated jobs retain the configured repository runner. Its production-source coverage include is broad enough that new untested feature and API modules affect the gate; test/setup/entrypoint/generated-UI exclusions remain explicit. The generated `.jig.toml` wires those apps into `scripts/jig dev` and the TypeScript/web check gates, records each app's execution `kind` and semantic `role`, defaults Rust roots to `apps` and `crates`, uses `bun` unless a package manager is supplied, and leaves schema dumps disabled until the project provides a command. Generated workflow jobs select Bash explicitly for repository-owned shell commands. Use `--frontends` as the canonical multi-app form; repeat `--frontend name[:kind]` for one-off additions.
 
-Dependency readiness covers every authoritative root/member node-modules tree and launcher content, not only the selected app's scope root. Missing, empty, and exact ignored-only real install roots normalize to one absent proof, so TypeScript, Vite, Vitest, or Playwright creating only real top-level `.cache`, `.vite`, `.vite-temp`, `.tmp`, and `.DS_Store` output does not stale a root-hoisted receipt. Unknown entries, nested or type-replaced cache lookalikes, package metadata, dependency metadata, symlinks, and launchers remain authoritative. Every in-memory SQLite pool retains one connection without idle or lifetime retirement and disables the cancellable pre-acquire health check; private-cache URLs additionally serialize checkouts so migrations and requests keep the same schema.
+Dependency readiness covers every authoritative root/member node-modules tree and launcher content, not only the selected app's scope root. Missing, empty, and exact ignored-only real install roots normalize to one absent proof, so TypeScript, Vite, Vitest, or Playwright creating only real top-level `.cache`, `.vite`, `.vite-temp`, `.tmp`, and `.DS_Store` output does not stale a root-hoisted receipt. Unknown entries, nested or type-replaced cache lookalikes, package metadata, dependency metadata, symlinks, and launchers remain authoritative.
 
-Generated Rust source is rustfmt-clean before the first project command across supported repository names, no-database/SQLite/PostgreSQL branches, and valid custom migration paths. Rust/React init validates the normalized Cargo package stem before writing: 216 ASCII bytes is the maximum that leaves room for Cargo's generated test-support metadata filename, while a 217-byte stem fails with guidance to choose a shorter repository name. Longer supported names use a deterministic DNS-safe fallback API label; ordinary short repository names retain their readable `api.<repo>.localhost` origin.
+Generated Rust source is rustfmt-clean before the first project command across supported repository names, no-database/PostgreSQL branches, and valid custom migration paths. Rust/React init validates the normalized Cargo package stem before writing: 216 ASCII bytes is the maximum that leaves room for Cargo's generated test-support metadata filename, while a 217-byte stem fails with guidance to choose a shorter repository name. Longer supported names use a deterministic DNS-safe fallback API label; ordinary short repository names retain their readable `api.<repo>.localhost` origin.
 
 Preset application code is a starter shape, not a managed framework. After init, the backend crates and frontend apps are project-owned; `jig update` updates the harness and will not migrate or overwrite scaffolded application source.
 
@@ -148,21 +150,27 @@ Managed npm checks, browser E2E, and generated dev pin the exact app and require
 
 ## Day-To-Day Loop
 
+Choose commands for the current task and validate the affected behavior with focused
+checks. Run history inspection is optional. A full test suite is
+useful when the affected behavior or remaining risk warrants it.
+
 The daily developer loop is built around a few stable verbs:
 
 - `scripts/jig setup` runs doctor, prepares local dependencies, registers configured agent tooling when needed, verifies the minimum contract, and runs doctor again.
 - `scripts/jig bootstrap` remains the project-dependency-only primitive used by setup.
-- `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. The launcher keeps `doctor` and `check contract` reachable through a capability-only final runtime probe against its rendered contract epoch, so a missing or malformed repository manifest can be reported instead of blocking its own diagnostic. Ordinary commands still require strict repository validation. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux and macOS retain the exact child process-group identity until descendants are proven gone, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
+- `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. Operator-only setup such as `vault init`, which needs a human-chosen passphrase, is reported as `operator_setup` instead of a next step. The launcher keeps `doctor` and `check contract` reachable through a capability-only final runtime probe against its rendered contract epoch, so a missing or malformed repository manifest can be reported instead of blocking its own diagnostic. Ordinary commands still require strict repository validation. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux and macOS retain the exact child process-group identity until descendants are proven gone, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
-- `scripts/jig check ...` runs configured repo checks and records receipts by default.
-- `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
-- `scripts/jig status` collects local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
+- `scripts/jig check ...` runs configured repo checks and records each run in run history.
+- `scripts/jig file-budget audit` provides standalone source-size diagnostics without creating runs.
+- `scripts/jig state summary` summarizes run history: runs, target results, failures, and the most recent target results. `scripts/jig work` was removed and is an unknown command.
+- `scripts/jig status` collects local repository, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
-- `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
+- `scripts/jig claude homes` lists Claude Code configuration directories; `scripts/jig claude launch` opens the shared searchable picker or an explicit home. Add `--usage` for subscription limits.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
+- `scripts/jig info inputs` previews action input declarations (`inputs_policy` and `source_state`) without writing files.
 
-This is where Jig is most agent-friendly: repository targets, verification profiles, legacy checks, and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect the exact target and run, which skill produced findings, the contract and input digests, and whether the required evidence is still fresh.
+Checks record structured results in local, Git-ignored, append-only run history under `.agent/state/runs.jsonl`. Local inspection shows the exact target and run, the contract and input digests, the conclusion and exit code, findings, and the tail of a failed target's output. This history is not shared through commits. Every check run executes its targets; earlier results are never reused in place of execution.
 
 ### Repository targets and check plans
 
@@ -202,11 +210,12 @@ scripts/jig run --profile verify --affected origin/main --json
 With no selectors or `--profile`, `jig run` executes the repository’s default check
 profile. Use `jig run --explain` to inspect that selection first.
 
-The foreground command shares MCP planning, execution, receipts and cancellation.
+The foreground command shares repository planning, execution, run history and cancellation.
 Approve every planned `worktree` and `external` effect explicitly with repeated
 `--approve-effect` flags. `--explain` prints the plan without execution or run
-state. `--plan-id`, `--no-receipt`, `--fail-fast`, and `--comparison-*` have the
-same repository execution meaning as on `check`. This requires contract v6 or
+state. `--fail-fast` and `--comparison-*` have the same repository execution
+meaning as on `check`; the removed `--plan-id` and `--no-receipt` options are
+rejected. This requires contract v6 or
 later; general declared action arguments remain follow-up work.
 
 Bare `scripts/jig check` resolves the default verification profile. For a
@@ -232,7 +241,7 @@ dependency and build trees do not become source inputs; unignore a containing
 path when a repository intentionally stores an input there. Because observed
 ignored dotenv files have no committed baseline, generated repositories exclude
 their mere presence through reviewed `repository.affected_ignore` policy while
-retaining their contents in evidence fingerprints. An explicit action input
+retaining their contents in source fingerprints. An explicit action input
 overrides the affected-ignore policy when a check must be selected for that
 dotenv. The plan explains each direct path and configured
 component-dependent propagation; runtime-owned `.agent/state/` and
@@ -242,26 +251,20 @@ selection is a no-op. Action dependencies are added only after this filtering,
 and versions 2 through 5 retain their legacy check behavior without affected
 selection.
 
-Contract-v6 work gates name the same target/profile vocabulary. A default
-`scripts/jig work check --plan-id ...` resolves all configured evidence gates
-and executes their target union once, allowing a profile gate to prove that all
-members succeeded in one compatible run. An exact target receipt cannot satisfy
-a different target, and separate partial runs cannot be combined into profile
-evidence. Legacy tool gates remain available for older contracts and explicit
-`work check --tool ...` compatibility.
-
 `--explain` is read-only: it prints the immutable plan, bounded target-reason
 previews (with total-count metadata when truncated), dependency layers, effects,
 configuration digest, source identity, and input
-digests, and executes no command or receipt write. Selectors are normalized and
+digests, and executes no command or state write. Selectors are normalized and
 targets are sorted before the plan id is derived, so equivalent requests
 against the same repository state have the same plan id. The existing named
-check forms and their receipt controls remain compatible.
+check forms remain compatible.
 
 Executing one of these plans creates an append-only durable run even when the
-CLI waits for it to finish. Each target reaches its own conclusion and normally
-writes one receipt carrying the run id, structured target, configuration and
-input digests, and normalized findings. A reviewed plan is rejected before a
+CLI waits for it to finish. Each target reaches its own conclusion, recorded in
+run history with its configuration and input digests, exit code, and normalized
+findings. A target that did not succeed also keeps the last 4,000 bytes of its
+stdout and stderr as `output_tail`. Checks write no receipts. A reviewed plan is
+rejected before a
 run is created if the contract or worktree changed. Query the accepted plan and
 folded target results later with:
 
@@ -270,42 +273,38 @@ scripts/jig status run RUN_ID
 ```
 
 Checks own their configured process trees, apply target timeouts, and preserve
-every target result on cancellation or explicit fail-fast skips. Receipt flags
+every target result on cancellation or explicit fail-fast skips. Execution flags
 may appear before or after target selectors, for example
-`scripts/jig check api:test --no-receipt`.
+`scripts/jig check api:test --fail-fast`.
 
 ## State Health And Retention
 
-Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state; add `--deep` to analyze legacy recursive session summaries and receipt payload growth. `state compact sessions --dry-run` validates and previews the repair. Apply mode creates an exact compressed backup under ignored `.agent/.cache/` before replacing the session stream, and `state restore --backup <path>` verifies that backup before restoring it.
+Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state and recommends run archiving once `runs.jsonl` reaches 8 MiB. Legacy `receipts.jsonl`, `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl` streams are still sized and checked, but Jig no longer reads them; keep them as history or remove them. `state compact sessions` was removed, and `state restore --backup <path>` no longer restores the sessions backups it created.
 
-Receipt retention is also local. `state archive --before <date>` compresses eligible old records into ignored `.agent/.cache/state-archives/`, writes an exact manifested pre-archive backup under `.agent/.cache/state-backups/`, and shrinks the active stream. `state restore --backup <path>` can restore that exact receipt preimage. `state export receipts --before <date> --output <file.jsonl.gz>` makes a non-mutating copy at a caller-selected destination. Cache artifacts are ignored local recovery aids rather than durable backups, and neither operation rewrites Git history, so durable retention and committed historical blobs require separate, coordinated handling.
+Run retention is also local. Checks record run history, and each loop occurrence records its own evidence under Git metadata, kept while the occurrence stays in loop history. `state archive --before <date>` compresses completed runs that ended before the cutoff into ignored `.agent/.cache/state-archives/`, writes an exact manifested pre-archive backup under `.agent/.cache/state-backups/`, and shrinks `runs.jsonl`. `state restore --backup <path>` can restore that exact preimage. Cache artifacts are ignored local recovery aids rather than durable backups, and neither operation rewrites Git history, so durable retention and committed historical blobs require separate, coordinated handling.
 
 ## Terminal Dashboard
 
-This section describes the unreleased dashboard cutover after 0.3.0. The published 0.3.0 release still has separate browser and status dashboards with external status providers; see its [developer guide](https://github.com/bpcakes/jig-sh/blob/8629700b92cd9ab8b09f8ff86de4fc1573469c83/docs/developer-ux.md) for release-specific commands.
-
-`scripts/jig ui` is the canonical read-only dashboard for local repository and recorder state. `scripts/jig status --tui` enters the same application on Status.
+`scripts/jig ui` is the canonical read-only dashboard for local repository and recorder state. `scripts/jig status --tui` enters the same application on Status. Upgrading from 0.3.0 replaces the separate browser and status dashboards and their external status providers.
 
 ```sh
-scripts/jig ui                         # start on Work
-scripts/jig ui --plan PLAN_ID          # start in plan detail
+scripts/jig ui                         # start on Timeline
 scripts/jig status --tui               # start on Status
 scripts/jig --json ui                  # one recorder snapshot
-scripts/jig --json ui --plan PLAN_ID   # one plan snapshot
 scripts/jig status --json              # one local status snapshot
 ```
 
-The four tabs are Status, Work, Timeline, and Health. Status summarizes local repository, work, loop, and collection observations. Work shows open and completed plans and their gates. Timeline merges sessions, plan events, receipts, and decisions newest-first. Health shows recent failures, receipt output, per-tool aggregates, and loop attempts that need attention. Plan detail includes the bounded plan body, gates, decisions, receipts, changed paths, and captured output.
+The three tabs are Status, Timeline, and Health. Status summarizes local repository, harness, loop, and collection observations. Timeline lists finished targets from run history newest-first, with each run, conclusion, exit code, duration, and the output tail of a target that did not succeed. Health shows recent failed, timed-out, and blocked targets with their output tail, per-target aggregates, loop runs, and loop attempts and occurrences that need attention. A loop run's detail names the `scripts/jig loop show` command that reports its evidence. The Work tab, plan detail, and session, plan, and decision rows were removed with structured work.
 
-At the top level, use Tab or Shift-Tab, left/right, or `1` through `4` to switch tabs; `j`/`k`, up/down, PageUp/PageDown, Home, and End move through lists; and `q` or Ctrl-C quits. Enter opens the selected item on Work, Timeline, or Health. `f`/`F` plus `-`/`+` control the Timeline filter and row limit. `r` and `R` refresh local data. Escape closes detail first and quits only from the top level. Detail views retain the movement keys; plan detail uses Tab between sections, `h`/`l` or left/right scroll horizontally, and Enter can open a selected receipt or nested detail.
+At the top level, use Tab or Shift-Tab, left/right, or `1` through `3` to switch tabs; `j`/`k`, up/down, PageUp/PageDown, Home, and End move through lists; and `q` or Ctrl-C quits. Enter opens the selected item on Timeline or Health. `f`/`F` plus `-`/`+` control the Timeline filter and row limit. `r` and `R` refresh local data. Escape closes detail first and quits only from the top level. Detail views retain the movement keys, and `h`/`l` or left/right scroll horizontally.
 
-Local collection defaults to a 10-second completion-relative schedule. Refreshes never overlap, run through one cancellable worker, and publish repository status and recorder state as one epoch. A damaged state stream remains a visible local error while usable observations stay available. Neither entrypoint writes receipts, fetches remotes, or executes actions.
+Local collection defaults to a 10-second completion-relative schedule. Refreshes never overlap, run through one cancellable worker, and publish repository status and recorder state as one epoch. A damaged state stream remains a visible local error while usable observations stay available. Neither entrypoint writes state, fetches remotes, or executes actions.
 
 The full layout is comfortable at 108 by 24 cells or larger and supported from 72 by 20. Terminals from 40 by 12 use a compact layout; smaller terminals show a safe micro summary. Both stdin and stdout must be terminals. When redirected, the interactive command exits nonzero with guidance to use `jig ui --json` for recorder data or `jig status --json` for local status data, and terminal state is restored on cancellation or failure.
 
-The recorder and plan JSON documents use schema version 1 but are different shapes, selected by `snapshot_kind`. They are one-shot, read-only documents rather than addresses for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120; it is invalid with plan JSON. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 2.
+The recorder JSON document uses schema version 4, whose loop occurrences report `worker_invoked` instead of a worker receipt ID. It is a one-shot, read-only document rather than an address for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 4.
 
-The unreleased cutover removes the browser server, browser URLs, and HTTP snapshot endpoints. In current `master`, the old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in 0.4.0. Callers needing the browser transport can continue using the published 0.3.0 release. The cutover does not change generated launcher scope or itself require a new contract epoch because `ui` and `status` remain runtime-owned repository commands.
+The 0.3.0 cutover removes the browser server, browser URLs, and HTTP snapshot endpoints. The old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in a later release. Callers needing the browser transport can continue using 0.3.0. The cutover does not change generated launcher scope or itself require a new contract epoch because `ui` and `status` remain runtime-owned repository commands.
 
 ## Dev Proxy
 
@@ -325,11 +324,15 @@ On Unix, the invoking CLI and its owning worker identify their project in proces
 
 If an orphan's app remains live, the stop/replacement diagnostic names its PID and directs the operator to `scripts/jig dev status --json`. After independently verifying and stopping surviving app processes, retry `scripts/jig dev stop` or `scripts/jig dev --replace`; `--forget-ambiguous-orphans` cannot stop them. If the replacement app then fails its own startup checks, Jig reports that app failure and preserves the completed orphan-recovery details.
 
-Every foreground launch also registers a tied dev session in the proxy state directory. `scripts/jig dev status` is a read-only view of sessions owned by the current canonical repository, including supervisor/app observations, durable preflight-cleanup evidence, and whether an orphan is `recoverable`; no sessions is a successful stopped state. Aggregate `running` excludes stale and recoverable records, so a recoverable record appears in `sessions` while `running` is false and still requires explicit cleanup. `scripts/jig dev stop` requests shutdown of every registered session for that repository and is idempotent when nothing is running. It uses the session's authenticated loopback control endpoint so the live supervisor performs its ordinary handle-backed cleanup. If that supervisor is gone while preflight cleanup is unconfirmed, an app spawn is pending or unknown, or a registered identity remains live or uncertain, the command exits nonzero and retains the session record for inspection; it never converts persisted numeric PIDs into authority to signal a possibly recycled process. If cleanup evidence is complete and all exact registered identities are absent, `dev stop` and `dev --replace` recover by retiring the orphan and its exact-owned process routes under the state lock and print a recovery notice with app targets, last-known PIDs, and any explicitly forgotten ambiguities. Blocking warnings remain separate from successful recovery notices. When only unconfirmed preflight cleanup or pending or legacy-untracked spawn evidence blocks a dead-supervisor orphan, an operator who has independently checked for unrecorded processes can run `scripts/jig dev stop --forget-ambiguous-orphans`. This explicit repair remains fail-closed for every live or uncertain registered identity, signals no persisted PID, and records that an unrecorded process may still be running.
+Every foreground launch also registers a tied dev session in the proxy state directory. `scripts/jig dev status` is a read-only view of sessions owned by the current canonical repository, including supervisor/app observations, durable preflight-cleanup evidence, and whether an orphan is `recoverable`; no sessions is a successful stopped state. Aggregate `running` excludes stale and recoverable records, so a recoverable record appears in `sessions` while `running` is false. `scripts/jig dev stop` requests shutdown of every registered session for that repository and is idempotent when nothing is running. It uses the session's authenticated loopback control endpoint so the live supervisor performs its ordinary handle-backed cleanup. If that supervisor is gone while preflight cleanup is unconfirmed, an app spawn is pending or unknown, or a registered identity remains live or uncertain, the command exits nonzero and retains the session record for inspection; it never converts persisted numeric PIDs into authority to signal a possibly recycled process. If cleanup evidence is complete and all exact registered identities are absent, ordinary same-repository `dev` launch, `dev stop`, and `dev --replace` can retire an overlapping orphan and its exact-owned process routes under the state lock. They report a recovery notice with app targets and last-known PIDs; later launch failure or cancellation retains that notice. Only explicit stop can report a deliberately forgotten ambiguity. This proves registered identities absent, not that unrecorded descendants are gone. Blocking warnings remain separate from successful recovery notices. When only unconfirmed preflight cleanup or pending or legacy-untracked spawn evidence blocks a dead-supervisor orphan, an operator who has independently checked for unrecorded processes can run `scripts/jig dev stop --forget-ambiguous-orphans`. This explicit repair remains fail-closed for every live or uncertain registered identity, signals no persisted PID, and records that an unrecorded process may still be running.
 
-Bare `scripts/jig dev` remains the launch command. Add `--replace` when a new launch should stop only its conflicting registered sessions from the same canonical repository before claiming their apps and routes. Replacement never takes over a cross-repository session, an ad-hoc `proxy run`, or a live route that cannot be attributed to a registered session. A process started by an older Jig without session registration therefore needs a one-time manual stop followed by `scripts/jig proxy prune`; subsequent registered sessions can be handled with `dev status`, `dev stop`, or `dev --replace`.
+The human status summary uses observed `activity` and cleanup evidence: running, activity uncertain, cleanup required, or stopped. JSON retains the older aggregate `running` rule for compatibility; inspect `activity`, `cleanup_required`, and each session's `retention_reason` when deciding what to clean up. A conflict names each exact session ID and the selected state directory. Inspect from an owning repository with that state directory while its root still exists. When the saved root has moved or disappeared, run `jig dev status --session ID --state-dir PATH` from any directory; `jig dev status --all --state-dir PATH` also shows unrelated and route-free legacy blockers. `jig dev recover --session ID --state-dir PATH` retires only an eligible exact record and its owned routes without requesting process shutdown. `jig dev stop --session ID --state-dir PATH` can request authenticated shutdown of the selected live supervisor and supports the existing `--forget-ambiguous-orphans` repair for a dead ambiguous record. Prefixes and wildcards never select other sessions. `route_present` reports a persisted exact-owned route, not a successful network probe.
 
-Launch and both management subcommands must use the same proxy state directory. They default to `JIG_PROXY_STATE_DIR` or `~/.jig/proxy`; pass `--state-dir <path>` after `status` or `stop` when the launch used an explicit directory. Launch-only flags such as `--app`, `--replace`, and proxy listener options are not accepted by the management subcommands. The stop-only `--forget-ambiguous-orphans` repair is never applied by replacement.
+Bare `scripts/jig dev` remains the launch command and automatically retires eligible dead overlapping claims from its canonical repository without stopping processes. Add `--replace` when a new launch should stop live conflicting registered sessions through their authenticated supervisors before claiming their apps and routes. Replacement never takes over a cross-repository session, an ad-hoc `proxy run`, or a live route that cannot be attributed to a registered session. A process started by an older Jig without session registration therefore needs a one-time manual stop followed by `scripts/jig proxy prune`; subsequent registered sessions can be handled with `dev status`, `dev stop`, or `dev --replace`.
+
+Before reusing a shared proxy, `dev` and `proxy start` verify its actual LAN binding and HTTPS HTTP/2 setting through a token-authenticated loopback capability response tied to the live proxy PID. A requested LAN or HTTPS HTTP/2 mismatch, or a proxy version that cannot report those capabilities, stops startup with the state directory and an explicit restart or matching-flags action. HTTP-only launches can reuse a proxy with an extra HTTPS listener. Jig does not restart a shared proxy automatically, so other repositories' sessions remain intact.
+
+Launch and all management subcommands must use the same proxy state directory. They default to `JIG_PROXY_STATE_DIR` or `~/.jig/proxy`; pass `--state-dir <path>` after `status`, `recover`, or `stop` when the launch used an explicit directory. Launch-only flags such as `--app`, `--replace`, and proxy listener options are not accepted by the management subcommands. The stop-only `--forget-ambiguous-orphans` repair is never applied by replacement.
 
 Manual services can still join the same local routing model:
 
@@ -343,14 +346,14 @@ The proxy is friendly because it removes repeated port hunting, browser bookmark
 - Trust-store mutation requires `--accept-trust-scope`.
 - LAN mode must be enabled deliberately.
 - Alias routes remain loopback-client-only even when LAN mode is enabled.
-- App commands inherit the developer environment, but the long-running background proxy process starts with a constrained environment.
+- App commands inherit the developer environment except the reserved vault passphrase variables, which every non-vault Jig command withholds at startup; the long-running background proxy process starts with a constrained environment.
 - Jig replaces inherited `JIG_DEV_<APP>_{HOST,PORT,ORIGIN,URL}` coordinates with the current app selection. Generated Vite apps prefer the current namespaced API origin, while `API_ORIGIN` remains the explicit override for direct or web-only starts.
 
 Those constraints keep the normal path smooth while making machine-wide or network-visible changes visible in the command line.
 
 ## Vault
 
-The vault handles a common developer problem: a project needs a complete local environment bundle, but the repository and command receipts should contain references rather than protected values.
+The vault handles a common developer problem: a project needs a complete local environment bundle, but the repository and its run history should contain references rather than protected values.
 
 References are project-relative. `jig://Production/RESTIC_PASSWORD` selects the `Production` item in whichever vault the current repository, `--global`, or `--home` chooses. There is no repository-name segment and no cross-project reference syntax. A project moves its encrypted state with backup and restore, not by adding a project qualifier to references.
 
@@ -369,7 +372,7 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-`vault exec` invokes the command directly, inherits stdin and the ordinary environment, streams stdout and stderr without a Jig timeout or output cap, redacts concealed values, and preserves the child status. It is the developer-facing analogue of `op run --env-file`. The older `vault run` remains intentionally different: it uses an allowlisted environment, closes stdin, caps and buffers output, applies a timeout, and owns child-tree cleanup. That constrained behavior remains useful for agent-controlled execution, and `vault secret` remains the compatible concealed-field vocabulary.
+`vault exec` invokes the command directly, inherits stdin and the ordinary environment, streams stdout and stderr without a Jig timeout or output cap, redacts concealed values, and preserves the child status. It is the developer-facing analogue of `op run --env-file`. The older `vault run` remains intentionally different: it accepts legacy secret names or `jig://ITEM/FIELD` references, uses an allowlisted environment, closes stdin, caps and buffers output, redacts every injected value of at least 4 bytes regardless of kind, applies a timeout, and owns child-tree cleanup. That constrained behavior remains useful when a command needs the broker's limits, and `vault secret` remains the compatible concealed-field vocabulary. Coding agents follow the generated guide's Vault rules: when the operator has already provided the passphrase and a refs file, an agent runs its task command through `vault exec`, or through `vault run` with the operator's references for a short non-interactive command; every other vault subcommand is an operator step (see [coding agents](configuration.md#coding-agents)). Nested vault commands cannot borrow a passphrase from an outer Jig command: checks, `jig run` actions, dev apps, and Jig-launched agents never receive `JIG_VAULT_PASSPHRASE`. Ask the operator to run the underlying task directly through `vault exec`, outside recording Jig runners. Wrapping `check` or `run` can persist secret-bearing failure output in run history before the outer wrapper redacts it (see [passphrase withholding](configuration.md#passphrase-withholding)).
 
 `vault read` is the exact-byte analogue of `op read`; terminal stdout requires `--reveal`, while pipelines are accepted and private file output requires an explicit overwrite opt-in. `vault inject` replaces only `{{ jig://ITEM/FIELD }}` placeholders under the same output rules. Raw reveal commands reject `--json` so values cannot enter structured results.
 
@@ -385,19 +388,19 @@ RESTIC_COMPRESSION=jig://Production/RESTIC_COMPRESSION
 
 Jig reads only the requested dotenv source during this explicit cutover; it does not inspect or modify another project checkout automatically.
 
-Passphrase rotation reseals a version 2 vault without changing its fields or identity. Encrypted backup captures the vault and audit log; from a checkout configured for repo scope, restore automatically selects that checkout's vault home, prepares missing private parents, and installs only when the vault home itself is entirely absent. `--global` makes legacy user-level selection deliberate, while `--home` remains an explicit recovery and testing override; omitted selection retains the legacy default during contract v4. This gives a project an explicit relocation and recovery path without weakening path-bound repo isolation.
+Passphrase rotation reseals a version 2 or 3 vault without changing its fields or identity; on version 3 it also replaces the data-encryption key, though earlier copies and backups stay decryptable with the passphrase they were made with. Encrypted backup captures the vault and audit log; from a checkout configured for repo scope, restore automatically selects that checkout's vault home (a linked Git worktree selects the vault home it shares with its main checkout, unless it keeps its own vault from an earlier Jig version), prepares missing private parents, and installs only when the vault home itself is entirely absent. `--global` makes legacy user-level selection deliberate, while `--home` remains an explicit recovery and testing override; omitted selection retains the legacy default during contract v4. This gives a project an explicit relocation and recovery path without weakening path-bound repo isolation.
 
 The friendliness here is in the workflow shape: developers get an auditable secret handoff without adding new project-specific secret scripts. The important limits are also clear:
 
 - Vault reduces accidental exposure; it is not a sandbox.
 - Once a child process receives a secret, that child can use or disclose it.
 - Redaction is a backup control; transformed values and side channels are outside its guarantee.
-- Non-interactive unlocks use `JIG_VAULT_PASSPHRASE`; command-line passphrases are intentionally unsupported.
+- Non-interactive unlocks use an operator-provided `JIG_VAULT_PASSPHRASE`; agents never request, choose, or set the passphrase, and without one they ask the operator to run passphrase-requiring commands in a terminal. Command-line passphrases are intentionally unsupported.
 - Audit metadata, including field names and run IDs, is plaintext local operational metadata. The local HMAC chain detects edits and broken links, but deletion, rollback, or compromise by someone with the vault and passphrase requires an external checkpoint or backup to detect.
 
-## Agent And MCP Friendliness
+## Agent Friendliness
 
-Jig treats agents as first-class repo operators. The generated root `AGENTS.md`, `agent-map.md`, optional crate-level guide conventions, MCP server, and work receipts all serve the same goal: reduce guessing.
+Jig treats agents as first-class repo operators. The generated root `AGENTS.md`, `agent-map.md`, optional crate-level guide conventions, and run history all serve the same goal: reduce guessing.
 
 An agent can discover:
 
@@ -405,10 +408,9 @@ An agent can discover:
 - which checks exist for this repo profile
 - which tools are stable contract tools
 - which commands are runtime-owned local conveniences
-- whether required work gates have fresh receipts
 - whether local Codex-side Jig skills are available
 
-The contract v6 MCP surface is deliberately independent of repository size. Agents inspect components, targets, profiles, and durable runs with `jig.inspect`; resolve an exact immutable plan with `jig.plan_run`; submit that plan with `jig.execute_run`; and poll or cancel by run id. Effectful targets require explicit selection, closed plan-bound arguments, and exact worktree/external effect approval at execution. Adding another component or action changes catalog data rather than adding another MCP tool. Contracts v2 through v5 keep their direct manifest tools for compatibility.
+Agents inspect components, targets, and profiles with `jig info`, preview plans with `jig run --explain`, and execute declared targets with `jig run`. Pass `--json` for structured results and inspect durable run history with `jig status run ID`. Effectful targets require explicit selection, closed arguments, and exact worktree/external effect approval. Adding another component or action changes catalog data rather than adding a command. Contracts v2 through v5 keep their manifest-tool CLI compatibility aliases.
 
 ## Update And Maintenance UX
 
@@ -430,16 +432,18 @@ The distinction matters for downstream repos because the harness is shared infra
 
 ## What Makes Jig Developer-Friendly
 
+In Jig's own source checkout, ordinary `scripts/jig` commands use the released runtime selected in `.jig/source-runtime-version`. Editing Jig therefore does not rebuild the check runner before it can run formatting, tests, or other commands. Cargo still compiles the edited source for tests. Use `scripts/jig-dev <command>` when you need to exercise a change to the CLI itself; it builds incrementally in the workspace and runs the resulting executable through the same launcher. `repo:source-runtime-check` is available directly and in the `verify` profile for current-source validation; CI runs the same target.
+
 Jig's developer friendliness comes from a few consistent product choices:
 
 - It gives every repo a small, stable command vocabulary.
 - It records repo conventions in committed configuration instead of tribal memory.
 - It preserves existing repo ownership during adoption.
-- It makes local checks and work evidence inspectable.
-- It makes MCP and CLI use converge on the same runtime contract.
+- It makes local checks and their results inspectable.
+- It gives humans, CI, and agents the same CLI runtime contract.
 - It keeps machine-local proxy and vault state out of repo history.
 - It makes broad trust changes explicit at the command line.
-- It supports dogfooding through `JIG_DEV_BIN` so Jig changes can be validated through the same launcher generated repos use.
+- It supports dogfooding through `scripts/jig-dev` while routine source-repository work uses a selected release.
 
 The intentional friction is part of the UX. Trusting a local CA, exposing a proxy on the LAN, installing Codex marketplace support, overwriting managed files, or injecting secrets into a child process all require explicit commands. Ordinary repo work stays quick; higher-blast-radius actions are visible and auditable.
 
@@ -448,4 +452,6 @@ The intentional friction is part of the UX. Trusting a local CA, exposing a prox
 - [Adoption Guide](./adoption.md)
 - [Configuration Reference](./configuration.md)
 - [Public Contract](./public-contract.md)
+- [Action input declarations](./action-input-declarations.md)
+- [Scheduled Codex Tasks](./codex-task-operations.md)
 - [Repo Intent For Agents](./repo-intent.md)

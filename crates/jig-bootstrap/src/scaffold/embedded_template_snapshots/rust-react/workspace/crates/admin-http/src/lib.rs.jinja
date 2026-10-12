@@ -1,0 +1,185 @@
+mod authorization;
+
+use ::<<[ module_name ]>>::AppState;
+use ::<<[ module_name ]>>_http_common::ApiError;
+use ::<<[ module_name ]>>_http_common::ApiErrorResponse;
+use ::<<[ module_name ]>>_http_common::not_found;
+use ::<<[ module_name ]>>_http_common::probes;
+use ::<<[ module_name ]>>_http_common::requests;
+use ::<<[ module_name ]>>_http_common::route_inventory;
+use axum::{
+    Json, Router,
+    extract::State,
+    http::{HeaderName, HeaderValue},
+    middleware,
+    response::IntoResponse,
+};
+use batter::{
+    BoxError,
+    axum::{
+        AssembledHttp, BrowserPolicy, CorrelationId, GroupPolicy, GuardedRouter, HttpBoundary,
+        InProcessClient, ReadinessPolicy, RouteInventory,
+        browser::{MutationPolicy, PrivateResponsePolicy, RequiredHeader},
+    },
+    lifecycle::{OperationAdmission, ShutdownHandle},
+    readiness::ReadinessCondition,
+};
+use serde::Serialize;
+use utoipa::{OpenApi, ToSchema, openapi::OpenApi as OpenApiDocument};
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+pub use authorization::{
+    AdminAuthorizationError, AdminAuthorizer, AdminRequestContext, DenyAllAdminAuthorizer,
+};
+
+/// Marker the admin panel sends with every request. Mutating requests must
+/// carry it together with `Sec-Fetch-Site: same-origin`, which a cross-site
+/// page cannot forge, before authorization runs.
+pub const ADMIN_REQUEST_HEADER: &str = "x-admin-request";
+pub const ADMIN_REQUEST_HEADER_VALUE: &str = "1";
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "<<[ repo_name ]>> admin API",
+        version = "0.1.0",
+        description = "Privileged HTTP contract for <<[ repo_name ]>>"
+    ),
+    components(schemas(ApiErrorResponse))
+)]
+struct AdminApi;
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminStatusResponse {
+    pub ready: bool,
+}
+
+/// Privileged routes belong in this independently deployed router. Every route
+/// added here is protected by the authorizer supplied to `assemble`.
+fn routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::with_openapi(AdminApi::openapi()).routes(routes!(status))
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin-api/status",
+    operation_id = "getAdminStatus",
+    responses(
+        (status = OK, description = "Privileged API identity and dependency readiness", body = AdminStatusResponse),
+        (status = UNAUTHORIZED, description = "Authentication is required", body = ApiErrorResponse),
+        (status = FORBIDDEN, description = "The caller lacks permission", body = ApiErrorResponse)
+    ),
+    tag = "admin"
+)]
+async fn status(State(state): State<AppState>) -> Json<AdminStatusResponse> {
+    Json(AdminStatusResponse {
+        ready: state.is_ready(),
+    })
+}
+
+/// Assemble the privileged surface for protected serving.
+///
+/// Every response, including probes and admission, deadline, and mutation
+/// rejections, carries `Cache-Control: no-store`, `X-Content-Type-Options:
+/// nosniff`, and `Referrer-Policy: no-referrer`.
+pub async fn assemble<A, E>(
+    state: AppState,
+    authorizer: A,
+    admission: OperationAdmission,
+    readiness: ReadinessPolicy<E>,
+) -> Result<AssembledHttp, BoxError>
+where
+    A: AdminAuthorizer,
+    E: Send + Sync + 'static,
+{
+    let (router, document) = routes().split_for_parts();
+    let inventory = route_inventory(&document)?;
+    assemble_routes(state, authorizer, router, inventory, admission, readiness).await
+}
+
+/// Dispatch requests through the same boundary with an independent, approved
+/// lifecycle. Responses prove response construction only.
+pub async fn in_process<A: AdminAuthorizer>(
+    state: AppState,
+    authorizer: A,
+) -> Result<InProcessClient, BoxError> {
+    let (router, document) = routes().split_for_parts();
+    in_process_routes(state, authorizer, router, route_inventory(&document)?).await
+}
+
+async fn in_process_routes<A: AdminAuthorizer>(
+    state: AppState,
+    authorizer: A,
+    router: Router<AppState>,
+    inventory: RouteInventory,
+) -> Result<InProcessClient, BoxError> {
+    let (shutdown, approval) = ShutdownHandle::new_with_readiness_approval();
+    approval.approve();
+    let readiness = ReadinessPolicy::lifecycle_only(shutdown.status());
+    let admission = shutdown.operation_admission();
+    Ok(
+        assemble_routes(state, authorizer, router, inventory, admission, readiness)
+            .await?
+            .in_process(),
+    )
+}
+
+async fn assemble_routes<A, E>(
+    state: AppState,
+    authorizer: A,
+    router: Router<AppState>,
+    inventory: RouteInventory,
+    admission: OperationAdmission,
+    readiness: ReadinessPolicy<E>,
+) -> Result<AssembledHttp, BoxError>
+where
+    A: AdminAuthorizer,
+    E: Send + Sync + 'static,
+{
+    let readiness = readiness.with_condition(ReadinessCondition::new("application-state")?, {
+        let state = state.clone();
+        move || state.is_ready()
+    });
+    let protected = router.layer(middleware::from_fn_with_state(
+        authorizer,
+        authorization::require_admin_authorization::<A>,
+    ));
+    let application = GuardedRouter::from_router(protected, inventory)
+        .with_state(state)
+        .fallback(not_found);
+    let policy = GroupPolicy::browser(requests::policy(admission), browser_policy()?);
+    let boundary =
+        HttpBoundary::new(policy).with_probe_response_policy(PrivateResponsePolicy::NoReferrer);
+    Ok(probes::mount(boundary, readiness)?
+        .assemble(application)
+        .await?)
+}
+
+/// Private-response headers on every admin response, plus mutation checks
+/// that reject cross-site browser requests before authorization runs.
+fn browser_policy() -> Result<BrowserPolicy, BoxError> {
+    let marker = RequiredHeader::new(
+        HeaderName::from_static(ADMIN_REQUEST_HEADER),
+        HeaderValue::from_static(ADMIN_REQUEST_HEADER_VALUE),
+    )?;
+    Ok(BrowserPolicy::with_mutation_checks(
+        PrivateResponsePolicy::NoReferrer,
+        MutationPolicy::required_header(marker),
+        |rejection, parts| {
+            ApiError::new(
+                rejection.status(),
+                rejection.code(),
+                "The browser request was rejected",
+                parts.extensions.get::<CorrelationId>(),
+            )
+            .into_response()
+        },
+    ))
+}
+
+pub fn openapi() -> OpenApiDocument {
+    routes().into_openapi()
+}
+
+#[cfg(test)]
+mod tests;

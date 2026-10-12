@@ -1,0 +1,129 @@
+use super::{Db, health_policy};
+use batter::{
+    cleanup::{CleanupBudget, CleanupOutcome, CleanupStack},
+    operation::OperationOwner,
+    settings::SecretString,
+};
+use std::{
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
+    time::Duration,
+};
+
+#[test]
+fn health_policy_admits_a_probe_before_observations_expire() {
+    let policy = health_policy().expect("constant health policy is valid");
+    assert!(
+        policy.probe_budget() + policy.probe_delay() + policy.scheduling_margin()
+            <= policy.maximum_age()
+    );
+}
+
+fn write_backend_message(stream: &mut TcpStream, tag: u8, body: &[u8]) {
+    stream.write_all(&[tag]).expect("write message tag");
+    let length = u32::try_from(body.len() + 4).expect("test message length fits in u32");
+    stream
+        .write_all(&length.to_be_bytes())
+        .expect("write message length");
+    stream.write_all(body).expect("write message body");
+}
+
+fn run_stalled_postgres(listener: TcpListener, query_started: tokio::sync::oneshot::Sender<()>) {
+    let (mut stream, _) = listener.accept().expect("accept PostgreSQL connection");
+    let mut length = [0_u8; 4];
+    stream
+        .read_exact(&mut length)
+        .expect("read startup message length");
+    let startup_length = u32::from_be_bytes(length) as usize;
+    assert!(
+        startup_length >= 8,
+        "startup packet includes protocol version"
+    );
+    let mut startup = vec![0_u8; startup_length - 4];
+    stream
+        .read_exact(&mut startup)
+        .expect("read startup message body");
+
+    write_backend_message(&mut stream, b'R', &0_u32.to_be_bytes());
+    write_backend_message(&mut stream, b'S', b"server_version\0\x31\x38.0\0");
+    write_backend_message(&mut stream, b'S', b"client_encoding\0UTF8\0");
+    write_backend_message(&mut stream, b'K', &[0_u8; 8]);
+    write_backend_message(&mut stream, b'Z', b"I");
+    stream.flush().expect("flush PostgreSQL startup response");
+
+    let mut query_header = [0_u8; 5];
+    stream
+        .read_exact(&mut query_header)
+        .expect("read first query protocol message");
+    assert!(
+        matches!(query_header[0], b'P' | b'Q'),
+        "the connection starts a PostgreSQL query"
+    );
+    query_started.send(()).expect("notify query start");
+
+    let mut remainder = [0_u8; 1024];
+    while stream
+        .read(&mut remainder)
+        .expect("read until client closes")
+        != 0
+    {}
+}
+
+#[tokio::test]
+async fn interrupted_established_probe_retires_lease_and_closes_pool() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local PostgreSQL stub");
+    let port = listener.local_addr().expect("read listener address").port();
+    let (query_started, query_waiting) = tokio::sync::oneshot::channel();
+    let server = tokio::task::spawn_blocking(move || {
+        run_stalled_postgres(listener, query_started);
+    });
+
+    let mut cleanup = CleanupStack::new();
+    let owner = OperationOwner::new(Duration::from_secs(5)).unwrap();
+    let database_url = SecretString::new(format!(
+        "postgres://postgres@127.0.0.1:{port}/example?sslmode=disable"
+    ));
+    let error = {
+        let connecting = Db::connect_in(
+            &database_url,
+            owner.context(),
+            cleanup.reserve("database.close").unwrap(),
+        );
+        tokio::pin!(connecting);
+
+        tokio::select! {
+            biased;
+            result = &mut connecting => panic!("probe completed before cancellation: {result:?}"),
+            started = query_waiting => {
+                started.expect("the PostgreSQL stub observes the first query");
+                owner.cancel();
+            }
+        }
+        connecting
+            .await
+            .expect_err("cancellation interrupts the established query")
+    };
+    assert!(format!("{error:#}").contains("operation cancelled"));
+
+    let report = tokio::time::timeout(
+        Duration::from_secs(1),
+        cleanup.close(
+            CleanupBudget::new(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .unwrap(),
+        ),
+    )
+    .await
+    .expect("pool cleanup reaches an explicit outcome within the bound");
+    assert!(report.is_success());
+    assert_eq!(report.records.len(), 1);
+    assert_eq!(report.records[0].name, "database.close");
+    assert_eq!(report.records[0].outcome, CleanupOutcome::Succeeded);
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .expect("the retired connection closes the stalled server session locally")
+        .expect("the PostgreSQL stub exits cleanly");
+}

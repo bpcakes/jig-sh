@@ -5,6 +5,5 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT_DIR"
 
 cargo fmt --all -- --check
-rustfmt --edition 2024 --check \
-  crates/jig/src/doctor_parts/*.rs \
-  crates/jig/src/doctor/tests_parts/*.rs
+# Sources spliced in with include! escape cargo fmt, so keep every file a module.
+python3 scripts/check-rust-module-splits.py

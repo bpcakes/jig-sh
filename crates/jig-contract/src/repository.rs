@@ -316,6 +316,10 @@ pub enum ActionEffect {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ActionRunner {
+    /// Explicit v1 Cargo Nextest capability; unsupported runtimes reject the tag.
+    RustNextestV1 {
+        configuration: crate::RustNextestConfigV1,
+    },
     Command {
         command: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -462,6 +466,8 @@ pub enum ResultParser {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ActionArgumentSpec {
+    /// A bounded JSON-encoded RustFocusV1, normalized before invocation hashing.
+    RustFocusV1 {},
     String {
         #[serde(default)]
         required: bool,
@@ -514,6 +520,8 @@ pub struct ActionSpec {
     pub intent: ActionIntent,
     pub effects: Vec<ActionEffect>,
     pub runner: ActionRunner,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<crate::ExecutionResourceV1>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub arguments: BTreeMap<String, ActionArgumentSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -546,6 +554,7 @@ impl ActionSpec {
             intent,
             effects: Vec::new(),
             runner,
+            resources: Vec::new(),
             arguments: BTreeMap::new(),
             inputs: Vec::new(),
             inputs_policy: None,

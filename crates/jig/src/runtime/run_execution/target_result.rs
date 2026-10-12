@@ -1,12 +1,50 @@
 use super::*;
 
+pub(in crate::runtime) fn block_started_check_run(
+    ctx: &RepoContext,
+    run_id: &str,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let message = format!("repository run worker stopped unexpectedly: {error:#}");
+    jig_state::block_nonterminal_run(ctx, run_id, &message)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn record_finished_target(
+    ctx: &RepoContext,
+    run_id: &str,
+    target_id: &TargetId,
+    result: TargetRunResult,
+    compatibility: Option<Value>,
+    fail_fast: bool,
+    conclusions: &mut BTreeMap<TargetId, RunConclusion>,
+    failed_targets: &mut Vec<TargetId>,
+    compatibility_results: &mut Vec<Value>,
+    stop_after_failure: &mut bool,
+) -> Result<()> {
+    let conclusion = result
+        .conclusion
+        .expect("finished target results always have a conclusion");
+    conclusions.insert(target_id.clone(), conclusion);
+    if matches!(
+        conclusion,
+        RunConclusion::Failure | RunConclusion::TimedOut | RunConclusion::Blocked
+    ) {
+        failed_targets.push(target_id.clone());
+        *stop_after_failure |= fail_fast;
+    }
+    record_target_result(ctx, run_id, result)?;
+    if let Some(compatibility) = compatibility {
+        compatibility_results.push(compatibility);
+    }
+    Ok(())
+}
+
 pub(super) struct TargetFinisher<'a> {
+    pub(super) alias_override: Option<&'a ExecutionAliasOverride>,
     pub(super) ctx: &'a RepoContext,
     pub(super) catalog: &'a RepositoryCatalog,
-    pub(super) run: &'a crate::state::DurableRun,
-    pub(super) work_plan_id: Option<&'a str>,
-    pub(super) record_receipts: bool,
-    pub(super) freshness: Option<&'a super::freshness::ExecutionFreshness>,
+    pub(super) run: &'a jig_state::DurableRun,
 }
 
 pub(super) struct CompletedTargetCapture {
@@ -18,8 +56,7 @@ pub(super) struct CompletedTargetCapture {
 impl CompletedTargetCapture {
     pub(super) fn now(started_at_ms: Option<u64>, capture: TargetCapture) -> Self {
         Self {
-            started_at_ms: started_at_ms
-                .map(|started| capture.authority_started_at_ms.unwrap_or(started)),
+            started_at_ms,
             ended_at_ms: now_ms(),
             capture,
         }
@@ -46,74 +83,18 @@ impl TargetFinisher<'_> {
         completed: CompletedTargetCapture,
         worktree_fingerprint: std::result::Result<String, String>,
     ) -> Result<(TargetRunResult, Option<Value>)> {
-        let target_freshness = self.freshness.map(|freshness| {
-            freshness.metadata(self.run, planned, &completed, &worktree_fingerprint)
-        });
         let CompletedTargetCapture {
             started_at_ms,
             ended_at_ms,
             capture,
         } = completed;
-        let tool_name = capture.alias.as_deref().unwrap_or(GENERIC_TARGET_TOOL);
+        let alias_override = self
+            .alias_override
+            .filter(|alias| alias.target == planned.target);
         let input_digest = match &worktree_fingerprint {
             Ok(fingerprint) => target_input_digest(self.catalog, &planned.target, fingerprint)?,
             Err(_) => planned.input_digest.clone(),
         };
-        let receipt_id = self
-            .record_receipts
-            .then(|| {
-                record_target_receipt(
-                    self.ctx,
-                    ReceiptInput {
-                        tool_name,
-                        args: json!({
-                            "run_id": self.run.result.run_id,
-                            "target": planned.target,
-                        }),
-                        invoked_command_key: capture.command_key.clone(),
-                        plan_id: self.work_plan_id.map(str::to_owned),
-                        started_at_ms: started_at_ms.unwrap_or(ended_at_ms),
-                        ended_at_ms,
-                        exit_status: capture.receipt_exit_status,
-                        stdout: &capture.stdout,
-                        stderr: &capture.stderr,
-                        evidence: capture.native_evidence.clone(),
-                        session_override: None,
-                        collect_git_metadata: true,
-                        collect_worktree_fingerprint: false,
-                        worktree_fingerprint_override: Some(worktree_fingerprint),
-                    },
-                    TargetReceiptMetadata {
-                        target_freshness: target_freshness.clone(),
-                        run_id: self.run.result.run_id.clone(),
-                        target: planned.target.clone(),
-                        config_digest: self.run.plan.config_digest.clone(),
-                        input_digest: input_digest.clone(),
-                        findings: capture.findings.clone(),
-                        finding_count: capture.finding_count,
-                        findings_truncated: capture.findings_truncated,
-                        findings_digest: capture.findings_digest.clone(),
-                        evaluated_at_ms: capture.evaluated_at_ms,
-                        valid_until_ms: capture.valid_until_ms,
-                    },
-                )
-            })
-            .transpose()?;
-
-        if let (Some(freshness), Some(receipt_id), Some(metadata)) = (
-            self.freshness,
-            receipt_id.as_deref(),
-            target_freshness.as_ref(),
-        ) {
-            freshness.recorded(
-                self.run,
-                planned,
-                receipt_id,
-                ended_at_ms,
-                capture.conclusion,
-                metadata,
-            );
-        }
 
         let mut result = TargetRunResult::queued(
             planned.target.clone(),
@@ -125,7 +106,10 @@ impl TargetFinisher<'_> {
         result.started_at_ms = started_at_ms;
         result.ended_at_ms = Some(ended_at_ms);
         result.exit_code = capture.exit_code;
-        result.receipt_id.clone_from(&receipt_id);
+        if capture.conclusion != RunConclusion::Success {
+            result.output_tail =
+                jig_contract::TargetOutputTailV1::from_streams(&capture.stdout, &capture.stderr);
+        }
         result.findings.clone_from(&capture.findings);
         result.finding_count = capture.finding_count;
         result.findings_truncated = capture.findings_truncated;
@@ -133,24 +117,26 @@ impl TargetFinisher<'_> {
         result.native_evidence.clone_from(&capture.native_evidence);
         result.evaluated_at_ms = capture.evaluated_at_ms;
         result.valid_until_ms = capture.valid_until_ms;
-        result.target_freshness.clone_from(&target_freshness);
 
         let compatibility = started_at_ms.map(|_| {
-            let alias = self
-                .catalog
-                .aliases_for_target(&planned.target)
-                .first()
-                .cloned();
-            let mut value = json!({
+            let alias = alias_override
+                .map(|alias| alias.tool_name.clone())
+                .or_else(|| {
+                    self.catalog
+                        .aliases_for_target(&planned.target)
+                        .first()
+                        .cloned()
+                });
+            json!({
                 "target": planned.target,
                 "tool": alias,
                 "response": {
                     "ok": capture.conclusion == RunConclusion::Success,
                     "tool": alias.as_deref().unwrap_or(GENERIC_TARGET_TOOL),
                     "command_key": capture.command_key,
-                    "args": {},
+                    "args": alias_override.map_or_else(|| json!({}), |alias| alias.args.clone()),
                     "result": {
-                        "exit_status": capture.receipt_exit_status,
+                        "exit_status": capture.envelope_exit_status,
                         "stdout": capture.stdout,
                         "stderr": capture.stderr,
                         "finding_count": capture.finding_count,
@@ -159,13 +145,8 @@ impl TargetFinisher<'_> {
                         "evaluated_at_ms": capture.evaluated_at_ms,
                         "valid_until_ms": capture.valid_until_ms,
                     },
-                    "receipt_id": receipt_id,
                 },
-            });
-            if let Some(metadata) = &target_freshness {
-                value["response"]["result"]["target_freshness"] = json!(metadata);
-            }
-            value
+            })
         });
         Ok((result, compatibility))
     }
@@ -188,12 +169,9 @@ pub(super) fn aggregate_conclusion(
 }
 
 pub(super) struct TargetCapture {
-    pub(super) authority_started_at_ms: Option<u64>,
-    pub(super) freshness_authority: Option<crate::repository::freshness::CollectionResult<()>>,
-    pub(super) execution_safety_proved: bool,
     pub(super) conclusion: RunConclusion,
     pub(super) exit_code: Option<i32>,
-    pub(super) receipt_exit_status: i32,
+    pub(super) envelope_exit_status: i32,
     pub(super) stdout: String,
     pub(super) stderr: String,
     pub(super) findings: Vec<Finding>,
@@ -233,18 +211,15 @@ impl TargetCapture {
             }
             RunConclusion::Failure
         };
-        let receipt_exit_status = if conclusion == RunConclusion::Success {
+        let envelope_exit_status = if conclusion == RunConclusion::Success {
             exit_status
         } else {
             exit_status.max(1)
         };
         Self {
-            freshness_authority: None,
-            authority_started_at_ms: None,
-            execution_safety_proved: true,
             conclusion,
             exit_code: Some(exit_status),
-            receipt_exit_status,
+            envelope_exit_status,
             stdout,
             stderr,
             findings,
@@ -261,21 +236,15 @@ impl TargetCapture {
     }
 
     pub(super) fn from_native_action(result: jig_contract::NativeActionResult) -> Self {
-        let receipt_exit_status = if result.conclusion == RunConclusion::Success {
+        let envelope_exit_status = if result.conclusion == RunConclusion::Success {
             0
         } else {
             1
         };
         Self {
-            freshness_authority: None,
-            authority_started_at_ms: None,
-            execution_safety_proved: matches!(
-                result.conclusion,
-                RunConclusion::Success | RunConclusion::Failure
-            ),
             conclusion: result.conclusion,
             exit_code: None,
-            receipt_exit_status,
+            envelope_exit_status,
             stdout: result.human_output,
             stderr: String::new(),
             findings: result.findings,
@@ -294,12 +263,9 @@ impl TargetCapture {
     pub(super) fn not_started(conclusion: RunConclusion, message: impl Into<String>) -> Self {
         let message = message.into();
         Self {
-            freshness_authority: None,
-            authority_started_at_ms: None,
-            execution_safety_proved: false,
             conclusion,
             exit_code: None,
-            receipt_exit_status: 1,
+            envelope_exit_status: 1,
             stdout: String::new(),
             stderr: message.clone(),
             findings: vec![finding(message, "jig")],
@@ -339,12 +305,9 @@ impl TargetCapture {
         }
         stderr.push_str(&message);
         Self {
-            authority_started_at_ms: None,
-            freshness_authority: None,
-            execution_safety_proved: false,
             conclusion: RunConclusion::Failure,
             exit_code: None,
-            receipt_exit_status: 1,
+            envelope_exit_status: 1,
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
             stderr,
             findings: vec![finding(message, source)],

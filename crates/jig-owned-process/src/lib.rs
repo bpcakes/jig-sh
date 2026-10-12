@@ -1,8 +1,13 @@
+mod bash_environment;
 mod pipe;
 mod process;
 
 pub mod unix;
 
+pub use bash_environment::{
+    BASH_CONTROL_ENVIRONMENT_KEYS, is_exported_bash_function_environment_key,
+    sanitize_bash_environment,
+};
 pub use pipe::{ChildPipe, NonblockingPipe};
 pub use process::interaction;
 pub use process::{

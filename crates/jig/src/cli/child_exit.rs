@@ -1,11 +1,5 @@
 use super::*;
-
-#[test]
-fn transparent_vault_child_exit_is_silent_and_preserves_status() {
-    let error = crate::cli::structured_error::vault_exec_child_exit(37);
-    assert!(is_structured_json_failure(&error));
-    assert_eq!(structured_error_exit_code(&error), Some(37));
-}
+use crate::cli::structured_error::structured_error_exit_code;
 
 #[test]
 fn json_error_payload_and_reported_error_preserve_machine_failure_contract() {
@@ -26,7 +20,6 @@ fn json_error_reporting_preserves_protocol_and_post_output_boundaries() {
         true,
         &CommandKind::Info(InfoOpts::default())
     ));
-    assert!(!should_report_json_command_errors(true, &CommandKind::Mcp));
     let runtime_probe = Cli::try_parse_from([
         "jig",
         "__runtime-compatible",
@@ -61,45 +54,28 @@ fn json_error_reporting_preserves_protocol_and_post_output_boundaries() {
 #[test]
 fn json_request_detection_ignores_child_arguments_after_separator() {
     assert!(args_request_json(
-        ["work", "status", "--json"].map(OsString::from)
+        ["state", "summary", "--json"].map(OsString::from)
     ));
     assert!(args_request_json(
-        ["--json", "work", "status"].map(OsString::from)
+        ["--json", "state", "summary"].map(OsString::from)
     ));
     assert!(!args_request_json(
         ["vault", "run", "--", "tool", "--json"].map(OsString::from)
-    ));
-
-    assert!(args_target_mcp(
-        ["--json", "mcp", "--bogus"].map(OsString::from)
-    ));
-    assert!(args_target_mcp(["mcp", "--json"].map(OsString::from)));
-    assert!(args_target_mcp(
-        [
-            "--__launcher-contract-version",
-            "6",
-            "--__launcher-profile",
-            "repo",
-            "--__launcher-repo-root",
-            "/tmp/ExampleProject",
-            "mcp",
-            "--json",
-        ]
-        .map(OsString::from)
-    ));
-    assert!(!args_target_mcp(
-        ["--__launcher-profile", "mcp", "vault", "status"].map(OsString::from)
-    ));
-    assert!(!args_target_mcp(
-        ["vault", "status", "mcp", "--json"].map(OsString::from)
-    ));
-    assert!(!args_target_mcp(
-        ["vault", "run", "--", "mcp", "--json"].map(OsString::from)
     ));
 }
 
 #[test]
 fn dev_management_actions_do_not_request_launch_process_identity() {
+    // Each dev action renders with its own summary; the probe makes the three
+    // summaries distinct.
+    let probe = serde_json::json!({ "ok": true, "sessions": [] });
+    let launch_summary = crate::cli::proxy::render::format_dev_summary(&probe);
+    let status_summary = crate::cli::proxy::render::format_dev_status_summary(&probe);
+    let stop_summary = crate::cli::proxy::render::format_dev_stop_summary(&probe);
+    assert_ne!(launch_summary, status_summary);
+    assert_ne!(launch_summary, stop_summary);
+    assert_ne!(status_summary, stop_summary);
+
     let launch = DevOpts {
         command: None,
         launch: DevLaunchOpts {
@@ -107,22 +83,25 @@ fn dev_management_actions_do_not_request_launch_process_identity() {
             ..Default::default()
         },
     };
+    #[cfg(feature = "dev-proxy")]
     assert_eq!(dev_launch_identity_present(&launch), Some(true));
-    assert!(matches!(dev_human_output(&launch), HumanOutput::Dev));
+    assert_eq!(launch.renderer()(&probe), launch_summary);
 
     let status = DevOpts {
         command: Some(DevSubcommand::Status(DevStatusOpts::default())),
         launch: DevLaunchOpts::default(),
     };
+    #[cfg(feature = "dev-proxy")]
     assert_eq!(dev_launch_identity_present(&status), None);
-    assert!(matches!(dev_human_output(&status), HumanOutput::DevStatus));
+    assert_eq!(status.renderer()(&probe), status_summary);
 
     let stop = DevOpts {
         command: Some(DevSubcommand::Stop(DevStopOpts::default())),
         launch: DevLaunchOpts::default(),
     };
+    #[cfg(feature = "dev-proxy")]
     assert_eq!(dev_launch_identity_present(&stop), None);
-    assert!(matches!(dev_human_output(&stop), HumanOutput::DevStop));
+    assert_eq!(stop.renderer()(&probe), stop_summary);
 }
 
 #[test]
@@ -143,7 +122,7 @@ fn dev_interruption_exit_status_comes_from_the_runtime_result() {
     let ordinary_failure =
         require_foreground_status(&serde_json::json!({ "ok": false })).unwrap_err();
     assert!(is_structured_json_failure(&ordinary_failure));
-    assert_eq!(structured_error_exit_code(&ordinary_failure), None);
+    assert_eq!(structured_error_exit_code(&ordinary_failure), Some(1));
 
     for malformed in [
         serde_json::json!({ "ok": false, "interrupted": true }),
@@ -153,16 +132,5 @@ fn dev_interruption_exit_status_comes_from_the_runtime_result() {
         let error = require_foreground_status(&malformed).unwrap_err();
         assert!(!is_structured_json_failure(&error));
         assert_eq!(structured_error_exit_code(&error), None);
-    }
-}
-
-#[test]
-fn agent_child_exit_status_is_preserved_by_the_cli() {
-    for agent in ["Claude", "Codex"] {
-        let error: anyhow::Error =
-            crate::agent_launch::AgentChildExitStatus { agent, status: 37 }.into();
-        assert!(is_structured_json_failure(&error));
-        assert_eq!(structured_error_exit_code(&error), Some(37));
-        assert_eq!(error.to_string(), format!("{agent} exited with status 37"));
     }
 }

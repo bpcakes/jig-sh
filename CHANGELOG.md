@@ -2,30 +2,733 @@
 
 ## Unreleased
 
-These changes postdate the published v0.3.0 release of September 5, 2026. They are available in current `master` and are not part of the crates.io 0.3.0 package.
+### Added
+
+- Add a reset-aware collective quota forecast to the `jig codex launch`
+  picker. The header shows coverage, modeled gap risk, and scheduled capacity
+  return across every discovered Codex account pool. Details explain the
+  window-average pace, matching-plan capacity assumption, allocation scenario,
+  and periodic reset model; banked resets are excluded. Unknown identities,
+  capacities, or window timing stay excluded or unsupported, duplicate homes
+  share one quota pool, and tied conflicting samples withhold that pool.
+  Sample alignment and simulation both require quota in every account window.
+  Live inspection and `r` refresh update the cached forecast. The current
+  layout, 46×12 minimum, and `NO_COLOR` presentation remain supported.
+
+- Show Codex banked reset counts in the picker's account details and
+  `codex homes --usage`, including JSON. Missing counts remain unknown.
+  Automatic selection favors more banked resets when current headroom ties;
+  dry runs report the counts. Resets do not make exhausted accounts eligible.
+
+- `jig codex launch --auto` and `jig claude launch --auto` select a home without
+  a picker or credential prompts, using the most constrained remaining quota
+  across reported windows. Automatic dry runs explain the decision in JSON;
+  unknown or exhausted usage never becomes available capacity. Claude usage
+  reports now include model-scoped weekly limits such as Fable.
+  Known utilization remains selectable when no reset time is supplied; malformed
+  windows stay ineligible while valid neighboring Claude usage remains visible.
+
+### Fixed
+
+- Automatic agent selection accepts known utilization when a quota window omits
+  its duration, as permitted by the Codex protocol. Supplied reset times still
+  enforce expiry, and malformed duration values remain ineligible.
+
+- Backend-only changes no longer select every frontend check under
+  `scripts/jig check --affected`, with or without API contracts. Frontend
+  components no longer depend on the backend component: their checks read
+  their own inputs, including `openapi/**` and the generated API clients, so a
+  backend change cannot change their results. A frontend whose package
+  scripts compile or run backend code must declare those files as inputs. In
+  repositories scaffolded with API contracts, `repo:frontend-contract-drift`
+  catches backend changes that alter the contracts, and now also runs when
+  only `Cargo.lock`, `go.sum`, or Go workspace files change. `jig update`
+  removes the backend dependency from existing frontend components in
+  `.jig.toml` while it is still the generated single dependency on the
+  repository-root backend with inferred provenance, including under an
+  adopted backend id such as `workspace`, and names each dependency it
+  removes; a dependency with declared provenance is kept. Existing generated
+  contract actions also gain the new lockfile and workspace inputs, while
+  authored inputs and commands survive. Unmodified saved models remain
+  eligible for generated updates. The refreshed `.agent/jig-contract.json` is
+  reported as a conflict, so review it and accept it with `--force`.
+- Frontend `typecheck` and `build` checks no longer depend on the contract
+  checks. Those checks produce nothing a frontend check reads, so a
+  frontend-only change, or `scripts/jig check web:typecheck`, no longer runs
+  `repo:frontend-contract-drift`, which builds the backend. Each contract
+  check runs when its own inputs change. `jig update` removes exactly these
+  generated dependencies, `typecheck` on both contract checks and `build` on
+  the boundary check, and names each one; any other dependency, or one with
+  declared provenance, is kept.
+- The generated `webapp-checks.yml` triggers on the files its job reads
+  instead of a Go backend's paths. A Go repository's workflow no longer runs
+  on Go source changes, or on every change when the backend sits at the
+  repository root; its job never runs Go. Every workflow now also runs when
+  the shared ESLint config or `scripts/web-node.cjs` changes, and, with API
+  contracts, when `docs/public/**`, `public-docs/**`, the Go backend's
+  `go.mod`, or the Rust public API and HTTP crate manifests change, which
+  `client-check` scans. A frontend app at the repository root now triggers
+  the workflow on any change; its filter was `./**`, which matched nothing.
+  `jig update` reports the refreshed workflow as a conflict.
+
+## v0.8.0 - 2026-10-09
 
 ### Added
 
-- Add a reset-aware collective quota forecast to the `jig codex launch` picker. It
-  answers whether the modeled pool of Codex accounts reaches a period in which no
-  account can accept work, assuming the estimated aggregate pace and work that can
-  move between accounts. The forecast covers every discovered home rather than the
-  current search results, counts distinct quota pools rather than directories,
-  keeps a separate budget per account window, and replaces one window's allowance
-  at each reset. Coverage, the window-average pace basis, the equal-capacity
-  assumption, the periodic-reset approximation, and the finite horizon are all
-  reported, and mixed or unreported plan capacities stay explicitly unsupported
-  rather than being treated as equal. A plan the provider reports as unknown counts
-  as unreported, homes that disagree about one shared account at the same
-  observation second withhold that pool instead of letting discovery order decide,
-  and a window inside its warmup withholds a consumption forecast without hiding an
-  already exhausted window. Samples observed at different times are carried forward
-  to the newest one with each account's windows advancing together, so a warming pace
-  cannot extrapolate an account into exhaustion and a blocked account does not spend
-  allowances it could not have used, while its estimated pace still counts toward
-  fleet demand. Alignment-budget exhaustion is reported separately from exhausting the
-  forecast horizon's work budget. Existing per-account usage, projections, and
-  recommendations are unchanged, and Claude and configuration pickers gain nothing.
+- Use the mouse in the `claude launch` and `codex launch` home pickers: click
+  a home to select it, double-click to launch it, and scroll the homes or the
+  details with the wheel. Mouse capture is restored with the terminal on
+  every exit.
+- Press `r` in the `claude launch` and `codex launch` home pickers to inspect
+  every home again without reopening the picker. Each home keeps its previous
+  sample, marked with a spinner, until the new one arrives; refresh is
+  offered once the current inspection has finished.
+- Add vault format 3. `vault init`, and vault setup in `jig init` and
+  `jig adopt --write`, now create format 3 vaults; existing vaults are never
+  migrated implicitly. `vault migrate --to 3` upgrades a format 1 or 2 vault
+  atomically, keeping its identity, values, field kinds, timestamps, and audit
+  history; `--to 2` still upgrades format 1, the current format is a verified
+  no-op, and downgrades are refused. The Vault TUI's `m` migrates to format 3.
+- Rotate the data-encryption key on a format 3 passphrase change, in the CLI
+  and the TUI: all state is resealed under a fresh key, so a key recovered from
+  an earlier copy cannot decrypt later state. Rotation is not revocation:
+  earlier vault files and backups remain decryptable with the passphrase they
+  were made with, the audit key stays the same, and previously revealed values
+  may still need rotating at their source. Format 2 keeps rewrapping its
+  unchanged key.
+- Detect vault rollback. For each format 3 vault, a per-user rollback witness
+  in `~/.jig/vault-witness`, outside every vault home, records the committed
+  generation, a digest of the exact encrypted vault file, and the audit event
+  that committed it. Authenticated commands refuse an older copy, a different
+  copy at the same generation, and an older-format copy of a witnessed vault.
+  The witness is local, not a remote authority: whole-profile rollback,
+  deleting or replacing the witness, same-user or root compromise, events
+  forged with a compromised audit key, and truncation of audit-only events
+  after the last state change remain outside the guarantee. Never delete the
+  witness to get past an error.
+- Finish interrupted format 3 changes. Init, field edits, imports, migration
+  to format 3, passphrase changes, and witnessed restores record a transaction
+  in the witness before touching the vault, and the next authenticated command
+  finishes an interrupted one instead of rolling it back. `vault status`
+  reports `pending_transaction` while one is recorded; a pending passphrase
+  change finishes only with the new passphrase, and an interrupted restore
+  finishes when the same backup is restored again or the restored home is
+  unlocked with the backup's passphrase.
+- Fence other copies on restore. Restoring a format 3 backup, or a format 2
+  backup of a vault already witnessed as format 3, reseals it as format 3
+  under a fresh key at a generation above both the backup and the witness, so
+  every other copy of that vault is refused afterwards. The result reports
+  `source_format_version`, `generation`, and `other_copies_stale`, and the CLI
+  and TUI say that other copies are stale. The restored vault opens with the
+  passphrase the backup was created with. A format 2 backup of an unwitnessed
+  vault restores as before.
+- Report the vault format. `vault status` adds `format_version`, `info` adds
+  `capabilities.vault_format_version`, and doctor's vault check shows it. The
+  value is read from the unauthenticated public header without a passphrase
+  or any write: discovery metadata, never proof of integrity, freshness, or
+  rollback safety.
+- Add `jig init` service options for `rust-react`: `--metrics otlp` compiles
+  Batter's bounded OTLP/HTTP exporter for the foundation metrics catalog,
+  enabled at runtime by `METRICS_OTLP_ENDPOINT`, and `--jobs runledger`
+  (PostgreSQL only) adds a `crates/<repo>-jobs` crate whose Runledger worker
+  Batter supervises inside the public API process. Both default to `none`; the
+  interactive wizard offers them while it guides the project shape, and the
+  init report records `metrics` and `jobs`.
+- Claude usage inspection now names each home's signed-in account. The
+  `claude launch` picker and `claude homes --usage` show the email Claude
+  records in the home's `.claude.json` (`~/.claude.json` for the native
+  default) instead of a bare "Claude"; the file holds no credentials, and a
+  missing or unreadable one leaves the account unknown.
+
+### Changed
+
+- Redesign the `claude launch` and `codex launch` home pickers. Each usage
+  window now has a meter: the fill is the quota used, a fainter continuation
+  shows where the sampled pace ends up at reset, and a tick marks how far
+  into the window the sample was taken. Rows carry `◆` for the best pace and
+  `●` for the current home, panels are rounded and titled in their borders,
+  and key hints are keycap chips. Truecolor terminals get green-to-red
+  gradients, 256-color and 16-color terminals the nearest colors, and
+  `NO_COLOR` keeps the glyphs and text without color.
+- The `claude launch` and `codex launch` home pickers choose their layout from
+  one set of breakpoints. The list sits above the details, sized to its rows
+  instead of a fixed 58%, whenever that leaves the details room to show a
+  home without scrolling, so tall terminals no longer split into two narrow
+  columns. Shorter terminals sit the panes side by side from 120 columns,
+  with the details at a readable 56–72 columns and the rest going to the
+  list, and terminals too short for both show one pane at a time, with Tab
+  switching between them.
+- Rename the internal home-picker crate `jig-codex-tui` to `jig-agents-tui`,
+  since it serves Claude as well as Codex, and drop its unused Codex-only
+  entry points. Only `jig-sh` depended on it; `jig-codex-tui` stays on
+  crates.io at v0.7.2 and receives no further releases.
+- The home pickers size list columns to their content, so remaining quota is
+  no longer cut off, and show it as one compact label per home (`5h 58% ·
+  weekly 82% left`). The projection always names its window. The details
+  pane lists account and usage before the home's path and configuration,
+  drops the window duration its label already names, and indents wrapped
+  lines under their value. The focused pane has an accent border, the
+  footer drops its least important key hints first on narrow terminals, and
+  the Claude picker no longer says "Codex" when no projection can be ranked.
+- Rename `info freshness` to `info inputs`; `freshness` remains a hidden alias.
+  The report's `command` field is now `info inputs`. The command previews
+  action input declarations, and Jig has recorded no target freshness since
+  `jig work` was removed. `docs/target-freshness-integration.md` moves to
+  `docs/action-input-declarations.md`.
+- When invoked from the repository root, `info --commands` next steps use
+  `scripts/jig ...` and `adopt .` instead of embedding absolute launcher and
+  repository paths. From any other directory they stay anchored to the
+  discovered root, and the report's `root` field always carries the absolute
+  path.
+- Retire leftover work-era wording: the `info` help no longer mentions gates,
+  and the generated `AGENTS.md` no longer says `file-budget audit` creates no
+  receipts.
+- **Breaking:** authenticated vault operations now require a writable per-user
+  `~/.jig/vault-witness`, including operations on format 1 and 2 vaults selected
+  with `--home` or `JIG_VAULT_HOME`. Shared witness locks serialize legacy
+  operations with migration of another copy of the same vault. A writable
+  vault home alone is no longer sufficient when the user profile is read-only;
+  `vault status` remains a read-only, non-creating probe.
+- **Breaking:** Jig 0.7.2 and earlier cannot read format 3 vaults or their
+  backups. Before migrating a vault or creating a new one, make sure every Jig
+  runtime that uses it, including one selected by a repository's runtime pin,
+  supports format 3. Keep an encrypted backup and a format-3-capable binary
+  until recovery is verified; copying old files or deleting the witness is not
+  a supported recovery.
+- **Breaking:** a newly chosen vault passphrase, at `vault init`, vault setup
+  in `jig init` and `jig adopt --write`, the TUI, or `vault passphrase change`,
+  must be at least 16 UTF-8 bytes and estimated by the pinned zxcvbn 3.1.1
+  estimator to need at least 2^40 guesses, replacing the 12-byte floor.
+  Rejections never reveal the candidate or its estimate. The estimate is
+  guesswork, not a measured entropy guarantee: it considers only the first 100
+  characters, and it scores dates against the current UTC year, so a
+  date-bearing passphrase near the threshold can be judged differently in a
+  later year. Existing passphrases are never revalidated; unlock, migration,
+  backup, and restore keep working.
+- Once a restore has recorded its transaction, its encrypted staging directory
+  (`.jig-vault-restore-*.tmp` beside the target) is never deleted
+  automatically. An abandoned restore leaves it for the operator to inspect
+  and remove; a new restore uses fresh staging.
+- Generated agent guidance adds a managed Vault rule: never delete, move, or
+  edit the vault rollback witness or its journals, and report rollback, fork,
+  and pending-transaction errors to the operator. `jig update` refreshes the
+  rule in existing repositories.
+- New `rust-react` applications pin Batter `18cdf97` and use its canonical
+  service path: sealed `HttpBoundary` assembly with OpenAPI routes admitted
+  through derived route inventories, `AdmittedRequest` handlers, rendered probes
+  that keep the documented contract, readiness conditions, checked completion
+  through `batter::service::start`, and redacted `batter::settings`
+  configuration. PostgreSQL applications add a supervised database health
+  monitor, so readiness follows connectivity and recovers without a restart,
+  migrations on a retired-on-failure lease, and per-test template databases
+  from Batter's SQLx fixture harness through `scripts/test-postgres.sh`, which
+  replaces `TEST_DATABASE_URL` with `POSTGRES_TEST_ADMIN_URL`. The admin
+  surface sends private-response headers on every response and checks
+  same-origin Fetch Metadata and an `x-admin-request` marker on mutations.
+  Generated `TestApp` construction is now async. Existing application source
+  is not migrated by `jig update`.
+
+### Fixed
+
+- Generated Runledger applications retain SQLx's missing-migration guard for
+  application history, rejecting a deployed bundle that omits an applied
+  application migration while accepting the bundled Runledger history.
+- Reject `rust-react` repository names whose generated packages would collide
+  with Batter-owned packages that the selected shape adds, such as
+  `runledger-core` for a repository named `runledger` with `--jobs runledger`.
+- Rendered files keep the trailing newline their templates end with. Earlier
+  renders dropped it, so generated launchers, workflows, and manifests were
+  incomplete text files and the source checkout's launcher parity check
+  failed after every re-render.
+- The guides seeded into the agent map during `init`, `adopt`, and `update`
+  now come from the same Git-aware listing as `agent-map generate`, so
+  Git-ignored guides no longer appear in `agent-map.md` after an update.
+  Guide discovery for `check agent-guides` and the agent map no longer
+  descends into nested repositories, whose guides belong to them; Git ignore
+  rules still do not exclude existing guides.
+- Preserve operator guidance when an output or process failure also encounters
+  an audit integrity refusal, and keep malformed journal contents out of errors.
+- Let CLI and bootstrap initialization finish a recorded init even if today's
+  strength estimate rejects its authenticated credential; fresh credentials
+  still require the current policy.
+- Route integrity failures, including missing or mismatched recovery journals
+  and missing audit logs, to the operator with instructions to preserve recovery
+  data instead of editing the witness or its journals.
+- Serialize legacy vault restore installation with same-ID migration. If
+  migration wins before or after restore finalization, leave the target absent and
+  request a retry through witnessed recovery.
+- Report uncertain pending-marker publication with recovery guidance, including
+  retaining both passphrases after an interrupted credential change.
+- Retry complete output alias scans after transient witness entry disappearance,
+  while retaining fail-closed checks and a bounded retry limit.
+- Remove the lifetime witness entry-count cliff from authenticated vault
+  access and existing-file output checks. Scans still validate complete
+  authority, retain bounded state, and preserve witness history; their
+  filesystem work remains proportional to retained entries.
+
+- Reject an audit append that would exceed the log's read limit before any
+  audit write or pending transaction, keeping the existing vault usable.
+- Keep initialization available in the Vault TUI after an init interrupted
+  before its pending marker; an orphan journal no longer advertises recovery.
+- Verify a format 3 backup's archived mutation checkpoint before restore
+  replaces it, refusing missing anchors and mismatched generations without
+  advancing the witness or installing the target.
+- Allow initialization on the first attempt after a restore interrupted
+  before its pending marker, while preserving abandoned staging.
+- Explain independent-profile witness divergence and operator backup/restore
+  recovery; newer-state and fork refusals now include recovery guidance.
+- Explain operator recovery on rollback and older-format replay refusals,
+  including using the current or restored home without editing the witness.
+- On macOS, the Claude home picker's usage check no longer prompts for
+  Keychain access as `jig`. It reads with system dialogs disabled, then
+  requests permission through Apple's `/usr/bin/security` tool, whose
+  "Always Allow" approval survives Jig rebuilds and upgrades.
+- `jig check contract` with any `--comparison-*` option runs with repository
+  scope in the runtime, as the generated launcher already expects.
+- `jig init` with options but no path now also prints the missing-path hint,
+  and usage hints no longer depend on the executable being named `jig`.
+
+## v0.7.2 - 2026-10-05
+
+### Fixed
+- Allow broad semicolon-separated SQLx inventory sources
+- Support backup restore on macOS
+- Keep macOS ACLs from bypassing restore privacy
+- Refuse restore parents whose ACL allows delete
+- Classify external cfg(test) module descendants as test code
+- Follow Rust's module directory rules when resolving mod declarations
+- Treat manifest-configured Cargo targets as production roots
+- Derive Cargo target roots from manifests instead of filenames
+- Recognize a Cargo target named main.rs in a target directory
+- Honor Cargo auto-discovery settings for target roots
+- Match Cargo's own rules for default and discovered targets
+- Retract guessed module directories and overridden target names
+- Settle the root set and consider every enclosing package
+- Keep a test filename from reclassifying what the file declares
+- Classify each loading of a file, and decline when roots never settle
+- Protect only the loading Cargo compiles
+- Require a trusted path for every restore ancestor
+- Refuse ownership-ignoring volumes anywhere on the restore path
+- See production declarations in blocks and outside the crate roots
+- Read a raw path attribute as the path attribute
+- Clear inherited macOS ACLs from vault homes and private outputs
+
+### Changed
+- Record SQLx external cfg(test) module task
+- Close jig-sh-sqlx-external-test-modules-uq7j
+- Record jig-sh-3mwh macOS vault ACL follow-up
+- Share the macOS ACL module across the crate
+- Close jig-sh-3mwh
+
+### Tests
+- Cover every refused restore parent ACL permission
+- Cover preflight through an ancestor owned by another user
+
+### Other
+- Begin v0.7.2-dev development
+
+## v0.7.1 - 2026-10-04
+
+### Added
+- Distribute verified Jig release binaries
+- Add standalone binary installer
+
+### Fixed
+- Make passphrase errors safe for agents
+- Accept jig:// references in vault run mappings
+- Keep operator-only vault setup out of next steps
+- Withhold the vault passphrase from non-vault commands
+- Share the main checkout's vault with linked git worktrees
+- Explain unsupported harness stubs when repo context fails
+- Route --home and vault-directory recovery to the operator
+- Offer withheld-passphrase wrapping only for check and run
+- Forbid wrapping Jig runners in vault exec or vault run
+- Keep existing worktree-local vaults instead of failing closed
+- Never let worktree-local guidance block a kept vault
+- Require SQLx-specific evidence before enabling SQLx
+- Honor implied SQLx when filling migration defaults
+- Require established ownership for SQLx migration dirs
+- Treat unowned migration dirs as ambiguous for SQLx
+- Keep competing SQLx migration owners ambiguous
+- Show install guidance when an older Jig shadows the binary
+
+### Changed
+- Move Git helpers into policy/git.rs
+- Share the no-follow Git pointer reader across runtime
+- Record vault guidance review validation
+- Record branch validation runs
+- Run vault-named doctor tests when doctor sources change
+- Record vault review-fix validation runs
+- Record final branch validation runs
+- Record guidance fix validation runs
+- Record worktree-local vault validation runs
+- Trial Ubicloud for the Linux test suite
+- Move all Linux workflows to Ubicloud
+- Fix proxy shutdown and reuse release and fixture work
+- Reject release reuse when Git status cannot be read
+- Isolate fresh Cargo home builds from the fixture cache
+- Consolidate validation jobs and reduce fixture optimization
+- Reuse the built Jig binary across fixture checks
+- Reuse test builds and streamline frontend and policy checks
+- Right-size short jobs and focus minimal-feature PR tests
+- Include test orchestration in affected-check inputs
+- Retain optimizations on GitHub-hosted runners
+- Claim jig-sh-so4.2
+- Record SQLx evidence validation runs
+- Record SQLx evidence repair validation runs
+- Close jig-sh-so4.2
+- Record SQLx ownership fix validation runs
+- Record unowned migration fix validation runs
+- Record SQLx owner ambiguity fix validation runs
+- Retain binary distribution validation records
+- Record jig-sh-so4.2 follow-up fixes and decisions
+
+### Documentation
+- Reflow vault exec help after jig:// wording
+- Say a null vault_main_checkout_root does not rule out a worktree
+- Add operator-owned vault guidance to generated repos
+- Mark linked-worktree vault sharing as a compatibility break
+- State that passphrase withholding is process hygiene
+
+### Tests
+- Prove policy Git helpers withhold the passphrase from Git
+- Assert the human summary names the shared main checkout
+
+### Other
+- Begin v0.7.1-dev development
+- Rustfmt the operator-only doctor assertion
+- Repair round 1: Recommended outer vault wrapper can persist concealed values in run history
+- Repair round 1: Unproved requirement: distribution
+- Repair round 2: Unproved requirement: distribution
+- Keep Jig run history local and untracked
+- Diagnose tracked run journals in downstream repositories
+- Repair round 1: Include other-clone history preservation in migration guidance
+- Repair round 2: Include other-clone history preservation in migration guidance
+- Preserve ignored run history during release development bump
+
+## v0.7.0 - 2026-10-03
+
+### Added
+
+- Add `jig loop show <occurrence>` (and `--json`) to report one loop
+  occurrence and the evidence its tick recorded: what the workflow observed and
+  did, each action and worker run with bounded output, and errors. It also
+  names the worker receipt of an occurrence recorded by an earlier runtime.
+- Add `[repository] tracker = "beads"` for contract version 9. It declares that
+  the root `.beads/` directory holds issue-tracker state rather than source, so
+  tracker updates stay out of repository source identity and do not make a
+  planned run stale. It replaces `[work] receipt_metadata = ["beads"]`, which
+  earlier contracts keep using.
+
+### Changed
+
+- Keep generated root agent guidance focused on repository policy and link to
+  backend ownership guides and workflow references. Contract 9's
+  `jig check agent-guides` validates local Markdown links in existing guides,
+  including ignored files and explicitly configured component guidance. Missing
+  optional guides need no placeholders, and heading organization is advisory.
+  Contracts 2 through 8 retain their earlier guide-validation policy.
+- **Breaking:** `jig check agent-map` validates CommonMark references and safe
+  repository paths in every supported contract version. Maps with unescaped
+  literal percent signs, undefined references, or symlinked targets can now fail.
+  Preserve authored content before regenerating a generated map with
+  `jig agent-map generate`; correct custom maps directly.
+- **Breaking:** generated repositories move to contract version 9, consolidating
+  the unreleased epochs 9 through 12 into one successor to the v8 contract
+  generated by the latest stable release, 0.6.0. This runtime still runs
+  repositories on contracts 2 through 8.
+  Contract 9 has no `[work]` section. `.jig.toml` rejects it, the template no
+  longer renders the `verify` evidence gate that repeated
+  `repository.default_check_profile`, and `jig info` omits `check_tools`,
+  `work_gates`, and their human-readable lines. `jig update` and `jig adopt` move
+  `[work] receipt_metadata = ["beads"]` to `[repository] tracker = "beads"`,
+  drop the rest of `[work]`, and report any project-authored gates, checks,
+  tracker, or other settings they dropped in `warnings` (update) or `notes`
+  (adopt). Repositories on contracts 2 through 8 still load `[work]`. Their
+  execution-authority digests stay unchanged unless `iteration_profile` was
+  set or `refinements` was nonempty; those retired values no longer enter
+  execution authority. Runtimes 0.6.0 and earlier reject
+  contract 9, so move a `.jig/runtime-version` pin to a release that supports it
+  before updating a pinned repository. `jig doctor`'s optional contract
+  migration check now describes the move to the current contract.
+- Rust adoption detects direct `sqlx::migrate!` invocations through the Rust AST,
+  including comment-separated paths, without treating strings or comments as
+  code. This is bounded syntax coverage: large valid sources can be skipped
+  with a warning. Non-candidate files skip parsing; a token-complexity budget and fixed
+  parser stack prevent deeply nested or long recursive syntax from aborting
+  adoption. Unparseable or over-budget sources produce warnings; macro expansion
+  and name resolution remain outside this adoption signal.
+- Dev-proxy workspace discovery parses `pnpm-workspace.yaml` with a YAML parser,
+  supporting multiline flow lists, escaped strings, and aliases. Malformed YAML
+  and non-string package entries now fail explicitly. Empty documents and
+  absent/null package lists yield no patterns; glob and filesystem restrictions
+  remain unchanged.
+- The native SQLx unchecked-call check and TODO inventory now use a Rust AST
+  parser, detecting direct calls separated by comments or newlines and accepting
+  complete `include!` expression fragments. Root-level `tests/` paths are now
+  classified as test code, so production counts can decrease on upgrade.
+  Unreadable or unparseable sources now fail both commands and preserve the
+  existing TODO; parse errors include both file and expression parser locations.
+  Missing worktree paths still listed by Git are skipped. This remains a bounded
+  source inventory, not complete Rust syntax coverage or compiler analysis:
+  macro input is inspected only for recognized expression macros, and aliases,
+  arbitrary cfg expressions, and external module/include relationships are not
+  resolved. Lexical matches in opaque macro bodies and function-value references
+  that the old scanner counted may disappear; newly detected calls can make
+  previously passing checks fail. Review regenerated inventories when upgrading.
+- Automatic Rust focus now compares against the merge base with the default
+  branch, like native checks, instead of a work-plan baseline, and falls back to
+  the whole workspace when that base cannot be resolved.
+- A target that does not succeed now records `output_tail` in its run result:
+  the final 4,000 bytes of its stdout and stderr, cut at a character boundary,
+  with counts of any omitted earlier bytes.
+- `jig update` retires the legacy file-budget checker by evaluating
+  `repo:file-budget` itself, then evaluating again just before deleting the
+  checker, instead of requiring an earlier passing receipt.
+- Manual `jig loop tick` occurrences now stay in loop history after they finish,
+  like scheduled ones, instead of being removed when they need no attention, so
+  `jig loop status` lists them and their evidence remains available.
+
+### Fixed
+
+- Preserve project-authored checks, work gates, and legacy Beads tracker settings
+  when adopting a pinned template on contract 2 through 8. Reconcile generated
+  check catalogs without discarding authored actions, and resolve exact action
+  identities before compatibility aliases.
+- The dashboard Timeline failure filter excludes cancelled and skipped targets,
+  matching the Health view. Truncated run output reports an unknown omitted
+  character count when only an upstream byte count is available; complete output
+  retains exact Unicode character counts.
+- Manual loop occurrences with retained worktrees require attention when their
+  evidence cannot be durably recorded, preserving the publication-failure signal.
+
+### Removed
+
+- **Breaking:** remove the MCP stdio server, `jig mcp`, every MCP tool, and the
+  `mcp` runtime/install profile in all contract epochs. Agents use the CLI with
+  `--json` for inspection, plan previews, execution, and run status. The current
+  contract remains v9. `jig mcp` is an unknown command that exits
+  with status 2. Generated repositories no longer receive
+  `.mcp.json`, contract checks do not require it, and `jig info` omits MCP command
+  discovery fields. Update and re-adoption with `--force` retire a previously
+  managed exact Jig registration, preserving other servers and settings and
+  releasing file ownership. Unmanaged, customized, malformed, and nonregular
+  config remains untouched. MCP-only public `jig-contract` tool constants are
+  removed. CLI execution, JSON projections, and run history remain available.
+  This source checkout keeps an empty unmanaged `.mcp.json` only for the
+  released 0.5.0 harness until its runtime pin can advance.
+- Stop shipping ExecPlan and structured-work guidance. Generated repositories no
+  longer receive `.agent/PLANS.md` or `.agent/plans/.gitkeep`, generated `AGENTS.md`
+  no longer directs agents to ExecPlans or `jig work`, and the default Codex skills
+  omit `jig-exec-plans@jig-skills`. `jig update` reports both formerly managed files
+  as removed paths and deletes them with `--force`; move any local edits to
+  `.agent/PLANS.md` first. Existing `.jig.toml` skill lists are preserved, so remove
+  `jig-exec-plans@jig-skills` there to stop expecting it.
+- **Breaking:** remove the `jig work` commands and the `jig.work_*` MCP tools.
+  `jig work` is an unknown command that exits with status 2, and generated
+  launchers no longer list it. Work-gate evaluation and the receipt reuse it
+  performed are gone, so every check executes its targets. The hidden
+  `jig status --freshness-timeout-ms` option is removed, and `jig status` human
+  output no longer prints a `Work:` line. `[work]` configuration still loads
+  through contract version 8.
+- **Breaking:** stop reading work plans, sessions, and decisions. The hidden
+  `--plan-id` option and the `plan_id` argument of contract 2–5 manifest tools
+  are removed in every contract version and rejected; those manifest tools now
+  reject any argument they do not declare. Generated launchers no longer
+  special-case `check --plan-id … contract`. Automatic Rust focus
+  (`{"kind": "automatic"}`) rejects its former `plan_id` field. Runs no longer
+  record a plan, and `jig status run` no longer reports
+  `work_plan_id`; run history that recorded one in a prepared native input
+  still loads. jig-contract drops `RustFocusV1::Automatic::plan_id` and
+  `PreparedNativeInputV1::work_plan_id`.
+  `jig state summary` reports run-history counts and recent target results.
+  `jig status --json` uses `schema_version: 4` without its `work`
+  section. `jig ui` drops the Work tab, plan detail, and session, plan, and
+  decision timeline rows, starts on Timeline, and removes `--plan`; its recorder
+  document uses `schema_version: 4` without `snapshot_kind`,
+  `current_session_id`, `counts`, `open_plans`, or `history`. Run-history rows and
+  failures carry no `plan_id` or `session_id`. `jig state archive` no
+  longer retains receipts and runs for open plans, `jig state compact sessions` is
+  removed, and `jig state restore` no longer accepts the sessions backups it
+  created.
+  Existing `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl` files stay in
+  place and are still sized by `jig state diagnose`, which no longer analyzes
+  session recursion. The loop `noop-status` workflow no longer reports open plans
+  or work-gate counts.
+- **Breaking:** stop recording check receipts and target freshness. `jig check`
+  and `jig run` record their results only in run history
+  (`runs.jsonl`). Directly executed manifest tools, `migration add`, and policy
+  checks no longer record anything. Target identities, dependency execution
+  proofs, and their validation are gone. Epoch-8 `inputs_policy` and
+  `source_state` declarations are still validated and reported, and action
+  `inputs` still drive `--affected`. `--no-receipt` is rejected, and check and run
+  output no longer includes `receipt_id`, `reused_from`, `target_freshness`,
+  `target_identity`, or
+  `target_identity_error`; plan again instead of submitting a plan from an
+  earlier runtime. Existing `runs.jsonl` records that carry those fields still
+  load. `jig state summary` now reports `runs`, `target_results`,
+  `failed_target_results`, and `recent_target_results` from run history. `jig ui`
+  reads its Timeline and Health tabs from run history, and its recorder document
+  uses `schema_version: 4`: `target_stats` replaces `tool_stats`, timeline
+  rows are target results, failures carry `output_tail` instead of
+  `stderr_preview`, the `failure_output_chars` limit replaces
+  `failure_stderr_chars`, and the `state.runs` error scope replaces
+  `state.receipts`. The contract version is unchanged.
+- **Breaking:** stop writing loop receipts. Each loop occurrence's tick instead
+  records one evidence document under `<git-dir>/jig/loop/evidence/` (the
+  ignored `.agent/runtime/loop/evidence/` without Git metadata), outside the
+  checkout, kept while the occurrence stays in loop history and reported by
+  `jig loop show`. Recording that evidence replaces receipt publication as the
+  tick's commit point: if the write fails, a manual occurrence or an otherwise
+  successful scheduled one requires attention.
+  Nothing writes `.agent/state/receipts.jsonl` any more. `loop tick` returns `occurrence_id` instead of
+  `receipt_id`, and `loop dispatch`, `loop clear-attempt`, and
+  `loop acknowledge-occurrence` no longer return `receipt_id`; clear-attempt and
+  acknowledgement are plain state changes that record no evidence. Worker runs
+  appear in their action as a `worker` object instead of `worker_receipt_id`,
+  and scheduled occurrences carry `worker_invoked` instead of
+  `worker_receipt_id`, so `jig status --json` and the `jig ui` recorder move to
+  `schema_version: 4`. Existing `schedule.json` records with `worker_receipt_id`
+  still load. Repo-mode Codex tasks no longer verify receipt-journal appends,
+  so the 64 MiB journal limit and the `receipt_append_valid`,
+  `receipt_ambiguity`, and `journal_unverifiable` diagnostics are gone; a worker
+  must leave the shared checkout clean. The contract version is unchanged.
+- **Breaking:** stop reading the receipt journal. `jig state export receipts`
+  and `jig state diagnose --deep` are removed and rejected as usage errors, along
+  with receipt payload analysis and the receipt-to-run linkage report.
+  `jig state diagnose` JSON drops `deep`, `receipts`, `run_linkage`, the
+  `integrity.run_linkage` and `integrity.run_linkage_findings` fields, the
+  per-stream `deep_analysis_*` fields, and the `archive_receipts` and
+  `export_receipts_before_repair` recommendations. It now recommends
+  `archive_runs` whenever `runs.jsonl` reaches 8 MiB, and a new
+  `legacy_state_streams` recommendation reports the bytes left in
+  `receipts.jsonl`, `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl`.
+  `jig state archive --before` now archives completed run histories by default
+  and leaves `receipts.jsonl` alone; `--include-runs` is hidden and has no
+  effect. Its JSON drops `source_path`, `archive_path`, `recovery_backup_path`,
+  `receipt_count_before`, `receipts_archived`, `receipts_retained`,
+  `uncompressed_bytes`, `compressed_bytes`, `sha256`, `content_sha256`, and
+  `runs_included`, keeping the `runs_*` fields. `jig state restore` accepts only
+  runs backups; receipt backups stay in `.agent/.cache/` as gzip JSONL. Repo-mode Codex tasks now treat uncommitted changes to a legacy
+  `receipts.jsonl` as dirty like any other path. Existing `receipts.jsonl` files
+  stay in place; keep them as history or delete them. The contract version is
+  unchanged.
+- Stop validating the retired `[work].iteration_profile` and `[[work.refinements]]`
+  settings. Both are still accepted so existing configuration loads, never affect
+  execution authority, and are dropped by `jig update`.
+- **Breaking** for `jig-contract` users: remove the unused `tool` constants for
+  the removed work, plan, session, and decision tools (`WORK_*`, `PLANS_*`,
+  `SESSION_*`, and `DECISIONS_ADD`).
+
+## v0.6.0 - 2026-09-27
+
+### Added
+
+- Support `.jig/runtime-version` release pins in generated launchers, with exact
+  crates.io installation, compatible installed-binary reuse, and CI executable
+  caching independent of template source revisions. Generated launchers and
+  staged-render checks prevent older runtimes or templates from replacing
+  pin-aware scripts during updates and re-adoption.
+- Allow isolated scheduled Codex tasks to run an optional `prepare_command` in
+  their new worktree before agent launch. The command runs under the configured
+  Codex sandbox; failures retain the worktree and report bounded output without
+  starting the agent. Existing task configurations need no changes.
+
+### Changed
+
+- Make structured work, receipt inspection, and ExecPlans optional in generated and
+  repository guidance. Recommend checks for the affected behavior instead of a full
+  backend suite for every change, and retain standalone `jig file-budget` diagnostics.
+- Start ready read-only dependent checks when their own prerequisites complete,
+  without waiting for unrelated checks in the same execution layer. Preserve
+  resource admission, effectful execution, and fail-fast ordering constraints.
+- Run inexpensive local preflight checks before the full workspace suite in this
+  source repository, and reduce CI test serialization and redundant check builds.
+
+### Fixed
+
+- Skip unused source-runtime repair seeds in release-pinned repositories and
+  suppress doctor warnings about those inactive caches.
+
+- Include configured shared frontend workspace roots in both web workflow path filters, so changes to shared frontend code run web checks.
+- Forward available `vault exec` output promptly even when a child writes no
+  newline, while retaining enough trailing bytes to redact concealed values.
+- Keep ready check scheduling and cancellation responsive when resource admission,
+  source observation, reuse publication, or local validation cleanup is delayed.
+- Explain when a receipt is stale only because Git identity changed, while still
+  requiring fresh evidence before reuse.
+
+## v0.5.0 - 2026-09-22
+
+### Added
+
+- Add `jig dev recover --session ID`, exact-session `jig dev stop --session ID`,
+  and `jig dev status --session ID` / `--all` for inspecting and repairing dev
+  sessions from a selected state directory. Normal launches can recover eligible
+  interrupted sessions while preserving evidence needed for safe cleanup.
+- Add native evidence gates to `jig work check`, typed focused Rust checks, and
+  opt-in `agent-v1` projections for work and target inspection. Workflow errors
+  now point to actionable corrections, and scheduled task attention explains
+  the affected checkout and receipts.
+- Pin the released runtime used by `scripts/jig` in this source checkout and add
+  `scripts/jig-dev` to build and validate the current source through the launcher.
+
+### Changed
+
+- Generate new `rust-react` applications with Batter-protected startup and
+  shutdown, lifecycle-aware HTTP admission, and finite database bootstrap.
+  PostgreSQL pools are registered through Batter before probing. New application
+  scaffolds support PostgreSQL or no database; SQLite is no longer a scaffold
+  option. They require Rust 1.94 on Unix and pin the unpublished Batter facade
+  to revision `bd836a2`. The generated HTTP wrapper supplies server-generated
+  request correlation. Existing application source is not migrated by
+  `jig update`; Rust library and CLI presets remain independent.
+- Distinguish source builds from published releases: the workspace now carries the
+  next `-dev` package version between releases, and `jig --version` adds Git commit
+  distance, revision, and dirty state for builds from an unreleased checkout.
+- Advance the default branch to the next patch `-dev` version after a successful
+  automated release, while allowing the release workflow to promote the current
+  development version to its stable counterpart.
+
+### Fixed
+
+- Reject Rust-react application names that would conflict with Batter packages
+  before writing destination files.
+- Verify shared proxy capabilities before reusing a live proxy, and preserve
+  certificate scope and shared certificates when proxy readiness is uncertain.
+- `jig state diagnose --deep` now detects receipts whose run history is
+  unavailable. Deep diagnosis joins receipt `run_id` values and child receipts
+  named by `jig.work_check_targets/v1` and `jig.work_check/v2` batch evidence to
+  the active run journal, verified run archives, and manifested run backups, and
+  reports each affected run with its child and batch receipt IDs, explicit
+  counts, and truncation flags. Findings distinguish missing, unverifiable,
+  inconsistent, and backup-recoverable history; live, completed, and verified
+  archived lifecycles are never labeled orphans, and a failed or truncated scan
+  reports `incomplete` instead of `clean`. Shallow mode discloses that linkage
+  was not checked, `ok` reports command completion only, and the new
+  `integrity` object plus human summary separate integrity findings from
+  command success. Recovery guidance is read-only: export affected receipts and
+  record a decision naming the affected IDs, or restore a verified exact backup
+  after preserving newer appends; nothing fabricates run events.
+- Run archive and restore validation now applies the runtime's complete queued
+  plan-structure contract, including execution-layer coverage and dependency
+  ordering. Structurally invalid hand-edited or cross-version run journals are
+  rejected before archival or replacement.
+
+## v0.4.0 - 2026-09-18
+
+### Added
+
+- Add `jig work retire` and the `jig.work_retire` MCP tool for explicit
+  non-success retirement of an open work plan. Retirement requires a structured
+  disposition (`cancelled`, `superseded`, `duplicate`, `obsolete`) and a nonblank
+  reason, accepts an optional `--superseded-by` reference, evaluates no required
+  gates, and records no successful gate evidence. It reuses the existing
+  plan-close lease, open-state recheck, and linked-run rejection, appends an
+  additive `retirement` object to the existing append-only `close` plan event and
+  its state receipt, and ends a session only when the plan's open receipt proves
+  that session owns the plan. `work finish` stays evidence-gated and uses the
+  same ownership-safe session teardown.
 
 - Add the 0.4.0 contract v8 epoch, combining the unreleased bounded-argument,
   literal-argv, explicit-shell, target-freshness, and working-file-authority
@@ -36,6 +739,24 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
   actions to opt into `exhaustive` inputs and `worktree` source authority.
   Preserve released v7 file-budget configuration and v6/v7 native
   migration-name compatibility.
+
+- Add `jig info freshness` to inspect conservative target policies and preview a
+  paired `.jig.toml` / `.agent/jig-contract.json` adoption patch. Worktree and
+  exhaustive opt-ins require explicit target selection and owner assertions.
+  Generated checks stay on Git freshness, including Cargo formatters.
+
+- Reuse compatible original receipts across work plans for plan-independent v8+
+  targets. Newer failed, expired, or incompatible outcomes block older passes.
+  Native runners and their transitive dependents stay plan-local.
+
+- Add `jig claude homes` and `jig claude launch` with the shared searchable
+  picker, optional subscription usage, and dry-run JSON. Existing repositories
+  need `scripts/jig update --recopy` so Claude launches preserve the invocation
+  directory.
+
+- Share one internal agent-provider workflow across Claude and Codex for
+  preflight, inspection, picker selection, dry-run, and execution. Cursor
+  support is prepared but not shipped.
 
 ### Fixed
 
@@ -51,17 +772,23 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 - Preserve custom command-backed migration aliases across v8 update and recopy,
   including their existing `NAME` environment interface. Keep the new 200-byte
   native migration-name bound scoped to v8; v6/v7 retain their previous validation.
+- Fix dev-app cleanup after launcher loss, including macOS races where the child
+  exits during group signaling.
+- Keep concurrent receipt-journal creation race-safe and bound receipt
+  publication across session and journal locks.
 
 ### Changed
 
 - Breaking: remove the `jig prompt` library CLI (`get`, `copy`, `add`, `edit`, `remove`, `list`, `search`, `export`, `import`), its user/repo/pack file registry, MiniJinja rendering, clipboard helpers, and `JIG_PROMPT_HOME` override. Named prompt packs are no longer a Jig surface. This is a runtime-owned CLI removal and does not require a new contract epoch.
-- Breaking: replace the loopback browser dashboard with one unified, read-only terminal application. `jig ui` starts on Work and `jig status --tui` starts on Status; both expose Status, Work, Timeline, and Health. `jig ui --json` now emits a bounded recorder schema-1 document directly, and `jig ui --plan PLAN_ID --json` emits a bounded plan schema-1 document, ending support for browser URLs and HTTP JSON endpoints. The hidden `--port` parser returns a migration error and may be removed in 0.4.0. Dashboard/status readers now cap each logical sessions, plans, decisions, or receipts record at 1,048,576 bytes; oversized legacy records yield partial `record_too_large` observations and can be located with `jig state diagnose` before repair or compaction. This dashboard change leaves generated launcher scope and the append-only state format unchanged and does not itself require a new contract epoch.
+- Breaking: replace the loopback browser dashboard with one unified, read-only terminal application. `jig ui` starts on Work and `jig status --tui` starts on Status; both expose Status, Work, Timeline, and Health. `jig ui --json` now emits a bounded recorder schema-1 document directly, and `jig ui --plan PLAN_ID --json` emits a bounded plan schema-1 document, ending support for browser URLs and HTTP JSON endpoints. A hidden `--port` parser returns a migration error and may be removed in a later release. Dashboard/status readers now cap each logical sessions, plans, decisions, or receipts record at 1,048,576 bytes; oversized legacy records yield partial `record_too_large` observations and can be located with `jig state diagnose` before repair or compaction. This dashboard change leaves generated launcher scope and the append-only state format unchanged and does not itself require a new contract epoch.
 - Breaking: remove the external status-provider subsystem, its configuration, protocol DTOs and schemas, process execution, and Packages and Blockers dashboard views. `[status]` and `[[status.providers]]` are now rejected as unknown configuration, `jig ui --status-refresh-seconds` is rejected as an unknown option, and `jig status --json` advances to schema version 2 with only local repository, work, loop, and collection-error fields. The terminal dashboard has one completion-relative local refresh domain.
 - Breaking: stop publishing the internal `jig-status-tui` crate after moving both terminal-dashboard entrypoints into `jig-ui`; previously published versions remain available but neither internal crate is a supported cross-version integration boundary.
+- Make Beads integration JSONL-first. Doctor validates the bounded export without invoking `br` or opening SQLite. The work-link journal preserves historical issue snapshots and rejects corrupt, conflicting, unsupported, or torn authority before an append becomes durable.
 
 ### Documentation
 
 - Add an end-to-end scheduled Codex task guide covering checkout selection, mutating prompt requirements, nested receipt boundaries, and cron, launchd, and systemd dispatchers.
+- Clarify ExecPlan authoring and execution guidance.
 
 ## v0.3.0 - 2026-09-05
 

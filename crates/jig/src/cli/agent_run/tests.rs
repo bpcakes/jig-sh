@@ -2,10 +2,11 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::process::Command;
 
+use jig_agents::agent_provider::{Choice, Metadata};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::agent_provider::{Choice, Metadata};
+use crate::cli::claude::render;
 
 #[derive(Debug, Eq, PartialEq)]
 enum ExampleConfig {
@@ -44,7 +45,8 @@ impl AgentProvider for ExampleProvider {
         }
     }
 
-    fn discover(&self) -> Result<Discovery<Self::Home>> {
+    fn discover(&self, mode: InspectionMode) -> Result<Discovery<Self::Home>> {
+        assert_eq!(mode, InspectionMode::Interactive);
         self.calls.borrow_mut().push("discover");
         let path = PathBuf::from("/tmp/ExampleAgent");
         Ok(Discovery {
@@ -104,9 +106,10 @@ fn third_provider_dry_run_resolves_and_prepares_without_discovery_or_execution()
         &provider,
         Some(Path::new("ExampleAgent")),
         &args,
+        false,
         true,
         true,
-        HumanOutput::ClaudeLaunch,
+        render::launch_summary,
     )
     .unwrap();
     assert_eq!(*provider.calls.borrow(), ["resolve", "prepare"]);
@@ -116,7 +119,7 @@ fn third_provider_dry_run_resolves_and_prepares_without_discovery_or_execution()
 fn capabilities_and_json_preflight_prevent_provider_work() {
     let provider = ExampleProvider::default();
     assert!(
-        homes(&provider, true, true, HumanOutput::ClaudeHomes)
+        homes(&provider, true, true, render::homes_summary)
             .unwrap_err()
             .to_string()
             .contains("does not support")
@@ -127,19 +130,28 @@ fn capabilities_and_json_preflight_prevent_provider_work() {
             Some(Path::new("ExampleAgent")),
             &[],
             false,
+            false,
             true,
-            HumanOutput::ClaudeLaunch
+            render::launch_summary
         )
         .is_err()
     );
     assert!(
-        launch(&provider, None, &[], true, true, HumanOutput::ClaudeLaunch)
-            .unwrap_err()
-            .to_string()
-            .contains("Pass a Example Agent HOME")
+        launch(
+            &provider,
+            None,
+            &[],
+            false,
+            true,
+            true,
+            render::launch_summary
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("Pass a Example Agent HOME")
     );
     assert!(provider.calls.borrow().is_empty());
-    homes(&provider, false, true, HumanOutput::ClaudeHomes).unwrap();
+    homes(&provider, false, true, render::homes_summary).unwrap();
     assert_eq!(*provider.calls.borrow(), ["report"]);
 }
 

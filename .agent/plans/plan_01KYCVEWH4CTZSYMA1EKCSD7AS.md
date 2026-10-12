@@ -1,1 +1,0 @@
-Annotate long-running jig dev argv with the configured repo name and root, preserve foreground process semantics, add focused parser and Unix integration coverage, and verify the actual process listing.

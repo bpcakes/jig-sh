@@ -1,1 +1,0 @@
-Add confidence/source metadata and adoption profile preview output for jig adopt, with focused tests around SQLx, frontend, package manager, CI, generated gates, managed files, assumptions, and explicit-answer overrides.

@@ -87,6 +87,65 @@ fn parses_dev_status_and_stop_commands() {
 }
 
 #[test]
+fn parses_contextless_exact_session_commands_and_rejects_selector_overlap() {
+    let all = Cli::try_parse_from([
+        "jig",
+        "dev",
+        "status",
+        "--all",
+        "--state-dir",
+        "/tmp/ExampleProject-proxy-state",
+    ])
+    .unwrap();
+    let CommandKind::Dev(all) = all.command else {
+        panic!("expected dev command")
+    };
+    assert!(all.is_contextless());
+
+    let exact =
+        Cli::try_parse_from(["jig", "dev", "status", "--session", "dev_example_target"]).unwrap();
+    let CommandKind::Dev(exact) = exact.command else {
+        panic!("expected dev command")
+    };
+    assert!(exact.is_contextless());
+
+    let recover =
+        Cli::try_parse_from(["jig", "dev", "recover", "--session", "dev_example_target"]).unwrap();
+    let CommandKind::Dev(recover) = recover.command else {
+        panic!("expected dev command")
+    };
+    assert!(recover.is_contextless());
+
+    let stop = Cli::try_parse_from([
+        "jig",
+        "dev",
+        "stop",
+        "--session",
+        "dev_example_target",
+        "--forget-ambiguous-orphans",
+    ])
+    .unwrap();
+    let CommandKind::Dev(stop) = stop.command else {
+        panic!("expected dev command")
+    };
+    assert!(stop.is_contextless());
+
+    assert!(
+        Cli::try_parse_from([
+            "jig",
+            "dev",
+            "status",
+            "--all",
+            "--session",
+            "dev_example_target"
+        ])
+        .is_err()
+    );
+    assert!(Cli::try_parse_from(["jig", "dev", "recover"]).is_err());
+    assert!(Cli::try_parse_from(["jig", "dev", "status", "--all", "--replace"]).is_err());
+}
+
+#[test]
 fn dev_management_commands_reject_launch_options() {
     for args in [
         &["jig", "dev", "status", "--replace"][..],

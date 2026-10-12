@@ -1,0 +1,64 @@
+//! Rendered probe responses shared by every HTTP surface.
+//!
+//! The boundary mounts probes outside admission and owns their status: 200 for
+//! liveness, and the readiness decision's status. Renderers choose only bodies.
+
+use axum::{
+    http::{StatusCode, request::Parts},
+    response::{IntoResponse, Response},
+};
+use batter::{
+    BoxError,
+    axum::{CorrelationId, HttpBoundary, ProbePath, ReadinessDecision, ReadinessPolicy},
+    readiness::ReadinessUnreadyReason,
+};
+
+use crate::ApiError;
+
+pub const LIVENESS_PATH: &str = "/health/live";
+pub const READINESS_PATH: &str = "/health/ready";
+
+/// Process liveness: answering at all is the signal.
+pub fn liveness(_parts: &Parts) -> Response {
+    "ok".into_response()
+}
+
+/// Readiness keeps the documented contract: an empty body when ready, otherwise
+/// the API error envelope with the probe's server-generated request ID.
+pub fn readiness(decision: ReadinessDecision, parts: &Parts) -> Response {
+    let correlation_id = parts.extensions.get::<CorrelationId>();
+    match decision {
+        ReadinessDecision::Ready => StatusCode::OK.into_response(),
+        ReadinessDecision::Unready(
+            ReadinessUnreadyReason::Dependency(_) | ReadinessUnreadyReason::Condition(_),
+        ) => ApiError::service_unavailable(
+            "dependency_unavailable",
+            "A required dependency is unavailable",
+            correlation_id,
+        )
+        .into_response(),
+        ReadinessDecision::Unready(
+            ReadinessUnreadyReason::Starting
+            | ReadinessUnreadyReason::Draining
+            | ReadinessUnreadyReason::Stopped,
+        ) => ApiError::service_unavailable(
+            "service_unavailable",
+            "The service is not ready",
+            correlation_id,
+        )
+        .into_response(),
+    }
+}
+
+/// Mount `/health/live` and `/health/ready` outside admission.
+pub fn mount<E>(
+    boundary: HttpBoundary,
+    readiness_policy: ReadinessPolicy<E>,
+) -> Result<HttpBoundary, BoxError>
+where
+    E: Send + Sync + 'static,
+{
+    Ok(boundary
+        .with_rendered_liveness(ProbePath::new(LIVENESS_PATH)?, liveness)?
+        .with_rendered_readiness(ProbePath::new(READINESS_PATH)?, readiness_policy, readiness)?)
+}

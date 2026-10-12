@@ -1,1 +1,0 @@
-Fix stale gate evidence, mixed gate/check migration, and fixture smoke cleanup.

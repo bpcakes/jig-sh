@@ -1,14 +1,12 @@
-use crate::{
-    dashboard::{
-        BoundedRows, BoundedText, CollectionDomain, DecisionTimelineRow, LimitId, LoopStateError,
-        PlanSnapshotResult, PlanTimelineRow, ReceiptTimelineRow, RecorderEpochId, RecorderRefresh,
-        RecorderSnapshot, Remediation, ScheduledOccurrence, SessionTimelineRow, SnapshotError,
-        SnapshotErrorCode, StatusLocalSnapshot, TimelineRow, scenarios,
-    },
-    terminal::model::{App, BaseDetail, PlanSection, Tab, TimelineFilter},
+use jig_dashboard::{
+    BoundedRows, BoundedText, CollectionDomain, LimitId, LoopStateError, RecorderEpochId,
+    RecorderRefresh, RecorderSnapshot, Remediation, ScheduledOccurrence, SnapshotError,
+    SnapshotErrorCode, TimelineRow, scenarios,
 };
 
-use super::{normalized, render_text};
+use crate::terminal::model::{App, Tab};
+
+use super::{normalized, render_text, status_local};
 
 mod parity;
 
@@ -19,18 +17,9 @@ fn app_with_local(tab: Tab) -> App {
 }
 
 fn accept_recorder(app: &mut App, recorder: RecorderSnapshot) {
-    let status = scenarios::status_snapshot();
-    let epoch_id = recorder.epoch_id;
     app.accept_recorder_refresh(RecorderRefresh {
+        status_local: status_local(scenarios::status_snapshot(), &recorder),
         recorder,
-        status_local: StatusLocalSnapshot {
-            epoch_id,
-            observed_at_ms: status.observed_at_ms,
-            repository: status.repository,
-            work: status.work,
-            loops: status.loops,
-            errors: status.errors,
-        },
     });
 }
 
@@ -43,28 +32,58 @@ fn assert_contains_all(rendered: &str, expected: &[&str]) {
     }
 }
 
+/// A target result row whose identity is `<run>:<target>`.
+fn result_row(run_id: &str, timestamp_ms: u64, conclusion: &str) -> TimelineRow {
+    TimelineRow {
+        stable_identity: format!("{run_id}:api:test"),
+        timestamp_ms: Some(timestamp_ms),
+        run_id: run_id.to_string(),
+        target: "api:test".to_string(),
+        status: "completed".to_string(),
+        conclusion: Some(conclusion.to_string()),
+        exit_code: Some(i64::from(conclusion != "success")),
+        started_at_ms: Some(timestamp_ms.saturating_sub(50)),
+        ended_at_ms: Some(timestamp_ms),
+        duration_ms: Some(50),
+        finding_count: None,
+        output_tail: None,
+    }
+}
+
+fn output_failure(recorder: &mut RecorderSnapshot, output: &str) {
+    recorder.failures[0].output_tail = BoundedText::for_limit(
+        output,
+        Some(output.chars().count()),
+        LimitId::FailureOutputChars,
+    )
+    .unwrap();
+}
+
 #[test]
-fn failure_stderr_is_bounded_and_scrollable() {
+fn failure_output_is_bounded_and_scrollable() {
     let mut recorder = scenarios::recorder_snapshot();
     let mut older = recorder.failures[0].clone();
-    older.id = "receipt_older".to_string();
+    older.run_id = "run_older".to_string();
     older.ended_at_ms = Some(scenarios::OBSERVED_AT_MS - 5_000);
     recorder.failures.push(older);
-    let stderr = format!("first\n{}\nlast", "x".repeat(389));
-    recorder.failures[0].stderr_preview =
-        BoundedText::for_limit(stderr, Some(425), LimitId::FailureStderrChars).unwrap();
+    let output = format!("first\n{}\nlast", "x".repeat(389));
+    recorder.failures[0].output_tail =
+        BoundedText::for_limit(output, Some(425), LimitId::FailureOutputChars).unwrap();
     let mut app = App::new(Tab::Health);
     app.recorder.data = Some(recorder.into());
 
     let failures = &app.recorder.data.as_ref().unwrap().failures;
-    assert_eq!(failures[0].id, "receipt_failed");
-    assert_eq!(failures[1].id, "receipt_older");
+    assert_eq!(failures[0].run_id, "run_failed");
+    assert_eq!(failures[1].run_id, "run_older");
     let failure = app.selected_health().unwrap();
-    assert_eq!(failure.identity, "failure:receipt_failed");
+    assert_eq!(failure.identity, "failure:run_failed:api:test");
     assert_contains_all(
         &failure.detail.lines.join(" "),
         &[
-            "Stderr:",
+            "Run: run_failed",
+            "Target: api:test",
+            "Conclusion: failure (exit 1)",
+            "Output tail:",
             "first",
             "last",
             "limit 400 characters; 25 omitted",
@@ -72,7 +91,7 @@ fn failure_stderr_is_bounded_and_scrollable() {
     );
     assert!(app.open_selected_detail());
     let rendered = normalized(&render_text(&app, 80, 16));
-    assert_contains_all(&rendered, &["Failure detail", "Stderr:", "first"]);
+    assert_contains_all(&rendered, &["Failure detail", "Output tail:", "first"]);
     assert!(app.detail.scroll_limit() > 0);
     app.move_detail_to_edge(true);
     let end = normalized(&render_text(&app, 80, 16));
@@ -80,32 +99,7 @@ fn failure_stderr_is_bounded_and_scrollable() {
 }
 
 #[test]
-fn gate_error_preserves_other_plans() {
-    let mut recorder = scenarios::recorder_snapshot();
-    recorder.open_plans[0].gates = None;
-    recorder.open_plans[0].gates_error = Some("gate collection unavailable".to_string());
-    recorder.errors.push(SnapshotError::new(
-        CollectionDomain::Gates,
-        SnapshotErrorCode::GateObservationFailed,
-        Some("plan_example".to_string()),
-        "gate collection unavailable",
-    ));
-    let mut app = App::new(Tab::Work);
-    app.recorder.data = Some(recorder.into());
-
-    let rendered = normalized(&render_text(&app, 120, 36));
-    assert_contains_all(
-        &rendered,
-        &[
-            "plan_example",
-            "plan_closed",
-            "Gate collection error: gate collection unavailable",
-        ],
-    );
-}
-
-#[test]
-fn tool_health_renders_all_aggregates() {
+fn target_health_renders_all_aggregates() {
     let app = app_with_local(Tab::Health);
     let item = app
         .recorder
@@ -116,12 +110,12 @@ fn tool_health_renders_all_aggregates() {
         .iter()
         .find(|item| item.section == "Check health")
         .unwrap();
-    assert_eq!(item.identity, "tool:jig.test");
+    assert_eq!(item.identity, "target:api:test");
     assert_contains_all(
         &item.detail.lines.join(" "),
         &[
-            "Tool: jig.test",
-            "Last status: exit 1",
+            "Target: api:test",
+            "Last conclusion: failure",
             "Last run:",
             "Runs: 3",
             "Failures: 1",
@@ -216,66 +210,16 @@ fn exhausted_attempt_keeps_identity_and_inert_recovery_argv() {
 }
 
 #[test]
-fn timeline_enter_uses_raw_plan_identity() {
-    let raw_plan_id = "plan\u{1b}[31m-raw";
-    let mut recorder = scenarios::recorder_snapshot();
-    recorder.timeline.insert(
-        0,
-        TimelineRow::Plan(PlanTimelineRow {
-            stable_identity: "plan:event:raw".to_string(),
-            timestamp_ms: Some(scenarios::OBSERVED_AT_MS),
-            id: "plan-event".to_string(),
-            event: "opened".to_string(),
-            plan_id: raw_plan_id.to_string(),
-            title: Some("Raw plan".to_string()),
-            resolution: None,
-        }),
-    );
-    let mut app = App::new(Tab::Timeline);
-    app.recorder.data = Some(recorder.into());
-
+fn timeline_and_loop_attention_details_are_reachable() {
+    let mut app = app_with_local(Tab::Timeline);
     assert!(app.open_selected_detail());
-    let (_, requested_plan_id) = app.take_plan_request().unwrap();
-    assert_eq!(requested_plan_id, raw_plan_id);
-    assert!(!render_text(&app, 80, 24).contains('\u{1b}'));
-}
-
-#[test]
-fn plan_summary_renders_baseline_values_and_errors() {
-    let mut app = app_with_local(Tab::Work);
-    let present = normalized(&render_text(&app, 120, 36));
-    assert!(present.contains("Baseline: HEAD 0123456789abcdef"));
-
-    app.move_selection(1);
-    let unavailable = normalized(&render_text(&app, 120, 36));
-    assert!(unavailable.contains("Baseline error: baseline unavailable"));
-}
-
-#[test]
-fn standalone_timeline_and_loop_attention_details_are_reachable() {
-    let mut recorder = scenarios::recorder_snapshot();
-    recorder.timeline.insert(
-        0,
-        TimelineRow::Decision(DecisionTimelineRow {
-            stable_identity: "decision:standalone".to_string(),
-            timestamp_ms: Some(scenarios::OBSERVED_AT_MS),
-            id: "decision-standalone".to_string(),
-            plan_id: None,
-            title: "Standalone choice".to_string(),
-            selected_option: "safe".to_string(),
-            rationale: BoundedText::for_limit(
-                "bounded reason",
-                Some(14),
-                LimitId::TimelineDecisionRationaleChars,
-            )
-            .unwrap(),
-        }),
+    let result = normalized(&render_text(&app, 80, 24));
+    assert_contains_all(
+        &result,
+        &["Target result", "Run: run_failed", "Target: api:test"],
     );
-    let mut app = App::new(Tab::Timeline);
-    app.recorder.data = Some(recorder.into());
-    assert!(app.open_selected_detail());
-    assert!(render_text(&app, 80, 24).contains("bounded reason"));
     app.close_detail();
+    assert!(!app.detail_is_open());
 
     app.select_tab(Tab::Health);
     app.move_selection(6);
@@ -288,96 +232,80 @@ fn standalone_timeline_and_loop_attention_details_are_reachable() {
 #[test]
 fn producer_limits_and_partial_errors_are_visible_without_erasing_data() {
     let mut recorder = scenarios::partial_recorder_snapshot();
-    recorder.limits.history.omitted = Some(3);
+    recorder.limits.failures.omitted = Some(3);
     recorder.limits.timeline.omitted = None;
-    let mut app = App::new(Tab::Work);
+    let mut app = App::new(Tab::Health);
     app.recorder.data = Some(recorder.into());
-    let work = normalized(&render_text(&app, 120, 36));
-    assert!(work.contains("3 omitted"));
-    assert!(work.contains("example loop data is unavailable"));
+    let health = normalized(&render_text(&app, 200, 36));
+    assert!(health.contains("limit 10 failures; 3 omitted"), "{health}");
+    assert!(
+        health.contains("example loop data is unavailable"),
+        "{health}"
+    );
+    assert!(health.contains("Recent failures"));
 
     app.select_tab(Tab::Timeline);
     let timeline = normalized(&render_text(&app, 120, 36));
     assert!(timeline.contains("omitted count unknown"));
-    assert!(timeline.contains("receipt_failed"));
+    assert!(timeline.contains("run_failed"));
 }
 
 #[test]
-fn recorder_refresh_reconciles_selection_without_discarding_bounded_closed_detail() {
-    let mut app = app_with_local(Tab::Work);
+fn recorder_refresh_keeps_timeline_selection_and_open_detail() {
+    let mut recorder = scenarios::recorder_snapshot();
+    recorder.timeline = vec![
+        result_row("run_newer", scenarios::OBSERVED_AT_MS - 100, "success"),
+        result_row("run_older", scenarios::OBSERVED_AT_MS - 200, "success"),
+    ];
+    let mut app = App::new(Tab::Timeline);
+    accept_recorder(&mut app, recorder.clone());
     app.move_selection(1);
-    assert_eq!(app.selected_work().unwrap().plan_id, "plan_closed");
-    assert!(app.open_selected_detail());
-    let (basis, requested) = app.take_plan_request().unwrap();
-    let mut detail = scenarios::plan_snapshot();
-    detail.plan.plan_id = requested.clone();
-    detail.plan.title = "Closed example".to_string();
-    detail.plan.state = "closed".to_string();
-    app.accept_plan_result(
-        basis,
-        &requested,
-        PlanSnapshotResult::Found(Box::new(detail)),
-    );
-
-    let mut recorder = scenarios::recorder_snapshot();
-    recorder.history.insert(0, recorder.history[0].clone());
-    accept_recorder(&mut app, recorder);
-    assert_eq!(app.selected_work().unwrap().plan_id, "plan_closed");
-    assert!(app.take_plan_request().is_none());
-
-    let mut recorder = scenarios::recorder_snapshot();
-    recorder.history.clear();
-    accept_recorder(&mut app, recorder);
-    assert!(app.detail_is_open());
-    assert_eq!(app.detail.plan().unwrap().raw_plan_id, "plan_closed");
-
-    assert!(app.refresh_plan_detail());
-    let (basis, requested) = app.take_plan_request().unwrap();
-    app.accept_plan_result(basis, &requested, PlanSnapshotResult::NotFound);
-    assert!(!app.detail_is_open());
-    assert!(app.detail.notice.as_deref().unwrap().contains("no longer"));
-}
-
-#[test]
-fn detail_errors_keep_last_successful_plan_visible() {
-    let mut app = app_with_local(Tab::Work);
-    assert!(app.open_selected_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    app.accept_plan_result(
-        basis,
-        &plan_id,
-        PlanSnapshotResult::Found(Box::new(scenarios::plan_snapshot())),
-    );
-    app.detail.request_plan(plan_id.clone());
-    app.accept_plan_error(&plan_id, "detail collection failed".to_string());
-
-    assert!(app.detail.plan().is_some());
     assert_eq!(
-        app.detail.error.as_deref(),
-        Some("detail collection failed")
+        app.selected_timeline().unwrap().identity,
+        "run_older:api:test"
     );
+
+    recorder.timeline.insert(
+        0,
+        result_row("run_newest", scenarios::OBSERVED_AT_MS, "success"),
+    );
+    accept_recorder(&mut app, recorder.clone());
+    assert_eq!(app.timeline_index, 2);
+    assert_eq!(
+        app.selected_timeline().unwrap().identity,
+        "run_older:api:test"
+    );
+
+    assert!(app.open_selected_detail());
+    recorder.epoch_id = RecorderEpochId::new(2).unwrap();
+    recorder.timeline.clear();
+    accept_recorder(&mut app, recorder);
     assert!(app.detail_is_open());
+    assert!(
+        app.detail
+            .document
+            .as_ref()
+            .unwrap()
+            .lines
+            .iter()
+            .any(|line| line == "Run: run_older")
+    );
+    assert!(app.selected_timeline().is_none());
 }
 
 #[test]
-fn multiline_text_and_session_labels_cross_the_terminal_boundary_safely() {
+fn multiline_text_and_labels_cross_the_terminal_boundary_safely() {
     let mut recorder = scenarios::recorder_snapshot();
-    recorder.current_session_id = Some("session\u{1b}[31m\u{202e}raw".to_string());
-    let mut app = App::new(Tab::Work);
+    output_failure(&mut recorder, "first\r\nsecond\tcolumn\nthird\u{1b}[31m");
+    recorder.timeline[0].target = "api\u{1b}[31m\u{202e}:test".to_string();
+    let mut app = App::new(Tab::Timeline);
     app.recorder.data = Some(recorder.into());
-    let work = render_text(&app, 120, 36);
-    assert!(!work.contains('\u{1b}'));
-    assert!(!work.contains('\u{202e}'));
+    let timeline = render_text(&app, 120, 36);
+    assert!(!timeline.contains('\u{1b}'));
+    assert!(!timeline.contains('\u{202e}'));
 
+    app.select_tab(Tab::Health);
     assert!(app.open_selected_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    let mut plan = scenarios::plan_snapshot();
-    let body = "first\r\nsecond\tcolumn\nthird\u{1b}[31m";
-    plan.body = Some(
-        BoundedText::for_limit(body, Some(body.chars().count()), LimitId::PlanBodyChars).unwrap(),
-    );
-    app.accept_plan_result(basis, &plan_id, PlanSnapshotResult::Found(Box::new(plan)));
-    app.cycle_detail_section(false);
     let rendered = render_text(&app, 120, 36);
     assert!(rendered.lines().any(|line| line.contains("first")));
     assert!(rendered.lines().any(|line| line.contains("second column")));
@@ -386,46 +314,29 @@ fn multiline_text_and_session_labels_cross_the_terminal_boundary_safely() {
 }
 
 #[test]
-fn detail_scroll_edges_clamp_and_open_leaf_survives_epoch_refresh() {
-    let mut app = app_with_local(Tab::Work);
+fn detail_scroll_edges_clamp_and_document_survives_epoch_refresh() {
+    let mut recorder = scenarios::recorder_snapshot();
+    output_failure(&mut recorder, "one\ntwo\nthree\nfour");
+    let mut app = App::new(Tab::Health);
+    accept_recorder(&mut app, recorder);
     assert!(app.open_selected_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    let mut plan = scenarios::plan_snapshot();
-    let body = "one\ntwo\nthree\nfour";
-    plan.body = Some(
-        BoundedText::for_limit(body, Some(body.chars().count()), LimitId::PlanBodyChars).unwrap(),
-    );
-    app.accept_plan_result(basis, &plan_id, PlanSnapshotResult::Found(Box::new(plan)));
-    app.cycle_detail_section(false);
+    let limit = app.detail.scroll_limit();
+    assert_eq!(limit, 10);
     app.move_detail_to_edge(true);
-    assert_eq!(app.detail.section_scroll[PlanSection::Body.index()], 5);
-    app.move_detail_selection(10);
-    assert_eq!(app.detail.section_scroll[PlanSection::Body.index()], 5);
+    assert_eq!(app.detail.scroll, limit);
+    app.scroll_detail(10);
+    assert_eq!(app.detail.scroll, limit);
     app.move_detail_to_edge(false);
-    assert_eq!(app.detail.section_scroll[PlanSection::Body.index()], 0);
+    assert_eq!(app.detail.scroll, 0);
+    app.scroll_detail(3);
+    assert_eq!(app.detail.scroll, 3);
 
-    for _ in 0..2 {
-        app.cycle_detail_section(false);
-    }
-    app.open_detail_leaf_or_close();
-    assert!(app.detail.leaf.is_some());
     let mut recorder = scenarios::recorder_snapshot();
     recorder.epoch_id = RecorderEpochId::new(2).unwrap();
     accept_recorder(&mut app, recorder);
-    assert!(app.detail.leaf.is_some());
-    let (basis, requested) = app.take_plan_request().unwrap();
-    assert_eq!(
-        basis,
-        crate::dashboard::PlanBasis::RecorderEpoch(RecorderEpochId::new(2).unwrap())
-    );
-    let mut refreshed = scenarios::plan_snapshot();
-    refreshed.basis_epoch = RecorderEpochId::new(2).unwrap();
-    app.accept_plan_result(
-        basis,
-        &requested,
-        PlanSnapshotResult::Found(Box::new(refreshed)),
-    );
-    assert!(app.detail.leaf.is_some());
+    assert!(app.detail_is_open());
+    assert_eq!(app.detail.scroll, 3);
+    assert_eq!(app.detail.item_epoch, Some(RecorderEpochId::FIRST));
 }
 
 #[test]
@@ -449,7 +360,7 @@ fn manual_occurrences_and_loop_error_selection_survive_unrelated_insertions() {
             finished_at_ms: None,
             acknowledged_at_ms: None,
             status: "running".to_string(),
-            worker_receipt_id: None,
+            worker_invoked: false,
             worktree: None,
             error: None,
         }],
@@ -511,22 +422,23 @@ fn manual_occurrences_and_loop_error_selection_survive_unrelated_insertions() {
 fn recorder_errors_render_their_sanitized_subject() {
     let mut recorder = scenarios::recorder_snapshot();
     recorder.errors.push(SnapshotError::new(
-        CollectionDomain::Gates,
-        SnapshotErrorCode::GateObservationFailed,
-        Some("plan\u{1b}[31m-target".to_string()),
-        "gate failed",
+        CollectionDomain::Runs,
+        SnapshotErrorCode::StreamReadFailed,
+        Some("run\u{1b}[31m-target".to_string()),
+        "run stream failed",
     ));
-    let mut app = App::new(Tab::Work);
+    let mut app = App::new(Tab::Timeline);
     app.recorder.data = Some(recorder.into());
     let rendered = render_text(&app, 120, 36);
-    assert!(rendered.contains("plan�[31m-target"));
+    assert!(rendered.contains("run�[31m-target"));
+    assert!(rendered.contains("run stream failed"));
     assert!(!rendered.contains('\u{1b}'));
 }
 
 #[test]
 fn local_header_reports_default_branch_age_and_detached_state_on_every_local_tab() {
-    let mut app = app_with_local(Tab::Work);
-    for tab in [Tab::Work, Tab::Timeline, Tab::Health] {
+    let mut app = app_with_local(Tab::Timeline);
+    for tab in [Tab::Timeline, Tab::Health] {
         app.select_tab(tab);
         let rendered = render_text(&app, 120, 36);
         assert!(rendered.contains("default main"));
@@ -540,28 +452,7 @@ fn local_header_reports_default_branch_age_and_detached_state_on_every_local_tab
 
 #[test]
 fn compact_local_views_are_single_selection_following_lists() {
-    let mut app = app_with_local(Tab::Work);
-    let prototype = app.recorder.data.as_ref().unwrap().work[0].clone();
-    for index in 0..12 {
-        let mut plan = prototype.clone();
-        plan.plan_id = format!("plan_{index:02}");
-        plan.display_plan_id = plan.plan_id.clone();
-        app.recorder.data.as_mut().unwrap().work.push(plan);
-    }
-    let last = app.recorder.data.as_ref().unwrap().work.len() - 1;
-    for index in [0, last / 2, last] {
-        app.work_index = index;
-        let selected = app.recorder.data.as_ref().unwrap().work[index]
-            .display_plan_id
-            .clone();
-        let rendered = render_text(&app, 40, 12);
-        assert!(
-            rendered.contains(&selected),
-            "missing selected row {selected}"
-        );
-        assert!(!rendered.contains("Plan preview"));
-    }
-
+    let mut app = app_with_local(Tab::Timeline);
     let timeline = app.recorder.data.as_ref().unwrap().timeline[0].clone();
     let health = app.recorder.data.as_ref().unwrap().health[0].clone();
     for index in 0..12 {
@@ -589,133 +480,24 @@ fn compact_local_views_are_single_selection_following_lists() {
     ] {
         app.select_tab(tab);
         app.move_selection(isize::try_from(last).unwrap());
-        assert!(render_text(&app, 40, 12).contains(marker));
+        let rendered = render_text(&app, 40, 12);
+        assert!(rendered.contains(marker), "{tab:?}:\n{rendered}");
+        assert!(!rendered.contains("preview"), "{tab:?}:\n{rendered}");
     }
-}
-
-#[test]
-fn plan_collection_errors_are_visible_in_empty_decision_and_receipt_sections() {
-    let mut app = app_with_local(Tab::Work);
-    assert!(app.open_selected_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    let mut snapshot = scenarios::plan_snapshot();
-    snapshot.decisions.clear();
-    snapshot.receipts.clear();
-    snapshot.errors.extend([
-        SnapshotError::new(
-            CollectionDomain::Decisions,
-            SnapshotErrorCode::StreamReadFailed,
-            Some(plan_id.clone()),
-            "decisions unavailable",
-        ),
-        SnapshotError::new(
-            CollectionDomain::Receipts,
-            SnapshotErrorCode::RecordDecodeFailed,
-            Some(plan_id.clone()),
-            "receipts unavailable",
-        ),
-    ]);
-    app.accept_plan_result(
-        basis,
-        &plan_id,
-        PlanSnapshotResult::Found(Box::new(snapshot)),
-    );
-    for _ in 0..3 {
-        app.cycle_detail_section(false);
-    }
-    let decisions = render_text(&app, 120, 36);
-    assert!(decisions.contains("decisions unavailable"));
-    assert!(decisions.contains("Enter opens"));
-    assert!(!decisions.contains("h/l horizontal"));
-    app.cycle_detail_section(false);
-    assert!(render_text(&app, 120, 36).contains("receipts unavailable"));
-}
-
-#[test]
-fn detail_failures_converge_without_automatic_retargeting() {
-    let mut app = app_with_local(Tab::Work);
-    assert!(app.open_selected_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    app.accept_plan_result(basis, &plan_id, PlanSnapshotResult::StaleRecorderEpoch);
-    assert!(app.take_plan_request().is_none());
-    assert!(app.detail.error.as_deref().unwrap().contains("stale"));
-
-    assert!(app.refresh_plan_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    let mut mismatch = scenarios::plan_snapshot();
-    mismatch.basis_epoch = RecorderEpochId::new(2).unwrap();
-    app.accept_plan_result(
-        basis,
-        &plan_id,
-        PlanSnapshotResult::Found(Box::new(mismatch)),
-    );
-    assert!(app.take_plan_request().is_none());
-    assert!(
-        app.detail
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("different recorder epoch")
-    );
-
-    assert!(app.refresh_plan_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    let mut mismatch = scenarios::plan_snapshot();
-    mismatch.plan.plan_id = "different-plan".to_string();
-    app.accept_plan_result(
-        basis,
-        &plan_id,
-        PlanSnapshotResult::Found(Box::new(mismatch)),
-    );
-    assert!(
-        app.detail
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("different plan ID")
-    );
-
-    assert!(app.refresh_plan_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    let mut unsupported = scenarios::plan_snapshot();
-    unsupported.schema_version += 1;
-    app.accept_plan_result(
-        basis,
-        &plan_id,
-        PlanSnapshotResult::Found(Box::new(unsupported)),
-    );
-    assert!(
-        app.detail
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("unsupported plan snapshot")
-    );
 }
 
 #[test]
 fn long_detail_lines_are_reachable_horizontally_and_item_details_become_stale() {
-    let mut app = app_with_local(Tab::Work);
+    let mut recorder = scenarios::recorder_snapshot();
+    output_failure(&mut recorder, &format!("{}TAIL_MARKER", "x".repeat(120)));
+    let mut app = App::new(Tab::Health);
+    accept_recorder(&mut app, recorder);
     assert!(app.open_selected_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    let mut snapshot = scenarios::plan_snapshot();
-    let long = format!("{}TAIL_MARKER", "x".repeat(120));
-    snapshot.body = Some(
-        BoundedText::for_limit(&long, Some(long.chars().count()), LimitId::PlanBodyChars).unwrap(),
-    );
-    app.accept_plan_result(
-        basis,
-        &plan_id,
-        PlanSnapshotResult::Found(Box::new(snapshot)),
-    );
-    app.cycle_detail_section(false);
     assert!(!render_text(&app, 80, 24).contains("TAIL_MARKER"));
     app.scroll_detail_horizontal(120);
     assert!(render_text(&app, 80, 24).contains("TAIL_MARKER"));
+    assert!(!render_text(&app, 80, 24).contains("stale"));
 
-    app.close_detail();
-    app.select_tab(Tab::Health);
-    assert!(app.open_selected_detail());
     let mut recorder = scenarios::recorder_snapshot();
     recorder.epoch_id = RecorderEpochId::new(2).unwrap();
     accept_recorder(&mut app, recorder);
@@ -723,35 +505,14 @@ fn long_detail_lines_are_reachable_horizontally_and_item_details_become_stale() 
 }
 
 #[test]
-fn work_projection_drops_nested_gate_payload_and_timeline_summaries_stay_single_line() {
+fn timeline_summaries_stay_single_line() {
     let mut recorder = scenarios::recorder_snapshot();
-    let gates = recorder.open_plans[0].gates.as_mut().unwrap();
-    let mut gate = gates.gates.items()[0].clone();
-    gate.changed_paths = BoundedRows::for_limit(
-        vec!["NESTED_GATE_SENTINEL".to_string()],
-        Some(1),
-        LimitId::GateChangedPaths,
-    )
-    .unwrap();
-    gates.gates = BoundedRows::for_limit(vec![gate], Some(1), LimitId::GateRows).unwrap();
-    if let Some(TimelineRow::Decision(decision)) = recorder
-        .timeline
-        .iter_mut()
-        .find(|row| matches!(row, TimelineRow::Decision(_)))
-    {
-        decision.rationale = BoundedText::for_limit(
-            "first line\nsecond line",
-            Some(22),
-            LimitId::TimelineDecisionRationaleChars,
-        )
-        .unwrap();
-    }
+    recorder.timeline[0].run_id = "first line\nsecond line".to_string();
     let local: crate::terminal::model::LocalDashboard = recorder.into();
-    assert!(!format!("{:?}", local.work[0].gates).contains("NESTED_GATE_SENTINEL"));
     assert!(
         local
             .timeline
             .iter()
-            .all(|row| !row.secondary.contains('\n'))
+            .all(|row| !row.primary.contains('\n') && !row.secondary.contains('\n'))
     );
 }

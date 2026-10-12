@@ -7,23 +7,26 @@ use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
 use crate::audit::{AuditAction, AuditEvent};
-use crate::crypto::KEY_LEN;
 use crate::error::{classified, vault_error_from_anyhow};
-use crate::format::FORMAT_VERSION;
+use crate::format::{LATEST_FORMAT_VERSION, supports_field_kinds};
 use crate::store::VaultStore;
 use crate::{PreparedPrivateFile, Result, VaultError, VaultErrorKind};
 
 mod codec;
 mod payload;
-#[cfg(target_os = "linux")]
-mod restore_linux;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod restore;
 #[cfg(test)]
 mod tests;
 
 use codec::seal_archive;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use codec::{ParsedBackupArchive, decrypt_archive, parse_archive_bytes};
 pub(crate) use payload::{inspect_embedded_vault, max_backup_audit_bytes};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use restore::{
+    finish_pending_restore, legacy_restore_retry_error, read_candidate as read_restore_candidate,
+};
 
 pub const BACKUP_FORMAT_VERSION: u32 = 1;
 pub const MAX_BACKUP_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
@@ -64,16 +67,16 @@ pub struct BackupCreateResult {
 ///
 /// The request is opaque and consumed by [`crate::Vault::restore_backup`].
 pub struct BackupRestoreRequest {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     archive: ParsedBackupArchive,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     target: RestoreTarget,
 }
 
 impl fmt::Debug for BackupRestoreRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = formatter.debug_struct("BackupRestoreRequest");
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         debug
             .field("archive", &"[REDACTED]")
             .field("archive_len", &self.archive.serialized_len)
@@ -88,10 +91,17 @@ impl fmt::Debug for BackupRestoreRequest {
 pub struct BackupRestoreResult {
     pub root: PathBuf,
     pub vault_id: String,
+    /// Format of the restored vault. A format 2 archive whose vault ID is
+    /// already witnessed as format 3 is restored as format 3.
     pub format_version: u32,
+    /// Format of the vault inside the archive.
+    pub source_format_version: u32,
+    /// Generation of a witnessed restore. Every other copy of the vault ID
+    /// is older and is now refused as stale. `None` for a legacy restore.
+    pub generation: Option<u64>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 struct RestoreTarget {
     home: PathBuf,
     parent: PathBuf,
@@ -99,7 +109,7 @@ struct RestoreTarget {
     parent_inode: u64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl fmt::Debug for RestoreTarget {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -112,7 +122,7 @@ impl fmt::Debug for RestoreTarget {
 
 pub(crate) struct BackupSnapshot {
     pub(crate) store: VaultStore,
-    pub(crate) audit_key: Zeroizing<[u8; KEY_LEN]>,
+    pub(crate) audit_key: crate::audit::RetainedAuditKey,
     pub(crate) operation_id: String,
     pub(crate) source_vault_id: String,
     pub(crate) source_format_version: u32,
@@ -122,7 +132,7 @@ pub(crate) struct BackupSnapshot {
 
 struct BackupLifecycle {
     store: VaultStore,
-    audit_key: Zeroizing<[u8; KEY_LEN]>,
+    audit_key: crate::audit::RetainedAuditKey,
     operation_id: String,
 }
 
@@ -145,7 +155,7 @@ impl BackupLifecycle {
     fn record_finish(&self, bytes_written: usize, created_at_ms: i128) -> AnyResult<()> {
         AuditEvent::append(
             &self.store,
-            self.audit_key.as_ref(),
+            &self.audit_key,
             AuditAction::BackupFinish,
             serde_json::json!({
                 "operation_id": self.operation_id,
@@ -160,7 +170,7 @@ impl BackupLifecycle {
     fn record_failure(&self, stage: &str) -> AnyResult<()> {
         AuditEvent::append(
             &self.store,
-            self.audit_key.as_ref(),
+            &self.audit_key,
             AuditAction::BackupFailed,
             serde_json::json!({
                 "operation_id": self.operation_id,
@@ -176,9 +186,13 @@ impl BackupLifecycle {
             Ok(()) => VaultError::from_anyhow(kind, error),
             Err(audit_error) => VaultError::from_anyhow(
                 kind,
-                error.context(format!(
-                    "vault backup failed; additionally failed to append terminal audit event: {audit_error}"
-                )),
+                crate::error::context_with_secondary_recovery(
+                    error,
+                    &audit_error,
+                    format!(
+                        "vault backup failed; additionally failed to append terminal audit event: {audit_error}"
+                    ),
+                ),
             ),
         }
     }
@@ -187,15 +201,17 @@ impl BackupLifecycle {
         match self.record_failure("audit_finish") {
             Ok(()) => VaultError::from_anyhow(
                 VaultErrorKind::AuditTampered,
-                error.context(
-                    "backup output was installed, but its finish audit event failed",
-                ),
+                error.context("backup output was installed, but its finish audit event failed"),
             ),
             Err(failure_error) => VaultError::from_anyhow(
                 VaultErrorKind::AuditTampered,
-                error.context(format!(
-                    "backup output was installed, but both finish and failure audit events failed: {failure_error}"
-                )),
+                crate::error::context_with_secondary_recovery(
+                    error,
+                    &failure_error,
+                    format!(
+                        "backup output was installed, but both finish and failure audit events failed: {failure_error}"
+                    ),
+                ),
             ),
         }
     }
@@ -304,17 +320,20 @@ pub(crate) fn preflight_restore(
             "backup restore requires a bounded regular input file; stdin is unsupported",
         ));
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let archive_bytes = restore_linux::read_archive(input)
+        let archive_bytes = restore::read_archive(input)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))?;
         let archive = parse_archive_bytes(archive_bytes)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Serialization, error))?;
-        let target = restore_linux::preflight_target(target_home)
-            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
-        Ok(BackupRestoreRequest { archive, target })
+        // A target overlapping the protected witness is refused before any
+        // parent directory is prepared for it.
+        refuse_witness_overlap(&target_home)
+            .and_then(|()| restore::preflight_target(target_home))
+            .map(|target| BackupRestoreRequest { archive, target })
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (input, target_home);
         Err(unsupported_restore_platform())
@@ -325,22 +344,28 @@ pub(crate) fn restore(
     passphrase: &SecretString,
     request: BackupRestoreRequest,
 ) -> Result<BackupRestoreResult> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let BackupRestoreRequest { archive, target } = request;
         let decoded = decrypt_archive(passphrase, archive)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Authentication, error))?;
-        restore_linux::restore(passphrase, decoded, target)
+        restore::restore(passphrase, decoded, target)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Io, error))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (passphrase, request);
         Err(unsupported_restore_platform())
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn refuse_witness_overlap(target_home: &Path) -> AnyResult<()> {
+    let home = crate::path_security::physical_path(target_home, "restore target")?;
+    crate::store::witness::WitnessLocation::for_home(&home)?.ensure_disjoint(&home)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn unsupported_restore_platform() -> VaultError {
     VaultError::new(
         VaultErrorKind::InvalidInput,
@@ -352,15 +377,21 @@ fn validate_create_request(store: &VaultStore, output: &Path, overwrite: bool) -
     store.revalidate_existing()?;
     PreparedPrivateFile::preflight(output, overwrite).map_err(anyhow::Error::new)?;
     store.validate_external_output(output, "backup")?;
-    let vault_bytes = store
-        .read_vault_bytes()?
-        .context("existing vault state disappeared during backup preflight")?;
+    if store.has_pending_transaction()? {
+        // The authenticated backup finishes the recorded transaction first
+        // and checks the recovered format and bounds under the vault lock;
+        // the predecessor's format and size say nothing about them.
+        return Ok(());
+    }
+    let Some(vault_bytes) = store.read_vault_bytes()? else {
+        anyhow::bail!("existing vault state disappeared during backup preflight");
+    };
     let (vault_id, version) = inspect_embedded_vault(&vault_bytes)?;
-    if version != FORMAT_VERSION {
+    if !supports_field_kinds(version) {
         return Err(classified(
             VaultErrorKind::InvalidInput,
             format!(
-                "vault format {version} cannot be backed up; run `jig vault migrate --to {FORMAT_VERSION}` first"
+                "vault format {version} cannot be backed up; run `jig vault migrate --to {LATEST_FORMAT_VERSION}` first"
             ),
         ));
     }

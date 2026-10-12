@@ -1,0 +1,290 @@
+//! Application-owned operational policy: protected startup, readiness inputs,
+//! shutdown budgets, and native resource cleanup. Request deadlines live in the
+//! HTTP-common crate and end at response construction.
+[% if metrics_enabled %]
+
+mod metrics;
+[% endif %]
+
+use std::{future::Future, time::Duration};
+
+use ::<<[ module_name ]>> as app_crate;
+[% if jobs_enabled %]
+#[cfg(feature = "db")]
+use ::<<[ module_name ]>>_jobs as jobs_crate;
+[% endif %]
+use batter::{
+    BoxError,
+    axum::{AssembledHttp, ReadinessPolicy},
+    cleanup::CleanupBudget,
+    lifecycle::{LifecycleStatus, OperationAdmission, ShutdownBudget, Supervisor},
+    operation::{OperationContext, OperationOwner},
+    service::{self, ServiceOutcome},
+    startup::{ProtectedStartupScope, Startup},
+};
+
+/// One allowance covers initialization: database connection and migrations
+/// when enabled, worker registration, HTTP assembly, and listener binding.
+const STARTUP_BUDGET: Duration = Duration::from_secs(30);
+
+/// Failure type of the dependency health monitor feeding readiness.
+[% if db_enabled %]
+#[cfg(feature = "db")]
+pub type DependencyError = app_crate::db::DbHealthError;
+#[cfg(not(feature = "db"))]
+pub type DependencyError = std::convert::Infallible;
+[% else %]
+pub type DependencyError = std::convert::Infallible;
+[% endif %]
+
+/// Lifecycle readiness plus supervised dependency health when a database is
+/// configured. HTTP surfaces narrow it with application readiness conditions.
+pub type Readiness = ReadinessPolicy<DependencyError>;
+
+/// Own startup and shutdown for an HTTP service. Native resources stay
+/// registered until the HTTP task has joined; incomplete cleanup is an error.
+pub async fn serve<F, Fut>(config: app_crate::AppConfig, assemble: F) -> anyhow::Result<()>
+where
+    F: FnOnce(app_crate::AppState, OperationAdmission, Readiness) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<AssembledHttp, BoxError>> + Send,
+{
+    run(config, [% if jobs_enabled %]false, [% endif %]assemble).await
+}
+[% if jobs_enabled %]
+
+/// Like [`serve`], and also run the Runledger worker in this process.
+#[cfg(feature = "db")]
+pub async fn serve_with_jobs<F, Fut>(
+    config: app_crate::AppConfig,
+    assemble: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(app_crate::AppState, OperationAdmission, Readiness) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<AssembledHttp, BoxError>> + Send,
+{
+    run(config, true, assemble).await
+}
+[% endif %]
+
+[% if jobs_enabled %]
+async fn run<F, Fut>(
+    config: app_crate::AppConfig,
+    register_jobs: bool,
+    assemble: F,
+) -> anyhow::Result<()>
+[% else %]
+async fn run<F, Fut>(config: app_crate::AppConfig, assemble: F) -> anyhow::Result<()>
+[% endif %]
+where
+    F: FnOnce(app_crate::AppState, OperationAdmission, Readiness) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<AssembledHttp, BoxError>> + Send,
+{
+[% if metrics_enabled %]
+    let diagnostics = metrics::prepare(config.metrics_endpoint())?;
+[% endif %]
+    let supervisor = Supervisor::new(shutdown_budget()?);
+    let lifecycle = supervisor.status();
+    let admission = supervisor.operation_admission();
+    let context = OperationOwner::new(STARTUP_BUDGET)?.into_context();
+    let initialization = context.clone();
+    let startup = Startup::scoped(supervisor, context, cleanup_budget()?, move |scope| {
+        Box::pin(async move {
+            let service = Service {
+                config,
+                lifecycle,
+                admission,
+[% if jobs_enabled %]
+                register_jobs,
+[% endif %]
+            };
+            service
+                .initialize(scope, &initialization, assemble)
+                .await
+                .map_err(std::io::Error::other)
+        })
+    })
+    .with_unix_signals("signals");
+[% if metrics_enabled %]
+    let completion = service::start(startup, diagnostics).wait().await;
+    metrics::report(completion.diagnostics());
+[% else %]
+    let completion = service::start(startup, service::NoDiagnostics).wait().await;
+[% endif %]
+    match completion.service() {
+        ServiceOutcome::StartupFailed(error) => Err(anyhow::Error::new(error.clone())),
+        ServiceOutcome::Shutdown(Ok(_)) => Ok(()),
+        ServiceOutcome::Shutdown(Err(error)) => Err(anyhow::Error::new(error.clone())),
+        ServiceOutcome::Coordinator(error) => Err(anyhow::Error::new(error.clone())
+            .context("the service coordinator terminated without a completion report")),
+    }
+}
+
+/// Everything protected startup needs, captured before the supervisor moves.
+struct Service {
+    config: app_crate::AppConfig,
+    lifecycle: LifecycleStatus,
+    admission: OperationAdmission,
+[% if jobs_enabled %]
+    register_jobs: bool,
+[% endif %]
+}
+
+impl Service {
+    async fn initialize<F, Fut>(
+        self,
+        scope: &mut ProtectedStartupScope,
+        context: &OperationContext,
+        assemble: F,
+    ) -> anyhow::Result<()>
+    where
+        F: FnOnce(app_crate::AppState, OperationAdmission, Readiness) -> Fut,
+        Fut: Future<Output = Result<AssembledHttp, BoxError>>,
+    {
+        scope.stage("application.initialize")?;
+        let addr = self.config.bind_addr();
+        let admission = self.admission.clone();
+        let (state, readiness) = self.state(scope, context).await?;
+        scope.stage("http.assemble")?;
+        let application = assemble(state, admission, readiness)
+            .await
+            .map_err(|error| anyhow::anyhow!(error))?;
+        scope.stage("http.bind")?;
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let bound_addr = listener.local_addr()?;
+        tracing::info!(%bound_addr, "listening");
+        application.register_in(scope, "http", listener)?;
+        Ok(())
+    }
+[% if db_enabled %]
+
+    /// Reserve cleanup before acquiring the pool, so failure or cancellation of
+    /// any later step still closes it after dependent tasks have joined.
+    #[cfg(feature = "db")]
+    async fn state(
+        self,
+        scope: &mut ProtectedStartupScope,
+        context: &OperationContext,
+    ) -> anyhow::Result<(app_crate::AppState, Readiness)> {
+        let database_url = self.config.database_url().cloned().ok_or_else(|| {
+            anyhow::anyhow!("DATABASE_URL is required to initialize the database")
+        })?;
+        scope.stage("database.connect")?;
+        let cleanup = scope.reserve_cleanup("database.close")?;
+        let db = app_crate::db::Db::connect_in(&database_url, context, cleanup).await?;
+        scope.stage("database.migrate")?;
+        db.migrate(context).await?;
+        scope.stage("database.health")?;
+        let health = db.register_health(scope.registration())?;
+[% if jobs_enabled %]
+        if self.register_jobs {
+            scope.stage("jobs.register")?;
+            jobs_crate::register(scope, &db, self.config.jobs_worker_id(), context).await?;
+        }
+[% endif %]
+        let readiness = ReadinessPolicy::new(self.lifecycle, health);
+        Ok((
+            app_crate::AppState::from_database(self.config, db),
+            readiness,
+        ))
+    }
+
+    #[cfg(not(feature = "db"))]
+    async fn state(
+        self,
+        scope: &mut ProtectedStartupScope,
+        context: &OperationContext,
+    ) -> anyhow::Result<(app_crate::AppState, Readiness)> {
+        let _ = (scope, context[% if jobs_enabled %], self.register_jobs[% endif %]);
+        let readiness = ReadinessPolicy::lifecycle_only(self.lifecycle);
+        Ok((app_crate::AppState::from_config(self.config), readiness))
+    }
+[% else %]
+
+    async fn state(
+        self,
+        scope: &mut ProtectedStartupScope,
+        context: &OperationContext,
+    ) -> anyhow::Result<(app_crate::AppState, Readiness)> {
+        let _ = (scope, context);
+        let readiness = ReadinessPolicy::lifecycle_only(self.lifecycle);
+        Ok((app_crate::AppState::from_config(self.config), readiness))
+    }
+[% endif %]
+}
+
+/// Cleanup allowance: work, cancellation, and abort observation.
+fn cleanup_budget() -> Result<CleanupBudget, batter::ConfigurationError> {
+    CleanupBudget::new(
+        Duration::from_secs(5),
+        Duration::from_secs(3),
+        Duration::from_secs(1),
+    )
+}
+
+/// Drain, cancellation, and abort phases share the first-stop clock; cleanup
+/// has its own allowance. Production process managers must allow all of them.
+fn shutdown_budget() -> Result<ShutdownBudget, batter::ConfigurationError> {
+    ShutdownBudget::new(
+        Duration::from_secs(10),
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+        cleanup_budget()?,
+    )
+}
+[% if db_enabled %]
+
+/// Run finite database setup with owned cleanup, without starting an HTTP service.
+/// Cancellation cannot roll back database creation or committed migrations.
+#[cfg(feature = "db")]
+pub async fn bootstrap_database(config: app_crate::AppConfig) -> anyhow::Result<bool> {
+    use anyhow::Context;
+    use batter::command::{Command, check_command};
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let database_url = config
+        .database_url()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("DATABASE_URL is required to bootstrap the database"))?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    let command = Command::new(
+        OperationOwner::new(STARTUP_BUDGET)?.into_context(),
+        cleanup_budget()?,
+        move |scope| {
+            Box::pin(async move {
+                let work = async {
+                    scope.stage("database.create")?;
+                    let created = app_crate::db::Db::create_if_missing(&database_url)
+                        .await
+                        .context("Failed to create the database with the configured role; use a pre-created database or a role already authorized to create it")?;
+                    scope.stage("database.connect")?;
+                    let database_context = scope.context().clone();
+                    let cleanup = scope.reserve_cleanup("database.close")?;
+                    let db =
+                        app_crate::db::Db::connect_in(&database_url, &database_context, cleanup)
+                            .await?;
+                    scope.stage("database.migrate")?;
+                    db.migrate(&database_context).await?;
+                    Ok::<_, anyhow::Error>(created)
+                };
+                work.await.map_err(std::io::Error::other)
+            })
+        },
+    )
+    .start();
+    let outcome = tokio::select! {
+        biased;
+        _ = interrupt.recv() => { command.cancel(); command.wait().await }
+        _ = terminate.recv() => { command.cancel(); command.wait().await }
+        outcome = command.wait() => outcome,
+    };
+    let report = check_command(outcome)?;
+    Ok(*report
+        .work
+        .as_ref()
+        .expect("check_command validated successful work"))
+}
+[% endif %]
+
+#[cfg(test)]
+mod tests;

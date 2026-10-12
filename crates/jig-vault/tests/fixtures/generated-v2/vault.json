@@ -1,0 +1,21 @@
+{
+  "header": {
+    "magic": "jig-vault",
+    "version": 2,
+    "vault_id": "01M48RP93PRPX1WAGHTYAHXGHZ",
+    "created_at_ms": 1791295693942,
+    "kdf": {
+      "algorithm": "argon2id",
+      "memory_kib": 19456,
+      "iterations": 1,
+      "parallelism": 1,
+      "output_len": 32
+    },
+    "salt_b64": "rAGanfRW6THeXR0cxcKW0Q==",
+    "aead": "xchacha20poly1305"
+  },
+  "wrapped_dek_nonce_b64": "VKpfGMYMHxldPKy+3xBBjB5a6ag5eFzC",
+  "wrapped_dek_b64": "EfHpGXFAEaGCoHSTXVnaPegd/LSW8aMWBFadsjzI7rHPghTAMmifIufhQMSoLzez",
+  "state_nonce_b64": "+rAVxTmm0QlKBKhiozdp0ztYdA8rTjNI",
+  "state_b64": "BjmnV/SywaisOZAgELcZTou2Bik8R77hNDEDYjMx8zy7roSNAGrRuCE68TO8qbW805knLsNEthXkUY8VHarGd1nG7655SQ2/BTU1JJaRe/xYyqdkDh0AG2wUmPecBWtCHeLSgDymsL5+NFZjpoRwjNylle2bhDZ2esS5tW9p496hfMf4TCwm1vXWB5b4ctGeUZWgBilymMRa4LUAZTM7S8vX7/B6wvcjkkSBbs4P9ce4iWsnbvq/lkz0jgTZySAISIXxWao3CgtoO9sV3xu2nJm91QaJBT2+OoIcryx0v8A1bBoJ11jTJaPSi8fmMIliFJmedes4pEsPl/oq3geuMvZ+aX3MiL2/SiFCzUZl+eb2iLSafT8VuNTJGF0sN61K91fV5Q2Bzzs0rTE+Y2OurT/hwycTBm4mPQCkPJGnmZG6hiHU4EVMmVSF4Dccn1N/6TUuPjeuDLxo5kz0f2BZNxBLqX/+DoGySMX+6ouIkNw0lf17ayiRSdaURfFrESu8WVLU/AThXcp+M6cSj6JNBKmuvA1EzuqDH8Yb8kZtfagCenzk+0eIsl8coD78xwacqYMtsGl7HANw5RRZtr+KZnFDOMCeX0GfkWB00R9aC2IxlES2ScOsmVUqj6Y3dKfpiuksXk9FK/cjpvZMQ6Qvzvy6RDDr+v8dfHm0Flr9hR2NPLPzg/U9dFlus2xu"
+}

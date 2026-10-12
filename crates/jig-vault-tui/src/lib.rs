@@ -20,11 +20,16 @@ mod model;
 mod peek;
 mod quick_access;
 mod render;
+mod restore_notice;
 mod runtime;
 mod secret_input;
 mod tools;
 mod viewport;
 
+#[cfg(test)]
+mod format_version_tests;
+#[cfg(test)]
+mod passphrase_policy_tests;
 #[cfg(test)]
 mod tests;
 
@@ -96,7 +101,9 @@ impl std::error::Error for VaultUiError {}
 #[derive(Debug)]
 pub enum VaultAction {
     Refresh,
-    MigrateToV2,
+    /// Explicit one-way migration of a version 1 or 2 vault to the latest
+    /// format.
+    MigrateToLatest,
     Mutate {
         revision: VaultRevision,
         mutation: VaultMutation,
@@ -322,6 +329,8 @@ pub enum VaultActionResult {
         root: PathBuf,
         vault_id: String,
         format_version: u32,
+        /// A witnessed restore fences every other copy of its vault ID.
+        other_copies_stale: bool,
     },
     Exported {
         output: PathBuf,

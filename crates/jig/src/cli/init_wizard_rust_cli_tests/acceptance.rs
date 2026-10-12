@@ -20,7 +20,7 @@ fn explicit_rust_cli_is_complete_in_strict_defaults_and_no_terminal_modes() {
         assert!(!opts.scaffold.has_frontends());
         assert_eq!(
             opts.answers.backend_language,
-            Some(crate::bootstrap::BackendLanguage::Rust)
+            Some(jig_context::backend::BackendLanguage::Rust)
         );
         assert_eq!(opts.answers.sqlx_enabled, Some(false));
     }

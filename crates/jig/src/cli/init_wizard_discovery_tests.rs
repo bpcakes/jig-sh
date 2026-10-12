@@ -115,7 +115,7 @@ fn guided_application_choices_still_prompt_from_typed_capabilities() {
     let mut rust_output = Vec::new();
     prepare_init_interaction_with_io(
         &mut rust,
-        &mut Cursor::new("1\nnone\nweb\n"),
+        &mut Cursor::new("1\nnone\nweb\n\n"),
         &mut rust_output,
     )
     .unwrap();
@@ -125,6 +125,8 @@ fn guided_application_choices_still_prompt_from_typed_capabilities() {
     assert_eq!(rust.scaffold.frontends.len(), 1);
     assert!(rust_output.contains("Database?"), "{rust_output}");
     assert!(rust_output.contains("Frontends?"), "{rust_output}");
+    assert!(rust_output.contains("Metrics export?"), "{rust_output}");
+    assert!(!rust_output.contains("Background jobs?"), "{rust_output}");
     assert!(!rust_output.contains("Go module"), "{rust_output}");
 
     let mut go = init_opts(&["jig", "init", "ExampleProject", "--no-vault"]);
@@ -146,6 +148,7 @@ fn guided_application_choices_still_prompt_from_typed_capabilities() {
     assert!(go_output.contains("Database?"), "{go_output}");
     assert!(go_output.contains("Frontends?"), "{go_output}");
     assert!(go_output.contains("Go module"), "{go_output}");
+    assert!(!go_output.contains("Metrics export?"), "{go_output}");
 }
 
 #[test]

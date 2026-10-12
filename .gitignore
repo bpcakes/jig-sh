@@ -31,10 +31,6 @@ site/
 # Rust
 target/
 
-# Default local SQLite database and transient sidecars
-/jig_sh.db
-/jig_sh.db-*
-
 
 
 # JavaScript and TypeScript
@@ -55,9 +51,11 @@ build/
 .contract-stage-*/
 .contract-client-stage-*/
 
-# Jig local runtime cache. Keep durable agent state tracked.
+# Jig local runtime data and execution history.
+.agent/state/runs.jsonl
 .agent/.cache/*
 !.agent/.cache/.gitignore
+.agent/runtime/
 .agent/tmp/
 
 # Local logs and scratch files
@@ -65,4 +63,9 @@ build/
 tmp/
 temp/
 # END JIG MANAGED BLOCK
-/scripts/tests/__pycache__/
+# The pinned release runtime still appends receipts, which current Jig
+# neither writes nor reads.
+.agent/state/receipts.jsonl
+__pycache__/
+# Retired tracker stores must not re-enter code branches.
+/.beads/

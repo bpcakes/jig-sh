@@ -1,0 +1,37 @@
+import {
+  client as publicApiClient,
+  getAppStatusOptions,
+  type AppStatusResponse,
+  zApiErrorResponse,
+} from "<<[ public_api_client_package ]>>"
+import {
+  client as adminApiClient,
+  getAdminStatusOptions,
+} from "<<[ admin_api_client_package ]>>"
+
+publicApiClient.interceptors.error.use(normalizeApiError)
+adminApiClient.interceptors.error.use(normalizeApiError)
+// The admin API rejects mutating requests unless they carry this marker and
+// same-origin Fetch Metadata, which a cross-site page cannot forge.
+adminApiClient.setConfig({ headers: { "x-admin-request": "1" } })
+
+export { adminApiClient }
+export type AppStatus = AppStatusResponse
+export const adminStatusQueryOptions = getAdminStatusOptions({
+  baseUrl: globalThis.location.origin,
+})
+export const appStatusQueryOptions = getAppStatusOptions({
+  baseUrl: globalThis.location.origin,
+})
+
+function normalizeApiError(error: unknown): Error {
+  if (error instanceof Error) return error
+  const parsed = zApiErrorResponse.safeParse(error)
+  if (parsed.success) {
+    return new Error(
+      `${parsed.data.message} (request ${parsed.data.request_id})`
+    )
+  }
+  if (typeof error === "string" && error.length > 0) return new Error(error)
+  return new Error("API request failed")
+}

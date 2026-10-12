@@ -1,4 +1,4 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{fmt, ops::Range};
 
 use anyhow::{Context, Result as AnyResult, bail};
@@ -10,8 +10,8 @@ use crate::VaultErrorKind;
 use crate::crypto::{KEY_LEN, NONCE_LEN, SALT_LEN, validate_kdf_params};
 use crate::error::{classified, classify_source};
 use crate::format::{
-    AEAD_ALGORITHM, FORMAT_VERSION, MAGIC, V1_FORMAT_VERSION, VaultHeader, decode_b64_array,
-    validate_header,
+    AEAD_ALGORITHM, LATEST_FORMAT_VERSION, MAGIC, V1_FORMAT_VERSION, VaultHeader, decode_b64_array,
+    supports_field_kinds, validate_header,
 };
 
 use super::codec::{BackupKdfParams, validate_short_ascii};
@@ -21,7 +21,7 @@ const MAX_SOURCE_VAULT_ID_BYTES: usize = 128;
 const BACKUP_PAYLOAD_MAGIC: &[u8] = b"jig-vault-backup-payload\n";
 const BACKUP_PAYLOAD_VERSION: u32 = 1;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) struct DecodedBackupArchive {
     plaintext: Zeroizing<Vec<u8>>,
     vault_range: Range<usize>,
@@ -29,9 +29,10 @@ pub(super) struct DecodedBackupArchive {
     pub(super) source_vault_id: String,
     pub(super) source_format_version: u32,
     pub(super) backup_created_at_ms: i128,
+    pub(super) archive_sha256: String,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl DecodedBackupArchive {
     pub(super) fn vault_bytes(&self) -> &[u8] {
         &self.plaintext[self.vault_range.clone()]
@@ -42,7 +43,7 @@ impl DecodedBackupArchive {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl fmt::Debug for DecodedBackupArchive {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -113,10 +114,11 @@ fn backup_payload_fixed_len(source_vault_id_len: usize) -> AnyResult<usize> {
         .context("backup payload length overflow")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn decode_backup_payload(
     plaintext: Zeroizing<Vec<u8>>,
     backup_created_at_ms: i128,
+    archive_sha256: String,
 ) -> AnyResult<DecodedBackupArchive> {
     if plaintext.len() > MAX_BACKUP_PAYLOAD_BYTES {
         return Err(classified(
@@ -161,6 +163,7 @@ pub(super) fn decode_backup_payload(
         source_vault_id,
         source_format_version,
         backup_created_at_ms,
+        archive_sha256,
     })
 }
 
@@ -180,11 +183,11 @@ fn validate_payload_metadata(
         return Err(classified(
             VaultErrorKind::InvalidInput,
             format!(
-                "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {FORMAT_VERSION}` and create a new backup"
+                "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {LATEST_FORMAT_VERSION}` and create a new backup"
             ),
         ));
     }
-    if source_format_version != FORMAT_VERSION {
+    if !supports_field_kinds(source_format_version) {
         return Err(classified(
             VaultErrorKind::InvalidInput,
             format!("unsupported embedded vault format {source_format_version}"),
@@ -246,11 +249,11 @@ pub(crate) fn inspect_embedded_vault(vault_bytes: &[u8]) -> AnyResult<(String, u
         return Err(classified(
             VaultErrorKind::InvalidInput,
             format!(
-                "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {FORMAT_VERSION}` and create a new backup"
+                "backup contains vault format {V1_FORMAT_VERSION}; migrate the source first with `jig vault migrate --to {LATEST_FORMAT_VERSION}` and create a new backup"
             ),
         ));
     }
-    if embedded_header.version != FORMAT_VERSION {
+    if !supports_field_kinds(embedded_header.version) {
         return Err(classified(
             VaultErrorKind::InvalidInput,
             "unsupported embedded vault format",
@@ -348,6 +351,10 @@ struct StrictEmbeddedVaultHeader {
     kdf: BackupKdfParams,
     salt_b64: String,
     aead: String,
+    /// Required for embedded format 3 and rejected for format 2 by the
+    /// shared header validation.
+    #[serde(default)]
+    generation: Option<u64>,
 }
 
 impl StrictEmbeddedVaultHeader {
@@ -360,6 +367,7 @@ impl StrictEmbeddedVaultHeader {
             kdf: self.kdf.as_vault_params(),
             salt_b64: self.salt_b64.clone(),
             aead: self.aead.clone(),
+            generation: self.generation,
         }
     }
 }
@@ -382,13 +390,13 @@ fn push_len_prefixed_u64(output: &mut Vec<u8>, bytes: &[u8]) -> AnyResult<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 struct PayloadReader<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl<'a> PayloadReader<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }

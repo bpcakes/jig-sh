@@ -4,12 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Agent-oriented repository harness, command contract, and MCP runtime."
+description = "Agent-oriented repository harness and command-line runtime."
 repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
 readme = "../../README.md"
-keywords = ["agents", "cli", "mcp", "workflow"]
+keywords = ["agents", "cli", "workflow"]
 categories = ["command-line-utilities", "development-tools"]
 
 [lib]
@@ -38,11 +38,10 @@ required-features = ["dev-proxy"]
 # The default CLI build includes the local dev proxy. Library consumers that
 # only need the harness/runtime API can use `default-features = false`.
 default = ["dev-proxy"]
-dev-proxy = ["dep:jig-dev-proxy"]
+dev-proxy = ["dep:jig-dev-proxy", "jig-bootstrap/dev-proxy", "jig-context/dev-proxy"]
 
 [dependencies]
 anyhow.workspace = true
-cap-fs-ext.workspace = true
 cap-std.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
@@ -53,13 +52,25 @@ dotenvy.workspace = true
 fs4.workspace = true
 flate2.workspace = true
 globset.workspace = true
+jig-agents.workspace = true
+jig-bootstrap.workspace = true
+jig-commands.workspace = true
+jig-context.workspace = true
+jig-dashboard.workspace = true
 jig-contract.workspace = true
-jig-codex-tui.workspace = true
+jig-agents-tui.workspace = true
 jig-core.workspace = true
 jig-dev-proxy = { workspace = true, optional = true }
+jig-execution.workspace = true
 jig-features.workspace = true
 jig-file-budget.workspace = true
+jig-git.workspace = true
+jig-loops.workspace = true
 jig-owned-process.workspace = true
+jig-policy.workspace = true
+jig-repository.workspace = true
+jig-rust.workspace = true
+jig-state.workspace = true
 jig-typescript.workspace = true
 jig-tui.workspace = true
 jig-ui.workspace = true
@@ -75,6 +86,7 @@ serde_json.workspace = true
 serde_yaml_ng.workspace = true
 schemars.workspace = true
 sha2.workspace = true
+syn = { workspace = true, features = ["visit"] }
 tempfile.workspace = true
 time.workspace = true
 toml.workspace = true
@@ -88,7 +100,13 @@ security-framework.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
-jsonschema.workspace = true
+jig-bootstrap = { workspace = true, features = ["test-support"] }
+jig-commands = { workspace = true, features = ["test-support"] }
+jig-context = { workspace = true, features = ["test-support"] }
+jig-loops = { workspace = true, features = ["test-support"] }
+jig-policy = { workspace = true, features = ["test-support"] }
+jig-repository = { workspace = true, features = ["test-support"] }
+jig-state = { workspace = true, features = ["test-support"] }
 jig-vault = { workspace = true, features = ["test-utils"] }
 
 [build-dependencies]

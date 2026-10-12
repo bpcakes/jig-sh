@@ -4,6 +4,8 @@ use super::*;
 fn rust_cli_rejects_every_incompatible_cli_family() {
     let cases: &[(&[&str], &str)] = &[
         (&["--db", "none"], "--db"),
+        (&["--metrics", "otlp"], "--metrics"),
+        (&["--jobs", "none"], "--jobs"),
         (&["--frontend", "web"], "--frontend"),
         (&["--frontends", "web"], "--frontends"),
         (&["--frontend-app", "web:web:80"], "frontend_apps"),

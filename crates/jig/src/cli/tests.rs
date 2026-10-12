@@ -8,31 +8,21 @@ fn parses_canonical_and_legacy_sqlx_commands() {
         CommandKind::Migration(MigrationCommand::Add(_))
     ));
 
-    let migration = Cli::try_parse_from([
-        "jig",
-        "sqlx",
-        "migration",
-        "add",
-        "create_users",
-        "--plan-id",
-        "plan_1",
-    ])
-    .unwrap();
+    let migration =
+        Cli::try_parse_from(["jig", "sqlx", "migration", "add", "create_users"]).unwrap();
     match migration.command {
         CommandKind::Sqlx(SqlxCommand::Migration(SqlxMigrationCommand::Add(opts))) => {
             assert_eq!(opts.name, "create_users");
-            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_1"));
         }
         other => panic!("expected sqlx migration add command, got {other:?}"),
     }
 
-    let schema = Cli::try_parse_from(["jig", "sqlx", "schema", "dump", "--no-receipt"]).unwrap();
-    match schema.command {
-        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts))) => {
-            assert!(opts.no_receipt);
-        }
-        other => panic!("expected sqlx schema dump command, got {other:?}"),
-    }
+    let schema = Cli::try_parse_from(["jig", "sqlx", "schema", "dump"]).unwrap();
+    assert!(matches!(
+        schema.command,
+        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump))
+    ));
+    assert!(Cli::try_parse_from(["jig", "sqlx", "schema", "dump", "--no-receipt"]).is_err());
 
     assert!(matches!(
         Cli::try_parse_from(["jig", "migration-add", "create_users"])
@@ -42,40 +32,31 @@ fn parses_canonical_and_legacy_sqlx_commands() {
     ));
     assert!(matches!(
         Cli::try_parse_from(["jig", "schema-dump"]).unwrap().command,
-        CommandKind::SchemaDump(_)
+        CommandKind::SchemaDump
     ));
 }
 
 #[test]
 fn parses_check_namespace_commands() {
-    let fmt = Cli::try_parse_from(["jig", "check", "fmt", "--plan-id", "plan_1"]).unwrap();
-    match fmt.command {
+    let fmt = Cli::try_parse_from(["jig", "check", "fmt"]).unwrap();
+    assert!(matches!(
+        fmt.command,
         CommandKind::Check(CheckOpts {
-            command: Some(CheckCommand::Fmt(opts)),
+            command: Some(CheckCommand::Named(NamedCheckCommand::Fmt(_))),
             ..
-        }) => {
-            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_1"));
-        }
-        other => panic!("expected check fmt command, got {other:?}"),
-    }
+        })
+    ));
 
-    let ts_typecheck = Cli::try_parse_from([
-        "jig",
-        "check",
-        "typescript-typecheck",
-        "--plan-id",
-        "plan_2",
-    ])
-    .unwrap();
-    match ts_typecheck.command {
+    let ts_typecheck = Cli::try_parse_from(["jig", "check", "typescript-typecheck"]).unwrap();
+    assert!(matches!(
+        ts_typecheck.command,
         CommandKind::Check(CheckOpts {
-            command: Some(CheckCommand::TypeScriptTypecheck(opts)),
+            command: Some(CheckCommand::Named(NamedCheckCommand::TypeScriptTypecheck(
+                _
+            ))),
             ..
-        }) => {
-            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_2"));
-        }
-        other => panic!("expected check typescript-typecheck command, got {other:?}"),
-    }
+        })
+    ));
 
     for (command, expected) in [
         ("typescript-lint", "lint"),
@@ -86,21 +67,21 @@ fn parses_check_namespace_commands() {
         match (parsed.command, expected) {
             (
                 CommandKind::Check(CheckOpts {
-                    command: Some(CheckCommand::TypeScriptLint(_)),
+                    command: Some(CheckCommand::Named(NamedCheckCommand::TypeScriptLint(_))),
                     ..
                 }),
                 "lint",
             )
             | (
                 CommandKind::Check(CheckOpts {
-                    command: Some(CheckCommand::TypeScriptBuild(_)),
+                    command: Some(CheckCommand::Named(NamedCheckCommand::TypeScriptBuild(_))),
                     ..
                 }),
                 "build",
             )
             | (
                 CommandKind::Check(CheckOpts {
-                    command: Some(CheckCommand::TypeScriptCoverage(_)),
+                    command: Some(CheckCommand::Named(NamedCheckCommand::TypeScriptCoverage(_))),
                     ..
                 }),
                 "coverage",
@@ -128,15 +109,15 @@ fn parses_agent_native_check_selections() {
     ));
 
     let exact =
-        Cli::try_parse_from(["jig", "check", "api:test", "web:lint", "--no-receipt"]).unwrap();
+        Cli::try_parse_from(["jig", "check", "api:test", "web:lint", "--fail-fast"]).unwrap();
     match exact.command {
         CommandKind::Check(CheckOpts {
-            tool,
+            fail_fast,
             command: Some(CheckCommand::Selectors(selectors)),
             ..
         }) => {
-            assert!(!tool.no_receipt);
-            assert_eq!(selectors, ["api:test", "web:lint", "--no-receipt"]);
+            assert!(!fail_fast);
+            assert_eq!(selectors, ["api:test", "web:lint", "--fail-fast"]);
         }
         other => panic!("expected target selectors, got {other:?}"),
     }
@@ -146,7 +127,7 @@ fn parses_agent_native_check_selections() {
         explained.command,
         CommandKind::Check(CheckOpts {
             explain: true,
-            command: Some(CheckCommand::Test(_)),
+            command: Some(CheckCommand::Named(NamedCheckCommand::Test(_))),
             ..
         })
     ));
@@ -155,7 +136,7 @@ fn parses_agent_native_check_selections() {
     match mixed.command {
         CommandKind::Check(CheckOpts {
             explain: true,
-            command: Some(CheckCommand::Test(opts)),
+            command: Some(CheckCommand::Named(NamedCheckCommand::Test(opts))),
             ..
         }) => assert_eq!(opts.selectors, ["api:lint"]),
         other => panic!("expected built-in plus target selectors, got {other:?}"),
@@ -202,7 +183,6 @@ fn parses_hidden_sqlx_todo_generator_for_compatibility() {
         "sqlx-todo.md",
     ])
     .unwrap();
-
     match cli.command {
         CommandKind::GenerateSqlxUncheckedQueriesTodo(opts) => {
             assert_eq!(opts.output, Some(PathBuf::from("sqlx-todo.md")));
@@ -385,6 +365,7 @@ fn parses_init_scaffold_preset_frontends_and_db() {
         }
         other => panic!("expected init command, got {other:?}"),
     }
+    assert!(Cli::try_parse_from(["jig", "init", "demo", "--db", "sqlite"]).is_err());
 }
 
 #[test]
@@ -551,32 +532,18 @@ fn rejects_working_tree_template_mode() {
 }
 
 #[test]
-fn parses_work_receipts_filters() {
-    let cli = Cli::try_parse_from([
-        "jig",
-        "work",
-        "receipts",
-        "--session-id",
-        "session_1",
-        "--plan-id",
-        "plan_1",
-        "--tool-name",
-        tool::TEST,
-        "--failed-only",
-        "--limit",
-        "5",
-    ])
-    .unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Receipts(opts)) => {
-            assert_eq!(opts.session_id.as_deref(), Some("session_1"));
-            assert_eq!(opts.plan_id.as_deref(), Some("plan_1"));
-            assert_eq!(opts.tool_name.as_deref(), Some(tool::TEST));
-            assert!(opts.failed_only);
-            assert_eq!(opts.limit, 5);
-        }
-        other => panic!("expected work receipts command, got {other:?}"),
+fn the_removed_work_namespace_is_an_unknown_command() {
+    for args in [
+        vec!["jig", "work", "status"],
+        vec!["jig", "--json", "work", "start", "--title", "Example"],
+        vec!["jig", "work"],
+    ] {
+        let error = Cli::try_parse_from(&args).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::InvalidSubcommand,
+            "{args:?}"
+        );
     }
 }
 
@@ -596,7 +563,6 @@ fn parses_state_archive_command() {
     match cli.command {
         CommandKind::State(StateCommand::Archive(opts)) => {
             assert_eq!(opts.before, "2026-01-01");
-            assert!(opts.include_runs);
             assert!(opts.dry_run);
         }
         other => panic!("expected state archive command, got {other:?}"),
@@ -605,19 +571,14 @@ fn parses_state_archive_command() {
 
 #[test]
 fn parses_state_maintenance_commands() {
-    let cli = Cli::try_parse_from(["jig", "state", "diagnose", "--deep"]).unwrap();
-    match cli.command {
-        CommandKind::State(StateCommand::Diagnose(opts)) => assert!(opts.deep),
-        other => panic!("expected state diagnose command, got {other:?}"),
-    }
+    let cli = Cli::try_parse_from(["jig", "state", "diagnose"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        CommandKind::State(StateCommand::Diagnose)
+    ));
+    assert!(Cli::try_parse_from(["jig", "state", "diagnose", "--deep"]).is_err());
 
-    let cli = Cli::try_parse_from(["jig", "state", "compact", "sessions", "--dry-run"]).unwrap();
-    match cli.command {
-        CommandKind::State(StateCommand::Compact {
-            command: StateCompactCommand::Sessions(opts),
-        }) => assert!(opts.dry_run),
-        other => panic!("expected state compact sessions command, got {other:?}"),
-    }
+    assert!(Cli::try_parse_from(["jig", "state", "compact", "sessions", "--dry-run"]).is_err());
 
     let cli = Cli::try_parse_from([
         "jig",
@@ -637,26 +598,19 @@ fn parses_state_maintenance_commands() {
         other => panic!("expected state restore command, got {other:?}"),
     }
 
-    let cli = Cli::try_parse_from([
-        "jig",
-        "state",
-        "export",
-        "receipts",
-        "--before",
-        "2026-01-01",
-        "--output",
-        "receipts.jsonl.gz",
-    ])
-    .unwrap();
-    match cli.command {
-        CommandKind::State(StateCommand::Export {
-            command: StateExportCommand::Receipts(opts),
-        }) => {
-            assert_eq!(opts.before, "2026-01-01");
-            assert_eq!(opts.output, std::path::PathBuf::from("receipts.jsonl.gz"));
-        }
-        other => panic!("expected state export receipts command, got {other:?}"),
-    }
+    assert!(
+        Cli::try_parse_from([
+            "jig",
+            "state",
+            "export",
+            "receipts",
+            "--before",
+            "2026-01-01",
+            "--output",
+            "receipts.jsonl.gz",
+        ])
+        .is_err()
+    );
 }
 
 #[test]
@@ -670,71 +624,24 @@ fn parses_state_summary_command() {
 }
 
 #[test]
-fn parses_tool_no_receipt_flag() {
-    let cli = Cli::try_parse_from(["jig", "check", "contract", "--no-receipt"]).unwrap();
-
-    match cli.command {
-        CommandKind::Check(CheckOpts {
-            command: Some(CheckCommand::Contract(opts)),
-            ..
-        }) => {
-            assert!(opts.tool.no_receipt);
-            assert_eq!(opts.tool.plan_id, None);
-        }
-        other => panic!("expected check contract command, got {other:?}"),
-    }
-
-    let error = Cli::try_parse_from([
-        "jig",
-        "check",
-        "contract",
-        "--plan-id",
-        "plan_1",
-        "--no-receipt",
-    ])
-    .unwrap_err();
-    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-}
-
-#[test]
-fn parses_work_goal() {
-    let cli = Cli::try_parse_from([
-        "jig",
-        "work",
-        "goal",
-        "--objective",
-        "Migrate the API",
-        "--success",
-        "all handlers use the new type",
-        "--validation",
-        "scripts/jig check test",
-        "--validation",
-        "scripts/jig check clippy",
-        "--constraint",
-        "do not change public routes",
-        "--checkpoint",
-        "baseline current tests",
-        "--title",
-        "API migration",
-        "--notes",
-        "Keep changes small.",
-    ])
-    .unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Goal(opts)) => {
-            assert_eq!(opts.objective, "Migrate the API");
-            assert_eq!(opts.success, "all handlers use the new type");
-            assert_eq!(
-                opts.validations,
-                vec!["scripts/jig check test", "scripts/jig check clippy"]
-            );
-            assert_eq!(opts.constraints, vec!["do not change public routes"]);
-            assert_eq!(opts.checkpoints, vec!["baseline current tests"]);
-            assert_eq!(opts.title.as_deref(), Some("API migration"));
-            assert_eq!(opts.notes.as_deref(), Some("Keep changes small."));
-        }
-        other => panic!("expected work goal command, got {other:?}"),
+fn rejects_the_removed_receipt_and_plan_flags() {
+    for args in [
+        &["jig", "check", "contract", "--no-receipt"][..],
+        &["jig", "migration-add", "create_users", "--no-receipt"][..],
+        &["jig", "check", "contract", "--plan-id", "plan_1"][..],
+        &["jig", "check", "--plan-id=plan_1"][..],
+        &["jig", "run", "repo:contract", "--plan-id", "plan_1"][..],
+        &["jig", "bootstrap", "--plan-id", "plan_1"][..],
+        &[
+            "jig",
+            "migration",
+            "add",
+            "create_users",
+            "--plan-id",
+            "plan_1",
+        ][..],
+    ] {
+        assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
     }
 }
 
@@ -817,8 +724,7 @@ fn parses_agent_bootstrap_marketplace() {
     }
 }
 
-include!("tests/proxy_and_vault.rs");
+mod proxy_and_vault;
 
 mod info;
 mod launcher_only;
-mod work_commands;

@@ -1,1 +1,0 @@
-Detect required checks, lockfile behavior, cache strategy, matrix OS/toolchain, and whether generated Jig checks supplement or replace existing CI. Validate with focused adopt tests and repo gates.

@@ -2,6 +2,8 @@ use crate::test_tempdir as tempdir;
 
 use super::*;
 
+mod yaml;
+
 #[test]
 fn discovers_package_json_workspaces_with_dev_scripts() {
     let temp = tempdir().unwrap();
@@ -104,14 +106,14 @@ fn null_workspaces_field_is_not_a_workspace_root() {
 }
 
 #[test]
-fn yaml_inline_comment_parser_handles_escaped_backslashes() {
+fn yaml_parser_decodes_escapes_before_inline_comments() {
     assert_eq!(
-        strip_inline_yaml_comment(r#""apps\\web" # comment"#),
-        r#""apps\\web""#
+        parse_pnpm_workspace(r#"packages: ["apps\\web"] # comment"#).unwrap(),
+        [r#"apps\web"#]
     );
     assert_eq!(
-        strip_inline_yaml_comment(r#""apps\"web" # comment"#),
-        r#""apps\"web""#
+        parse_pnpm_workspace(r#"packages: ["apps\"web"] # comment"#).unwrap(),
+        [r#"apps"web"#]
     );
 }
 
@@ -381,12 +383,10 @@ fn pnpm_workspace_without_packages_key_is_ignored() {
 }
 
 #[test]
-fn pnpm_workspace_multiline_flow_packages_are_rejected() {
-    let error = parse_pnpm_workspace("packages: [\n  \"apps/*\"\n]\n")
-        .unwrap_err()
-        .to_string();
+fn pnpm_workspace_multiline_flow_packages_are_supported() {
+    let globs = parse_pnpm_workspace("packages: [\n  \"apps/*\"\n]\n").unwrap();
 
-    assert!(error.contains("multi-line flow-style"));
+    assert_eq!(globs, ["apps/*"]);
 }
 
 #[test]
@@ -395,7 +395,7 @@ fn pnpm_workspace_scalar_packages_are_rejected() {
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains("unsupported inline packages value"));
+    assert!(error.contains("packages must be a list of strings"));
 }
 
 #[test]
@@ -404,7 +404,7 @@ fn pnpm_workspace_mapping_packages_are_rejected() {
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains("unsupported non-list packages entry"));
+    assert!(error.contains("packages must be a list of strings"));
 }
 
 #[test]
