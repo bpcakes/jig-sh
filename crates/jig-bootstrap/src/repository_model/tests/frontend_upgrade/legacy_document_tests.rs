@@ -172,3 +172,80 @@ fn managed_update_leaves_scaffold_document_checks_to_their_owner() {
         assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
     }
 }
+
+/// An update that left the check out keeps the model marked as one from
+/// before the check, so the update after the tests return adds it, and the
+/// model ends where an update beside the tests would have left it.
+#[test]
+fn managed_update_adds_the_document_check_once_its_tests_exist() {
+    for backend in ["rust", "go"] {
+        let repository = repository(&[]);
+        let answers = load_saved_at(repository.path(), &legacy_model(backend), backend);
+        let mut upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
+        upgraded
+            .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+        upgraded
+            .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+
+        write_scaffold_document_tests(repository.path(), backend);
+        let answers = load_saved_at(repository.path(), &upgraded, backend);
+        let reloaded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        let direct =
+            RepositoryRenderModel::from_answers(&load_saved(&legacy_model(backend), backend))
+                .unwrap();
+        assert!(answers.authored_repository().is_none(), "{backend}");
+        assert!(find(&reloaded, "api:openapi").is_some(), "{backend}");
+        assert_eq!(
+            reloaded.authored_toml().unwrap(),
+            direct.authored_toml().unwrap(),
+            "{backend}"
+        );
+        assert_eq!(reloaded.commands, direct.commands, "{backend}");
+    }
+}
+
+/// An owner who added the generated check by hand, beside the drift check
+/// from before it, has the check, so the model no longer predates it and
+/// stays generated.
+#[test]
+fn managed_update_keeps_a_document_check_added_by_hand() {
+    for backend in ["rust", "go"] {
+        let mut generated =
+            RepositoryRenderModel::from_answers(&load_saved(&legacy_model(backend), backend))
+                .unwrap();
+        generated
+            .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+        generated
+            .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+        let check = find(&generated, "api:openapi").unwrap().clone();
+        let mut saved = legacy_model(backend);
+        saved.actions.push(check.clone());
+        saved.actions.sort_by(|a, b| a.target.cmp(&b.target));
+        for profile in &mut saved.profiles {
+            if generated
+                .profiles
+                .iter()
+                .any(|item| item.id == profile.id && item.targets.contains(&check.target))
+            {
+                profile.targets.push(check.target.clone());
+                profile.targets.sort();
+            }
+        }
+        saved.commands.insert(
+            "api_openapi_command".into(),
+            generated.commands["api_openapi_command"].clone(),
+        );
+
+        let answers = load_saved(&saved, backend);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(answers.authored_repository().is_none(), "{backend}");
+        assert!(find(&upgraded, "api:openapi").is_some(), "{backend}");
+    }
+}

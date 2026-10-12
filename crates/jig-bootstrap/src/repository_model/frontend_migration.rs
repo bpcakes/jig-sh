@@ -1,9 +1,9 @@
 use super::{
     ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BACKEND_CONTRACT_INPUTS,
     BTreeMap, CLIENT_DRIFT_DESCRIPTION, FRONTEND_CONTRACT_DRIFT_ACTION,
-    FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance, OPENAPI_DOCUMENT_CHECK_ACTION,
-    OPENAPI_DOCUMENT_COMMAND_KEY, REPO_COMPONENT, RepositoryRenderModel, TargetId,
-    retire_saved_frontend_dependencies,
+    FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance, HISTORICAL_DRIFT_DESCRIPTION,
+    OPENAPI_DOCUMENT_CHECK_ACTION, OPENAPI_DOCUMENT_COMMAND_KEY, REPO_COMPONENT,
+    RepositoryRenderModel, TargetId, retire_saved_frontend_dependencies,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -20,10 +20,6 @@ const CONTRACT_RESOLUTION_INPUTS: &[&str] = &[
     "vendor/modules.txt",
     "**/vendor/modules.txt",
 ];
-
-// The drift check's description before generators wrote the document check.
-const HISTORICAL_DRIFT_DESCRIPTION: &str =
-    "Check repository-wide OpenAPI and generated-client drift.";
 
 // Backend inputs the drift check read while it exported the documents itself.
 const LEGACY_DRIFT_BACKEND_INPUTS: &[&str] = &[
@@ -74,16 +70,21 @@ pub(super) fn has_document_check(actions: &[ActionSpec]) -> bool {
     })
 }
 
-/// Whether the saved model is one that generation would give the document
-/// check: it has API contracts whose drift check exports from the backend, no
-/// document check, and the check's command key free.
+/// Whether the saved model predates the document check, so that update and
+/// re-adoption may give it the check: it has API contracts whose drift check
+/// keeps the description that generators wrote before the check, no document
+/// check, and the check's command key free. Any other model without the check
+/// is one whose owner removed it, which stays removed.
 pub(super) fn predates_document_check(
     actions: &[ActionSpec],
     commands: &BTreeMap<String, String>,
     generated_command: &str,
 ) -> bool {
     contracts_enabled(actions, commands)
-        && !client_only_drift(actions)
+        && actions.iter().any(|action| {
+            is_drift(&action.target)
+                && action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION)
+        })
         && !actions
             .iter()
             .any(|action| action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION)
@@ -146,10 +147,9 @@ pub(super) fn upgrade_saved_projection(
 
 /// Earlier generators had no document check. To decide whether a saved
 /// scaffold can be regenerated, count the generated one, its profile entries,
-/// and its command as saved. Only a model from before the check qualifies: its
-/// drift check keeps the description those generators wrote, and the check's
-/// command key is free. A model whose owner removed the check, or reused its
-/// command key, keeps its own targets.
+/// and its command as saved. Only a model that predates the check qualifies;
+/// a model whose owner removed the check, or reused its command key, keeps
+/// its own targets.
 pub(super) fn with_generated_document_check(
     current: &RepositoryRenderModel,
     saved: &AuthoredRepositoryModel,
@@ -161,22 +161,7 @@ pub(super) fn with_generated_document_check(
         .find(|action| is_document_check(&action.target))?;
     let key = command(&check.runner)?;
     let generated_command = current.commands.get(key)?;
-    let drift = current.actions.iter().find(|action| {
-        action.target.component.as_str() == REPO_COMPONENT
-            && action.target.action.as_str() == FRONTEND_CONTRACT_DRIFT_ACTION
-    })?;
-    if saved
-        .actions
-        .iter()
-        .any(|action| action.target == check.target)
-        || commands
-            .get(key)
-            .is_some_and(|value| value != generated_command)
-        || !saved.actions.iter().any(|action| {
-            action.target == drift.target
-                && action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION)
-        })
-    {
+    if !predates_document_check(&saved.actions, commands, generated_command) {
         return None;
     }
     let mut adopted = saved.clone();

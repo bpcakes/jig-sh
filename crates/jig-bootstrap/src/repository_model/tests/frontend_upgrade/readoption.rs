@@ -139,3 +139,66 @@ fn capability_refresh_adds_no_document_check_under_a_taken_command_key() {
         "printf skip-openapi-check"
     );
 }
+
+#[test]
+fn capability_refresh_keeps_a_removed_document_check_removed() {
+    // A scaffold's own check, and one that an update gave an older model.
+    let mut upgraded =
+        RepositoryRenderModel::from_answers(&load_saved(&legacy_model("rust"), "rust")).unwrap();
+    upgraded
+        .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    upgraded
+        .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    assert!(has_target(&upgraded, "api:openapi"));
+    for (label, mut saved) in [
+        ("scaffold", saved_current_model("rust")),
+        ("upgraded", upgraded),
+    ] {
+        let check = target_id("api", "openapi").unwrap();
+        saved.actions.retain(|action| action.target != check);
+        for profile in &mut saved.profiles {
+            profile.targets.retain(|target| *target != check);
+        }
+        saved.commands.remove("api_openapi_command");
+
+        let answers = readopt_with_sqlx(&saved).unwrap();
+        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(
+            model
+                .components
+                .iter()
+                .any(|component| component.adapters.iter().any(|adapter| adapter == "sqlx")),
+            "{label}"
+        );
+        assert!(!has_target(&model, "api:openapi"), "{label}");
+        assert!(
+            !model.commands.contains_key("api_openapi_command"),
+            "{label}"
+        );
+        assert!(
+            model
+                .profiles
+                .iter()
+                .all(|profile| !profile.targets.contains(&check)),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn capability_refresh_keeps_a_customized_document_check_command() {
+    let custom = "cargo test --workspace --locked committed_ -- --format pretty";
+    let mut saved = saved_current_model("rust");
+    saved
+        .commands
+        .insert("api_openapi_command".into(), custom.into());
+
+    let answers = readopt_with_sqlx(&saved).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(has_target(&model, "api:openapi"));
+    assert_eq!(model.commands["api_openapi_command"], custom);
+}
