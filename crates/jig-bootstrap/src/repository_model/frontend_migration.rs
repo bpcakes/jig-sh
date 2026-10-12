@@ -105,6 +105,12 @@ pub(super) fn upgrade_saved_projection(
     if !current.frontend_contracts_enabled() || !saved.frontend_contracts_enabled(commands) {
         return upgraded;
     }
+    // The historical description marks a model that predates the document
+    // check, so it stays until the model has one.
+    let documents_checked = upgraded
+        .actions
+        .iter()
+        .any(|action| action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION);
     for action in &mut upgraded.actions {
         if action.target.component.as_str() != REPO_COMPONENT
             || !matches!(
@@ -137,7 +143,8 @@ pub(super) fn upgrade_saved_projection(
         {
             continue;
         }
-        if action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION) {
+        if documents_checked && action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION)
+        {
             action.description.clone_from(&expected.description);
         }
         action.inputs.clone_from(&expected.inputs);

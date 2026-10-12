@@ -202,3 +202,17 @@ fn capability_refresh_keeps_a_customized_document_check_command() {
     assert!(has_target(&model, "api:openapi"));
     assert_eq!(model.commands["api_openapi_command"], custom);
 }
+
+#[test]
+fn capability_refresh_adds_the_document_check_to_a_custom_older_model() {
+    // An update kept the customized older model as its owner left it.
+    let mut saved = legacy_model("rust");
+    super::backend_freshness::customize_frontend(&mut saved);
+    let updated = RepositoryRenderModel::from_answers(&load_saved(&saved, "rust")).unwrap();
+    assert!(!has_target(&updated, "api:openapi"));
+
+    let answers = readopt_with_sqlx(&updated).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(has_target(&model, "api:openapi"));
+}

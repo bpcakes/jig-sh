@@ -18,7 +18,7 @@ use super::metadata::Confidence;
 use super::scan::{RepoScan, read_json_for_inference, read_limited_text, read_toml_for_inference};
 
 mod authority;
-mod workspace;
+pub(super) mod workspace;
 
 #[derive(Args, Clone, Debug, Default)]
 pub struct ComponentSelectionOpts {

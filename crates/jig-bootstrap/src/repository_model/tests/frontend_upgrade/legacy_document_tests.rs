@@ -2,7 +2,7 @@
 //! its backend still has the scaffold's document tests, which the check runs.
 //! The tests belong to the application, which may have renamed or moved them.
 
-use super::backend_freshness::{drift_reads_backend, find};
+use super::backend_freshness::{customize_frontend, drift_reads_backend, find};
 use super::*;
 
 const GO_TEST: &str =
@@ -29,25 +29,39 @@ fn managed_update_adds_the_document_check_only_beside_its_tests() {
     let admin = rust_test("committed_admin_openapi_is_current");
     let renamed = rust_test("public_openapi_document_matches");
     let renamed_go = GO_TEST.replace("TestOpenAPIIsCurrent", "TestOpenAPIDocumentMatches");
+    let http = ("crates/example-project-http/Cargo.toml", RUST_PACKAGE);
+    let workspace = ("Cargo.toml", RUST_WORKSPACE);
+    let commented = public.replace("    #[test]\n    fn", "    // #[test]\n    // fn");
     for (backend, label, files, checked) in [
         (
             "rust",
             "scaffold",
-            vec![("crates/example-project-http/src/lib.rs", public.as_str())],
+            vec![
+                workspace,
+                http,
+                ("crates/example-project-http/src/lib.rs", public.as_str()),
+            ],
             true,
         ),
         // Cargo runs the tests of the whole workspace.
         (
             "rust",
             "moved test",
-            vec![("apps/example-project-api/tests/openapi.rs", &public)],
+            vec![
+                workspace,
+                ("apps/example-project-api/Cargo.toml", RUST_PACKAGE),
+                ("apps/example-project-api/tests/openapi.rs", &public),
+            ],
             true,
         ),
         (
             "rust",
             "admin document",
             vec![
+                workspace,
+                http,
                 ("crates/example-project-http/src/lib.rs", &public),
+                ("crates/example-project-admin-http/Cargo.toml", RUST_PACKAGE),
                 ("crates/example-project-admin-http/src/tests.rs", &admin),
                 ("openapi/admin.json", "{}\n"),
             ],
@@ -56,19 +70,45 @@ fn managed_update_adds_the_document_check_only_beside_its_tests() {
         (
             "rust",
             "renamed test",
-            vec![("crates/example-project-http/src/lib.rs", &renamed)],
+            vec![
+                workspace,
+                http,
+                ("crates/example-project-http/src/lib.rs", &renamed),
+            ],
+            false,
+        ),
+        (
+            "rust",
+            "commented-out test",
+            vec![
+                workspace,
+                http,
+                ("crates/example-project-http/src/lib.rs", &commented),
+            ],
+            false,
+        ),
+        (
+            "rust",
+            "test outside the workspace",
+            vec![
+                workspace,
+                ("fixtures/example-project-http/Cargo.toml", RUST_PACKAGE),
+                ("fixtures/example-project-http/src/lib.rs", &public),
+            ],
             false,
         ),
         (
             "rust",
             "admin document without its test",
             vec![
+                workspace,
+                http,
                 ("crates/example-project-http/src/lib.rs", &public),
                 ("openapi/admin.json", "{}\n"),
             ],
             false,
         ),
-        ("rust", "no tests", vec![], false),
+        ("rust", "no tests", vec![workspace], false),
         (
             "go",
             "scaffold",
@@ -247,5 +287,40 @@ fn managed_update_keeps_a_document_check_added_by_hand() {
 
         assert!(answers.authored_repository().is_none(), "{backend}");
         assert!(find(&upgraded, "api:openapi").is_some(), "{backend}");
+    }
+}
+
+/// An update keeps a customized model from before the check as its owner left
+/// it, still marked as from before the check, so reverting the customization
+/// lets the next update add the check.
+#[test]
+fn managed_update_keeps_a_custom_model_eligible_for_the_document_check() {
+    for backend in ["rust", "go"] {
+        let mut saved = legacy_model(backend);
+        customize_frontend(&mut saved);
+
+        let answers = load_saved(&saved, backend);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
+
+        let mut reverted = upgraded.clone();
+        let web = reverted
+            .components
+            .iter_mut()
+            .find(|component| component.id.as_str() == "web")
+            .unwrap();
+        web.description = legacy_model(backend)
+            .components
+            .iter()
+            .find(|component| component.id.as_str() == "web")
+            .unwrap()
+            .description
+            .clone();
+        let answers = load_saved(&reverted, backend);
+        let regenerated = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(answers.authored_repository().is_none(), "{backend}");
+        assert!(find(&regenerated, "api:openapi").is_some(), "{backend}");
     }
 }
