@@ -400,3 +400,44 @@ fn capability_refresh_keeps_a_removed_document_check_removed_beside_another_one(
     );
     assert!(has_target(&model, "worker:openapi"));
 }
+
+/// A command that the owner set for the check before asking for it keeps the
+/// model one from before the check through an update and then a refresh,
+/// which adds no check.
+#[test]
+fn capability_refresh_keeps_an_older_model_with_an_owners_command_eligible() {
+    let custom = "cargo test --workspace --locked public_document -- --format pretty";
+    let mut saved = legacy_model("rust");
+    saved
+        .commands
+        .insert("api_openapi_command".into(), custom.into());
+    // An update first brings the contract checks' inputs up to date.
+    let mut updated = RepositoryRenderModel::from_answers(&load_saved(&saved, "rust")).unwrap();
+    updated
+        .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    updated
+        .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+
+    let answers = readopt_with_sqlx(&updated).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(
+        model
+            .components
+            .iter()
+            .any(|component| component.adapters.iter().any(|adapter| adapter == "sqlx"))
+    );
+    assert!(!has_target(&model, "api:openapi"));
+    assert_eq!(model.commands["api_openapi_command"], custom);
+    let drift = model
+        .actions
+        .iter()
+        .find(|action| action.target.to_string() == "repo:frontend-contract-drift")
+        .unwrap();
+    assert_eq!(
+        drift.description.as_deref(),
+        Some("Check repository-wide OpenAPI and generated-client drift.")
+    );
+}

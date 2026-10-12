@@ -183,18 +183,11 @@ impl RawAnswers {
                 "api_test_locked_command",
             );
         }
-        if self.add_openapi_check
-            || self
-                .repository
-                .as_ref()
-                .is_some_and(AuthoredRepositoryModel::has_document_check)
-        {
-            inherit_repository_command(
-                &mut self.openapi_check_command,
-                commands,
-                "api_openapi_command",
-            );
-        }
+        inherit_repository_command(
+            &mut self.openapi_check_command,
+            commands,
+            "api_openapi_command",
+        );
         inherit_repository_command(&mut self.sqlx_check_command, commands, "api_sqlx_command");
         inherit_repository_command(
             &mut self.schema_dump_command,

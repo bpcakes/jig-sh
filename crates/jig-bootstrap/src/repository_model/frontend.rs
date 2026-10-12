@@ -277,6 +277,10 @@ impl ModelBuilder<'_> {
     /// commands.
     pub(super) fn add_openapi_document_check(&mut self) -> Result<()> {
         if self.answers.document_check_deferred() {
+            // A command that its owner set for the check stays theirs.
+            if let Some(command) = self.answers.openapi_check_command() {
+                self.insert_command(OPENAPI_DOCUMENT_COMMAND_KEY, command)?;
+            }
             return Ok(());
         }
         let Some(tests) = self.actions.get(&target_id(BACKEND_COMPONENT, "test")?) else {

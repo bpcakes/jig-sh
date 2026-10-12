@@ -14,11 +14,11 @@ impl RenderAnswers {
     }
 }
 
-/// Whether generation leaves out the document check: the saved model predates
-/// it, and its owner has not asked for it with `jig update
-/// --add-openapi-check`. The check runs the scaffold's document tests by name,
-/// and those belong to the application, which may have renamed, moved, or
-/// disabled them.
+/// Whether generation leaves out the document check: the saved model has not
+/// gained it, and its owner has not asked for it with `jig update
+/// --add-openapi-check`, whatever command they set for it. The check runs the
+/// scaffold's document tests by name, and those belong to the application,
+/// which may have renamed, moved, or disabled them.
 pub(super) fn document_check_deferred(
     raw: &RawAnswers,
     commands: Option<&BTreeMap<String, String>>,
@@ -26,10 +26,7 @@ pub(super) fn document_check_deferred(
     let (Some(repository), Some(commands)) = (raw.repository.as_ref(), commands) else {
         return false;
     };
-    !raw.add_openapi_check
-        && repository.is_complete()
-        && repository
-            .predates_document_check(commands, raw.backend_language == Some(BackendLanguage::Go))
+    !raw.add_openapi_check && repository.is_complete() && repository.lacks_document_check(commands)
 }
 
 /// What an update says about a saved model from before the document check:
