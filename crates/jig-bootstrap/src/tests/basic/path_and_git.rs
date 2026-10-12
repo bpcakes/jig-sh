@@ -121,6 +121,7 @@ fn init_and_adopt_resolve_relative_bootstrap_paths_from_invocation_cwd() {
         template_mode: None,
         recopy: false,
         launcher_only: false,
+        add_openapi_check: false,
         force: false,
         vcs_ref: None,
         defaults: true,

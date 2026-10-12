@@ -39,6 +39,7 @@ fn refresh(
             template_mode: None,
             recopy: false,
             launcher_only: false,
+            add_openapi_check: false,
             force,
             vcs_ref: None,
             defaults: true,

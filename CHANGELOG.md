@@ -11,6 +11,9 @@
   reports now include model-scoped weekly limits such as Fable.
   Known utilization remains selectable when no reset time is supplied; malformed
   windows stay ineligible while valid neighboring Claude usage remains visible.
+- `jig update --add-openapi-check` gives a repository scaffolded with API
+  contracts before this release the `api:openapi` check of its committed
+  OpenAPI documents. Until its owner asks, each update says how.
 
 ### Fixed
 
@@ -64,18 +67,14 @@
   compares them. An existing `scripts/contracts.mjs` belongs to its repository
   and keeps its behavior, so a repository upgraded from an earlier version
   keeps a drift check that reads the backend, whose own script still exports
-  from it; the drift check's description records which kind it is.
-  `jig update`, and re-adoption that changes the harness footprint or a
-  capability, add `api:openapi` to a repository generated before this release
-  once its backend has the scaffold's document tests where the check runs them
-  (the Rust `committed_public_openapi_is_current`, with
-  `committed_admin_openapi_is_current` beside `openapi/admin.json`, as tests
-  that are not ignored in a package of the root Cargo workspace, or Go's
-  `TestOpenAPIIsCurrent` in a test file of `internal/httpapi` that every build
-  includes, and neither in a comment or a string) and while its
-  `api_openapi_command` key is free; until then its drift check keeps
-  exporting the documents from the backend. A check its owner then removes
-  stays removed, re-adoption included, and a custom repository model keeps its
+  from it; the drift check's description records which kind it is. A
+  repository generated before this release gains `api:openapi` only when its
+  owner asks, with `jig update --add-openapi-check`, because the check runs
+  the scaffold's document tests by name and those belong to the application;
+  the check then runs `api_openapi_command` if the owner set one. Until then
+  its drift check keeps exporting the documents from the backend, and each
+  update says how to add the check. A check its owner then removes stays
+  removed, re-adoption included, and a custom repository model keeps its
   targets.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs

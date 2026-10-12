@@ -46,10 +46,14 @@ pub(super) struct RawAnswers {
     /// The saved document check's command; not an answer.
     #[serde(skip)]
     pub(super) openapi_check_command: Option<String>,
-    /// Whether a saved model from before the document check belongs to a
-    /// repository without the scaffold's document tests; not an answer.
+    /// Whether the owner asked this update to give a saved model from before
+    /// the document check the check; not an answer.
     #[serde(skip)]
-    pub(super) legacy_document_tests_missing: bool,
+    pub(super) add_openapi_check: bool,
+    /// Whether generation leaves out the document check of a saved model
+    /// from before it; not an answer.
+    #[serde(skip)]
+    pub(super) document_check_deferred: bool,
     pub(super) sqlc_check_command: Option<String>,
     pub(super) typescript_lint_command: Option<String>,
     pub(super) typescript_typecheck_command: Option<String>,
@@ -179,10 +183,11 @@ impl RawAnswers {
                 "api_test_locked_command",
             );
         }
-        if self
-            .repository
-            .as_ref()
-            .is_some_and(AuthoredRepositoryModel::has_document_check)
+        if self.add_openapi_check
+            || self
+                .repository
+                .as_ref()
+                .is_some_and(AuthoredRepositoryModel::has_document_check)
         {
             inherit_repository_command(
                 &mut self.openapi_check_command,
@@ -667,7 +672,7 @@ impl RawAnswers {
             go_postgres_integration_script: false,
             client_only_contract_drift: false,
             openapi_check_command: self.openapi_check_command,
-            legacy_document_tests_missing: self.legacy_document_tests_missing,
+            document_check_deferred: self.document_check_deferred,
             repository_projection_hint: self.repository_projection_hint,
             repo_name,
             default_branch: self.default_branch.unwrap_or_else(|| "main".into()),

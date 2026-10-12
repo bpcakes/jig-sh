@@ -278,9 +278,12 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
             "Missing template source metadata in {ANSWERS_FILE}. Re-adopt the repo before running jig update."
         );
     };
-    let (answers, mut warnings) = progress.log_blocked_on_err(
-        RenderAnswers::from_managed_answers_file(&answers_path, &destination),
-    )?;
+    let (answers, mut warnings) =
+        progress.log_blocked_on_err(RenderAnswers::from_managed_answers_file(
+            &answers_path,
+            &destination,
+            opts.add_openapi_check,
+        ))?;
     let runtime_policy =
         FullRefreshRuntimePolicy::for_render(answers.harness_footprint(), update_template.source());
     let reconcile_runtime_config =

@@ -286,6 +286,7 @@ fn adoption_and_update_advertise_preserved_file_budget_policy_without_seed() {
         template_mode: None,
         recopy: true,
         launcher_only: false,
+        add_openapi_check: false,
         force: false,
         vcs_ref: None,
         defaults: true,

@@ -133,6 +133,15 @@ Preset application code is a starter shape, not a managed framework. After init,
 
 Database provisioning continues to use the configured role's existing privileges. Where that role cannot create databases, provision the database separately before running setup.
 
+### Adding the OpenAPI document check to older projects
+
+Projects scaffolded with API contracts before `api:openapi` existed keep a drift check that exports the OpenAPI documents from the backend. `jig update` does not add `api:openapi` to them, because it runs the scaffold's committed-document tests by name and those tests are project-owned. To add it:
+
+1. Check that the backend still has those tests: `committed_public_openapi_is_current`, plus `committed_admin_openapi_is_current` beside `openapi/admin.json`, for Rust, or `TestOpenAPIIsCurrent` in `internal/httpapi` for Go. If the project renamed, moved, or disabled them, set `[commands].api_openapi_command` to a command that runs its own document tests and fails unless they pass.
+2. Run `jig update --add-openapi-check`, then `scripts/jig check api:openapi`.
+
+Later updates keep the check, and a check that its owner removes stays removed.
+
 Rust backend repos can opt into migration and SQLx checks from the start:
 
 ```sh

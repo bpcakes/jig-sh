@@ -3,6 +3,23 @@ use std::process::Command;
 use super::*;
 use crate::template_source::{TemplateRenderSource, prepare_template_source_from_base};
 
+/// A forced update of `path` that advances from `template`, or from the
+/// stored source.
+fn forced_update(path: PathBuf, template: Option<String>) -> UpdateOpts {
+    UpdateOpts {
+        path,
+        template,
+        template_mode: None,
+        recopy: false,
+        launcher_only: false,
+        add_openapi_check: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn local_source_stamp_tracks_transitive_and_untracked_crate_content() {
@@ -326,18 +343,7 @@ fn update_uses_stored_embedded_template_by_default() {
     });
     fs::write(repo.join("scripts/install-jig.sh"), "# locally changed\n").unwrap();
 
-    run_update(UpdateOpts {
-        path: repo.clone(),
-        template: None,
-        template_mode: None,
-        recopy: false,
-        launcher_only: false,
-        force: true,
-        vcs_ref: None,
-        defaults: true,
-        no_input: true,
-    })
-    .unwrap();
+    run_update(forced_update(repo.clone(), None)).unwrap();
 
     let answers = read_answers_toml(&repo.join(".jig.toml")).unwrap();
     assert_eq!(
@@ -547,19 +553,9 @@ fn update_rejects_explicit_switch_from_committed_source_to_embedded_source() {
     let template = materialize_template_git_worktree();
     adopt_repo_for_test(&repo, template.path(), TemplateMode::Committed);
 
-    let error = run_update(UpdateOpts {
-        path: repo,
-        template: Some(EMBEDDED_TEMPLATE_SOURCE.into()),
-        template_mode: None,
-        recopy: false,
-        launcher_only: false,
-        force: true,
-        vcs_ref: None,
-        defaults: true,
-        no_input: true,
-    })
-    .unwrap_err()
-    .to_string();
+    let error = run_update(forced_update(repo, Some(EMBEDDED_TEMPLATE_SOURCE.into())))
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("cannot switch template source paths"));
 }

@@ -1,10 +1,8 @@
-use std::path::Path;
-
 use super::*;
 
 mod backend_freshness;
+mod document_check_opt_in;
 mod document_commands;
-mod legacy_document_tests;
 mod readoption;
 
 const APP: &str = r#"
@@ -99,17 +97,24 @@ fn saved_model(backend: &str, backend_inputs: &[&str]) -> RepositoryRenderModel 
     model
 }
 
-/// Loads `model` as `jig update` does, in a repository that has the
-/// scaffold's committed-document tests.
+/// Loads `model` as `jig update` does.
 fn load_saved(model: &RepositoryRenderModel, backend: &str) -> RenderAnswers {
-    let temp = TempDir::new().unwrap();
-    write_scaffold_document_tests(temp.path(), backend);
-    load_saved_at(temp.path(), model, backend)
+    update_answers(model, backend, false).0
 }
 
-/// Loads `model` as `jig update` does, in the repository at `root`.
-fn load_saved_at(root: &Path, model: &RepositoryRenderModel, backend: &str) -> RenderAnswers {
-    let path = root.join(".jig.toml");
+/// Loads `model` as `jig update --add-openapi-check` does.
+fn load_saved_adding_check(model: &RepositoryRenderModel, backend: &str) -> RenderAnswers {
+    update_answers(model, backend, true).0
+}
+
+/// The answers and notes of an update of `model`.
+fn update_answers(
+    model: &RepositoryRenderModel,
+    backend: &str,
+    add_openapi_check: bool,
+) -> (RenderAnswers, Vec<String>) {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join(".jig.toml");
     fs::write(
         &path,
         format!(
@@ -119,39 +124,7 @@ fn load_saved_at(root: &Path, model: &RepositoryRenderModel, backend: &str) -> R
         ),
     )
     .unwrap();
-    RenderAnswers::from_managed_answers_file(&path, root)
-        .unwrap()
-        .0
-}
-
-/// A Cargo workspace like a scaffold's, whose members `cargo test` tests.
-const RUST_WORKSPACE: &str = "[workspace]\nmembers = [\"apps/*\", \"crates/*\"]\n";
-
-/// The manifest of a workspace member.
-const RUST_PACKAGE: &str = "[package]\nname = \"example-project\"\nversion = \"0.1.0\"\n";
-
-/// The committed-document test that scaffolds with API contracts write.
-fn write_scaffold_document_tests(root: &Path, backend: &str) {
-    let files: &[(&str, &str)] = if backend == "go" {
-        &[(
-            "internal/httpapi/httpapi_test.go",
-            "package httpapi\n\nimport \"testing\"\n\nfunc TestOpenAPIIsCurrent(t *testing.T) {}\n",
-        )]
-    } else {
-        &[
-            ("Cargo.toml", RUST_WORKSPACE),
-            ("crates/example-project-http/Cargo.toml", RUST_PACKAGE),
-            (
-                "crates/example-project-http/src/lib.rs",
-                "#[cfg(test)]\nmod tests {\n    #[test]\n    fn committed_public_openapi_is_current() {}\n}\n",
-            ),
-        ]
-    };
-    for (path, contents) in files {
-        let path = root.join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, contents).unwrap();
-    }
+    RenderAnswers::from_managed_answers_file(&path, temp.path(), add_openapi_check).unwrap()
 }
 
 /// A model generated with the scaffold's client-only contract script.
@@ -205,7 +178,7 @@ fn managed_update_upgrades_legacy_contract_models_and_keeps_them_generated() {
         ]
     }) {
         let saved = saved_model(backend, backend_inputs);
-        let answers = load_saved(&saved, backend);
+        let answers = load_saved_adding_check(&saved, backend);
         assert!(answers.authored_repository().is_none());
         assert!(answers.scaffolded_frontend_contracts());
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
@@ -463,8 +436,11 @@ fn contracts_split_backend_and_client_freshness_without_frontend_fanout() {
             scaffold.enable_client_only_contract_drift();
             RepositoryRenderModel::from_answers(&scaffold).unwrap()
         } else {
-            RepositoryRenderModel::from_answers(&load_saved(&legacy_model(backend), backend))
-                .unwrap()
+            RepositoryRenderModel::from_answers(&load_saved_adding_check(
+                &legacy_model(backend),
+                backend,
+            ))
+            .unwrap()
         };
         model
             .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)

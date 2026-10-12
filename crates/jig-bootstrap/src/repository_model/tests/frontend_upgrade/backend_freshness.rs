@@ -147,9 +147,9 @@ fn managed_update_keeps_a_scaffold_drift_check_client_only() {
 #[test]
 fn managed_update_keeps_a_document_check_removed_after_an_upgrade() {
     for backend in ["rust", "go"] {
-        // The first update adds the check; the drift check keeps reading the
+        // The owner asks for the check; the drift check keeps reading the
         // backend, so its inputs alone look like those of an older generator.
-        let answers = load_saved(&legacy_model(backend), backend);
+        let answers = load_saved_adding_check(&legacy_model(backend), backend);
         let mut migrated = RepositoryRenderModel::from_answers(&answers).unwrap();
         assert!(answers.authored_repository().is_none(), "{backend}");
         assert!(find(&migrated, "api:openapi").is_some(), "{backend}");
@@ -168,12 +168,17 @@ fn managed_update_keeps_a_document_check_removed_after_an_upgrade() {
         }
         migrated.commands.remove("api_openapi_command");
 
-        let answers = load_saved(&migrated, backend);
-        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+        // It stays removed, even when the owner asks for the check again.
+        for answers in [
+            load_saved(&migrated, backend),
+            load_saved_adding_check(&migrated, backend),
+        ] {
+            let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
 
-        assert!(answers.authored_repository().is_some(), "{backend}");
-        assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
-        assert!(drift_reads_backend(&upgraded), "{backend}");
+            assert!(answers.authored_repository().is_some(), "{backend}");
+            assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
+            assert!(drift_reads_backend(&upgraded), "{backend}");
+        }
     }
 }
 
@@ -200,7 +205,7 @@ fn managed_update_adds_the_document_check_beside_customized_test_commands() {
             let mut saved = legacy_model(backend);
             saved.commands.insert(key.into(), custom.into());
 
-            let answers = load_saved(&saved, backend);
+            let answers = load_saved_adding_check(&saved, backend);
             let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
 
             let current = generated_model(backend, &format!("{answer} = {custom:?}\n"));
@@ -217,8 +222,9 @@ fn managed_update_adds_the_document_check_beside_customized_test_commands() {
 }
 
 /// Repositories scaffolded by the latest release upgrade in place: they stay
-/// generated, gain the document check, and keep their drift check reading
-/// the backend that their own contract script exports from.
+/// generated, gain the document check when their owner asks, and keep their
+/// drift check reading the backend that their own contract script exports
+/// from.
 #[test]
 fn managed_update_upgrades_scaffolds_from_the_latest_release() {
     for (backend, fixture) in [
@@ -228,9 +234,16 @@ fn managed_update_upgrades_scaffolds_from_the_latest_release() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(".jig.toml");
         fs::write(&path, fixture).unwrap();
-        write_scaffold_document_tests(temp.path(), backend);
 
-        let (answers, _) = RenderAnswers::from_managed_answers_file(&path, temp.path()).unwrap();
+        let (answers, _) =
+            RenderAnswers::from_managed_answers_file(&path, temp.path(), false).unwrap();
+        let unchanged = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(answers.authored_repository().is_none(), "{backend}");
+        assert!(find(&unchanged, "api:openapi").is_none(), "{backend}");
+        assert!(drift_reads_backend(&unchanged), "{backend}");
+
+        let (answers, _) =
+            RenderAnswers::from_managed_answers_file(&path, temp.path(), true).unwrap();
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
 
         assert!(answers.authored_repository().is_none(), "{backend}");
@@ -293,28 +306,23 @@ fn managed_update_keeps_backend_inputs_an_owner_added_to_a_client_only_drift_che
 
 #[test]
 fn managed_update_keeps_a_model_custom_when_the_check_command_key_is_taken() {
-    for (backend, tests) in [("rust", true), ("go", true), ("rust", false), ("go", false)] {
-        let label = format!("{backend} {tests}");
+    for backend in ["rust", "go"] {
         let mut saved = legacy_model(backend);
         saved.commands.insert(
             "api_openapi_command".into(),
             "printf skip-openapi-check".into(),
         );
-        let repository = TempDir::new().unwrap();
-        if tests {
-            write_scaffold_document_tests(repository.path(), backend);
-        }
 
-        let answers = load_saved_at(repository.path(), &saved, backend);
+        let answers = load_saved(&saved, backend);
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
 
-        assert!(answers.authored_repository().is_some(), "{label}");
-        assert!(find(&upgraded, "api:openapi").is_none(), "{label}");
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
         assert_eq!(
             upgraded.commands["api_openapi_command"], "printf skip-openapi-check",
-            "{label}"
+            "{backend}"
         );
-        assert!(drift_reads_backend(&upgraded), "{label}");
+        assert!(drift_reads_backend(&upgraded), "{backend}");
     }
 }
 

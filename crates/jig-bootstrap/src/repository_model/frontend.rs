@@ -267,13 +267,14 @@ impl ModelBuilder<'_> {
     /// The backend owns document freshness through a check that reads what
     /// the backend tests read, plus the documents. Adoption generates the
     /// backend only at the repository root, so a nested backend has no
-    /// generated tests to own the check, and gets none. Neither does a
-    /// repository from before the check whose backend no longer has the
-    /// scaffold's document tests: its drift check still exports from the
-    /// backend. A saved check keeps its command, like the other backend
+    /// generated tests to own the check, and gets none. Nor does a model from
+    /// before the check until its owner asks for it: the check runs the
+    /// scaffold's document tests by name, which the application may have
+    /// renamed or disabled, and the model's drift check still exports from
+    /// the backend. A saved check keeps its command, like the other backend
     /// commands.
     pub(super) fn add_openapi_document_check(&mut self) -> Result<()> {
-        if self.answers.legacy_document_tests_missing() {
+        if self.answers.document_check_deferred() {
             return Ok(());
         }
         let Some(tests) = self.actions.get(&target_id(BACKEND_COMPONENT, "test")?) else {
