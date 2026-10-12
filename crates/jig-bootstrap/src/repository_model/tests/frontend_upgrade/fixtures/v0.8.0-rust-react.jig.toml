@@ -1,5 +1,5 @@
 # Answers that jig 0.8.0 saved for a rust-react scaffold, without its
-# machine-specific template-source keys.
+# machine-specific template-source keys, and with a placeholder vault scope.
 repo_name = "exampleproject"
 default_branch = "main"
 ci_github_runner = "ubuntu-latest"
@@ -748,7 +748,7 @@ targets = "inherited"
 
 [vault]
 scope = "repo"
-scope_id = "01M4PTJQMT7G2G1PB2J0241HXN"
+scope_id = "example-project-scope"
 allow_global = false
 
 
