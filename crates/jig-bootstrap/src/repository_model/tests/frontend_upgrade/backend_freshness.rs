@@ -46,14 +46,14 @@ fn generated_model(backend: &str, answers: &str) -> RepositoryRenderModel {
     .unwrap()
 }
 
-fn find<'a>(model: &'a RepositoryRenderModel, target: &str) -> Option<&'a ActionSpec> {
+pub(super) fn find<'a>(model: &'a RepositoryRenderModel, target: &str) -> Option<&'a ActionSpec> {
     model
         .actions
         .iter()
         .find(|item| item.target.to_string() == target)
 }
 
-fn drift_reads_backend(model: &RepositoryRenderModel) -> bool {
+pub(super) fn drift_reads_backend(model: &RepositoryRenderModel) -> bool {
     let drift = &find(model, "repo:frontend-contract-drift").unwrap().inputs;
     BACKEND_CONTRACT_INPUTS
         .iter()
@@ -228,6 +228,7 @@ fn managed_update_upgrades_scaffolds_from_the_latest_release() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(".jig.toml");
         fs::write(&path, fixture).unwrap();
+        write_scaffold_document_tests(temp.path(), backend);
 
         let (answers, _) = RenderAnswers::from_managed_answers_file(&path, temp.path()).unwrap();
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
@@ -292,19 +293,77 @@ fn managed_update_keeps_backend_inputs_an_owner_added_to_a_client_only_drift_che
 
 #[test]
 fn managed_update_keeps_a_model_custom_when_the_check_command_key_is_taken() {
-    for backend in ["rust", "go"] {
+    for (backend, tests) in [("rust", true), ("go", true), ("rust", false), ("go", false)] {
+        let label = format!("{backend} {tests}");
         let mut saved = legacy_model(backend);
         saved.commands.insert(
             "api_openapi_command".into(),
             "printf skip-openapi-check".into(),
         );
+        let repository = TempDir::new().unwrap();
+        if tests {
+            write_scaffold_document_tests(repository.path(), backend);
+        }
 
-        let answers = load_saved(&saved, backend);
+        let answers = load_saved_at(repository.path(), &saved, backend);
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
 
-        assert!(answers.authored_repository().is_some(), "{backend}");
-        assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
-        assert!(drift_reads_backend(&upgraded), "{backend}");
+        assert!(answers.authored_repository().is_some(), "{label}");
+        assert!(find(&upgraded, "api:openapi").is_none(), "{label}");
+        assert_eq!(
+            upgraded.commands["api_openapi_command"], "printf skip-openapi-check",
+            "{label}"
+        );
+        assert!(drift_reads_backend(&upgraded), "{label}");
+    }
+}
+
+/// An owner may run the document tests their own way, as a Go backend that
+/// needs its workspace modules does. Generation keeps that command, as it
+/// keeps the other backend commands, and the model stays generated.
+#[test]
+fn managed_update_keeps_a_customized_document_check_command() {
+    for (backend, custom) in [
+        (
+            "rust",
+            "cargo test --workspace --locked committed_ -- --format pretty",
+        ),
+        (
+            "go",
+            "go test -count=1 -run '^TestOpenAPIIsCurrent$' ./internal/httpapi",
+        ),
+    ] {
+        let mut saved = saved_current_model(backend);
+        saved
+            .commands
+            .insert("api_openapi_command".into(), custom.into());
+
+        let answers = load_saved(&saved, backend);
+        let mut upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        let mut current = scaffolded_model(backend, "");
+        current
+            .commands
+            .insert("api_openapi_command".into(), custom.into());
+        assert!(answers.authored_repository().is_none(), "{backend}");
+        assert_eq!(
+            upgraded.authored_toml().unwrap(),
+            current.authored_toml().unwrap(),
+            "{backend}"
+        );
+        assert_eq!(upgraded.commands, current.commands, "{backend}");
+
+        // The next update reads back the command this one wrote.
+        upgraded
+            .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+        upgraded
+            .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+            .unwrap();
+        let answers = load_saved(&upgraded, backend);
+        let reloaded = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(answers.authored_repository().is_none(), "{backend}");
+        assert_eq!(reloaded.commands, current.commands, "{backend}");
     }
 }
 

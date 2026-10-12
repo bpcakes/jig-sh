@@ -57,6 +57,10 @@ pub(super) struct RenderAnswers {
     #[serde(skip)]
     client_only_contract_drift: bool,
     #[serde(skip)]
+    openapi_check_command: Option<String>,
+    #[serde(skip)]
+    legacy_document_tests_missing: bool,
+    #[serde(skip)]
     repository_projection_hint: RepositoryProjectionHint,
     repo_name: String,
     default_branch: String,
@@ -332,6 +336,7 @@ impl AnswerInputShape {
 
 mod adoption;
 mod adoption_commands;
+mod document_check;
 mod resolution;
 
 impl RenderAnswers {

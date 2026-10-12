@@ -75,6 +75,16 @@ pub fn refresh(
             retained_owners.insert(action.target, owners);
             continue;
         }
+        // As on update, a model from before the document check gains none
+        // while its owner keeps another command under the check's key.
+        if action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
+            && let ActionRunner::Command { command, .. } = &action.runner
+            && commands
+                .get(command)
+                .is_some_and(|owned| Some(owned) != generated_commands.get(command))
+        {
+            continue;
+        }
         if let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
             &action.runner
             && let Some(value) = generated_commands.get(command)

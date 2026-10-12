@@ -55,19 +55,24 @@
   language, whatever adoption or its owner named the component. The Go check
   builds the backend module outside any `go.work` workspace, as releases do,
   so its `go.mod` and `go.sum` must resolve every dependency; a backend that
-  needs workspace modules sets `api_openapi_command`, and a failing check says
-  so when a workspace would have applied. The drift check reads only the
-  documents, the generated clients, and the JavaScript toolchain, so backend
-  changes no longer select it. Newly scaffolded repositories also run it
-  without exporting from the backend: it regenerates the clients from the
-  committed documents and compares them. An existing `scripts/contracts.mjs`
-  belongs to its repository and keeps its behavior, so a repository upgraded
-  from an earlier version keeps a drift check that reads the backend, whose
-  own script still exports from it; the drift check's description records
-  which kind it is. `jig update` adds `api:openapi` to a repository generated
-  before this release unless its `api_openapi_command` key is taken; a check
-  its owner then removes stays removed, and a custom repository model keeps
-  its targets.
+  needs workspace modules sets `api_openapi_command`, which updates keep like
+  the other backend commands, and a failing check says so when a workspace
+  would have applied. The drift check reads only the documents, the generated
+  clients, and the JavaScript toolchain, so backend changes no longer select
+  it. Newly scaffolded repositories also run it without exporting from the
+  backend: it regenerates the clients from the committed documents and
+  compares them. An existing `scripts/contracts.mjs` belongs to its repository
+  and keeps its behavior, so a repository upgraded from an earlier version
+  keeps a drift check that reads the backend, whose own script still exports
+  from it; the drift check's description records which kind it is.
+  `jig update` and re-adoption add `api:openapi` to a repository generated
+  before this release only when its backend still has the scaffold's document
+  tests (the Rust `committed_public_openapi_is_current`, with
+  `committed_admin_openapi_is_current` beside `openapi/admin.json`, or Go's
+  `TestOpenAPIIsCurrent` in `internal/httpapi`) and its `api_openapi_command`
+  key is free; otherwise its drift check keeps exporting the documents from
+  the backend. A check its owner then removes stays removed, and a custom
+  repository model keeps its targets.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the
