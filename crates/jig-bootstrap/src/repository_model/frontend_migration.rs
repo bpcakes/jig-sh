@@ -189,7 +189,7 @@ pub(super) fn upgrade_saved_projection(
         .iter()
         .any(|action| is_repo_target(&action.target, FRONTEND_PUBLIC_BOUNDARY_ACTION))
     {
-        retire_generated_boundary(current, drift, &mut upgraded, commands);
+        retire_generated_boundary(&current.commands, drift, &mut upgraded, commands);
     }
     upgraded
 }
@@ -257,11 +257,42 @@ fn generated_input_history(action: &str, drift_inputs: &[String]) -> Vec<Vec<Str
     ]
 }
 
+/// Whether a capability refresh keeps the saved boundary check that
+/// generation no longer writes, as an update keeps it: one that its owner
+/// customized, or that another target depends on. Without API contracts,
+/// generation drops it with the other frontend checks.
+pub(super) fn keeps_saved_boundary(
+    generated: &AuthoredRepositoryModel,
+    generated_commands: &BTreeMap<String, String>,
+    saved: &AuthoredRepositoryModel,
+    commands: &BTreeMap<String, String>,
+) -> bool {
+    let declares = |actions: &[ActionSpec]| {
+        actions
+            .iter()
+            .any(|action| is_repo_target(&action.target, FRONTEND_PUBLIC_BOUNDARY_ACTION))
+    };
+    let Some(drift) = generated
+        .actions
+        .iter()
+        .find(|action| is_repo_target(&action.target, FRONTEND_CONTRACT_DRIFT_ACTION))
+    else {
+        return false;
+    };
+    if declares(&generated.actions) || !declares(&saved.actions) {
+        return false;
+    }
+    let mut upgraded = saved.clone();
+    retire_saved_frontend_dependencies(&mut upgraded.components, &mut upgraded.actions);
+    retire_generated_boundary(generated_commands, drift, &mut upgraded, commands);
+    declares(&upgraded.actions)
+}
+
 /// Go scaffolds have no admin API, so their boundary check guarded nothing.
 /// Drop an unmodified generated one with its profile entries, unless another
 /// target still depends on it.
 fn retire_generated_boundary(
-    current: &RepositoryRenderModel,
+    current_commands: &BTreeMap<String, String>,
     drift: &ActionSpec,
     upgraded: &mut AuthoredRepositoryModel,
     commands: &BTreeMap<String, String>,
@@ -275,7 +306,7 @@ fn retire_generated_boundary(
     };
     let saved = &upgraded.actions[index];
     let expected_command = command(&drift.runner)
-        .and_then(|key| current.commands.get(key))
+        .and_then(|key| current_commands.get(key))
         .map(|value| value.replacen("contracts-drift-check", "contracts-boundary-check", 1));
     let generated = [BOUNDARY_DESCRIPTION, LEGACY_GO_BOUNDARY_DESCRIPTION]
         .into_iter()

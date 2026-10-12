@@ -38,8 +38,20 @@ pub fn refresh(
     let mut commands = prior_commands.clone();
     commands.retain(|_, value| !value.trim().is_empty());
     let mut managed = BTreeSet::new();
+    // As on update, a boundary check that generation no longer writes leaves
+    // only if it is unmodified and no other target depends on it.
+    let keeps_boundary = super::frontend_migration::keeps_saved_boundary(
+        &generated,
+        &generated_commands,
+        prior,
+        prior_commands,
+    );
     for action in &prior.actions {
-        if generated_action(action, prior) {
+        if generated_action(action, prior)
+            && !(keeps_boundary
+                && action.target.component.as_str() == REPO_COMPONENT
+                && action.target.action.as_str() == FRONTEND_PUBLIC_BOUNDARY_ACTION)
+        {
             managed.insert(action.target.clone());
             if let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
                 &action.runner

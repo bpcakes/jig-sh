@@ -90,8 +90,8 @@
   `client-check` step without a boundary check. `jig update` narrows the
   inputs of a generated boundary check, removes an unmodified Go one with its
   profile entry and command unless another target depends on it, and names
-  each removed target. A boundary check that its owner removes stays removed,
-  re-adoption included.
+  each removed target; re-adoption retires a Go one only as an update does. A
+  boundary check that its owner removes stays removed, re-adoption included.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the

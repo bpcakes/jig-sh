@@ -21,23 +21,57 @@ fn readopt_apps_with_sqlx_at(
     model: &RepositoryRenderModel,
     apps: &str,
 ) -> Result<RenderAnswers> {
+    readopt_at(
+        root,
+        &format!(
+            "repo_name = \"ExampleProject\"\nbackend_language = \"rust\"\nharness_footprint = \"full\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{apps}"
+        ),
+        model,
+        AnswerOpts {
+            harness_footprint: Some(HarnessFootprint::Full),
+            sqlx_enabled: Some(true),
+            rust_migration_dir: Some("migrations".into()),
+            ..AnswerOpts::default()
+        },
+    )
+}
+
+/// Re-adopts a Go repository saved as `model` without a recorded harness
+/// footprint, passing the full one, which refreshes the harness.
+fn readopt_go_with_full_footprint(model: &RepositoryRenderModel) -> Result<RenderAnswers> {
+    let temp = TempDir::new().unwrap();
+    readopt_at(
+        temp.path(),
+        &format!(
+            "repo_name = \"ExampleProject\"\nbackend_language = \"go\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{APP}"
+        ),
+        model,
+        AnswerOpts {
+            harness_footprint: Some(HarnessFootprint::Full),
+            ..AnswerOpts::default()
+        },
+    )
+}
+
+/// Re-adopts the repository at `root`, whose `.jig.toml` holds `answers` and
+/// `model`, resolving `opts` as `jig adopt . --write` does.
+fn readopt_at(
+    root: &Path,
+    answers: &str,
+    model: &RepositoryRenderModel,
+    mut opts: AnswerOpts,
+) -> Result<RenderAnswers> {
     let path = root.join(".jig.toml");
     fs::write(
         &path,
         format!(
-            "repo_name = \"ExampleProject\"\nbackend_language = \"rust\"\nharness_footprint = \"full\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{apps}\n{}\n{}",
+            "{answers}\n{}\n{}",
             model.authored_toml().unwrap(),
             model.commands_toml().unwrap()
         ),
     )
     .unwrap();
     let mut inference = infer_adopt_answers(root);
-    let mut opts = AnswerOpts {
-        harness_footprint: Some(HarnessFootprint::Full),
-        sqlx_enabled: Some(true),
-        rust_migration_dir: Some("migrations".into()),
-        ..AnswerOpts::default()
-    };
     let mut input = AnswerInput::from_file(&path)?;
     input.prepare_adoption(
         &mut inference,
@@ -258,4 +292,57 @@ fn capability_refresh_keeps_a_removed_boundary_check_removed() {
             .iter()
             .all(|profile| !profile.targets.contains(&boundary))
     );
+}
+
+/// Like an update, a refresh retires an unmodified Go boundary check, which
+/// guards nothing, but keeps one that another target depends on or that its
+/// owner customized.
+#[test]
+fn capability_refresh_retires_a_go_boundary_check_only_as_an_update_would() {
+    let boundary = target_id("repo", "frontend-public-boundary").unwrap();
+    let mut depended_on = legacy_model("go");
+    let mut guard = ActionSpec::new(
+        target_id("repo", "release-guard").unwrap(),
+        ActionIntent::Check,
+        ActionRunner::command("repo_release_guard_command"),
+    );
+    guard.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+    guard.depends_on = vec![boundary.clone()];
+    guard.provenance = provenance(&[
+        ("target", FieldProvenance::Declared),
+        ("runner", FieldProvenance::Declared),
+        ("depends_on", FieldProvenance::Declared),
+    ]);
+    depended_on.actions.push(guard);
+    depended_on.actions.sort_by(|a, b| a.target.cmp(&b.target));
+    depended_on
+        .commands
+        .insert("repo_release_guard_command".into(), "true".into());
+    let mut customized = legacy_model("go");
+    customized
+        .actions
+        .iter_mut()
+        .find(|action| action.target == boundary)
+        .unwrap()
+        .inputs
+        .push("docs/privileged/**".into());
+
+    for (label, saved, kept) in [
+        ("unmodified", legacy_model("go"), false),
+        ("depended on", depended_on, true),
+        ("customized", customized, true),
+    ] {
+        let answers = readopt_go_with_full_footprint(&saved).unwrap();
+        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert_eq!(
+            has_target(&model, "repo:frontend-public-boundary"),
+            kept,
+            "{label}"
+        );
+        assert!(
+            has_target(&model, "repo:frontend-contract-drift"),
+            "{label}"
+        );
+    }
 }
