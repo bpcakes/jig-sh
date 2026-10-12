@@ -109,6 +109,7 @@ impl AnswerInput {
             loaded_repository_model_is_custom(&raw, authored_repository_commands.as_ref());
         migration_notes.extend(super::document_check::document_check_note(
             &raw,
+            authored_repository_commands.as_ref(),
             preserve_repository_model,
         ));
         Ok(Self {

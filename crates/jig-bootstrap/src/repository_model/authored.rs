@@ -34,6 +34,10 @@ impl AuthoredRepositoryModel {
         super::frontend_migration::has_document_check(&self.actions)
     }
 
+    pub fn lacks_document_check(&self, commands: &BTreeMap<String, String>) -> bool {
+        super::frontend_migration::lacks_document_check(&self.actions, commands)
+    }
+
     pub fn predates_document_check(&self, commands: &BTreeMap<String, String>, go: bool) -> bool {
         super::frontend_migration::predates_document_check(
             &self.actions,

@@ -428,3 +428,103 @@ fn capability_refresh_keeps_declared_dependencies_of_a_generated_check() {
         Some(&FieldProvenance::Declared)
     );
 }
+
+/// Inputs that an owner declared on a generated check survive the refresh,
+/// so a change to them still selects the check and runs its workflow.
+#[test]
+fn capability_refresh_keeps_inputs_an_owner_declared_on_a_generated_check() {
+    let mut saved = saved_current_model("rust");
+    let check = saved
+        .actions
+        .iter_mut()
+        .find(|action| action.target.to_string() == "api:openapi")
+        .unwrap();
+    check.inputs.push("schemas/**".into());
+    check.inputs.sort();
+    check
+        .provenance
+        .insert("inputs".into(), FieldProvenance::Declared);
+
+    let answers = readopt_with_sqlx(&saved).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    let check = model
+        .actions
+        .iter()
+        .find(|action| action.target.to_string() == "api:openapi")
+        .unwrap();
+    assert!(check.inputs.contains(&"schemas/**".into()));
+    assert_eq!(
+        check.provenance.get("inputs"),
+        Some(&FieldProvenance::Declared)
+    );
+    assert!(model.rust_ci_input_paths().contains(&"schemas/**".into()));
+}
+
+/// A contract check whose inputs its owner changed stays as its owner left
+/// it, as on update; an unmodified one is regenerated.
+#[test]
+fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
+    // A Rust scaffold with an admin app has both contract checks.
+    let apps = format!("{APP}{ADMIN_APP}");
+    let mut scaffold = scaffold_answers(&format!("backend_language = \"rust\"\n{apps}"));
+    scaffold.enable_client_only_contract_drift();
+    let mut current = RepositoryRenderModel::from_answers(&scaffold).unwrap();
+    current
+        .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    current
+        .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    for (target, input) in [
+        ("repo:frontend-contract-drift", "schemas/**"),
+        ("repo:frontend-public-boundary", "docs/privileged/**"),
+    ] {
+        let mut saved = current.clone();
+        let check = saved
+            .actions
+            .iter_mut()
+            .find(|action| action.target.to_string() == target)
+            .unwrap();
+        check.inputs.push(input.into());
+        check.inputs.sort();
+
+        let temp = TempDir::new().unwrap();
+        let answers = readopt_apps_with_sqlx_at(temp.path(), &saved, &apps).unwrap();
+        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(
+            model
+                .components
+                .iter()
+                .any(|component| component.adapters.iter().any(|adapter| adapter == "sqlx")),
+            "{target}"
+        );
+        let refreshed = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == target)
+            .unwrap();
+        assert!(refreshed.inputs.contains(&input.into()), "{target}");
+    }
+}
+
+/// Contract checks with the inputs that earlier generators wrote end up with
+/// those that generation writes now.
+#[test]
+fn capability_refresh_regenerates_the_contract_checks_of_an_older_model() {
+    let answers = readopt_with_sqlx(&legacy_model("rust")).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    for target in [
+        "repo:frontend-contract-drift",
+        "repo:frontend-public-boundary",
+    ] {
+        let check = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == target)
+            .unwrap();
+        assert!(check.inputs.contains(&"Cargo.lock".into()), "{target}");
+    }
+}
