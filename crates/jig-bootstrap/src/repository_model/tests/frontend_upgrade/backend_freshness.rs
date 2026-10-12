@@ -457,7 +457,7 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
             "{label}"
         );
         let expected = if go {
-            "test -count=1 -run ^TestOpenAPIIsCurrent$ -v ./internal/httpapi\n"
+            "test -mod=readonly -count=1 -run ^TestOpenAPIIsCurrent$ -v ./internal/httpapi\n"
         } else {
             "test --workspace --locked openapi_is_current -- --format pretty\n"
         };
@@ -466,4 +466,187 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
             assert_eq!(result.status.code(), status.parse().ok(), "{label}");
         }
     }
+}
+
+/// Go records workspace checksums even in read-only mode; the check puts the
+/// file back as it found it.
+#[cfg(unix)]
+#[test]
+fn go_document_check_restores_the_workspace_checksum_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for kept in [None, Some("kept\n")] {
+        let root = TempDir::new().unwrap();
+        let bin = root.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let tool = bin.join("go");
+        fs::write(
+            &tool,
+            "#!/bin/sh\nprintf 'written\\n' >> go.work.sum\nprintf '%s\\n' '--- PASS: TestOpenAPIIsCurrent (0.00s)'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        if let Some(kept) = kept {
+            fs::write(root.path().join("go.work.sum"), kept).unwrap();
+        }
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(openapi_document_check_command(true))
+            .current_dir(root.path())
+            .env("PATH", path)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "{kept:?}");
+        assert_eq!(
+            fs::read_to_string(root.path().join("go.work.sum"))
+                .ok()
+                .as_deref(),
+            kept
+        );
+    }
+}
+
+/// Builds a module zip for the local proxy with the standard library only.
+const MODULE_ZIP_WRITER: &str = r#"package main
+
+import (
+	"archive/zip"
+	"os"
+)
+
+func main() {
+	file, err := os.Create(os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	archive := zip.NewWriter(file)
+	for name, body := range map[string]string{
+		"example.invalid/dep@v1.0.0/go.mod": "module example.invalid/dep\n\ngo 1.22\n",
+		"example.invalid/dep@v1.0.0/dep.go": "package dep\n\nconst Name = \"dep\"\n",
+	} {
+		entry, err := archive.Create(name)
+		if err != nil {
+			panic(err)
+		}
+		if _, err := entry.Write([]byte(body)); err != nil {
+			panic(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		panic(err)
+	}
+	if err := file.Close(); err != nil {
+		panic(err)
+	}
+}
+"#;
+
+/// Real Go, offline: a local module proxy serves a dependency whose
+/// checksums neither go.sum nor go.work.sum holds yet.
+#[cfg(unix)]
+#[test]
+fn go_document_check_leaves_module_and_workspace_checksums_alone() {
+    if std::process::Command::new("go")
+        .arg("version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let proxy = root.path().join("proxy");
+    let versions = proxy.join("example.invalid/dep/@v");
+    fs::create_dir_all(&versions).unwrap();
+    fs::write(versions.join("list"), "v1.0.0\n").unwrap();
+    fs::write(
+        versions.join("v1.0.0.info"),
+        "{\"Version\":\"v1.0.0\",\"Time\":\"2026-01-01T00:00:00Z\"}\n",
+    )
+    .unwrap();
+    fs::write(
+        versions.join("v1.0.0.mod"),
+        "module example.invalid/dep\n\ngo 1.22\n",
+    )
+    .unwrap();
+    let go_command = |program: &str, dir: &std::path::Path, goflags: &str, workspace: bool| {
+        let mut command = std::process::Command::new(program);
+        command
+            .current_dir(dir)
+            .env("GOPATH", root.path().join("gopath"))
+            .env("GOMODCACHE", root.path().join("modcache"))
+            .env("GOCACHE", root.path().join("gocache"))
+            .env("GOPROXY", format!("file://{}", proxy.display()))
+            .env("GOSUMDB", "off")
+            .env("GOTOOLCHAIN", "local")
+            .env("GOFLAGS", goflags);
+        if !workspace {
+            command.env("GOWORK", "off");
+        }
+        command
+    };
+    let writer = root.path().join("writer");
+    fs::create_dir_all(&writer).unwrap();
+    fs::write(
+        writer.join("go.mod"),
+        "module example.invalid/writer\n\ngo 1.22\n",
+    )
+    .unwrap();
+    fs::write(writer.join("main.go"), MODULE_ZIP_WRITER).unwrap();
+    let written = go_command("go", &writer, "-modcacherw", false)
+        .args(["run", "."])
+        .arg(versions.join("v1.0.0.zip"))
+        .output()
+        .unwrap();
+    assert!(
+        written.status.success(),
+        "{}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+
+    let app = root.path().join("app");
+    fs::create_dir_all(app.join("internal/httpapi")).unwrap();
+    fs::write(
+        app.join("go.mod"),
+        "module example.invalid/app\n\ngo 1.22\n\nrequire example.invalid/dep v1.0.0\n",
+    )
+    .unwrap();
+    fs::write(
+        app.join("internal/httpapi/httpapi_test.go"),
+        "package httpapi\n\nimport (\n\t\"testing\"\n\n\t\"example.invalid/dep\"\n)\n\nfunc TestOpenAPIIsCurrent(t *testing.T) {\n\tif dep.Name != \"dep\" {\n\t\tt.Fatal(dep.Name)\n\t}\n}\n",
+    )
+    .unwrap();
+    let check = |goflags: &str, workspace: bool| {
+        go_command("bash", &app, goflags, workspace)
+            .arg("-c")
+            .arg(openapi_document_check_command(true))
+            .output()
+            .unwrap()
+    };
+
+    // An inherited -mod=mod would add go.sum entries; the check refuses.
+    let output = check("-modcacherw -mod=mod", false);
+    assert!(
+        !output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!app.join("go.sum").exists());
+
+    // Go records the workspace checksums even in read-only mode; the check
+    // removes the file it created.
+    fs::write(app.join("go.work"), "go 1.22\n\nuse .\n").unwrap();
+    let output = check("-modcacherw", true);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!app.join("go.work.sum").exists());
+    assert!(!app.join("go.sum").exists());
 }
