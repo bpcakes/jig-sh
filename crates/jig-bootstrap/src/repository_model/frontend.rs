@@ -373,11 +373,7 @@ impl RepositoryRenderModel {
         self.actions
             .iter()
             .filter(|check| {
-                check.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
-                    && self.components.iter().any(|component| {
-                        component.id == check.target.component
-                            && component.adapters.iter().any(|item| item == adapter)
-                    })
+                is_document_action(&self.components, check, adapter)
                     && jig_repository::validate_read_only_check_closure(
                         &self.actions,
                         std::iter::once(&check.target),
@@ -393,6 +389,20 @@ impl RepositoryRenderModel {
             .map(|check| check.target.to_string())
             .collect()
     }
+}
+
+/// Whether `action` has the document check's name and belongs to a component
+/// with `adapter`, whatever adoption or the owner named the component.
+pub(super) fn is_document_action(
+    components: &[ComponentSpec],
+    action: &ActionSpec,
+    adapter: &str,
+) -> bool {
+    action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
+        && components.iter().any(|component| {
+            component.id == action.target.component
+                && component.adapters.iter().any(|item| item == adapter)
+        })
 }
 
 pub(super) fn provenance(entries: &[(&str, FieldProvenance)]) -> BTreeMap<String, FieldProvenance> {

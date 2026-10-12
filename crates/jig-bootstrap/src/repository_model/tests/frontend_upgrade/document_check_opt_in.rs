@@ -290,3 +290,85 @@ fn managed_update_says_the_document_check_needs_api_contracts() {
         );
     }
 }
+
+/// An action of the check's name on a frontend, such as one that checks the
+/// rendered API reference, is the owner's own: the update still says how to
+/// add the document check, and the model stays marked as from before it,
+/// even when its owner asks.
+#[test]
+fn managed_update_offers_the_check_beside_a_frontend_openapi_action() {
+    for backend in ["rust", "go"] {
+        let mut saved = legacy_model(backend);
+        let mut reference = find(&saved, "web:typecheck").unwrap().clone();
+        reference.target = target_id("web", "openapi").unwrap();
+        saved.actions.push(reference);
+        saved.actions.sort_by(|a, b| a.target.cmp(&b.target));
+        let historical = |model: &RepositoryRenderModel| {
+            find(model, "repo:frontend-contract-drift")
+                .unwrap()
+                .description
+                .as_deref()
+                == Some(HISTORICAL_DRIFT_DESCRIPTION)
+        };
+
+        let (answers, notes) = update_answers(&saved, backend, false);
+        let updated = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert!(historical(&updated), "{backend}");
+        assert!(
+            notes
+                .iter()
+                .any(|note| note.contains("declare it in .jig.toml")),
+            "{backend}: {notes:?}"
+        );
+
+        let (answers, notes) = update_answers(&prepared(updated), backend, true);
+        let asked = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert!(find(&asked, "api:openapi").is_none(), "{backend}");
+        assert!(historical(&asked), "{backend}");
+        assert!(
+            notes
+                .iter()
+                .any(|note| note.contains("left the custom repository model")),
+            "{backend}: {notes:?}"
+        );
+    }
+}
+
+/// A document check counts on whichever backend component adoption or the
+/// owner gave it, so the update has nothing to add or say.
+#[test]
+fn managed_update_finds_the_document_check_on_a_renamed_backend() {
+    for backend in ["rust", "go"] {
+        let current = saved_current_model(backend);
+        let mut saved = legacy_model(backend);
+        rename_backend(&mut saved, "server");
+        let mut check = find(&current, "api:openapi").unwrap().clone();
+        check.target = target_id("server", "openapi").unwrap();
+        saved.actions.push(check);
+        saved.actions.sort_by(|a, b| a.target.cmp(&b.target));
+        saved.commands.insert(
+            "api_openapi_command".into(),
+            current.commands["api_openapi_command"].clone(),
+        );
+
+        for add_openapi_check in [false, true] {
+            let (answers, notes) = update_answers(&saved, backend, add_openapi_check);
+            let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+            assert!(find(&upgraded, "server:openapi").is_some(), "{backend}");
+            assert!(find(&upgraded, "api:openapi").is_none(), "{backend}");
+            assert_ne!(
+                find(&upgraded, "repo:frontend-contract-drift")
+                    .unwrap()
+                    .description
+                    .as_deref(),
+                Some(HISTORICAL_DRIFT_DESCRIPTION),
+                "{backend}"
+            );
+            assert!(
+                !notes.iter().any(|note| note.contains("openapi")),
+                "{backend}: {notes:?}"
+            );
+        }
+    }
+}

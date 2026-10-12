@@ -31,16 +31,16 @@ impl AuthoredRepositoryModel {
     }
 
     pub fn has_document_check(&self) -> bool {
-        super::frontend_migration::has_document_check(&self.actions)
+        super::frontend_migration::has_document_check(self)
     }
 
     pub fn lacks_document_check(&self, commands: &BTreeMap<String, String>) -> bool {
-        super::frontend_migration::lacks_document_check(&self.actions, commands)
+        super::frontend_migration::lacks_document_check(self, commands)
     }
 
     pub fn predates_document_check(&self, commands: &BTreeMap<String, String>, go: bool) -> bool {
         super::frontend_migration::predates_document_check(
-            &self.actions,
+            self,
             commands,
             super::frontend::openapi_document_check_command(go),
         )
