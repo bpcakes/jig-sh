@@ -3,7 +3,7 @@ use super::{
     BTreeMap, CLIENT_DRIFT_DESCRIPTION, FRONTEND_CONTRACT_DRIFT_ACTION,
     FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance, HISTORICAL_DRIFT_DESCRIPTION,
     OPENAPI_DOCUMENT_CHECK_ACTION, OPENAPI_DOCUMENT_COMMAND_KEY, REPO_COMPONENT,
-    RepositoryRenderModel, TargetId, retire_saved_frontend_dependencies,
+    RepositoryRenderModel, TargetId, is_document_action, retire_saved_frontend_dependencies,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -59,14 +59,15 @@ pub(super) fn client_only_drift(actions: &[ActionSpec]) -> bool {
     })
 }
 
-/// Whether the saved model runs a document check through the generated
-/// check's command key, whose command generation then keeps, as it keeps the
-/// other backend commands. A key that no document check runs belongs to the
-/// owner, so generation never adopts it.
-pub(super) fn has_document_check(actions: &[ActionSpec]) -> bool {
-    actions.iter().any(|action| {
-        action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
-            && command(&action.runner) == Some(OPENAPI_DOCUMENT_COMMAND_KEY)
+/// Whether the saved model has a document check: an action of that name on a
+/// Rust or Go component, where the backend workflows look for one, whatever
+/// adoption or the owner named the component. An action of that name on
+/// another component, such as a frontend, is the owner's own.
+pub(super) fn has_document_check(saved: &AuthoredRepositoryModel) -> bool {
+    saved.actions.iter().any(|action| {
+        ["rust", "go"]
+            .into_iter()
+            .any(|adapter| is_document_action(&saved.components, action, adapter))
     })
 }
 
@@ -75,28 +76,26 @@ pub(super) fn has_document_check(actions: &[ActionSpec]) -> bool {
 /// before the check, and no document check. Any other model without the
 /// check is one whose owner removed it, which stays removed.
 pub(super) fn lacks_document_check(
-    actions: &[ActionSpec],
+    saved: &AuthoredRepositoryModel,
     commands: &BTreeMap<String, String>,
 ) -> bool {
-    contracts_enabled(actions, commands)
-        && actions.iter().any(|action| {
+    contracts_enabled(&saved.actions, commands)
+        && saved.actions.iter().any(|action| {
             is_drift(&action.target)
                 && action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION)
         })
-        && !actions
-            .iter()
-            .any(|action| action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION)
+        && !has_document_check(saved)
 }
 
 /// Whether the saved model predates the document check, so that update and
 /// re-adoption may give it the check: it lacks the check, and the check's
 /// command key is free.
 pub(super) fn predates_document_check(
-    actions: &[ActionSpec],
+    saved: &AuthoredRepositoryModel,
     commands: &BTreeMap<String, String>,
     generated_command: &str,
 ) -> bool {
-    lacks_document_check(actions, commands)
+    lacks_document_check(saved, commands)
         && commands
             .get(OPENAPI_DOCUMENT_COMMAND_KEY)
             .is_none_or(|value| value == generated_command)
@@ -129,10 +128,7 @@ pub(super) fn upgrade_saved_projection(
     }
     // The historical description marks a model that predates the document
     // check, so it stays until the model has one.
-    let documents_checked = upgraded
-        .actions
-        .iter()
-        .any(|action| action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION);
+    let documents_checked = has_document_check(&upgraded);
     for action in &mut upgraded.actions {
         if action.target.component.as_str() != REPO_COMPONENT
             || !matches!(
@@ -190,7 +186,7 @@ pub(super) fn with_generated_document_check(
         .find(|action| is_document_check(&action.target))?;
     let key = command(&check.runner)?;
     let generated_command = current.commands.get(key)?;
-    if !predates_document_check(&saved.actions, commands, generated_command) {
+    if !predates_document_check(saved, commands, generated_command) {
         return None;
     }
     let mut adopted = saved.clone();
