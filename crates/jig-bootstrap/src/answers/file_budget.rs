@@ -1,12 +1,15 @@
 use super::*;
 
 impl RenderAnswers {
+    /// `add_openapi_check` gives a saved model from before the document check
+    /// the check, as `jig update --add-openapi-check` asks.
     pub fn from_managed_answers_file(
         path: &Path,
         destination: &Path,
+        add_openapi_check: bool,
     ) -> Result<(Self, Vec<String>)> {
         let (mut raw, authored_repository_commands, preserve_repository_model, warnings) =
-            AnswerInput::from_file(path)?.into_parts();
+            AnswerInput::from_update_file(path, add_openapi_check)?.into_parts();
         raw.normalize_legacy_sqlx_disabled_schema_dump();
         raw.normalize_legacy_generated_cargo_command_defaults();
         let mut answers = resolve_render_answers(

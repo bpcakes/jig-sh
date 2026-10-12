@@ -119,6 +119,7 @@ targets = [{ component = "api", action = "test" }]
             template_mode: None,
             recopy,
             launcher_only: false,
+            add_openapi_check: false,
             force: true,
             vcs_ref: None,
             defaults: true,

@@ -1,6 +1,8 @@
 //! Re-adoption with a capability change regenerates the harness actions
 //! around the saved components, whatever their names and roots.
 
+use std::path::Path;
+
 use super::*;
 use crate::adopt_infer::{ComponentSelectionOpts, infer_adopt_answers};
 use crate::answers::{AnswerInput, HarnessFootprint};
@@ -9,13 +11,7 @@ use crate::answers::{AnswerInput, HarnessFootprint};
 /// the answers as `jig adopt . --write --sqlx-enabled true` does.
 fn readopt_with_sqlx(model: &RepositoryRenderModel) -> Result<RenderAnswers> {
     let temp = TempDir::new().unwrap();
-    write_scaffold_document_tests(temp.path(), "rust");
-    readopt_with_sqlx_at(temp.path(), model)
-}
-
-/// Re-adopts the repository at `root`, saved as `model`, enabling SQLx.
-fn readopt_with_sqlx_at(root: &Path, model: &RepositoryRenderModel) -> Result<RenderAnswers> {
-    readopt_apps_with_sqlx_at(root, model, APP)
+    readopt_apps_with_sqlx_at(temp.path(), model, APP)
 }
 
 /// Re-adopts the repository at `root`, saved as `model` with the frontend
@@ -112,24 +108,21 @@ fn capability_refresh_keeps_a_renamed_backend_document_check_in_ci() {
     assert!(model.rust_ci_input_paths().contains(&"openapi/**".into()));
 }
 
+/// Only `jig update --add-openapi-check` gives a model from before the
+/// document check the check.
 #[test]
-fn capability_refresh_adds_the_document_check_only_beside_its_tests() {
-    for tests in [true, false] {
-        let temp = TempDir::new().unwrap();
-        if tests {
-            write_scaffold_document_tests(temp.path(), "rust");
-        }
+fn capability_refresh_leaves_an_older_model_without_the_document_check() {
+    let answers = readopt_with_sqlx(&legacy_model("rust")).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
 
-        let answers = readopt_with_sqlx_at(temp.path(), &legacy_model("rust")).unwrap();
-        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-
-        assert_eq!(has_target(&model, "api:openapi"), tests, "{tests}");
-        assert_eq!(
-            model.commands.contains_key("api_openapi_command"),
-            tests,
-            "{tests}"
-        );
-    }
+    assert!(
+        model
+            .components
+            .iter()
+            .any(|component| component.adapters.iter().any(|adapter| adapter == "sqlx"))
+    );
+    assert!(!has_target(&model, "api:openapi"));
+    assert!(!model.commands.contains_key("api_openapi_command"));
 }
 
 #[test]
@@ -153,8 +146,11 @@ fn capability_refresh_adds_no_document_check_under_a_taken_command_key() {
 #[test]
 fn capability_refresh_keeps_a_removed_document_check_removed() {
     // A scaffold's own check, and one that an update gave an older model.
-    let mut upgraded =
-        RepositoryRenderModel::from_answers(&load_saved(&legacy_model("rust"), "rust")).unwrap();
+    let mut upgraded = RepositoryRenderModel::from_answers(&load_saved_adding_check(
+        &legacy_model("rust"),
+        "rust",
+    ))
+    .unwrap();
     upgraded
         .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
         .unwrap();
@@ -228,7 +224,6 @@ fn capability_refresh_keeps_a_removed_boundary_check_removed() {
     let boundary = target_id("repo", "frontend-public-boundary").unwrap();
     let readopt = |saved: &RepositoryRenderModel| {
         let temp = TempDir::new().unwrap();
-        write_scaffold_document_tests(temp.path(), "rust");
         let answers = readopt_apps_with_sqlx_at(temp.path(), saved, &apps).unwrap();
         RepositoryRenderModel::from_answers(&answers).unwrap()
     };
@@ -263,18 +258,4 @@ fn capability_refresh_keeps_a_removed_boundary_check_removed() {
             .iter()
             .all(|profile| !profile.targets.contains(&boundary))
     );
-}
-
-#[test]
-fn capability_refresh_adds_the_document_check_to_a_custom_older_model() {
-    // An update kept the customized older model as its owner left it.
-    let mut saved = legacy_model("rust");
-    super::backend_freshness::customize_frontend(&mut saved);
-    let updated = RepositoryRenderModel::from_answers(&load_saved(&saved, "rust")).unwrap();
-    assert!(!has_target(&updated, "api:openapi"));
-
-    let answers = readopt_with_sqlx(&updated).unwrap();
-    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-
-    assert!(has_target(&model, "api:openapi"));
 }

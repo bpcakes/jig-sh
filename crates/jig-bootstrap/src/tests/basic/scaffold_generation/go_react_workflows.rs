@@ -338,3 +338,117 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     assert_contains_all(&go_tests, &["scripts/jig check api:sqlc"]);
     assert_contains_none(&go_tests, &["postgres-integration:"]);
 }
+
+/// A repository scaffolded before the document check gains it only when its
+/// owner asks with `jig update --add-openapi-check`; until then each update
+/// says how, and the Go workflow runs no document check.
+#[test]
+fn update_adds_the_document_check_to_an_older_repository_when_asked() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("go-older-contracts");
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            frontends: vec![ScaffoldFrontend {
+                name: "web".into(),
+                kind: ScaffoldFrontendKind::Spa,
+                custom_default_name: false,
+            }],
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("go-older-contracts".into()),
+            go_module: Some("example.com/go-older-contracts".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    // Save the model as generators before the document check did: no check,
+    // and a drift check that exports the documents from the backend.
+    let is_check = |target: &toml::Value| {
+        target["component"].as_str() == Some("api") && target["action"].as_str() == Some("openapi")
+    };
+    let config_path = destination.join(".jig.toml");
+    let mut config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let repository = &mut config["repository"];
+    let actions = repository["actions"].as_array_mut().unwrap();
+    actions.retain(|action| !is_check(&action["target"]));
+    let drift = actions
+        .iter_mut()
+        .find(|action| action["target"]["action"].as_str() == Some("frontend-contract-drift"))
+        .unwrap();
+    drift["description"] = "Check repository-wide OpenAPI and generated-client drift.".into();
+    let inputs = drift["inputs"].as_array_mut().unwrap();
+    inputs.extend(
+        [
+            "Cargo.toml",
+            "**/Cargo.toml",
+            "**/*.rs",
+            "go.mod",
+            "**/go.mod",
+            "**/*.go",
+        ]
+        .map(toml::Value::from),
+    );
+    inputs.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    inputs.dedup();
+    for profile in repository["profiles"].as_array_mut().unwrap() {
+        profile["targets"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|target| !is_check(target));
+    }
+    config["commands"]
+        .as_table_mut()
+        .unwrap()
+        .remove("api_openapi_command");
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    let has_check = || {
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap()
+            ["repository"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| is_check(&action["target"]))
+    };
+    let go_tests =
+        || fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
+
+    let report = run_update(update_opts(&destination, template.path(), true)).unwrap();
+
+    assert!(!has_check());
+    assert!(drift_reads_go(&destination));
+    assert_contains_none(&go_tests(), &["scripts/jig check api:openapi"]);
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .is_some_and(|warning| warning.contains("jig update --add-openapi-check"))),
+        "{report:#}"
+    );
+
+    let mut opts = update_opts(&destination, template.path(), true);
+    opts.add_openapi_check = true;
+    run_update(opts).unwrap();
+
+    assert!(has_check());
+    assert_contains_all(&go_tests(), &["scripts/jig check api:openapi"]);
+}

@@ -5,15 +5,14 @@ use globset::{GlobBuilder, GlobMatcher};
 use super::super::scan::read_toml_for_inference;
 
 #[derive(Default)]
-pub(in crate::adopt_infer) struct CargoWorkspace {
+pub(super) struct CargoWorkspace {
     members: Vec<GlobMatcher>,
     exclusions: Vec<GlobMatcher>,
     membership_known: bool,
-    root_package: bool,
 }
 
 impl CargoWorkspace {
-    pub(in crate::adopt_infer) fn read(root: &Path, warnings: &mut Vec<String>) -> Self {
+    pub(super) fn read(root: &Path, warnings: &mut Vec<String>) -> Self {
         let manifest = root.join("Cargo.toml");
         if !manifest.is_file() {
             return Self::default();
@@ -21,12 +20,8 @@ impl CargoWorkspace {
         let Some(parsed) = read_toml_for_inference(&manifest, warnings) else {
             return Self::default();
         };
-        let root_package = parsed.get("package").is_some();
         let Some(workspace) = parsed.get("workspace") else {
-            return Self {
-                root_package,
-                ..Self::default()
-            };
+            return Self::default();
         };
         let (members, members_known) = patterns(workspace.get("members"), "members", warnings);
         let (exclusions, exclusions_known) =
@@ -35,7 +30,6 @@ impl CargoWorkspace {
             members,
             exclusions,
             membership_known: members_known && exclusions_known,
-            root_package,
         }
     }
 
@@ -47,12 +41,6 @@ impl CargoWorkspace {
 
     pub(super) fn excludes(&self, root: &str) -> bool {
         self.exclusions.iter().any(|pattern| pattern.is_match(root))
-    }
-
-    /// Whether `cargo test --workspace` in the repository root tests the
-    /// package at `root`: the root package or a workspace member.
-    pub(in crate::adopt_infer) fn tests(&self, root: &str) -> bool {
-        (root == "." && self.root_package) || self.includes(root)
     }
 }
 

@@ -486,6 +486,7 @@ fn run_update_with_recopy(repo: PathBuf, recopy: bool) -> serde_json::Value {
         template_mode: None,
         recopy,
         launcher_only: false,
+        add_openapi_check: false,
         force: true,
         vcs_ref: None,
         defaults: true,

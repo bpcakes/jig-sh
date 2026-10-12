@@ -96,6 +96,7 @@ fn update_and_recopy_preserve_saved_git_policy_for_every_provenance() {
                 template_mode: None,
                 recopy,
                 launcher_only: false,
+                add_openapi_check: false,
                 // Accept re-rendering the fixture-edited manifest; its authored
                 // policies must still survive the requested update.
                 force: true,
@@ -145,6 +146,7 @@ fn update_and_recopy_retract_only_superseded_formatter_inference() {
                     template_mode: None,
                     recopy,
                     launcher_only: false,
+                    add_openapi_check: false,
                     force: true,
                     vcs_ref: None,
                     defaults: true,

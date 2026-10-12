@@ -71,7 +71,8 @@ fn managed_update_narrows_admin_boundary_inputs_and_keeps_models_generated() {
     for backend_inputs in [LEGACY_BACKEND_INPUTS, LOCKFILE_BACKEND_INPUTS] {
         let saved = saved_model_with("rust", &apps, backend_inputs);
 
-        let answers = load_saved_with(&saved, "rust", &apps);
+        // Asking for the document check, the update reaches the scaffold.
+        let (answers, _) = update_answers_with(&saved, "rust", &apps, true);
 
         assert!(answers.authored_repository().is_none());
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();

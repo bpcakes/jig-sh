@@ -61,7 +61,7 @@ pub(super) struct RenderAnswers {
     #[serde(skip)]
     openapi_check_command: Option<String>,
     #[serde(skip)]
-    legacy_document_tests_missing: bool,
+    document_check_deferred: bool,
     #[serde(skip)]
     repository_projection_hint: RepositoryProjectionHint,
     repo_name: String,

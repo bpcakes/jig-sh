@@ -89,3 +89,30 @@ fn parses_launcher_only_update_and_rejects_source_overrides() {
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 }
+
+#[test]
+fn parses_add_openapi_check_update_and_rejects_it_beside_launcher_repair() {
+    let cli = Cli::try_parse_from(["jig", "update", "--add-openapi-check"]).unwrap();
+    match cli.command {
+        CommandKind::Update(bootstrap::UpdateOpts {
+            add_openapi_check,
+            launcher_only,
+            ..
+        }) => {
+            assert!(add_openapi_check);
+            assert!(!launcher_only);
+        }
+        other => panic!("expected update command, got {other:?}"),
+    }
+
+    assert!(
+        Cli::try_parse_from([
+            "jig",
+            "update",
+            "--add-openapi-check",
+            "--launcher-only",
+            "--force",
+        ])
+        .is_err()
+    );
+}

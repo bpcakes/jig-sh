@@ -166,6 +166,7 @@ fn adopt_minimal_writes_config_and_agent_scaffolding_only() {
         template_mode: None,
         recopy: true,
         launcher_only: false,
+        add_openapi_check: false,
         force: false,
         vcs_ref: None,
         defaults: true,
