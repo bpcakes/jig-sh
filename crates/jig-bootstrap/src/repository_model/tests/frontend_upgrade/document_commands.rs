@@ -49,6 +49,7 @@ fn rust_document_check_runs_quiet_cargo_without_rewriting_the_lockfile() {
     for (test, passes) in [
         ("committed_public_openapi_is_current", true),
         ("committed_public_document_renamed", false),
+        ("unrelated_committed_public_openapi_is_current", false),
     ] {
         let output = check(test);
         assert_eq!(
@@ -116,6 +117,28 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
         (false, &["public", "admin"][..], both.as_str(), "0", true),
         (false, &["public", "admin"], public, "0", false),
         (false, &["public"], public, "0", true),
+        (
+            false,
+            &["public"],
+            "test committed_public_openapi_is_current ... ok",
+            "0",
+            true,
+        ),
+        // A test whose name only ends with the document test's does not count.
+        (
+            false,
+            &["public"],
+            "test tests::unrelated_committed_public_openapi_is_current ... ok",
+            "0",
+            false,
+        ),
+        (
+            false,
+            &["public"],
+            "test unrelated_committed_public_openapi_is_current ... ok",
+            "0",
+            false,
+        ),
         (false, &["public"], "running 0 tests", "0", false),
         // Removing the public document does not remove its test.
         (false, &[], "running 0 tests", "0", false),

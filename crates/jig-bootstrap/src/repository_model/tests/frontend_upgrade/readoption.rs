@@ -337,3 +337,66 @@ fn capability_refresh_regenerates_the_contract_checks_of_an_older_model() {
         assert!(check.inputs.contains(&"Cargo.lock".into()), "{target}");
     }
 }
+
+/// A document check that its owner removed stays removed, even while
+/// another component keeps a document check of its own.
+#[test]
+fn capability_refresh_keeps_a_removed_document_check_removed_beside_another_one() {
+    let mut saved = saved_current_model("rust");
+    let mut worker = saved
+        .components
+        .iter()
+        .find(|component| component.id.as_str() == "api")
+        .unwrap()
+        .clone();
+    worker.id = component_id("worker").unwrap();
+    worker.root = "worker".into();
+    saved.components.push(worker);
+    saved.components.sort_by(|a, b| a.id.cmp(&b.id));
+    let check = target_id("api", "openapi").unwrap();
+    let mut worker_check = saved
+        .actions
+        .iter()
+        .find(|action| action.target == check)
+        .unwrap()
+        .clone();
+    worker_check.target = target_id("worker", "openapi").unwrap();
+    worker_check.runner = ActionRunner::command("worker_openapi_command");
+    worker_check.inputs = vec!["worker/**".into()];
+    worker_check.provenance = provenance(&[
+        ("target", FieldProvenance::Declared),
+        ("runner", FieldProvenance::Declared),
+        ("inputs", FieldProvenance::Declared),
+    ]);
+    saved.actions.push(worker_check);
+    saved.commands.insert(
+        "worker_openapi_command".into(),
+        "cd worker && cargo test --locked openapi_is_current".into(),
+    );
+    // The owner removes the backend's check.
+    saved.actions.retain(|action| action.target != check);
+    saved.actions.sort_by(|a, b| a.target.cmp(&b.target));
+    for profile in &mut saved.profiles {
+        profile.targets.retain(|target| *target != check);
+    }
+    saved.commands.remove("api_openapi_command");
+
+    let answers = readopt_with_sqlx(&saved).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(
+        model
+            .components
+            .iter()
+            .any(|component| component.adapters.iter().any(|adapter| adapter == "sqlx"))
+    );
+    assert!(!has_target(&model, "api:openapi"));
+    assert!(!model.commands.contains_key("api_openapi_command"));
+    assert!(
+        model
+            .profiles
+            .iter()
+            .all(|profile| !profile.targets.contains(&check))
+    );
+    assert!(has_target(&model, "worker:openapi"));
+}

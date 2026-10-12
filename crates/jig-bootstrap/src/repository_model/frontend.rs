@@ -233,8 +233,9 @@ pub(super) fn frontend_contract_inputs(
 /// document outside the module changed, and a filter that matches no test
 /// passes. A customized general test command therefore cannot skip them.
 /// Rust pins the per-test format, which quiet Cargo would print as dots,
-/// keeps the lockfile as a read-only check must, and always requires the
-/// public test, which every Rust scaffold has. Go builds the backend module
+/// keeps the lockfile as a read-only check must, always requires the public
+/// test, which every Rust scaffold has, and accepts each test only by its whole
+/// name, not one that merely ends with it. Go builds the backend module
 /// as a release does, outside any workspace, whose checksum file it would
 /// update even in read-only mode, and refuses to update go.sum, even under an
 /// inherited -mod=mod, so the check writes no checksum file.
@@ -256,7 +257,8 @@ pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
             "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
             "for name in public admin; do ",
             "[ \"$name\" = public ] || [ -f \"openapi/$name.json\" ] || continue; ",
-            "case \"$output\" in *\"committed_${name}_openapi_is_current ... ok\"*) ;; ",
+            "case \"$output\" in *\"::committed_${name}_openapi_is_current ... ok\"* ",
+            "| *\"test committed_${name}_openapi_is_current ... ok\"*) ;; ",
             "*) printf 'committed_%s_openapi_is_current did not pass.\\n' \"$name\" >&2; exit 1 ;; ",
             "esac; done",
         )
