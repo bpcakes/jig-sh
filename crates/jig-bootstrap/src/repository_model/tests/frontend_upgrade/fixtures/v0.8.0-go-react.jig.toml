@@ -1,5 +1,5 @@
 # Answers that jig 0.8.0 saved for a go-react scaffold, without its
-# machine-specific template-source keys.
+# machine-specific template-source keys, and with a placeholder vault scope.
 repo_name = "exampleproject"
 default_branch = "main"
 ci_github_runner = "ubuntu-latest"
@@ -594,7 +594,7 @@ targets = "inherited"
 
 [vault]
 scope = "repo"
-scope_id = "01M4PTJJD6WE5PSQPJVE01JCXN"
+scope_id = "example-project-scope"
 allow_global = false
 
 
