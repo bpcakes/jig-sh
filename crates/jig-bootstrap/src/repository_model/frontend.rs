@@ -305,14 +305,14 @@ pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
 
 impl ModelBuilder<'_> {
     /// The backend owns document freshness through a check that reads what
-    /// the backend tests read, plus the documents.
+    /// the backend tests read, plus the documents. Adoption generates the
+    /// backend only at the repository root, so a nested backend has no
+    /// generated tests to own the check, and gets none.
     pub(super) fn add_openapi_document_check(&mut self) -> Result<()> {
-        let mut inputs = self
-            .actions
-            .get(&target_id(BACKEND_COMPONENT, "test")?)
-            .ok_or_else(|| anyhow::anyhow!("frontend contracts require the backend tests"))?
-            .inputs
-            .clone();
+        let Some(tests) = self.actions.get(&target_id(BACKEND_COMPONENT, "test")?) else {
+            return Ok(());
+        };
+        let mut inputs = tests.inputs.clone();
         inputs.push(OPENAPI_INPUT.into());
         inputs.sort();
         inputs.dedup();
@@ -343,33 +343,33 @@ impl ModelBuilder<'_> {
 }
 
 impl RepositoryRenderModel {
-    /// The document check that the backend workflow for `adapter` runs: a
-    /// read-only check owned by a component with that adapter, so an authored
-    /// action of that name joins CI only as a check.
-    pub(super) fn openapi_document_check(&self, adapter: &str) -> Option<&ActionSpec> {
-        let check = self.actions.iter().find(|action| {
-            action.target.component.as_str() == BACKEND_COMPONENT
-                && action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
-        })?;
-        let owned = self
-            .components
+    /// The document checks that the backend workflow for `adapter` runs:
+    /// each read-only check of that name owned by a component with that
+    /// adapter, whatever adoption or the owner named the component, so an
+    /// authored action of that name joins CI only as a check.
+    pub(super) fn openapi_document_checks(&self, adapter: &str) -> Vec<&ActionSpec> {
+        self.actions
             .iter()
-            .find(|component| component.id == check.target.component)?
-            .adapters
-            .iter()
-            .any(|item| item == adapter);
-        (owned
-            && jig_repository::validate_read_only_check_closure(
-                &self.actions,
-                std::iter::once(&check.target),
-            )
-            .is_ok())
-        .then_some(check)
+            .filter(|check| {
+                check.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
+                    && self.components.iter().any(|component| {
+                        component.id == check.target.component
+                            && component.adapters.iter().any(|item| item == adapter)
+                    })
+                    && jig_repository::validate_read_only_check_closure(
+                        &self.actions,
+                        std::iter::once(&check.target),
+                    )
+                    .is_ok()
+            })
+            .collect()
     }
 
-    pub(crate) fn openapi_document_check_target(&self, adapter: &str) -> Option<String> {
-        self.openapi_document_check(adapter)
+    pub(crate) fn openapi_document_check_targets(&self, adapter: &str) -> Vec<String> {
+        self.openapi_document_checks(adapter)
+            .into_iter()
             .map(|check| check.target.to_string())
+            .collect()
     }
 }
 

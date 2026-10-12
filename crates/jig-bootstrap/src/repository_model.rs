@@ -271,7 +271,8 @@ impl RepositoryRenderModel {
             })
             .map(|action| action.target.clone())
             .chain(
-                self.openapi_document_check(language)
+                self.openapi_document_checks(language)
+                    .into_iter()
                     .map(|check| check.target.clone()),
             )
             .collect::<Vec<_>>();

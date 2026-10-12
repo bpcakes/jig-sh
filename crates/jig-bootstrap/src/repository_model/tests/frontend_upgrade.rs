@@ -2,6 +2,7 @@ use super::*;
 
 mod backend_freshness;
 mod document_commands;
+mod readoption;
 
 const APP: &str = r#"
 [[frontend_apps]]
@@ -179,6 +180,48 @@ fn load_saved_with(model: &RepositoryRenderModel, backend: &str, apps: &str) -> 
     RenderAnswers::from_managed_answers_file(&path, temp.path())
         .unwrap()
         .0
+}
+
+/// A model generated with the scaffold's client-only contract script.
+fn scaffolded_model(backend: &str, answers: &str) -> RepositoryRenderModel {
+    let mut scaffold = scaffold_answers(&format!("backend_language = {backend:?}\n{answers}{APP}"));
+    scaffold.enable_client_only_contract_drift();
+    RepositoryRenderModel::from_answers(&scaffold).unwrap()
+}
+
+/// A current scaffold as `jig init` saves it.
+fn saved_current_model(backend: &str) -> RepositoryRenderModel {
+    let mut current = scaffolded_model(backend, "");
+    current
+        .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    current
+        .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    current
+}
+
+/// Renames the backend component as adoption names it after the repository
+/// workspace, keeping its command keys.
+fn rename_backend(model: &mut RepositoryRenderModel, id: &str) {
+    let renamed = component_id(id).unwrap();
+    let rename = |target: &mut TargetId| {
+        if target.component.as_str() == "api" {
+            target.component = renamed.clone();
+        }
+    };
+    for component in &mut model.components {
+        if component.id.as_str() == "api" {
+            component.id = renamed.clone();
+        }
+    }
+    for action in &mut model.actions {
+        rename(&mut action.target);
+        action.depends_on.iter_mut().for_each(rename);
+    }
+    for profile in &mut model.profiles {
+        profile.targets.iter_mut().for_each(rename);
+    }
 }
 
 #[test]

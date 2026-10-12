@@ -194,14 +194,12 @@ pub(super) fn render_context(
             JsonValue::Bool(repository.frontend_contracts_enabled()),
         );
         for (key, adapter) in [
-            ("go_openapi_check_target", "go"),
-            ("rust_openapi_check_target", "rust"),
+            ("go_openapi_check_targets", "go"),
+            ("rust_openapi_check_targets", "rust"),
         ] {
             context.insert(
                 key.into(),
-                repository
-                    .openapi_document_check_target(adapter)
-                    .map_or(JsonValue::Null, JsonValue::String),
+                serde_json::to_value(repository.openapi_document_check_targets(adapter))?,
             );
         }
         context.insert("repository".into(), serde_json::to_value(repository)?);
