@@ -46,13 +46,6 @@ fn generated_model(backend: &str, answers: &str) -> RepositoryRenderModel {
     .unwrap()
 }
 
-/// A model generated with the scaffold's client-only contract script.
-fn scaffolded_model(backend: &str, answers: &str) -> RepositoryRenderModel {
-    let mut scaffold = scaffold_answers(&format!("backend_language = {backend:?}\n{answers}{APP}"));
-    scaffold.enable_client_only_contract_drift();
-    RepositoryRenderModel::from_answers(&scaffold).unwrap()
-}
-
 fn find<'a>(model: &'a RepositoryRenderModel, target: &str) -> Option<&'a ActionSpec> {
     model
         .actions
@@ -65,18 +58,6 @@ fn drift_reads_backend(model: &RepositoryRenderModel) -> bool {
     BACKEND_CONTRACT_INPUTS
         .iter()
         .all(|input| drift.iter().any(|item| item == input))
-}
-
-/// A current scaffold as `jig init` saves it.
-fn saved_current_model(backend: &str) -> RepositoryRenderModel {
-    let mut current = scaffolded_model(backend, "");
-    current
-        .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
-        .unwrap();
-    current
-        .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
-        .unwrap();
-    current
 }
 
 fn document_check_mut(model: &mut RepositoryRenderModel) -> &mut ActionSpec {
@@ -354,7 +335,7 @@ fn managed_update_keeps_a_removed_document_check_removed() {
 }
 
 #[test]
-fn workflows_run_the_document_check_only_as_a_read_only_check_of_their_backend() {
+fn workflows_run_each_read_only_document_check_of_their_backend() {
     for (backend, other) in [("rust", "go"), ("go", "rust")] {
         let mut model = generated_model(backend, "");
         // An authored check may read more than the backend root, such as a
@@ -370,20 +351,48 @@ fn workflows_run_the_document_check_only_as_a_read_only_check_of_their_backend()
             }
         };
         assert_eq!(
-            model.openapi_document_check_target(backend).as_deref(),
-            Some("api:openapi")
+            model.openapi_document_check_targets(backend),
+            ["api:openapi"]
         );
-        assert_eq!(model.openapi_document_check_target(other), None);
+        assert!(model.openapi_document_check_targets(other).is_empty());
         assert!(
             ci_inputs(&model).contains(&"schemas/**".into()),
             "{backend}"
         );
 
+        // Adoption names the backend after the repository workspace, and an
+        // owner may add another backend with its own document check.
+        let mut renamed = model.clone();
+        rename_backend(&mut renamed, "server");
+        let mut worker = renamed
+            .components
+            .iter()
+            .find(|component| component.id.as_str() == "server")
+            .unwrap()
+            .clone();
+        worker.id = component_id("worker").unwrap();
+        worker.root = "worker".into();
+        renamed.components.push(worker);
+        let mut worker_check = find(&renamed, "server:openapi").unwrap().clone();
+        worker_check.target = target_id("worker", "openapi").unwrap();
+        worker_check.inputs = vec!["worker/openapi/**".into()];
+        renamed.actions.push(worker_check);
+        assert_eq!(
+            renamed.openapi_document_check_targets(backend),
+            ["server:openapi", "worker:openapi"]
+        );
+        for input in ["schemas/**", "worker/openapi/**"] {
+            assert!(
+                ci_inputs(&renamed).contains(&input.into()),
+                "{backend} {input}"
+            );
+        }
+
         // An authored action of the same name may generate the documents.
         let check = document_check_mut(&mut model);
         check.intent = ActionIntent::Generate;
         check.effects = vec![ActionEffect::Worktree];
-        assert_eq!(model.openapi_document_check_target(backend), None);
+        assert!(model.openapi_document_check_targets(backend).is_empty());
         assert!(
             !ci_inputs(&model).contains(&"schemas/**".into()),
             "{backend}"
