@@ -309,17 +309,28 @@ fn retire_generated_boundary(
     }
 }
 
-/// Removes the command of a retired generated boundary check.
+/// Removes the command of a generated boundary check that the upgrade from
+/// `saved` to `upgraded` retired. A command whose check its owner removed
+/// belongs to the owner.
 pub(super) fn drop_retired_contract_commands(
-    actions: &[ActionSpec],
+    saved: &[ActionSpec],
+    upgraded: &[ActionSpec],
     commands: &mut BTreeMap<String, String>,
 ) {
+    let declares_boundary = |actions: &[ActionSpec]| {
+        actions
+            .iter()
+            .any(|action| is_repo_target(&action.target, FRONTEND_PUBLIC_BOUNDARY_ACTION))
+    };
+    if !declares_boundary(saved) || declares_boundary(upgraded) {
+        return;
+    }
     let Ok(key) =
         CommandScope::Component.command_key(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION)
     else {
         return;
     };
-    if !actions
+    if !upgraded
         .iter()
         .any(|action| command(&action.runner) == Some(key.as_str()))
         && commands

@@ -76,9 +76,14 @@ impl RepositoryRenderModel {
                 authored_commands,
             )
         });
-        let authored = upgraded.as_ref().unwrap_or(authored);
+        let saved = authored;
+        let authored = upgraded.as_ref().unwrap_or(saved);
         let mut commands = authored_commands.clone();
-        super::frontend_migration::drop_retired_contract_commands(&authored.actions, &mut commands);
+        super::frontend_migration::drop_retired_contract_commands(
+            &saved.actions,
+            &authored.actions,
+            &mut commands,
+        );
         refresh_managed_rust_file_loc_command(
             &authored.actions,
             &mut commands,
