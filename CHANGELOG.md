@@ -91,6 +91,8 @@
   `client-check` scans. A frontend app at the repository root now triggers
   the workflow on any change; its filter was `./**`, which matched nothing.
   `jig update` reports the refreshed workflow as a conflict.
+- `scripts/jig init` accepts `--metrics` and `--jobs`. The generated launcher
+  rejected both because it could not find the destination past them.
 
 ## v0.8.0 - 2026-10-09
 

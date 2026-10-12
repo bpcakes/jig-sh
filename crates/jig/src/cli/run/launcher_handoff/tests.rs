@@ -13,17 +13,17 @@ use crate::test_env::{CurrentDirGuard, TestRepoBuilder, lock_env};
 const CURRENT_GENERATED_LAUNCHER: &str =
     include_str!("../../../../../jig-bootstrap/src/embedded_template_snapshots/scripts/jig.jinja");
 
-fn generated_launcher_classifies_as_capability_only(args: &[&str]) -> bool {
-    fn function_source(name: &str) -> String {
-        let start = format!("{name}() {{");
-        let body = CURRENT_GENERATED_LAUNCHER
-            .split_once(&start)
-            .and_then(|(_, remainder)| remainder.split_once("\n}\n"))
-            .map(|(body, _)| body)
-            .unwrap_or_else(|| panic!("generated launcher is missing {name}"));
-        format!("{start}{body}\n}}\n")
-    }
+fn function_source(name: &str) -> String {
+    let start = format!("{name}() {{");
+    let body = CURRENT_GENERATED_LAUNCHER
+        .split_once(&start)
+        .and_then(|(_, remainder)| remainder.split_once("\n}\n"))
+        .map(|(body, _)| body)
+        .unwrap_or_else(|| panic!("generated launcher is missing {name}"));
+    format!("{start}{body}\n}}\n")
+}
 
+fn generated_launcher_classifies_as_capability_only(args: &[&str]) -> bool {
     let script = format!(
         "set -eu\n{}{}jig_capability_only_requested \"$@\"\n",
         function_source("jig_is_global_flag"),
@@ -35,6 +35,53 @@ fn generated_launcher_classifies_as_capability_only(args: &[&str]) -> bool {
         .status()
         .unwrap()
         .success()
+}
+
+/// The destination the generated launcher pins for `init`, `adopt`, or
+/// `update`, or `None` when it refuses the invocation.
+fn generated_launcher_write_target(args: &[&str]) -> Option<String> {
+    let script = format!(
+        "set -eu\n{}{}subcommand=\"$1\"\njig_pin_write_target \"$@\"\nprintf '%s' \"$pin_target\"\n",
+        function_source("jig_pin_value_option"),
+        function_source("jig_pin_write_target")
+    );
+    let output = std::process::Command::new("sh")
+        .args(["-c", &script, "jig"])
+        .args(args)
+        .output()
+        .unwrap();
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8(output.stdout).unwrap())
+}
+
+#[test]
+fn launcher_destination_scan_knows_every_write_command_option() {
+    let command = Cli::command();
+    let mut misread = Vec::new();
+    for name in ["init", "adopt", "update"] {
+        let subcommand = command.find_subcommand(name).unwrap();
+        for argument in subcommand.get_arguments() {
+            let Some(long) = argument.get_long() else {
+                continue;
+            };
+            let option = format!("--{long}");
+            let mut args = vec![name, option.as_str()];
+            if argument.get_action().takes_values() {
+                args.push("ExampleValue");
+            }
+            args.push("ExampleProject");
+            if generated_launcher_write_target(&args).as_deref() != Some("ExampleProject") {
+                misread.push(format!("{name} {option}"));
+            }
+        }
+    }
+    assert!(
+        misread.is_empty(),
+        "the launcher cannot find the destination past {misread:?}; \
+         list each option in jig_pin_write_target or jig_pin_value_option"
+    );
 }
 
 #[test]

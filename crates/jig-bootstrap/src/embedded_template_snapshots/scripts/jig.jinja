@@ -93,7 +93,7 @@ jig_pin_value_option() {
     --dev-command|--rust-fmt-check-command|--rust-clippy-command|\
     --rust-test-command|--rust-test-locked-command|--web-package-manager|\
     --application-contracts-enabled|--frontend-app|--preset|--db|--frontend|\
-    --frontends|--include-component|--exclude-component)
+    --frontends|--metrics|--jobs|--include-component|--exclude-component)
       return 0
       ;;
   esac
@@ -135,7 +135,7 @@ jig_pin_write_target() {
           if [ "$subcommand" = init ]; then pin_write_requested=1; fi
           continue
           ;;
-        --json|--minimal|--defaults|--no-input|--no-vault|--recopy|--launcher-only|--help|--version)
+        --json|--minimal|--defaults|--no-input|--no-vault|--recopy|--launcher-only|--add-openapi-check|--help|--version)
           continue
           ;;
         --*=*)
