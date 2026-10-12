@@ -43,6 +43,9 @@
   generated dependencies, `typecheck` on both contract checks and `build` on
   the boundary check, and names each one; any other dependency, or one with
   declared provenance, is kept.
+- Re-adoption with a capability change keeps the dependencies that an owner
+  declared on a generated target. It regenerated the target without them, so
+  a check could run before the target that it was declared to follow.
 - In repositories scaffolded with API contracts, a new `api:openapi` check
   owns OpenAPI document freshness and `repo:frontend-contract-drift` owns
   client freshness. `api:openapi` runs only the scaffold's committed-document

@@ -48,11 +48,12 @@ pub fn refresh(
             }
         }
     }
+    let declared = declared_dependencies(prior, &managed);
     model
         .actions
         .retain(|action| !managed.contains(&action.target));
     let mut retained_owners = BTreeMap::new();
-    for action in generated.actions {
+    for mut action in generated.actions {
         if model
             .actions
             .iter()
@@ -95,6 +96,7 @@ pub fn refresh(
                 .entry(command.clone())
                 .or_insert_with(|| value.clone());
         }
+        carry_declared_dependencies(&mut action, &declared);
         model.actions.push(action);
     }
     let remap_targets = |targets: &mut Vec<TargetId>| {
@@ -154,6 +156,40 @@ pub fn refresh(
     }
     model.actions.sort_by(|a, b| a.target.cmp(&b.target));
     Ok((model, commands))
+}
+
+/// The dependencies that an owner declared on the generated actions that a
+/// refresh replaces.
+fn declared_dependencies(
+    prior: &AuthoredRepositoryModel,
+    managed: &BTreeSet<TargetId>,
+) -> BTreeMap<TargetId, Vec<TargetId>> {
+    prior
+        .actions
+        .iter()
+        .filter(|action| {
+            managed.contains(&action.target)
+                && action.provenance.get("depends_on") == Some(&FieldProvenance::Declared)
+        })
+        .map(|action| (action.target.clone(), action.depends_on.clone()))
+        .collect()
+}
+
+/// Gives a regenerated action the dependencies that its owner declared on
+/// the action it replaces.
+fn carry_declared_dependencies(
+    action: &mut ActionSpec,
+    declared: &BTreeMap<TargetId, Vec<TargetId>>,
+) {
+    let Some(dependencies) = declared.get(&action.target) else {
+        return;
+    };
+    action.depends_on.extend(dependencies.iter().cloned());
+    action.depends_on.sort();
+    action.depends_on.dedup();
+    action
+        .provenance
+        .insert("depends_on".into(), FieldProvenance::Declared);
 }
 
 fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> bool {

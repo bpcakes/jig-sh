@@ -36,6 +36,12 @@ pub(super) fn document_check_deferred(
 /// how to add the check, or that a custom model keeps its own targets.
 pub(super) fn document_check_note(raw: &RawAnswers, custom: bool) -> Option<String> {
     let repository = raw.repository.as_ref()?;
+    if raw.document_check_deferred && custom {
+        return Some(
+            "api:openapi, which checks the committed OpenAPI documents with the backend's document tests, is not part of this custom repository model, which keeps its own targets; declare it in .jig.toml to add the check."
+                .into(),
+        );
+    }
     if raw.document_check_deferred {
         return Some(
             "api:openapi, which checks the committed OpenAPI documents with the backend's document tests, is not part of this repository model yet; `jig update --add-openapi-check` adds it, running api_openapi_command when set."
