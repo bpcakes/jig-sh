@@ -59,14 +59,25 @@ fn capability_refresh_keeps_the_contract_checks_beside_a_nested_backend() {
         .unwrap()
         .root = "backend".into();
 
+    let contract_checks = saved
+        .actions
+        .iter()
+        .map(|action| action.target.to_string())
+        .filter(|target| {
+            matches!(
+                target.as_str(),
+                "repo:frontend-contract-drift" | "repo:frontend-public-boundary"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(contract_checks.contains(&"repo:frontend-contract-drift".into()));
+
     // Adoption generates backend actions only for a backend at the root, so
-    // none can own a regenerated document check.
+    // none can own a regenerated document check, but the saved contract
+    // checks are regenerated.
     let answers = readopt_with_sqlx(&saved).unwrap();
     let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-    for target in [
-        "repo:frontend-contract-drift",
-        "repo:frontend-public-boundary",
-    ] {
+    for target in &contract_checks {
         assert!(has_target(&model, target), "{target}");
     }
 }
