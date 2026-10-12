@@ -224,18 +224,15 @@ pub(super) fn frontend_contract_inputs(
 /// passes. A customized general test command therefore cannot skip them.
 /// Rust pins the per-test format, which quiet Cargo would print as dots,
 /// keeps the lockfile as a read-only check must, and always requires the
-/// public test, which every Rust scaffold has. Go refuses to update go.sum,
-/// even under an inherited -mod=mod, and restores the workspace checksum
-/// file, which it records even in read-only mode.
+/// public test, which every Rust scaffold has. Go builds the backend module
+/// as a release does, outside any workspace, whose checksum file it would
+/// update even in read-only mode, and refuses to update go.sum, even under an
+/// inherited -mod=mod, so the check writes no checksum file.
 pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
     if go {
         concat!(
-            "sums=$(mktemp) || exit 1; ",
-            "if [ -f go.work.sum ]; then cp go.work.sum \"$sums\"; else rm -f \"$sums\"; fi; ",
-            "output=$(go test -mod=readonly -count=1 -run '^TestOpenAPIIsCurrent$' -v ./internal/httpapi 2>&1); ",
-            "status=$?; ",
-            "if [ -f \"$sums\" ]; then cp \"$sums\" go.work.sum; rm -f \"$sums\"; else rm -f go.work.sum; fi; ",
-            "printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
+            "output=$(GOWORK=off go test -mod=readonly -count=1 -run '^TestOpenAPIIsCurrent$' -v ./internal/httpapi 2>&1); ",
+            "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
             "case \"$output\" in *'--- PASS: TestOpenAPIIsCurrent '*) ;; ",
             "*) printf 'TestOpenAPIIsCurrent did not pass.\\n' >&2; exit 1 ;; esac",
         )

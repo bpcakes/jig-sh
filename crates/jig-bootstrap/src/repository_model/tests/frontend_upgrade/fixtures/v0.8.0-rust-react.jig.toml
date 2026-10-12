@@ -1,0 +1,842 @@
+# Answers that jig 0.8.0 saved for a rust-react scaffold, without its
+# machine-specific template-source keys.
+repo_name = "exampleproject"
+default_branch = "main"
+ci_github_runner = "ubuntu-latest"
+template_source_url = ""
+harness_footprint = "full"
+
+sqlx_enabled = false
+rust_crate_roots = ["apps", "crates"]
+
+
+schema_dump_enabled = false
+schema_docs_dir = "docs/schema"
+
+
+# Command values are project-owned. Generated Cargo defaults skip cleanly when
+# no manifests are found; with nested manifests they run each one in turn.
+# Review them against this repo's workspace layout and replace them when custom
+# orchestration is needed.
+
+
+
+web_package_manager = "bun"
+application_contracts_enabled = true
+frontend_workspace_roots = []
+
+
+[[frontend_apps]]
+name = "web"
+dir = "apps/web"
+coverage_threshold = 80
+kind = "vite"
+role = "spa"
+
+[[frontend_apps]]
+name = "admin-panel"
+dir = "apps/admin-panel"
+coverage_threshold = 80
+kind = "vite"
+role = "admin"
+
+
+
+
+[repository]
+default_check_profile = "verify"
+affected_ignore = [".env", ".env.*", "**/.env", "**/.env.*", "README.md", "**/README.md", "AGENTS.md", "**/AGENTS.md", "agent-map.md", "CHANGELOG.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "docs/**", "LICENSE", "LICENSE.*", ".github/**"]
+
+[[repository.components]]
+id = "admin-panel"
+root = "apps/admin-panel"
+description = "Frontend application 'admin-panel'."
+tags = ["frontend", "admin"]
+depends_on = ["api"]
+adapters = ["typescript"]
+
+[repository.components.provenance]
+adapters = "inferred"
+depends_on = "inferred"
+id = "inferred"
+root = "declared"
+
+[[repository.components]]
+id = "api"
+root = "."
+description = "Primary application backend."
+tags = ["backend"]
+propagate_affected_to_dependents = true
+adapters = ["rust"]
+
+[repository.components.provenance]
+adapters = "inferred"
+id = "inferred"
+root = "inferred"
+
+[[repository.components]]
+id = "repo"
+root = "."
+description = "Repository-wide Jig policy and compatibility actions."
+tags = ["repository"]
+adapters = ["jig"]
+
+[repository.components.provenance]
+adapters = "inherited"
+id = "inferred"
+root = "inferred"
+
+[[repository.components]]
+id = "web"
+root = "apps/web"
+description = "Frontend application 'web'."
+tags = ["frontend", "spa"]
+depends_on = ["api"]
+adapters = ["typescript"]
+
+[repository.components.provenance]
+adapters = "inferred"
+depends_on = "inferred"
+id = "inferred"
+root = "declared"
+
+[[repository.actions]]
+description = "Build this TypeScript component."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/admin-panel/**/*", "apps/admin-panel/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "admin-panel"
+action = "build"
+
+[repository.actions.runner]
+kind = "shell"
+command = "admin_panel_build_command"
+
+[[repository.actions.depends_on]]
+component = "repo"
+action = "frontend-public-boundary"
+
+[repository.actions.provenance]
+depends_on = "inferred"
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "declared"
+
+[[repository.actions]]
+description = "Lint this TypeScript component."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/admin-panel/**/*", "apps/admin-panel/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "admin-panel"
+action = "lint"
+
+[repository.actions.runner]
+kind = "shell"
+command = "admin_panel_lint_command"
+
+[repository.actions.provenance]
+depends_on = "inferred"
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "declared"
+
+[[repository.actions]]
+description = "Run this TypeScript component's coverage tests."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/admin-panel/**/*", "apps/admin-panel/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "admin-panel"
+action = "test"
+
+[repository.actions.runner]
+kind = "shell"
+command = "admin_panel_test_command"
+
+[repository.actions.provenance]
+depends_on = "inferred"
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "declared"
+
+[[repository.actions]]
+description = "Type-check this TypeScript component."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/admin-panel/**/*", "apps/admin-panel/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "admin-panel"
+action = "typecheck"
+
+[repository.actions.runner]
+kind = "shell"
+command = "admin_panel_typecheck_command"
+
+[[repository.actions.depends_on]]
+component = "repo"
+action = "frontend-contract-drift"
+
+[[repository.actions.depends_on]]
+component = "repo"
+action = "frontend-public-boundary"
+
+[repository.actions.provenance]
+depends_on = "inferred"
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "declared"
+
+[[repository.actions]]
+description = "Run Rust Clippy with repository policy."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "**/*.rs", "rust-toolchain", "rust-toolchain.toml", "**/rust-toolchain", "**/rust-toolchain.toml", ".cargo/**", "**/.cargo/**", "rustfmt.toml", ".rustfmt.toml", "**/rustfmt.toml", "**/.rustfmt.toml", "clippy.toml", ".clippy.toml", "**/clippy.toml", "**/.clippy.toml"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.clippy"]
+
+[repository.actions.target]
+component = "api"
+action = "clippy"
+
+[repository.actions.runner]
+kind = "shell"
+command = "api_clippy_command"
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+inputs_policy = "inferred"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+source_state = "inferred"
+target = "inherited"
+
+[[repository.actions]]
+description = "Check Rust formatting."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "**/*.rs", "rust-toolchain", "rust-toolchain.toml", "**/rust-toolchain", "**/rust-toolchain.toml", ".cargo/**", "**/.cargo/**", "rustfmt.toml", ".rustfmt.toml", "**/rustfmt.toml", "**/.rustfmt.toml", "clippy.toml", ".clippy.toml", "**/clippy.toml", "**/.clippy.toml"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.fmt_check"]
+
+[repository.actions.target]
+component = "api"
+action = "fmt"
+
+[repository.actions.runner]
+kind = "shell"
+command = "api_fmt_command"
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+inputs_policy = "inferred"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+source_state = "inferred"
+target = "inherited"
+
+[[repository.actions]]
+description = "Run Rust tests."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "**/*.rs", "rust-toolchain", "rust-toolchain.toml", "**/rust-toolchain", "**/rust-toolchain.toml", ".cargo/**", "**/.cargo/**", "rustfmt.toml", ".rustfmt.toml", "**/rustfmt.toml", "**/.rustfmt.toml", "clippy.toml", ".clippy.toml", "**/clippy.toml", "**/.clippy.toml"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.test"]
+
+[repository.actions.target]
+component = "api"
+action = "test"
+
+[repository.actions.runner]
+kind = "shell"
+command = "api_test_command"
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+inputs_policy = "inferred"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+source_state = "inferred"
+target = "inherited"
+
+[[repository.actions]]
+description = "Run Rust tests using the locked dependency graph."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "**/*.rs", "rust-toolchain", "rust-toolchain.toml", "**/rust-toolchain", "**/rust-toolchain.toml", ".cargo/**", "**/.cargo/**", "rustfmt.toml", ".rustfmt.toml", "**/rustfmt.toml", "**/.rustfmt.toml", "clippy.toml", ".clippy.toml", "**/clippy.toml", "**/.clippy.toml"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.test_locked"]
+
+[repository.actions.target]
+component = "api"
+action = "test-locked"
+
+[repository.actions.runner]
+kind = "shell"
+command = "api_test_locked_command"
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+inputs_policy = "inferred"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+source_state = "inferred"
+target = "inherited"
+
+[[repository.actions]]
+description = "Prepare repository dependencies and local tooling."
+intent = "operate"
+effects = ["worktree", "process", "external"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.bootstrap"]
+
+[repository.actions.target]
+component = "repo"
+action = "bootstrap"
+
+[repository.actions.runner]
+kind = "shell"
+command = "repo_bootstrap_command"
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+inputs_policy = "inferred"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+source_state = "inferred"
+target = "inherited"
+
+[[repository.actions]]
+description = "Validate the checked-in Jig repository contract."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = [".jig.toml", "scripts/jig"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.contract_check"]
+
+[repository.actions.target]
+component = "repo"
+action = "contract"
+
+[repository.actions.runner]
+kind = "native"
+operation = "jig.contract_check"
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+inputs_policy = "inferred"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+source_state = "inferred"
+target = "inherited"
+
+[[repository.actions]]
+description = "Enforce repository-owned source file budgets."
+intent = "check"
+effects = ["read_only"]
+inputs = ["**"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.file_budget"]
+
+[repository.actions.target]
+component = "repo"
+action = "file-budget"
+
+[repository.actions.runner]
+kind = "native"
+operation = "jig.file_budget"
+
+[repository.actions.runner.configuration]
+kind = "file_budget"
+max_candidates = 10000
+max_total_bytes = 268435456
+missing_comparison = "block"
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+inputs_policy = "inferred"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "inherited"
+source_state = "inferred"
+target = "inherited"
+
+[[repository.actions]]
+description = "Check repository-wide OpenAPI and generated-client drift."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.go", "**/*.patch", "**/*.rs", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/Cargo.toml", "**/go.mod", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "Cargo.toml", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "go.mod", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "repo"
+action = "frontend-contract-drift"
+
+[repository.actions.runner]
+kind = "shell"
+command = "repo_frontend_contract_drift_command"
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "inferred"
+
+[[repository.actions]]
+description = "Check the repository-wide public/private dependency boundary."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.go", "**/*.patch", "**/*.rs", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/Cargo.toml", "**/go.mod", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "Cargo.toml", "bun.lock", "bun.lockb", "bunfig.toml", "docs/public/**", "eslint.config.shared.mjs", "go.mod", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "public-docs/**", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "repo"
+action = "frontend-public-boundary"
+
+[repository.actions.runner]
+kind = "shell"
+command = "repo_frontend_public_boundary_command"
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "inferred"
+
+[[repository.actions]]
+description = "Compatibility aggregate for build across all TypeScript components."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/admin-panel/**/*", "apps/admin-panel/package.json", "apps/web/**/*", "apps/web/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.typescript_build"]
+
+[repository.actions.target]
+component = "repo"
+action = "typescript-build"
+
+[repository.actions.runner]
+kind = "shell"
+command = "repo_compat_typescript_build_command"
+
+[repository.actions.provenance]
+inputs = "inferred"
+inputs_policy = "inferred"
+legacy_aliases = "inherited"
+runner = "inherited"
+source_state = "inferred"
+target = "inferred"
+
+[[repository.actions]]
+description = "Compatibility aggregate for test across all TypeScript components."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/admin-panel/**/*", "apps/admin-panel/package.json", "apps/web/**/*", "apps/web/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.typescript_coverage"]
+
+[repository.actions.target]
+component = "repo"
+action = "typescript-coverage"
+
+[repository.actions.runner]
+kind = "shell"
+command = "repo_compat_typescript_coverage_command"
+
+[repository.actions.provenance]
+inputs = "inferred"
+inputs_policy = "inferred"
+legacy_aliases = "inherited"
+runner = "inherited"
+source_state = "inferred"
+target = "inferred"
+
+[[repository.actions]]
+description = "Compatibility aggregate for lint across all TypeScript components."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/admin-panel/**/*", "apps/admin-panel/package.json", "apps/web/**/*", "apps/web/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.typescript_lint"]
+
+[repository.actions.target]
+component = "repo"
+action = "typescript-lint"
+
+[repository.actions.runner]
+kind = "shell"
+command = "repo_compat_typescript_lint_command"
+
+[repository.actions.provenance]
+inputs = "inferred"
+inputs_policy = "inferred"
+legacy_aliases = "inherited"
+runner = "inherited"
+source_state = "inferred"
+target = "inferred"
+
+[[repository.actions]]
+description = "Compatibility aggregate for typecheck across all TypeScript components."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/admin-panel/**/*", "apps/admin-panel/package.json", "apps/web/**/*", "apps/web/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+legacy_aliases = ["jig.typescript_typecheck"]
+
+[repository.actions.target]
+component = "repo"
+action = "typescript-typecheck"
+
+[repository.actions.runner]
+kind = "shell"
+command = "repo_compat_typescript_typecheck_command"
+
+[repository.actions.provenance]
+inputs = "inferred"
+inputs_policy = "inferred"
+legacy_aliases = "inherited"
+runner = "inherited"
+source_state = "inferred"
+target = "inferred"
+
+[[repository.actions]]
+description = "Build this TypeScript component."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/web/**/*", "apps/web/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "web"
+action = "build"
+
+[repository.actions.runner]
+kind = "shell"
+command = "web_build_command"
+
+[[repository.actions.depends_on]]
+component = "repo"
+action = "frontend-public-boundary"
+
+[repository.actions.provenance]
+depends_on = "inferred"
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "declared"
+
+[[repository.actions]]
+description = "Lint this TypeScript component."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/web/**/*", "apps/web/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "web"
+action = "lint"
+
+[repository.actions.runner]
+kind = "shell"
+command = "web_lint_command"
+
+[repository.actions.provenance]
+depends_on = "inferred"
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "declared"
+
+[[repository.actions]]
+description = "Run this TypeScript component's coverage tests."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/web/**/*", "apps/web/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "web"
+action = "test"
+
+[repository.actions.runner]
+kind = "shell"
+command = "web_test_command"
+
+[repository.actions.provenance]
+depends_on = "inferred"
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "declared"
+
+[[repository.actions]]
+description = "Type-check this TypeScript component."
+intent = "check"
+effects = ["read_only", "process"]
+inputs = ["**/*.diff", "**/*.patch", "**/.node-version", "**/.npmrc", "**/.yarn/**", "**/.yarnrc", "**/.yarnrc.yml", "**/package.json", "**/package.json5", "**/package.yaml", ".node-version", ".npmrc", ".pnp.cjs", ".pnp.data.json", ".pnp.js", ".pnp.loader.mjs", ".pnpmfile.cjs", ".yarn/**", ".yarnrc", ".yarnrc.yml", "apps/web/**/*", "apps/web/package.json", "bun.lock", "bun.lockb", "bunfig.toml", "eslint.config.shared.mjs", "npm-shrinkwrap.json", "openapi/**", "package-lock.json", "package.json", "packages/*-api-client/**", "patches/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", "pnpmfile.cjs", "scripts/check-webapp-scripts.mjs", "scripts/check-webapps.sh", "scripts/contracts.mjs", "scripts/enforce-coverage.cjs", "scripts/web-node.cjs", "yarn.lock"]
+inputs_policy = "whole_repository"
+source_state = "git"
+
+[repository.actions.target]
+component = "web"
+action = "typecheck"
+
+[repository.actions.runner]
+kind = "shell"
+command = "web_typecheck_command"
+
+[[repository.actions.depends_on]]
+component = "repo"
+action = "frontend-contract-drift"
+
+[[repository.actions.depends_on]]
+component = "repo"
+action = "frontend-public-boundary"
+
+[repository.actions.provenance]
+depends_on = "inferred"
+effects = "inherited"
+inputs = "inferred"
+inputs_policy = "inferred"
+intent = "inherited"
+runner = "inferred"
+source_state = "inferred"
+target = "declared"
+
+[[repository.profiles]]
+id = "verify"
+description = "Default repository verification targets."
+
+[[repository.profiles.targets]]
+component = "admin-panel"
+action = "build"
+
+[[repository.profiles.targets]]
+component = "admin-panel"
+action = "lint"
+
+[[repository.profiles.targets]]
+component = "admin-panel"
+action = "test"
+
+[[repository.profiles.targets]]
+component = "admin-panel"
+action = "typecheck"
+
+[[repository.profiles.targets]]
+component = "api"
+action = "clippy"
+
+[[repository.profiles.targets]]
+component = "api"
+action = "fmt"
+
+[[repository.profiles.targets]]
+component = "api"
+action = "test"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "contract"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "file-budget"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "frontend-contract-drift"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "frontend-public-boundary"
+
+[[repository.profiles.targets]]
+component = "web"
+action = "build"
+
+[[repository.profiles.targets]]
+component = "web"
+action = "lint"
+
+[[repository.profiles.targets]]
+component = "web"
+action = "test"
+
+[[repository.profiles.targets]]
+component = "web"
+action = "typecheck"
+
+[repository.profiles.provenance]
+id = "inferred"
+targets = "inherited"
+
+
+
+[vault]
+scope = "repo"
+scope_id = "01M4PTJQMT7G2G1PB2J0241HXN"
+allow_global = false
+
+
+[commands]
+admin_panel_build_command = "scripts/check-webapps.sh check-one apps/admin-panel 80 build:bundle"
+admin_panel_lint_command = "scripts/check-webapps.sh check-one apps/admin-panel 80 lint"
+admin_panel_test_command = "scripts/check-webapps.sh check-one apps/admin-panel 80 test:coverage"
+admin_panel_typecheck_command = "scripts/check-webapps.sh check-one apps/admin-panel 80 typecheck"
+api_clippy_command = '''if [ -f Cargo.toml ]; then cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -D clippy::mod_module_files; else printf '%s\n' 'No Cargo.toml found; skipping cargo clippy.'; fi'''
+api_fmt_command = '''if [ -f Cargo.toml ]; then cargo fmt --all -- --check; else printf '%s\n' 'No Cargo.toml found; skipping cargo fmt.'; fi'''
+api_test_command = '''if [ -f Cargo.toml ]; then cargo test --workspace; else printf '%s\n' 'No Cargo.toml found; skipping cargo test.'; fi'''
+api_test_locked_command = '''if [ -f Cargo.toml ]; then cargo test --workspace --locked; else printf '%s\n' 'No Cargo.toml found; skipping cargo test-locked.'; fi'''
+repo_bootstrap_command = '''if [ -f Cargo.toml ]; then cargo fetch; else printf '%s\n' 'No Cargo.toml found; skipping cargo bootstrap.'; fi && scripts/check-webapps.sh bootstrap'''
+repo_compat_typescript_build_command = "scripts/check-webapps.sh build"
+repo_compat_typescript_coverage_command = "scripts/check-webapps.sh coverage"
+repo_compat_typescript_lint_command = "scripts/check-webapps.sh lint"
+repo_compat_typescript_typecheck_command = "scripts/check-webapps.sh typecheck"
+repo_frontend_contract_drift_command = "scripts/check-webapps.sh contracts-drift-check apps/web"
+repo_frontend_public_boundary_command = "scripts/check-webapps.sh contracts-boundary-check apps/web"
+web_build_command = "scripts/check-webapps.sh check-one apps/web 80 build:bundle"
+web_lint_command = "scripts/check-webapps.sh check-one apps/web 80 lint"
+web_test_command = "scripts/check-webapps.sh check-one apps/web 80 test:coverage"
+web_typecheck_command = "scripts/check-webapps.sh check-one apps/web 80 typecheck"
+
+
+[dev]
+proxy_port = 1355
+https_port = 1443
+https = false
+# HTTPS listener ALPN only; cleartext proxy traffic remains HTTP/1.1.
+http2 = true
+lan = false
+# Must be localhost, local, test, internal, or a subdomain below one of them.
+tld = "localhost"
+# Set true to discover JavaScript workspace packages that expose dev scripts.
+workspace_discovery = false
+
+
+# Repo-local dev service.
+[[dev.apps]]
+name = "api"
+dir = "."
+kind = "env-port"
+argv = ["cargo", "run", "-p", "exampleproject-api"]
+
+
+# Repo-local dev service.
+[[dev.apps]]
+name = "admin-api"
+dir = "."
+kind = "env-port"
+argv = ["cargo", "run", "-p", "exampleproject-admin-api"]
+
+
+
+# Generated from [[frontend_apps]] so local dev uses explicit app settings while
+# web CI keeps its coverage threshold metadata above. Jig validates that name
+# and dir stay aligned with the matching frontend app.
+[[dev.apps]]
+name = "web"
+dir = "apps/web"
+kind = "vite"
+
+argv = ["bun", "run", "dev"]
+
+
+
+# Generated from [[frontend_apps]] so local dev uses explicit app settings while
+# web CI keeps its coverage threshold metadata above. Jig validates that name
+# and dir stay aligned with the matching frontend app.
+[[dev.apps]]
+name = "admin-panel"
+dir = "apps/admin-panel"
+kind = "vite"
+
+argv = ["bun", "run", "dev"]
+
+
+
+[execution]
+command_timeout_seconds = 1800
+command_output_limit_bytes = 67108864
+
+
+
+
+
+[[agent_tooling.codex.marketplaces]]
+id = "jig-skills"
+source = "bpcakes/jig-skills"
+plugins = ["jig-rust@jig-skills", "jig-swift@jig-skills", "jig-typescript@jig-skills"]

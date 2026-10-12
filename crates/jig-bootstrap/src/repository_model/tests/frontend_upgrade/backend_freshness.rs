@@ -235,6 +235,80 @@ fn managed_update_adds_the_document_check_beside_customized_test_commands() {
     }
 }
 
+/// Repositories scaffolded by the latest release upgrade in place: they stay
+/// generated, gain the document check, and keep their drift check reading
+/// the backend that their own contract script exports from.
+#[test]
+fn managed_update_upgrades_scaffolds_from_the_latest_release() {
+    for (backend, fixture) in [
+        ("rust", include_str!("fixtures/v0.8.0-rust-react.jig.toml")),
+        ("go", include_str!("fixtures/v0.8.0-go-react.jig.toml")),
+    ] {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".jig.toml");
+        fs::write(&path, fixture).unwrap();
+
+        let (answers, _) = RenderAnswers::from_managed_answers_file(&path, temp.path()).unwrap();
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(answers.authored_repository().is_none(), "{backend}");
+        assert!(find(&upgraded, "api:openapi").is_some(), "{backend}");
+        assert!(drift_reads_backend(&upgraded), "{backend}");
+        assert_eq!(
+            find(&upgraded, "repo:frontend-contract-drift")
+                .unwrap()
+                .description,
+            find(
+                &generated_model(backend, ""),
+                "repo:frontend-contract-drift"
+            )
+            .unwrap()
+            .description,
+            "{backend}"
+        );
+    }
+}
+
+#[test]
+fn managed_update_keeps_backend_inputs_an_owner_added_to_a_client_only_drift_check() {
+    for backend in ["rust", "go"] {
+        // The owner made the scaffold's drift-check export again and listed
+        // what it reads, which matches the inputs of an earlier generator.
+        let mut saved = saved_current_model(backend);
+        let drift = saved
+            .actions
+            .iter_mut()
+            .find(|item| item.target.to_string() == "repo:frontend-contract-drift")
+            .unwrap();
+        drift.inputs.extend(
+            [
+                "Cargo.toml",
+                "**/Cargo.toml",
+                "**/*.rs",
+                "go.mod",
+                "**/go.mod",
+                "**/*.go",
+            ]
+            .map(String::from),
+        );
+        drift.inputs.sort();
+        drift.inputs.dedup();
+        let authored = drift.inputs.clone();
+
+        let answers = load_saved(&saved, backend);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(answers.authored_repository().is_some(), "{backend}");
+        assert_eq!(
+            find(&upgraded, "repo:frontend-contract-drift")
+                .unwrap()
+                .inputs,
+            authored,
+            "{backend}"
+        );
+    }
+}
+
 #[test]
 fn managed_update_keeps_a_model_custom_when_the_check_command_key_is_taken() {
     for backend in ["rust", "go"] {
@@ -468,48 +542,39 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
     }
 }
 
-/// Go records workspace checksums even in read-only mode; the check puts the
-/// file back as it found it.
+/// Go records workspace checksums even in read-only mode, and a workspace
+/// may live above the repository, so the check builds outside any workspace.
 #[cfg(unix)]
 #[test]
-fn go_document_check_restores_the_workspace_checksum_file() {
+fn go_document_check_runs_outside_any_workspace() {
     use std::os::unix::fs::PermissionsExt;
 
-    for kept in [None, Some("kept\n")] {
-        let root = TempDir::new().unwrap();
-        let bin = root.path().join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let tool = bin.join("go");
-        fs::write(
-            &tool,
-            "#!/bin/sh\nprintf 'written\\n' >> go.work.sum\nprintf '%s\\n' '--- PASS: TestOpenAPIIsCurrent (0.00s)'\n",
-        )
-        .unwrap();
-        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
-        if let Some(kept) = kept {
-            fs::write(root.path().join("go.work.sum"), kept).unwrap();
-        }
-        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        )))
+    let root = TempDir::new().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let tool = bin.join("go");
+    fs::write(
+        &tool,
+        "#!/bin/sh\nprintf 'GOWORK=%s\\n' \"$GOWORK\"\nprintf '%s\\n' '--- PASS: TestOpenAPIIsCurrent (0.00s)'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(openapi_document_check_command(true))
+        .current_dir(root.path())
+        .env("PATH", path)
+        .env("GOWORK", root.path().join("go.work"))
+        .output()
         .unwrap();
 
-        let output = std::process::Command::new("bash")
-            .arg("-c")
-            .arg(openapi_document_check_command(true))
-            .current_dir(root.path())
-            .env("PATH", path)
-            .output()
-            .unwrap();
-
-        assert!(output.status.success(), "{kept:?}");
-        assert_eq!(
-            fs::read_to_string(root.path().join("go.work.sum"))
-                .ok()
-                .as_deref(),
-            kept
-        );
-    }
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("GOWORK=off"));
 }
 
 /// Builds a module zip for the local proxy with the standard library only.
@@ -621,32 +686,60 @@ fn go_document_check_leaves_module_and_workspace_checksums_alone() {
         "package httpapi\n\nimport (\n\t\"testing\"\n\n\t\"example.invalid/dep\"\n)\n\nfunc TestOpenAPIIsCurrent(t *testing.T) {\n\tif dep.Name != \"dep\" {\n\t\tt.Fatal(dep.Name)\n\t}\n}\n",
     )
     .unwrap();
-    let check = |goflags: &str, workspace: bool| {
-        go_command("bash", &app, goflags, workspace)
+    let check = |goflags: &str| {
+        go_command("bash", &app, goflags, true)
             .arg("-c")
             .arg(openapi_document_check_command(true))
             .output()
             .unwrap()
     };
+    let checksum_files = || {
+        [
+            app.join("go.sum"),
+            app.join("go.work.sum"),
+            root.path().join("go.work.sum"),
+        ]
+        .map(|path| fs::read(path).ok())
+    };
 
     // An inherited -mod=mod would add go.sum entries; the check refuses.
-    let output = check("-modcacherw -mod=mod", false);
+    let output = check("-modcacherw -mod=mod");
     assert!(
         !output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stdout)
     );
-    assert!(!app.join("go.sum").exists());
+    assert_eq!(checksum_files(), [None, None, None]);
 
-    // Go records the workspace checksums even in read-only mode; the check
-    // removes the file it created.
+    // Workspaces in the module and above it would record the missing
+    // checksums in their go.work.sum; the check ignores both.
     fs::write(app.join("go.work"), "go 1.22\n\nuse .\n").unwrap();
-    let output = check("-modcacherw", true);
+    fs::write(root.path().join("go.work"), "go 1.22\n\nuse ./app\n").unwrap();
+    let output = check("-modcacherw");
+    assert!(
+        !output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(checksum_files(), [None, None, None]);
+
+    // With complete module checksums the check passes and changes nothing.
+    let tidied = go_command("go", &app, "-modcacherw", false)
+        .args(["mod", "tidy"])
+        .output()
+        .unwrap();
+    assert!(
+        tidied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tidied.stderr)
+    );
+    let before = checksum_files();
+    assert!(before[0].is_some());
+    let output = check("-modcacherw");
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stdout)
     );
-    assert!(!app.join("go.work.sum").exists());
-    assert!(!app.join("go.sum").exists());
+    assert_eq!(checksum_files(), before);
 }

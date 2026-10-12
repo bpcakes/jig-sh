@@ -95,9 +95,12 @@ pub(super) fn upgrade_saved_projection(
         let mut expected_runner = expected.runner.clone();
         super::runners::make_shell_explicit(&mut runner);
         super::runners::make_shell_explicit(&mut expected_runner);
+        // A client-only drift check never had the earlier backend inputs, so
+        // its owner added any it now has.
         if runner != expected_runner
             || command(&runner).and_then(|key| commands.get(key))
                 != command(&expected_runner).and_then(|key| current.commands.get(key))
+            || action.description.as_deref() == Some(CLIENT_DRIFT_DESCRIPTION)
             || !generated_input_history(action.target.action.as_str(), &expected.inputs)
                 .contains(&action.inputs)
         {

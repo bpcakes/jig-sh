@@ -43,11 +43,11 @@
 - In repositories scaffolded with API contracts, a new `api:openapi` check
   owns OpenAPI document freshness and `repo:frontend-contract-drift` owns
   client freshness. `api:openapi` runs only the scaffold's committed-document
-  tests, uncached and without changing the lockfile or checksum files
-  (`cargo test --workspace --locked openapi_is_current`, or `go test
-  -mod=readonly -count=1 -run '^TestOpenAPIIsCurrent$'`, because Go replays
-  a cached pass when only a document outside the module changed; Go's
-  workspace checksums are put back as found), and fails unless each passed,
+  tests, uncached and without changing the lockfile or checksum files (`cargo
+  test --workspace --locked openapi_is_current`, or `GOWORK=off go test
+  -mod=readonly -count=1 -run '^TestOpenAPIIsCurrent$'`, because Go replays a
+  cached pass when only a document outside the module changed and records
+  workspace checksums even in read-only mode), and fails unless each passed,
   so customizing or caching the general backend tests, or renaming a document
   test, cannot skip them. It reads the backend test inputs and `openapi/**`,
   belongs to the default profile, and runs in the generated Rust and Go
