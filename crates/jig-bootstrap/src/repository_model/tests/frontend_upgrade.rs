@@ -1,6 +1,7 @@
 use super::*;
 
 mod backend_freshness;
+mod document_commands;
 
 const APP: &str = r#"
 [[frontend_apps]]

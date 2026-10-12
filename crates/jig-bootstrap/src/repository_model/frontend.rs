@@ -232,7 +232,11 @@ pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
     if go {
         concat!(
             "output=$(GOWORK=off go test -mod=readonly -count=1 -run '^TestOpenAPIIsCurrent$' -v ./internal/httpapi 2>&1); ",
-            "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
+            "status=$?; printf '%s\\n' \"$output\"; if [ \"$status\" -ne 0 ]; then ",
+            "case \"$(go env GOWORK 2>/dev/null)\" in \"\" | off) ;; ",
+            "*) printf 'api:openapi builds the backend module outside its go.work workspace, as releases do: ",
+            "go.mod and go.sum must resolve every dependency, or set api_openapi_command.\\n' >&2 ;; esac; ",
+            "exit \"$status\"; fi; ",
             "case \"$output\" in *'--- PASS: TestOpenAPIIsCurrent '*) ;; ",
             "*) printf 'TestOpenAPIIsCurrent did not pass.\\n' >&2; exit 1 ;; esac",
         )
