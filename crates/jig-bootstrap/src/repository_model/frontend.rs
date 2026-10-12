@@ -150,7 +150,7 @@ pub(super) fn aggregate_frontend_inputs(
         .collect()
 }
 
-/// The backend tests compare the committed OpenAPI documents with the backend.
+/// The committed OpenAPI documents.
 pub(super) const OPENAPI_INPUT: &str = "openapi/**";
 
 /// Committed public documentation that the boundary check scans.
@@ -160,8 +160,22 @@ pub(super) const PUBLIC_DOCUMENT_INPUTS: &[&str] = &["docs/public/**", "public-d
 const BOUNDARY_MANIFEST_INPUTS: &[&str] =
     &["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock"];
 
-/// Backend sources, manifests, lockfiles, and workspace files, which the
-/// drift check reads while the backend tests do not own document freshness.
+/// The backend check that the committed OpenAPI documents match the backend.
+pub(super) const OPENAPI_DOCUMENT_CHECK_ACTION: &str = "openapi";
+
+/// The drift check beside the client-only contract script, which a scaffold
+/// writes together with the document check: it owns only client freshness.
+/// The description records that mode durably in the repository model.
+pub(super) const CLIENT_DRIFT_DESCRIPTION: &str =
+    "Check that the generated API clients match the committed OpenAPI documents.";
+
+/// The drift check of a repository whose own contract script exports the
+/// documents from the backend, as scripts did before the document check.
+pub(super) const EXPORTING_DRIFT_DESCRIPTION: &str =
+    "Check that the OpenAPI documents and generated clients match the backend.";
+
+/// Backend sources, manifests, lockfiles, and workspace files, which a drift
+/// check whose script exports from the backend reads.
 pub(super) const BACKEND_CONTRACT_INPUTS: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
@@ -181,13 +195,14 @@ pub(super) const BACKEND_CONTRACT_INPUTS: &[&str] = &[
     "**/vendor/modules.txt",
 ];
 
-/// The drift check regenerates the clients from the committed documents, so
-/// it reads only the contract surface while the generated backend tests own
-/// document freshness, and otherwise also reads the backend. The boundary
-/// check reads the Cargo dependency graph and committed public documentation.
+/// The client-only drift check regenerates the clients from the committed
+/// documents, so it reads only the contract surface; the backend document
+/// check owns document freshness. A drift check whose script exports from the
+/// backend also reads the backend. The boundary check reads the Cargo
+/// dependency graph and committed public documentation.
 pub(super) fn frontend_contract_inputs(
     public_boundary: bool,
-    backend_tests_own_freshness: bool,
+    drift_reads_backend: bool,
     workspace_roots: &[String],
 ) -> Vec<String> {
     let mut inputs = FRONTEND_SHARED_INPUTS
@@ -206,7 +221,7 @@ pub(super) fn frontend_contract_inputs(
                 .chain(PUBLIC_DOCUMENT_INPUTS)
                 .map(|input| (*input).into()),
         );
-    } else if !backend_tests_own_freshness {
+    } else if drift_reads_backend {
         inputs.extend(BACKEND_CONTRACT_INPUTS.iter().map(|input| (*input).into()));
     }
     inputs.sort();
@@ -214,8 +229,6 @@ pub(super) fn frontend_contract_inputs(
     inputs
 }
 
-pub(super) const DRIFT_DESCRIPTION: &str =
-    "Check repository-wide OpenAPI and generated-client drift.";
 pub(super) const BOUNDARY_DESCRIPTION: &str =
     "Check the repository-wide public/private dependency boundary.";
 
@@ -255,20 +268,109 @@ pub(super) fn generates_public_boundary(answers: &RenderAnswers) -> bool {
                 .any(|app| app.role == "admin"))
 }
 
-/// Backend tests assert that the committed OpenAPI documents match the
-/// backend, so a document edit must select them.
-pub(super) fn add_backend_contract_test_inputs(
-    actions: &mut BTreeMap<TargetId, ActionSpec>,
-) -> Result<()> {
-    for id in ["test", "test-locked"] {
-        if let Some(action) = actions.get_mut(&target_id(BACKEND_COMPONENT, id)?) {
-            action.inputs.push(OPENAPI_INPUT.into());
-            action
-                .provenance
-                .insert("inputs".into(), FieldProvenance::Inferred);
-        }
+/// Runs only the scaffold's committed-document tests, uncached, and fails
+/// unless each one passed: Go would otherwise replay a pass when only a
+/// document outside the module changed, and a filter that matches no test
+/// passes. A customized general test command therefore cannot skip them.
+/// Rust pins the per-test format, which quiet Cargo would print as dots,
+/// keeps the lockfile as a read-only check must, and always requires the
+/// public test, which every Rust scaffold has. Go builds the backend module
+/// as a release does, outside any workspace, whose checksum file it would
+/// update even in read-only mode, and refuses to update go.sum, even under an
+/// inherited -mod=mod, so the check writes no checksum file.
+pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
+    if go {
+        concat!(
+            "output=$(GOWORK=off go test -mod=readonly -count=1 -run '^TestOpenAPIIsCurrent$' -v ./internal/httpapi 2>&1); ",
+            "status=$?; printf '%s\\n' \"$output\"; if [ \"$status\" -ne 0 ]; then ",
+            "case \"$(go env GOWORK 2>/dev/null)\" in \"\" | off) ;; ",
+            "*) printf 'api:openapi builds the backend module outside its go.work workspace, as releases do: ",
+            "go.mod and go.sum must resolve every dependency, or set api_openapi_command.\\n' >&2 ;; esac; ",
+            "exit \"$status\"; fi; ",
+            "case \"$output\" in *'--- PASS: TestOpenAPIIsCurrent '*) ;; ",
+            "*) printf 'TestOpenAPIIsCurrent did not pass.\\n' >&2; exit 1 ;; esac",
+        )
+    } else {
+        concat!(
+            "output=$(cargo test --workspace --locked openapi_is_current -- --format pretty 2>&1); ",
+            "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
+            "for name in public admin; do ",
+            "[ \"$name\" = public ] || [ -f \"openapi/$name.json\" ] || continue; ",
+            "case \"$output\" in *\"committed_${name}_openapi_is_current ... ok\"*) ;; ",
+            "*) printf 'committed_%s_openapi_is_current did not pass.\\n' \"$name\" >&2; exit 1 ;; ",
+            "esac; done",
+        )
     }
-    Ok(())
+}
+
+impl ModelBuilder<'_> {
+    /// The backend owns document freshness through a check that reads what
+    /// the backend tests read, plus the documents.
+    pub(super) fn add_openapi_document_check(&mut self) -> Result<()> {
+        let mut inputs = self
+            .actions
+            .get(&target_id(BACKEND_COMPONENT, "test")?)
+            .ok_or_else(|| anyhow::anyhow!("frontend contracts require the backend tests"))?
+            .inputs
+            .clone();
+        inputs.push(OPENAPI_INPUT.into());
+        inputs.sort();
+        inputs.dedup();
+        let command_key = CommandScope::Component
+            .command_key(BACKEND_COMPONENT, OPENAPI_DOCUMENT_CHECK_ACTION)?;
+        self.insert_command(
+            &command_key,
+            openapi_document_check_command(self.answers.backend_language().is_go()),
+        )?;
+        let mut action = ActionSpec::new(
+            target_id(BACKEND_COMPONENT, OPENAPI_DOCUMENT_CHECK_ACTION)?,
+            ActionIntent::Check,
+            ActionRunner::command(command_key),
+        );
+        action.description =
+            Some("Check that the committed OpenAPI documents match the backend.".into());
+        action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+        action.inputs = inputs;
+        action.provenance = provenance(&[
+            ("target", FieldProvenance::Inferred),
+            ("intent", FieldProvenance::Inherited),
+            ("effects", FieldProvenance::Inherited),
+            ("runner", FieldProvenance::Inferred),
+            ("inputs", FieldProvenance::Inferred),
+        ]);
+        self.insert_action(action)
+    }
+}
+
+impl RepositoryRenderModel {
+    /// The document check that the backend workflow for `adapter` runs: a
+    /// read-only check owned by a component with that adapter, so an authored
+    /// action of that name joins CI only as a check.
+    pub(super) fn openapi_document_check(&self, adapter: &str) -> Option<&ActionSpec> {
+        let check = self.actions.iter().find(|action| {
+            action.target.component.as_str() == BACKEND_COMPONENT
+                && action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
+        })?;
+        let owned = self
+            .components
+            .iter()
+            .find(|component| component.id == check.target.component)?
+            .adapters
+            .iter()
+            .any(|item| item == adapter);
+        (owned
+            && jig_repository::validate_read_only_check_closure(
+                &self.actions,
+                std::iter::once(&check.target),
+            )
+            .is_ok())
+        .then_some(check)
+    }
+
+    pub(crate) fn openapi_document_check_target(&self, adapter: &str) -> Option<String> {
+        self.openapi_document_check(adapter)
+            .map(|check| check.target.to_string())
+    }
 }
 
 pub(super) fn provenance(entries: &[(&str, FieldProvenance)]) -> BTreeMap<String, FieldProvenance> {

@@ -136,3 +136,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Run locked Rust tests
         run: scripts/jig check <<[ rust_test_locked_ci_target ]>>
+[% if rust_openapi_check_target %]      - name: Check committed OpenAPI documents
+        run: scripts/jig check <<[ rust_openapi_check_target ]>>
+[% endif -%]

@@ -26,6 +26,10 @@ impl AuthoredRepositoryModel {
         super::frontend_migration::public_boundary_enabled(&self.actions, commands)
     }
 
+    pub fn client_only_contract_drift(&self) -> bool {
+        super::frontend_migration::client_only_drift(&self.actions)
+    }
+
     pub fn has_adapter(&self, expected: &str) -> bool {
         self.components
             .iter()

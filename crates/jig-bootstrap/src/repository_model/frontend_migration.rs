@@ -1,15 +1,9 @@
-use jig_repository::shell::optional_cargo_command;
-
 use super::{
     ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BACKEND_CONTRACT_INPUTS,
-    BOUNDARY_DESCRIPTION, BTreeMap, CommandScope, FRONTEND_CONTRACT_DRIFT_ACTION,
-    FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance, OPENAPI_INPUT, PUBLIC_DOCUMENT_INPUTS,
-    REPO_COMPONENT, RepositoryRenderModel, TargetId, contract_check_action,
-    retire_saved_frontend_dependencies,
-};
-use crate::answers::{
-    DEFAULT_GO_TEST_COMMAND, DEFAULT_GO_TEST_LOCKED_COMMAND, DEFAULT_RUST_TEST_COMMAND,
-    DEFAULT_RUST_TEST_LOCKED_COMMAND,
+    BOUNDARY_DESCRIPTION, BTreeMap, CLIENT_DRIFT_DESCRIPTION, CommandScope,
+    FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance,
+    OPENAPI_DOCUMENT_CHECK_ACTION, PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel,
+    TargetId, contract_check_action, retire_saved_frontend_dependencies,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -26,6 +20,10 @@ const CONTRACT_RESOLUTION_INPUTS: &[&str] = &[
     "vendor/modules.txt",
     "**/vendor/modules.txt",
 ];
+
+// The drift check's description before generators wrote the document check.
+const HISTORICAL_DRIFT_DESCRIPTION: &str =
+    "Check repository-wide OpenAPI and generated-client drift.";
 
 // Backend inputs the contract checks read while drift exported the documents.
 const LEGACY_BACKEND_INPUTS: &[&str] = &[
@@ -83,6 +81,15 @@ fn declares_contract_check(
     })
 }
 
+/// Whether the saved drift check was generated beside the client-only
+/// contract script, which never reads the backend.
+pub(super) fn client_only_drift(actions: &[ActionSpec]) -> bool {
+    actions.iter().any(|action| {
+        is_repo_target(&action.target, FRONTEND_CONTRACT_DRIFT_ACTION)
+            && action.description.as_deref() == Some(CLIENT_DRIFT_DESCRIPTION)
+    })
+}
+
 /// Normalize only generated legacy fields, both for custom-model preservation
 /// and for deciding whether a saved scaffold can be regenerated on update.
 pub(super) fn upgrade_saved_projection(
@@ -102,9 +109,6 @@ pub(super) fn upgrade_saved_projection(
     else {
         return upgraded;
     };
-    upgrade_backend_contract_tests(current, &mut upgraded.actions);
-    let tests_check_documents =
-        backend_contract_tests_check_documents(current, &upgraded.actions, commands);
     for action in &mut upgraded.actions {
         let id = action.target.action.as_str();
         if action.target.component.as_str() != REPO_COMPONENT
@@ -127,27 +131,20 @@ pub(super) fn upgrade_saved_projection(
         let mut expected_runner = expected.runner.clone();
         super::runners::make_shell_explicit(&mut runner);
         super::runners::make_shell_explicit(&mut expected_runner);
+        // A client-only drift check never had the earlier backend inputs, so
+        // its owner added any it now has.
         if runner != expected_runner
             || command(&runner).and_then(|key| commands.get(key))
                 != command(&expected_runner).and_then(|key| current.commands.get(key))
+            || action.description.as_deref() == Some(CLIENT_DRIFT_DESCRIPTION)
+            || !generated_input_history(id, &drift.inputs).contains(&action.inputs)
         {
             continue;
         }
-        // Dropping backend inputs from the drift check is safe only while the
-        // saved backend tests prove the documents match the backend on every
-        // backend and document change.
-        if id == FRONTEND_CONTRACT_DRIFT_ACTION
-            && !tests_check_documents
-            && action
-                .inputs
-                .iter()
-                .any(|input| !expected.inputs.contains(input))
-        {
-            continue;
+        if action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION) {
+            action.description.clone_from(&expected.description);
         }
-        if generated_input_history(id, &drift.inputs).contains(&action.inputs) {
-            action.inputs.clone_from(&expected.inputs);
-        }
+        action.inputs.clone_from(&expected.inputs);
     }
     if !current
         .actions
@@ -159,43 +156,82 @@ pub(super) fn upgrade_saved_projection(
     upgraded
 }
 
-/// Inputs that generators wrote for a contract check: the contract surface
-/// plus the backend inputs of their time, and for the boundary check the
-/// public documents. A drift check may already read only the surface.
-fn generated_input_history(action: &str, drift_inputs: &[String]) -> Vec<Vec<String>> {
-    let surface = drift_inputs
+/// Earlier generators had no document check. To decide whether a saved
+/// scaffold can be regenerated, count the generated one, its profile entries,
+/// and its command as saved. Only a model from before the check qualifies: its
+/// drift check keeps the description those generators wrote, and the check's
+/// command key is free. A model whose owner removed the check, or reused its
+/// command key, keeps its own targets.
+pub(super) fn with_generated_document_check(
+    current: &RepositoryRenderModel,
+    saved: &AuthoredRepositoryModel,
+    commands: &BTreeMap<String, String>,
+) -> Option<(AuthoredRepositoryModel, BTreeMap<String, String>)> {
+    let check = current
+        .actions
         .iter()
-        .filter(|input| !BACKEND_CONTRACT_INPUTS.contains(&input.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    let with = |extra: &[&[&str]]| {
-        let mut inputs = surface
-            .iter()
-            .cloned()
-            .chain(
-                extra
-                    .iter()
-                    .flat_map(|set| set.iter().map(|input| (*input).to_owned())),
-            )
-            .collect::<Vec<_>>();
-        inputs.sort();
-        inputs.dedup();
-        inputs
-    };
-    if action == FRONTEND_PUBLIC_BOUNDARY_ACTION {
-        return vec![
-            with(&[LEGACY_BACKEND_INPUTS, PUBLIC_DOCUMENT_INPUTS]),
-            with(&[
-                LEGACY_BACKEND_INPUTS,
-                CONTRACT_RESOLUTION_INPUTS,
-                PUBLIC_DOCUMENT_INPUTS,
-            ]),
-        ];
+        .find(|action| is_document_check(&action.target))?;
+    let key = command(&check.runner)?;
+    let generated_command = current.commands.get(key)?;
+    let drift = current
+        .actions
+        .iter()
+        .find(|action| is_repo_target(&action.target, FRONTEND_CONTRACT_DRIFT_ACTION))?;
+    if saved
+        .actions
+        .iter()
+        .any(|action| action.target == check.target)
+        || commands
+            .get(key)
+            .is_some_and(|value| value != generated_command)
+        || !saved.actions.iter().any(|action| {
+            action.target == drift.target
+                && action.description.as_deref() == Some(HISTORICAL_DRIFT_DESCRIPTION)
+        })
+    {
+        return None;
     }
+    let mut adopted = saved.clone();
+    insert_sorted(&mut adopted.actions, check.clone(), |action| &action.target);
+    for profile in &mut adopted.profiles {
+        if current
+            .profiles
+            .iter()
+            .any(|item| item.id == profile.id && item.targets.contains(&check.target))
+        {
+            insert_sorted(&mut profile.targets, check.target.clone(), |target| target);
+        }
+    }
+    let mut adopted_commands = commands.clone();
+    adopted_commands.insert(key.into(), generated_command.clone());
+    Some((adopted, adopted_commands))
+}
+
+/// Generated actions and profile targets are sorted by target.
+fn insert_sorted<T>(items: &mut Vec<T>, item: T, target: impl Fn(&T) -> &TargetId) {
+    let index = items
+        .iter()
+        .position(|candidate| target(candidate) > target(&item))
+        .unwrap_or(items.len());
+    items.insert(index, item);
+}
+
+/// Inputs that earlier generators wrote for a contract check: the contract
+/// surface plus the backend inputs of their time, and for the boundary check
+/// the public documents.
+fn generated_input_history(action: &str, drift_inputs: &[String]) -> Vec<Vec<String>> {
+    let surface = contract_surface(drift_inputs);
+    let documents: &[&str] = if action == FRONTEND_PUBLIC_BOUNDARY_ACTION {
+        PUBLIC_DOCUMENT_INPUTS
+    } else {
+        &[]
+    };
     vec![
-        with(&[]),
-        with(&[LEGACY_BACKEND_INPUTS]),
-        with(&[LEGACY_BACKEND_INPUTS, CONTRACT_RESOLUTION_INPUTS]),
+        with_inputs(&surface, &[LEGACY_BACKEND_INPUTS, documents]),
+        with_inputs(
+            &surface,
+            &[LEGACY_BACKEND_INPUTS, CONTRACT_RESOLUTION_INPUTS, documents],
+        ),
     ]
 }
 
@@ -272,114 +308,37 @@ pub(super) fn drop_retired_contract_commands(
     }
 }
 
+/// The contract inputs of a drift check, without the backend.
+fn contract_surface(inputs: &[String]) -> Vec<String> {
+    inputs
+        .iter()
+        .filter(|input| !BACKEND_CONTRACT_INPUTS.contains(&input.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn with_inputs(inputs: &[String], extra: &[&[&str]]) -> Vec<String> {
+    let mut inputs = inputs
+        .iter()
+        .cloned()
+        .chain(
+            extra
+                .iter()
+                .flat_map(|set| set.iter().map(|input| (*input).to_owned())),
+        )
+        .collect::<Vec<_>>();
+    inputs.sort();
+    inputs.dedup();
+    inputs
+}
+
 fn is_repo_target(target: &TargetId, action: &str) -> bool {
     target.component.as_str() == REPO_COMPONENT && target.action.as_str() == action
 }
 
-fn is_backend_contract_test(target: &TargetId) -> bool {
+fn is_document_check(target: &TargetId) -> bool {
     target.component.as_str() == BACKEND_COMPONENT
-        && matches!(target.action.as_str(), "test" | "test-locked")
-}
-
-/// Add the document input to backend tests that still read the adapter's
-/// generated inputs.
-fn upgrade_backend_contract_tests(current: &RepositoryRenderModel, actions: &mut [ActionSpec]) {
-    for action in actions
-        .iter_mut()
-        .filter(|action| is_backend_contract_test(&action.target))
-    {
-        let Some(expected) = current
-            .actions
-            .iter()
-            .find(|item| item.target == action.target)
-        else {
-            continue;
-        };
-        let legacy = expected
-            .inputs
-            .iter()
-            .filter(|input| input.as_str() != OPENAPI_INPUT)
-            .cloned()
-            .collect::<Vec<_>>();
-        if action.provenance.get("inputs") == Some(&FieldProvenance::Inherited)
-            && action.inputs == legacy
-            && legacy.len() < expected.inputs.len()
-        {
-            action.inputs.clone_from(&expected.inputs);
-            action
-                .provenance
-                .insert("inputs".into(), FieldProvenance::Inferred);
-        }
-    }
-}
-
-/// Whether every backend test runs the generator's default command, which
-/// includes the committed-document tests, so that the backend tests own
-/// document freshness. Generation and the saved-model upgrade share this rule.
-pub(super) fn backend_tests_run_generated_commands<'a>(
-    actions: impl IntoIterator<Item = &'a ActionSpec>,
-    commands: &BTreeMap<String, String>,
-    go: bool,
-) -> bool {
-    let mut tests = actions
-        .into_iter()
-        .filter(|action| is_backend_contract_test(&action.target))
-        .peekable();
-    tests.peek().is_some()
-        && tests.all(|action| {
-            command(&action.runner).and_then(|key| commands.get(key))
-                == generated_backend_test_command(go, action.target.action.as_str()).as_ref()
-        })
-}
-
-/// Whether the saved backend tests prove the documents fresh: each runs its
-/// generated runner and command and reads every generated input, which
-/// covers the backend and the documents.
-fn backend_contract_tests_check_documents(
-    current: &RepositoryRenderModel,
-    actions: &[ActionSpec],
-    commands: &BTreeMap<String, String>,
-) -> bool {
-    let go = current.components.iter().any(|component| {
-        component.id.as_str() == BACKEND_COMPONENT
-            && component.adapters.iter().any(|adapter| adapter == "go")
-    });
-    backend_tests_run_generated_commands(actions, commands, go)
-        && actions
-            .iter()
-            .filter(|action| is_backend_contract_test(&action.target))
-            .all(|action| {
-                let Some(expected) = current
-                    .actions
-                    .iter()
-                    .find(|item| item.target == action.target)
-                else {
-                    return false;
-                };
-                let mut runner = action.runner.clone();
-                let mut expected_runner = expected.runner.clone();
-                super::runners::make_shell_explicit(&mut runner);
-                super::runners::make_shell_explicit(&mut expected_runner);
-                runner == expected_runner
-                    && expected
-                        .inputs
-                        .iter()
-                        .all(|input| action.inputs.contains(input))
-            })
-}
-
-/// The command the generator writes for a backend test.
-fn generated_backend_test_command(go: bool, action: &str) -> Option<String> {
-    match (go, action) {
-        (false, "test") => Some(optional_cargo_command(DEFAULT_RUST_TEST_COMMAND, "test")),
-        (false, "test-locked") => Some(optional_cargo_command(
-            DEFAULT_RUST_TEST_LOCKED_COMMAND,
-            "test-locked",
-        )),
-        (true, "test") => Some(DEFAULT_GO_TEST_COMMAND.into()),
-        (true, "test-locked") => Some(DEFAULT_GO_TEST_LOCKED_COMMAND.into()),
-        _ => None,
-    }
+        && target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
 }
 
 fn command(runner: &ActionRunner) -> Option<&str> {

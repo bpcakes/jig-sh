@@ -105,7 +105,9 @@ pub(super) fn render_and_copy_bootstrap_template(
     let (mut answers, mut notes) = answer_resolution.into_parts();
     preferred_rendered_commands.extend(answers.adoption_command_keys(request.answers)?);
     if request.scaffolded_frontend_contracts {
+        // The scaffold writes the client-only contract script with them.
         answers.enable_scaffolded_frontend_contracts();
+        answers.enable_client_only_contract_drift();
     }
     if request.scaffolded_go_postgres_integration {
         answers.enable_go_postgres_integration_script();
@@ -116,6 +118,7 @@ pub(super) fn render_and_copy_bootstrap_template(
     {
         answers.enable_go_postgres_integration_script();
     }
+
     let full_to_minimal_transition = request.prior_harness_footprint
         == Some(HarnessFootprint::Full)
         && answers.is_minimal_footprint();

@@ -1,6 +1,7 @@
 use super::*;
 
 mod backend_freshness;
+mod document_commands;
 
 const APP: &str = r#"
 [[frontend_apps]]
@@ -59,8 +60,8 @@ fn saved_model(backend: &str, backend_inputs: &[&str]) -> RepositoryRenderModel 
 }
 
 /// A model saved by an earlier generator: it always declared a boundary
-/// check, its contract checks read `backend_inputs`, and its backend tests
-/// did not read the documents.
+/// check, its contract checks read `backend_inputs`, and it had no document
+/// check.
 fn saved_model_with(backend: &str, apps: &str, backend_inputs: &[&str]) -> RepositoryRenderModel {
     let mut model = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
         "backend_language = {backend:?}\n{apps}"
@@ -107,15 +108,18 @@ fn saved_model_with(backend: &str, apps: &str, backend_inputs: &[&str]) -> Repos
             _ => {}
         }
     }
+    let document_check = target_id("api", "openapi").unwrap();
+    model
+        .actions
+        .retain(|action| action.target != document_check);
+    for profile in &mut model.profiles {
+        profile.targets.retain(|target| *target != document_check);
+    }
+    model.commands.remove("api_openapi_command");
     for action in &mut model.actions {
-        if matches!(
-            action.target.to_string().as_str(),
-            "api:test" | "api:test-locked"
-        ) {
-            action.inputs.retain(|input| input != "openapi/**");
-            action
-                .provenance
-                .insert("inputs".into(), FieldProvenance::Inherited);
+        if action.target == drift {
+            action.description =
+                Some("Check repository-wide OpenAPI and generated-client drift.".into());
         }
     }
     for action in &mut model.actions {
@@ -353,7 +357,6 @@ fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
     for target in [
         "api:test",
         "api:test-locked",
-        "repo:frontend-contract-drift",
         "repo:frontend-public-boundary",
     ] {
         assert_eq!(
@@ -362,6 +365,19 @@ fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
             "{target}"
         );
     }
+    // Without a document check, the drift check keeps reading the backend.
+    let mut drift = find(&current, "repo:frontend-contract-drift").inputs;
+    drift.extend(
+        BACKEND_CONTRACT_INPUTS
+            .iter()
+            .map(|input| (*input).to_owned()),
+    );
+    drift.sort();
+    drift.dedup();
+    assert_eq!(
+        find(&upgraded, "repo:frontend-contract-drift").inputs,
+        drift
+    );
     let boundary = find(&upgraded, "repo:frontend-public-boundary");
     assert!(boundary.inputs.contains(&"Cargo.lock".into()));
     assert!(!boundary.inputs.contains(&"**/*.rs".into()));
@@ -503,13 +519,22 @@ fn managed_update_preserves_authored_contract_inputs_commands_and_dependencies()
 }
 
 #[test]
-fn upgraded_contracts_split_backend_and_client_freshness_without_frontend_fanout() {
+fn contracts_split_backend_and_client_freshness_without_frontend_fanout() {
     use jig_context::RepoContext;
     use jig_repository::{PlanRunRequest, RepositoryCatalog, plan_run_with_cancellation};
 
-    for backend in ["rust", "go"] {
-        let answers = load_saved(&legacy_model(backend), backend);
-        let mut model = RepositoryRenderModel::from_answers(&answers).unwrap();
+    // A scaffold's client-only drift check ignores backend changes; an
+    // upgraded repository's own contract script still exports from the
+    // backend, so its drift check keeps running on them.
+    for (backend, client_only) in [("rust", true), ("go", true), ("rust", false), ("go", false)] {
+        let mut model = if client_only {
+            let mut scaffold = scaffold_answers(&format!("backend_language = {backend:?}\n{APP}"));
+            scaffold.enable_client_only_contract_drift();
+            RepositoryRenderModel::from_answers(&scaffold).unwrap()
+        } else {
+            RepositoryRenderModel::from_answers(&load_saved(&legacy_model(backend), backend))
+                .unwrap()
+        };
         model
             .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
             .unwrap();
@@ -588,6 +613,7 @@ fn upgraded_contracts_split_backend_and_client_freshness_without_frontend_fanout
                 PlanRunRequest {
                     selectors: [
                         "api:test",
+                        "api:openapi",
                         "repo:frontend-contract-drift",
                         "web:lint",
                         "web:typecheck",
@@ -608,21 +634,27 @@ fn upgraded_contracts_split_backend_and_client_freshness_without_frontend_fanout
                 .map(|item| item.target.to_string())
                 .collect::<Vec<_>>()
         };
-        // Backend tests own document freshness and the drift check owns
-        // client freshness; neither change fans out to the frontend checks.
+        // The document check owns document freshness and the drift check
+        // owns client freshness; neither change fans out to the frontend
+        // checks, and a document change does not rerun every backend test.
         let expectations = backend_paths
             .iter()
-            .map(|path| (*path, true, false, false))
+            .map(|path| (*path, true, true, !client_only, false))
             .chain([
-                ("openapi/public.json", true, true, true),
-                ("packages/web-api-client/index.ts", false, true, true),
-                ("frontend/web/src/main.ts", false, false, true),
+                ("openapi/public.json", false, true, true, true),
+                ("packages/web-api-client/index.ts", false, false, true, true),
+                ("frontend/web/src/main.ts", false, false, false, true),
             ]);
-        for (path, backend_tests, drift, frontend) in expectations {
+        for (path, backend_tests, documents, drift, frontend) in expectations {
             let selected = selected_after(path);
             assert_eq!(
                 selected.contains(&"api:test".into()),
                 backend_tests,
+                "{backend} {path}: {selected:?}"
+            );
+            assert_eq!(
+                selected.contains(&"api:openapi".into()),
+                documents,
                 "{backend} {path}: {selected:?}"
             );
             assert_eq!(

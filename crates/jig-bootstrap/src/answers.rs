@@ -27,14 +27,6 @@ use super::{
     ScaffoldPreset, generated_package_manager_spec, generated_package_manager_version,
 };
 
-/// Generated backend test commands. Each runs every test, including a
-/// scaffold's committed-document tests.
-pub(crate) const DEFAULT_RUST_TEST_COMMAND: &str = "cargo test --workspace";
-pub(crate) const DEFAULT_RUST_TEST_LOCKED_COMMAND: &str = "cargo test --workspace --locked";
-pub(crate) const DEFAULT_GO_TEST_COMMAND: &str = "go test ./...";
-pub(crate) const DEFAULT_GO_TEST_LOCKED_COMMAND: &str =
-    "go mod verify && go test -mod=readonly ./...";
-
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HarnessFootprint {
@@ -64,6 +56,8 @@ pub(super) struct RenderAnswers {
     scaffolded_public_boundary: bool,
     #[serde(skip)]
     go_postgres_integration_script: bool,
+    #[serde(skip)]
+    client_only_contract_drift: bool,
     #[serde(skip)]
     repository_projection_hint: RepositoryProjectionHint,
     repo_name: String,
@@ -539,6 +533,16 @@ impl RenderAnswers {
         self.go_postgres_integration_script = true;
     }
 
+    /// The repository's contract script is the client-only one that a
+    /// scaffold writes, so its drift check never reads the backend.
+    pub(super) const fn client_only_contract_drift(&self) -> bool {
+        self.client_only_contract_drift
+    }
+
+    pub(super) fn enable_client_only_contract_drift(&mut self) {
+        self.client_only_contract_drift = true;
+    }
+
     pub(super) fn dev_apps_configured(&self) -> bool {
         !self.dev_apps.is_empty() || !self.generated_frontend_dev_apps.is_empty()
     }
@@ -657,6 +661,9 @@ fn loaded_repository_model_is_custom(
     if authored_repository.public_boundary_enabled(authored_repository_commands) {
         generated_answers.enable_scaffolded_public_boundary();
     }
+    if authored_repository.client_only_contract_drift() {
+        generated_answers.enable_client_only_contract_drift();
+    }
     let Ok(generated) =
         crate::repository_model::RepositoryRenderModel::from_answers(&generated_answers)
     else {
@@ -680,6 +687,10 @@ fn resolve_render_answers(
     };
     let scaffolded_frontend_contracts = saved(AuthoredRepositoryModel::frontend_contracts_enabled);
     let scaffolded_public_boundary = saved(AuthoredRepositoryModel::public_boundary_enabled);
+    let client_only_contract_drift = raw
+        .repository
+        .as_ref()
+        .is_some_and(AuthoredRepositoryModel::client_only_contract_drift);
     let authored_repository = preserve_repository_model
         .then(|| raw.repository.take())
         .flatten()
@@ -692,6 +703,9 @@ fn resolve_render_answers(
     }
     if scaffolded_public_boundary {
         answers.enable_scaffolded_public_boundary();
+    }
+    if client_only_contract_drift {
+        answers.enable_client_only_contract_drift();
     }
     if let Some(authored_repository_commands) = authored_repository_commands
         && answers.authored_repository.is_some()

@@ -41,10 +41,9 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
             ["**/*.go", "go.mod", "go.sum", "go.work"],
         ),
     ] {
-        let model = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
-            "{backend}{FRONTEND_APPS}"
-        )))
-        .unwrap();
+        let mut scaffold = scaffold_answers(&format!("{backend}{FRONTEND_APPS}"));
+        scaffold.enable_client_only_contract_drift();
+        let model = RepositoryRenderModel::from_answers(&scaffold).unwrap();
 
         assert!(component(&model, "api").propagate_affected_to_dependents);
         for frontend in ["web", "admin"] {
@@ -64,27 +63,18 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
                 }
             }
         }
-        // Backend tests prove the documents match the backend; the drift
-        // check proves the clients match the documents.
+        // The document check proves the documents match the backend; the
+        // drift check proves the clients match the documents.
         let drift = action(&model, "repo:frontend-contract-drift");
+        let documents = action(&model, "api:openapi");
         for contract in ["openapi/**", "packages/*-api-client/**"] {
             assert!(drift.inputs.iter().any(|input| input == contract));
         }
-        for test in ["api:test", "api:test-locked"] {
-            let test = action(&model, test);
-            assert!(test.inputs.iter().any(|input| input == "openapi/**"));
-            assert_eq!(
-                test.provenance.get("inputs"),
-                Some(&FieldProvenance::Inferred)
-            );
-        }
+        assert!(documents.inputs.iter().any(|input| input == "openapi/**"));
         for input in backend_inputs {
             assert!(
-                action(&model, "api:test")
-                    .inputs
-                    .iter()
-                    .any(|candidate| candidate == input),
-                "backend tests must read {input}"
+                documents.inputs.iter().any(|candidate| candidate == input),
+                "the document check must read {input}"
             );
             assert!(
                 !drift.inputs.iter().any(|candidate| candidate == input),
@@ -97,6 +87,7 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
             .find(|profile| profile.id.as_str() == DEFAULT_PROFILE)
             .unwrap();
         assert!(verify.targets.contains(&drift.target));
+        assert!(verify.targets.contains(&documents.target));
         assert_boundary_guards_only_the_rust_admin_api(&model, backend.is_empty());
     }
 }

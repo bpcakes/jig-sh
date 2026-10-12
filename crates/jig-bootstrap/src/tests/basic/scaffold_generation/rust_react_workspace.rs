@@ -213,7 +213,16 @@ fn assert_generated_ci_workflows(destination: &Path) {
         );
         assert!(paths.iter().any(|path| path == "migrations/**"));
         assert!(paths.iter().any(|path| path == ".sqlx/**"));
+        assert!(paths.iter().any(|path| path == "openapi/**"));
     }
+    // The test job also proves that the committed documents match the backend.
+    assert!(
+        rust_workflow_yaml["jobs"]["test"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["run"] == "scripts/jig check api:openapi")
+    );
     assert_eq!(
         rust_workflow_yaml["jobs"]["clippy"]["env"]["SQLX_OFFLINE_DIR"],
         "${{ github.workspace }}/.sqlx"
@@ -593,6 +602,8 @@ fn assert_rust_drift_check_skips_the_backend(destination: &Path) {
     );
     assert!(!marker.exists(), "drift-check invoked cargo");
     assert_eq!(regular_file_tree_snapshot(destination), before);
+    assert_drift_check_rejects_a_stale_client(destination, &fake_bin);
+    assert_drift_check_scans_the_public_document(destination, &fake_bin);
 }
 
 #[cfg(unix)]
