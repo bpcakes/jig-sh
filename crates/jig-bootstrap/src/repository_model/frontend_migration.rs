@@ -1,6 +1,6 @@
 use super::{
     ActionRunner, ActionSpec, AuthoredRepositoryModel, BACKEND_COMPONENT, BACKEND_CONTRACT_INPUTS,
-    BOUNDARY_DESCRIPTION, BTreeMap, CLIENT_DRIFT_DESCRIPTION, CommandScope,
+    BOUNDARY_DESCRIPTION, BTreeMap, CLIENT_DRIFT_DESCRIPTION, CommandScope, ComponentSpec,
     FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance,
     HISTORICAL_DRIFT_DESCRIPTION, OPENAPI_DOCUMENT_CHECK_ACTION, OPENAPI_DOCUMENT_COMMAND_KEY,
     PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel, TargetId, contract_check_action,
@@ -87,16 +87,22 @@ pub(super) fn client_only_drift(actions: &[ActionSpec]) -> bool {
     })
 }
 
-/// Whether the saved model has a document check: an action of that name on a
-/// Rust or Go component, where the backend workflows look for one, whatever
-/// adoption or the owner named the component. An action of that name on
-/// another component, such as a frontend, is the owner's own.
+/// Whether the saved model has a document check.
 pub(super) fn has_document_check(saved: &AuthoredRepositoryModel) -> bool {
-    saved.actions.iter().any(|action| {
-        ["rust", "go"]
-            .into_iter()
-            .any(|adapter| is_document_action(&saved.components, action, adapter))
-    })
+    saved
+        .actions
+        .iter()
+        .any(|action| is_backend_document_check(&saved.components, action))
+}
+
+/// Whether `action` is a document check: an action of that name on a Rust or
+/// Go component, where the backend workflows look for one, whatever adoption
+/// or the owner named the component. An action of that name on another
+/// component, such as a frontend, is the owner's own.
+fn is_backend_document_check(components: &[ComponentSpec], action: &ActionSpec) -> bool {
+    ["rust", "go"]
+        .into_iter()
+        .any(|adapter| is_document_action(components, action, adapter))
 }
 
 /// Whether the saved model has not gained the document check: it has API
@@ -129,13 +135,17 @@ pub(super) fn predates_document_check(
             .is_none_or(|value| value == generated_command)
 }
 
-/// Whether a saved contract or document check reads other inputs than
-/// generation gives it now. A capability refresh, which cannot change those
-/// inputs, keeps such a check, as its owner may have changed them; loading
-/// the model then updates a contract check that earlier generators wrote, as
-/// an update does.
-pub(super) fn customized_contract_inputs(saved: &ActionSpec, generated: &ActionSpec) -> bool {
-    (is_document_check(&saved.target)
+/// Whether a saved contract or document check, among the saved `components`,
+/// reads other inputs than generation gives it now. A capability refresh,
+/// which cannot change those inputs, keeps such a check, as its owner may
+/// have changed them; loading the model then updates a contract check that
+/// earlier generators wrote, as an update does.
+pub(super) fn customized_contract_inputs(
+    components: &[ComponentSpec],
+    saved: &ActionSpec,
+    generated: &ActionSpec,
+) -> bool {
+    (is_backend_document_check(components, saved)
         || (saved.target.component.as_str() == REPO_COMPONENT
             && matches!(
                 saved.target.action.as_str(),

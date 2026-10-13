@@ -193,7 +193,11 @@ fn managed_targets(
                     .iter()
                     .find(|replacement| replacement.target == action.target)
                     .is_some_and(|replacement| {
-                        super::frontend_migration::customized_contract_inputs(action, replacement)
+                        super::frontend_migration::customized_contract_inputs(
+                            &prior.components,
+                            action,
+                            replacement,
+                        )
                     })
         })
         .map(|action| action.target.clone())

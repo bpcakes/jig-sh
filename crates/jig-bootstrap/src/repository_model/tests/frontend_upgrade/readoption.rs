@@ -462,7 +462,8 @@ fn capability_refresh_keeps_inputs_an_owner_declared_on_a_generated_check() {
 }
 
 /// A contract or document check whose inputs its owner changed stays as its
-/// owner left it, as on update; an unmodified one is regenerated.
+/// owner left it, as on update, whatever adoption named the backend; an
+/// unmodified one is regenerated.
 #[test]
 fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
     // A Rust scaffold with an admin app has both contract checks.
@@ -476,12 +477,14 @@ fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
     current
         .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
         .unwrap();
-    for (target, input) in [
-        ("repo:frontend-contract-drift", "schemas/**"),
-        ("repo:frontend-public-boundary", "docs/privileged/**"),
-        ("api:openapi", "schemas/**"),
+    for (backend, target, input) in [
+        ("api", "repo:frontend-contract-drift", "schemas/**"),
+        ("api", "repo:frontend-public-boundary", "docs/privileged/**"),
+        ("api", "api:openapi", "schemas/**"),
+        ("server", "server:openapi", "schemas/**"),
     ] {
         let mut saved = current.clone();
+        rename_backend(&mut saved, backend);
         let check = saved
             .actions
             .iter_mut()
@@ -507,8 +510,11 @@ fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
             .find(|action| action.target.to_string() == target)
             .unwrap();
         assert!(refreshed.inputs.contains(&input.into()), "{target}");
-        if target == "api:openapi" {
-            assert!(model.rust_ci_input_paths().contains(&input.into()));
+        if target.ends_with(":openapi") {
+            assert!(
+                model.rust_ci_input_paths().contains(&input.into()),
+                "{target}"
+            );
         }
     }
 }
