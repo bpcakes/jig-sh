@@ -307,6 +307,40 @@ fn managed_update_says_the_document_check_needs_api_contracts() {
     }
 }
 
+/// A custom model without the generated drift check may keep its API
+/// contracts under checks of its own, so asking says how to declare the
+/// document check instead of that the model has no contracts.
+#[test]
+fn managed_update_says_how_to_declare_the_check_beside_contract_checks_of_its_own() {
+    for backend in ["rust", "go"] {
+        let mut model = legacy_model(backend);
+        let drift = target_id("repo", "frontend-contract-drift").unwrap();
+        model.actions.retain(|action| action.target != drift);
+        for action in &mut model.actions {
+            action.depends_on.retain(|target| *target != drift);
+        }
+        for profile in &mut model.profiles {
+            profile.targets.retain(|target| *target != drift);
+        }
+        model
+            .commands
+            .remove("repo_frontend_contract_drift_command");
+
+        let (_, notes) = update_answers(&model, backend, true);
+
+        assert_eq!(
+            notes
+                .iter()
+                .filter(|note| note.contains("openapi"))
+                .collect::<Vec<_>>(),
+            [
+                "--add-openapi-check found none of the generated API contract checks in this custom repository model and left it as it is; declare api:openapi in .jig.toml to add the check."
+            ],
+            "{backend}"
+        );
+    }
+}
+
 /// An action of the check's name on a frontend, such as one that checks the
 /// rendered API reference, is the owner's own: the update still says how to
 /// add the document check, and the model stays marked as from before it,

@@ -204,6 +204,32 @@ fn capability_refresh_keeps_a_changed_document_check_of_a_nested_backend() {
         let target = check(&mut model).target.clone();
         assert!(model.profiles[0].targets.contains(&target), "{label}");
     }
+
+    // So does one whose owner renamed its command key with the backend.
+    let mut renamed = nested();
+    rename_backend(&mut renamed, "server");
+    renamed
+        .actions
+        .iter_mut()
+        .find(|action| action.target.to_string() == "server:openapi")
+        .unwrap()
+        .runner = ActionRunner::command("server_openapi_command");
+    let generated = renamed.commands.remove("api_openapi_command").unwrap();
+    renamed
+        .commands
+        .insert("server_openapi_command".into(), generated.clone());
+    let model = refresh(&renamed);
+    let check = model
+        .actions
+        .iter()
+        .find(|action| action.target.to_string() == "server:openapi")
+        .unwrap();
+    assert_eq!(
+        check.runner,
+        ActionRunner::command("server_openapi_command")
+    );
+    assert_eq!(model.commands["server_openapi_command"], generated);
+    assert!(model.profiles[0].targets.contains(&check.target));
 }
 
 #[test]

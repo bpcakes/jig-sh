@@ -161,8 +161,8 @@ pub(super) fn customized_contract_check(
 /// Whether a capability refresh keeps a saved document check that generation
 /// no longer writes, as for a backend that is no longer at the repository
 /// root: one whose owner changed it from what generation wrote, its
-/// component's test inputs and openapi/** run by `generated_command`, or that
-/// another target depends on.
+/// component's test inputs and openapi/** run by `generated_command` under
+/// the generated command key, or that another target depends on.
 pub(super) fn keeps_saved_document_check(
     saved: &AuthoredRepositoryModel,
     commands: &BTreeMap<String, String>,
@@ -185,6 +185,7 @@ pub(super) fn keeps_saved_document_check(
     inputs.sort();
     inputs.dedup();
     check.inputs != inputs
+        || command(&check.runner) != Some(OPENAPI_DOCUMENT_COMMAND_KEY)
         || command(&check.runner)
             .and_then(|key| commands.get(key))
             .is_some_and(|value| value != generated_command)
