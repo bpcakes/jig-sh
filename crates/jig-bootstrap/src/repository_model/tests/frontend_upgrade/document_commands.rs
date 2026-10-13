@@ -7,16 +7,16 @@ use super::*;
 /// The Rust scaffold's packages are named after the repository.
 const REPO_NAME: &str = "example-project";
 
-/// A Cargo workspace with the scaffold's public and admin HTTP packages and
-/// a worker, each at `version`, and the committed public document.
+/// A Cargo workspace whose packages, by suffix, are named after the
+/// repository, each at `version`, with the committed public document.
 #[cfg(unix)]
-fn rust_workspace(root: &std::path::Path, version: &str) {
+fn rust_workspace(root: &std::path::Path, version: &str, suffixes: &[&str]) {
     fs::write(
         root.join("Cargo.toml"),
         "[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]\n",
     )
     .unwrap();
-    for suffix in ["http", "admin-http", "worker"] {
+    for suffix in suffixes {
         let package = format!("{REPO_NAME}-{suffix}");
         fs::create_dir_all(root.join(format!("crates/{package}/src"))).unwrap();
         fs::write(root.join(format!("crates/{package}/src/lib.rs")), "").unwrap();
@@ -43,17 +43,32 @@ fn generate_lockfile(root: &std::path::Path) {
     assert!(status.success());
 }
 
-/// Gives each package of [`rust_workspace`] the named tests, by package
-/// suffix, and runs the Rust document check in it with quiet Cargo.
+/// Gives each package of [`rust_workspace`], by suffix, the named tests and
+/// runs the Rust document check with quiet Cargo. A document test reads its
+/// committed document, as the scaffold's do.
 #[cfg(unix)]
-fn run_rust_document_check(root: &std::path::Path, tests: [&[&str]; 3]) -> std::process::Output {
-    for (suffix, tests) in ["http", "admin-http", "worker"].into_iter().zip(tests) {
+fn run_rust_document_check(
+    root: &std::path::Path,
+    tests: &[(&str, &[&str])],
+) -> std::process::Output {
+    for (suffix, tests) in tests {
+        let source = tests
+            .iter()
+            .map(|test| {
+                let body = ["public", "admin"]
+                    .into_iter()
+                    .find(|name| *test == format!("committed_{name}_openapi_is_current"))
+                    .map_or_else(String::new, |name| {
+                        format!(
+                            "std::fs::read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../openapi/{name}.json\")).unwrap();"
+                        )
+                    });
+                format!("#[test]\nfn {test}() {{ {body} }}\n")
+            })
+            .collect::<String>();
         fs::write(
             root.join(format!("crates/{REPO_NAME}-{suffix}/src/lib.rs")),
-            tests
-                .iter()
-                .map(|test| format!("#[test]\nfn {test}() {{}}\n"))
-                .collect::<String>(),
+            source,
         )
         .unwrap();
     }
@@ -73,7 +88,7 @@ fn run_rust_document_check(root: &std::path::Path, tests: [&[&str]; 3]) -> std::
 #[test]
 fn rust_document_check_runs_quiet_cargo_without_rewriting_the_lockfile() {
     let root = TempDir::new().unwrap();
-    rust_workspace(root.path(), "0.1.0");
+    rust_workspace(root.path(), "0.1.0", &["http"]);
     generate_lockfile(root.path());
     let lockfile = fs::read(root.path().join("Cargo.lock")).unwrap();
     for (test, passes) in [
@@ -81,7 +96,7 @@ fn rust_document_check_runs_quiet_cargo_without_rewriting_the_lockfile() {
         ("committed_public_document_renamed", false),
         ("unrelated_committed_public_openapi_is_current", false),
     ] {
-        let output = run_rust_document_check(root.path(), [&[test], &[], &[]]);
+        let output = run_rust_document_check(root.path(), &[("http", &[test])]);
         assert_eq!(
             output.status.success(),
             passes,
@@ -92,10 +107,10 @@ fn rust_document_check_runs_quiet_cargo_without_rewriting_the_lockfile() {
     }
 
     // An outdated lockfile fails the check instead of being rewritten.
-    rust_workspace(root.path(), "0.2.0");
+    rust_workspace(root.path(), "0.2.0", &["http"]);
     let output = run_rust_document_check(
         root.path(),
-        [&["committed_public_openapi_is_current"], &[], &[]],
+        &[("http", &["committed_public_openapi_is_current"])],
     );
     assert!(
         !output.status.success(),
@@ -107,47 +122,70 @@ fn rust_document_check_runs_quiet_cargo_without_rewriting_the_lockfile() {
 
 /// Real Cargo: each document test counts only in the package that the
 /// scaffold puts it in, so a test of that name in another crate of the
-/// workspace cannot pass the check for it.
+/// workspace cannot pass the check for it, and an admin crate requires its
+/// test even when its document is gone.
 #[cfg(unix)]
 #[test]
 fn rust_document_check_runs_each_document_test_in_its_own_package() {
     let root = TempDir::new().unwrap();
-    rust_workspace(root.path(), "0.1.0");
-    generate_lockfile(root.path());
     let public = "committed_public_openapi_is_current";
     let admin = "committed_admin_openapi_is_current";
-    let check = |tests: [&[&str]; 3], passes: bool, missing: Option<(&str, &str)>| {
-        let output = run_rust_document_check(root.path(), tests);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(
-            output.status.success(),
-            passes,
-            "{tests:?}: {}{stderr}",
-            String::from_utf8_lossy(&output.stdout)
+    let check = |tests: &[(&str, &[&str])], passes: bool, expected: &str| {
+        let result = run_rust_document_check(root.path(), tests);
+        let output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
         );
-        if let Some((name, suffix)) = missing {
-            assert!(
-                stderr.contains(&format!(
-                    "committed_{name}_openapi_is_current did not pass in {REPO_NAME}-{suffix}."
-                )),
-                "{tests:?}: {stderr}"
-            );
-        }
+        assert_eq!(result.status.success(), passes, "{tests:?}: {output}");
+        assert!(output.contains(expected), "{tests:?}: {output}");
+    };
+    let missing = |name: &str, suffix: &str| {
+        format!("committed_{name}_openapi_is_current did not pass in {REPO_NAME}-{suffix}.")
     };
 
-    check([&[], &[], &[public]], false, Some(("public", "http")));
-    check([&[public], &[admin], &[]], true, None);
-    fs::write(root.path().join("openapi/admin.json"), "{}\n").unwrap();
-    check([&[public], &[admin], &[]], true, None);
+    // Without an admin API, only the public test counts, and only from its
+    // package; an admin document without the admin crate cannot be checked.
+    rust_workspace(root.path(), "0.1.0", &["http", "worker"]);
+    generate_lockfile(root.path());
     check(
-        [&[public, admin], &[], &[admin]],
+        &[("http", &[]), ("worker", &[public])],
         false,
-        Some(("admin", "admin-http")),
+        &missing("public", "http"),
+    );
+    check(&[("http", &[public]), ("worker", &[admin])], true, "");
+    fs::write(root.path().join("openapi/admin.json"), "{}\n").unwrap();
+    check(
+        &[("http", &[public]), ("worker", &[admin])],
+        false,
+        &format!("{REPO_NAME}-admin-http"),
+    );
+    fs::remove_file(root.path().join("openapi/admin.json")).unwrap();
+
+    // An admin crate requires its test, which fails without its document.
+    rust_workspace(root.path(), "0.1.0", &["http", "admin-http", "worker"]);
+    generate_lockfile(root.path());
+    let scaffold: &[(&str, &[&str])] = &[("http", &[public]), ("admin-http", &[admin])];
+    check(scaffold, false, &format!("test {admin} ... FAILED"));
+    fs::write(root.path().join("openapi/admin.json"), "{}\n").unwrap();
+    check(scaffold, true, "");
+    check(
+        &[
+            ("http", &[public, admin]),
+            ("admin-http", &[]),
+            ("worker", &[admin]),
+        ],
+        false,
+        &missing("admin", "admin-http"),
     );
     check(
-        [&[admin], &[public], &[public]],
+        &[
+            ("http", &[admin]),
+            ("admin-http", &[public]),
+            ("worker", &[public]),
+        ],
         false,
-        Some(("public", "http")),
+        &missing("public", "http"),
     );
 }
 
@@ -156,11 +194,12 @@ fn rust_document_check_runs_each_document_test_in_its_own_package() {
 fn document_check_commands_fail_unless_each_document_test_passed() {
     use std::os::unix::fs::PermissionsExt;
 
-    let run = |go: bool, documents: &[&str], output: &str, status: &str| {
+    let run = |go: bool, files: &[&str], output: &str, status: &str| {
         let root = TempDir::new().unwrap();
-        fs::create_dir_all(root.path().join("openapi")).unwrap();
-        for document in documents {
-            fs::write(root.path().join(format!("openapi/{document}.json")), "{}\n").unwrap();
+        for file in files {
+            let path = root.path().join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "{}\n").unwrap();
         }
         let bin = root.path().join("bin");
         fs::create_dir_all(&bin).unwrap();
@@ -192,13 +231,38 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
     let admin = "test tests::committed_admin_openapi_is_current ... ok";
     let both = format!("{public}\n{admin}");
     let go_pass = "--- PASS: TestOpenAPIIsCurrent (0.00s)";
-    for (go, documents, output, status, passes) in [
-        (false, &["public", "admin"][..], both.as_str(), "0", true),
-        (false, &["public", "admin"], public, "0", false),
-        (false, &["public"], public, "0", true),
+    let public_document = "openapi/public.json";
+    let admin_document = "openapi/admin.json";
+    let admin_crate = format!("crates/{REPO_NAME}-admin-http/Cargo.toml");
+    let admin_crate = admin_crate.as_str();
+    for (go, files, output, status, passes) in [
         (
             false,
-            &["public"],
+            &[public_document, admin_document][..],
+            both.as_str(),
+            "0",
+            true,
+        ),
+        (
+            false,
+            &[public_document, admin_document],
+            public,
+            "0",
+            false,
+        ),
+        // The admin crate requires its test without its document.
+        (
+            false,
+            &[public_document, admin_crate],
+            both.as_str(),
+            "0",
+            true,
+        ),
+        (false, &[public_document, admin_crate], public, "0", false),
+        (false, &[public_document], public, "0", true),
+        (
+            false,
+            &[public_document],
             "test committed_public_openapi_is_current ... ok",
             "0",
             true,
@@ -206,40 +270,40 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
         // A test whose name only ends with the document test's does not count.
         (
             false,
-            &["public"],
+            &[public_document],
             "test tests::unrelated_committed_public_openapi_is_current ... ok",
             "0",
             false,
         ),
         (
             false,
-            &["public"],
+            &[public_document],
             "test unrelated_committed_public_openapi_is_current ... ok",
             "0",
             false,
         ),
-        (false, &["public"], "running 0 tests", "0", false),
+        (false, &[public_document], "running 0 tests", "0", false),
         // Removing the public document does not remove its test.
         (false, &[], "running 0 tests", "0", false),
-        (false, &["public"], public, "101", false),
-        (true, &["public"], go_pass, "0", true),
+        (false, &[public_document], public, "101", false),
+        (true, &[public_document], go_pass, "0", true),
         (
             true,
-            &["public"],
+            &[public_document],
             "testing: warning: no tests to run",
             "0",
             false,
         ),
         (
             true,
-            &["public"],
+            &[public_document],
             "--- FAIL: TestOpenAPIIsCurrent (0.00s)",
             "1",
             false,
         ),
     ] {
-        let label = format!("{go} {documents:?} {output:?} {status}");
-        let (result, args) = run(go, documents, output, status);
+        let label = format!("{go} {files:?} {output:?} {status}");
+        let (result, args) = run(go, files, output, status);
         assert_eq!(result.status.success(), passes, "{label}");
         assert!(
             String::from_utf8_lossy(&result.stdout).contains(output),
@@ -249,10 +313,11 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
             "test -mod=readonly -count=1 -run ^TestOpenAPIIsCurrent$ -v ./internal/httpapi\n".into()
         } else {
             // Each document test runs in its own package, the admin one
-            // beside its document.
+            // beside its document or crate.
+            let admin_required = files.contains(&admin_document) || files.contains(&admin_crate);
             [("public", "http"), ("admin", "admin-http")]
                 .into_iter()
-                .filter(|(name, _)| *name == "public" || documents.contains(name))
+                .filter(|(name, _)| *name == "public" || admin_required)
                 .map(|(name, suffix)| {
                     format!(
                         "test --locked -p {REPO_NAME}-{suffix} committed_{name}_openapi_is_current -- --format pretty\n"

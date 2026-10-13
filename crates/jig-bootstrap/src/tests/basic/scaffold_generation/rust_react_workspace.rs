@@ -501,8 +501,13 @@ fn assert_rendered_jig_answers(destination: &Path) {
         ],
     );
     let config: toml::Value = toml::from_str(&answers).unwrap();
-    // api:openapi runs each document test in the package that holds it.
+    // api:openapi runs each document test in the package that holds it, and
+    // requires the admin one where the admin crate is.
     let document_check = config["commands"]["api_openapi_command"].as_str().unwrap();
+    assert!(
+        document_check.contains("[ -f \"crates/$package/Cargo.toml\" ]"),
+        "{document_check}"
+    );
     for (package, source, test) in [
         (
             "my-app-http",
