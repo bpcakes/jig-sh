@@ -165,9 +165,9 @@ pub fn refresh(
 
 /// The prior actions that the refresh replaces with the generated ones: those
 /// that generation wrote and their owner left as it wrote them. As on update,
-/// a contract check with other inputs stays, and a boundary check that
-/// generation no longer writes leaves only if it is unmodified and no other
-/// target depends on it.
+/// a contract or document check with other inputs stays, and a boundary check
+/// that generation no longer writes leaves only if it is unmodified and no
+/// other target depends on it.
 fn managed_targets(
     generated: &AuthoredRepositoryModel,
     generated_commands: &BTreeMap<String, String>,

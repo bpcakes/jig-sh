@@ -122,8 +122,8 @@ rejected there so the preview cannot promise a change that preservation discards
 Explicit footprint or SQLx capability changes refresh generated harness actions
 while retaining authored component identities. A generated action whose owner
 declared any of its fields, with provenance `declared`, stays as the owner
-wrote it, and so does a contract check whose inputs the owner changed.
-Command overrides such as
+wrote it, and so does a contract check or `api:openapi` whose inputs the owner
+changed. Command overrides such as
 `--rust-test-command` follow the existing action’s legacy alias to its authored
 command key. An override with no command action owner, or one targeting a native
 action, is rejected before writing; edit the authored model for those changes.

@@ -129,16 +129,18 @@ pub(super) fn predates_document_check(
             .is_none_or(|value| value == generated_command)
 }
 
-/// Whether a saved contract check reads other inputs than generation gives it
-/// now. A capability refresh, which cannot change those inputs, keeps such a
-/// check, as its owner may have changed them; loading the model then updates
-/// one that earlier generators wrote, as an update does.
+/// Whether a saved contract or document check reads other inputs than
+/// generation gives it now. A capability refresh, which cannot change those
+/// inputs, keeps such a check, as its owner may have changed them; loading
+/// the model then updates a contract check that earlier generators wrote, as
+/// an update does.
 pub(super) fn customized_contract_inputs(saved: &ActionSpec, generated: &ActionSpec) -> bool {
-    saved.target.component.as_str() == REPO_COMPONENT
-        && matches!(
-            saved.target.action.as_str(),
-            FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
-        )
+    (is_document_check(&saved.target)
+        || (saved.target.component.as_str() == REPO_COMPONENT
+            && matches!(
+                saved.target.action.as_str(),
+                FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
+            )))
         && saved.inputs != generated.inputs
 }
 
