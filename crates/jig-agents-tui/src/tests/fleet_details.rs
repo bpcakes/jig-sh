@@ -49,72 +49,75 @@ fn page(terminal: &mut Terminal<TestBackend>, app: &App, monochrome: bool) -> St
     terminal
         .backend()
         .to_string()
-        .replace('"', " ")
-        .replace('│', " ")
+        .replace(['"', '│'], " ")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn assert_fleet_details_readable(width: u16, height: u16, monochrome: bool) {
+    let mut app = partial_app();
+    // No visible home and an active search cannot prevent reading fleet details.
+    app.searching = true;
+    for character in "missing".chars() {
+        app.push_filter(character);
+    }
+    assert!(app.selected.is_none());
+    let expected = app.fleet_assessment_at(NOW);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let overview = page(&mut terminal, &app, monochrome);
+    assert!(overview.contains("?/F1 details"), "{overview}");
+    assert_eq!(press(&mut app, KeyCode::F(1)), Action::Redraw);
+    let mut text = String::new();
+    for _ in 0..100 {
+        text.push_str(&page(&mut terminal, &app, monochrome));
+        text.push(' ');
+        let before = app.fleet_scroll;
+        assert_eq!(press(&mut app, KeyCode::Down), Action::Redraw);
+        if app.fleet_scroll == before {
+            break;
+        }
+    }
+    for expected in [
+        "fleet forecast",
+        "Fleet partial 1/2",
+        "inspection unavailable",
+        "Limiting windows",
+        "work transferable",
+        "earliest reset",
+        "window-average pace",
+        "equal quotas",
+        "periodic approximation",
+        "Banked resets",
+        "not modeled",
+        "Horizon",
+        "7d",
+    ] {
+        assert!(
+            text.contains(expected),
+            "{width}x{height}: missing {expected}: {text}"
+        );
+    }
+    assert_eq!(app.fleet_assessment_at(NOW), expected);
+    assert_eq!(app.filter, "missing");
+    assert!(app.searching);
+    assert!(app.selected.is_none());
+    let end = app.fleet_scroll;
+    assert_eq!(press(&mut app, KeyCode::Home), Action::Redraw);
+    assert_eq!(app.fleet_scroll, 0);
+    press(&mut app, KeyCode::End);
+    assert_eq!(app.fleet_scroll, end);
+    if height == 12 {
+        assert!(app.fleet_scroll > 0);
+    }
+    assert!(page(&mut terminal, &app, monochrome).contains("Horizon"));
 }
 
 #[test]
 fn complete_fleet_qualifications_are_readable_at_supported_sizes_and_without_color() {
     for (width, height) in [(46, 12), (80, 20), (120, 30)] {
         for monochrome in [false, true] {
-            let mut app = partial_app();
-            // No visible home and an active search cannot prevent reading fleet details.
-            app.searching = true;
-            for character in "missing".chars() {
-                app.push_filter(character);
-            }
-            assert!(app.selected.is_none());
-            let expected = app.fleet_assessment_at(NOW);
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            let overview = page(&mut terminal, &app, monochrome);
-            assert!(overview.contains("?/F1 details"), "{overview}");
-            assert_eq!(press(&mut app, KeyCode::F(1)), Action::Redraw);
-            let mut text = String::new();
-            for _ in 0..100 {
-                text.push_str(&page(&mut terminal, &app, monochrome));
-                text.push(' ');
-                let before = app.fleet_scroll;
-                assert_eq!(press(&mut app, KeyCode::Down), Action::Redraw);
-                if app.fleet_scroll == before {
-                    break;
-                }
-            }
-            for expected in [
-                "fleet forecast",
-                "Fleet partial 1/2",
-                "inspection unavailable",
-                "Limiting windows",
-                "work transferable",
-                "earliest reset",
-                "window-average pace",
-                "equal quotas",
-                "periodic approximation",
-                "Banked resets",
-                "not modeled",
-                "Horizon",
-                "7d",
-            ] {
-                assert!(
-                    text.contains(expected),
-                    "{width}x{height}: missing {expected}: {text}"
-                );
-            }
-            assert_eq!(app.fleet_assessment_at(NOW), expected);
-            assert_eq!(app.filter, "missing");
-            assert!(app.searching);
-            assert!(app.selected.is_none());
-            let end = app.fleet_scroll;
-            assert_eq!(press(&mut app, KeyCode::Home), Action::Redraw);
-            assert_eq!(app.fleet_scroll, 0);
-            press(&mut app, KeyCode::End);
-            assert_eq!(app.fleet_scroll, end);
-            if height == 12 {
-                assert!(app.fleet_scroll > 0);
-            }
-            assert!(page(&mut terminal, &app, monochrome).contains("Horizon"));
+            assert_fleet_details_readable(width, height, monochrome);
         }
     }
 }
