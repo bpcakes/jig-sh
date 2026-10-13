@@ -235,11 +235,13 @@ pub(super) fn frontend_contract_inputs(
 /// Rust pins the per-test format, which quiet Cargo would print as dots,
 /// keeps the lockfile as a read-only check must, always requires the public
 /// test, which every Rust scaffold has, and accepts each test only by its whole
-/// name, not one that merely ends with it. Go builds the backend module
-/// as a release does, outside any workspace, whose checksum file it would
-/// update even in read-only mode, and refuses to update go.sum, even under an
-/// inherited -mod=mod, so the check writes no checksum file.
-pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
+/// name, not one that merely ends with it, and only from the package that
+/// every Rust scaffold puts it in, named after the repository, so a test of
+/// that name in another crate cannot stand in for it. Go builds the backend
+/// module as a release does, outside any workspace, whose checksum file it
+/// would update even in read-only mode, and refuses to update go.sum, even
+/// under an inherited -mod=mod, so the check writes no checksum file.
+pub(super) fn openapi_document_check_command(go: bool, repo_name: &str) -> String {
     if go {
         concat!(
             "output=$(GOWORK=off go test -mod=readonly -count=1 -run '^TestOpenAPIIsCurrent$' -v ./internal/httpapi 2>&1); ",
@@ -251,16 +253,22 @@ pub(super) fn openapi_document_check_command(go: bool) -> &'static str {
             "case \"$output\" in *'--- PASS: TestOpenAPIIsCurrent '*) ;; ",
             "*) printf 'TestOpenAPIIsCurrent did not pass.\\n' >&2; exit 1 ;; esac",
         )
+        .into()
     } else {
-        concat!(
-            "output=$(cargo test --workspace --locked openapi_is_current -- --format pretty 2>&1); ",
-            "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
-            "for name in public admin; do ",
-            "[ \"$name\" = public ] || [ -f \"openapi/$name.json\" ] || continue; ",
-            "case \"$output\" in *\"::committed_${name}_openapi_is_current ... ok\"* ",
-            "| *\"test committed_${name}_openapi_is_current ... ok\"*) ;; ",
-            "*) printf 'committed_%s_openapi_is_current did not pass.\\n' \"$name\" >&2; exit 1 ;; ",
-            "esac; done",
+        let package = |suffix: &str| jig_repository::shell::quote(&format!("{repo_name}-{suffix}"));
+        format!(
+            concat!(
+                "for name in public admin; do package={public}; ",
+                "if [ \"$name\" = admin ]; then [ -f openapi/admin.json ] || continue; package={admin}; fi; ",
+                "output=$(cargo test --locked -p \"$package\" \"committed_${{name}}_openapi_is_current\" -- --format pretty 2>&1); ",
+                "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
+                "case \"$output\" in *\"::committed_${{name}}_openapi_is_current ... ok\"* ",
+                "| *\"test committed_${{name}}_openapi_is_current ... ok\"*) ;; ",
+                "*) printf 'committed_%s_openapi_is_current did not pass in %s.\\n' \"$name\" \"$package\" >&2; exit 1 ;; ",
+                "esac; done",
+            ),
+            public = package("http"),
+            admin = package("admin-http"),
         )
     }
 }
@@ -290,10 +298,16 @@ impl ModelBuilder<'_> {
         inputs.push(OPENAPI_INPUT.into());
         inputs.sort();
         inputs.dedup();
-        let command = self.answers.openapi_check_command().unwrap_or_else(|| {
-            openapi_document_check_command(self.answers.backend_language().is_go())
-        });
-        self.insert_command(OPENAPI_DOCUMENT_COMMAND_KEY, command)?;
+        let command = self.answers.openapi_check_command().map_or_else(
+            || {
+                openapi_document_check_command(
+                    self.answers.backend_language().is_go(),
+                    self.answers.repo_name(),
+                )
+            },
+            str::to_owned,
+        );
+        self.insert_command(OPENAPI_DOCUMENT_COMMAND_KEY, &command)?;
         let mut action = ActionSpec::new(
             target_id(BACKEND_COMPONENT, OPENAPI_DOCUMENT_CHECK_ACTION)?,
             ActionIntent::Check,

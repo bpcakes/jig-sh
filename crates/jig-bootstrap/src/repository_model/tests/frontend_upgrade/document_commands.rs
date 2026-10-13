@@ -4,54 +4,84 @@
 
 use super::*;
 
+/// The Rust scaffold's packages are named after the repository.
+const REPO_NAME: &str = "example-project";
+
+/// A Cargo workspace with the scaffold's public and admin HTTP packages and
+/// a worker, each at `version`, and the committed public document.
+#[cfg(unix)]
+fn rust_workspace(root: &std::path::Path, version: &str) {
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]\n",
+    )
+    .unwrap();
+    for suffix in ["http", "admin-http", "worker"] {
+        let package = format!("{REPO_NAME}-{suffix}");
+        fs::create_dir_all(root.join(format!("crates/{package}/src"))).unwrap();
+        fs::write(root.join(format!("crates/{package}/src/lib.rs")), "").unwrap();
+        fs::write(
+            root.join(format!("crates/{package}/Cargo.toml")),
+            format!(
+                "[package]\nname = \"{package}\"\nversion = \"{version}\"\nedition = \"2021\"\n"
+            ),
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(root.join("openapi")).unwrap();
+    fs::write(root.join("openapi/public.json"), "{}\n").unwrap();
+}
+
+/// Locks the dependencies of [`rust_workspace`], as `--locked` requires.
+#[cfg(unix)]
+fn generate_lockfile(root: &std::path::Path) {
+    let status = std::process::Command::new("cargo")
+        .args(["generate-lockfile", "--offline"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Gives each package of [`rust_workspace`] the named tests, by package
+/// suffix, and runs the Rust document check in it with quiet Cargo.
+#[cfg(unix)]
+fn run_rust_document_check(root: &std::path::Path, tests: [&[&str]; 3]) -> std::process::Output {
+    for (suffix, tests) in ["http", "admin-http", "worker"].into_iter().zip(tests) {
+        fs::write(
+            root.join(format!("crates/{REPO_NAME}-{suffix}/src/lib.rs")),
+            tests
+                .iter()
+                .map(|test| format!("#[test]\nfn {test}() {{}}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    }
+    std::process::Command::new("bash")
+        .arg("-c")
+        .arg(openapi_document_check_command(false, REPO_NAME))
+        .current_dir(root)
+        .env("CARGO_TERM_QUIET", "true")
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .output()
+        .unwrap()
+}
+
 /// Real Cargo: quiet Cargo prints each passing test as a dot unless the
 /// format is pinned, and a read-only check must not rewrite the lockfile.
 #[cfg(unix)]
 #[test]
 fn rust_document_check_runs_quiet_cargo_without_rewriting_the_lockfile() {
     let root = TempDir::new().unwrap();
-    fs::create_dir_all(root.path().join("src")).unwrap();
-    fs::create_dir_all(root.path().join("openapi")).unwrap();
-    let manifest = |version: &str| {
-        fs::write(
-            root.path().join("Cargo.toml"),
-            format!(
-                "[package]\nname = \"example-openapi-fixture\"\nversion = \"{version}\"\nedition = \"2021\"\n"
-            ),
-        )
-        .unwrap();
-    };
-    manifest("0.1.0");
-    fs::write(root.path().join("openapi/public.json"), "{}\n").unwrap();
-    fs::write(root.path().join("src/lib.rs"), "").unwrap();
-    let lockfile_written = std::process::Command::new("cargo")
-        .args(["generate-lockfile", "--offline"])
-        .current_dir(root.path())
-        .status()
-        .unwrap();
-    assert!(lockfile_written.success());
+    rust_workspace(root.path(), "0.1.0");
+    generate_lockfile(root.path());
     let lockfile = fs::read(root.path().join("Cargo.lock")).unwrap();
-    let check = |test: &str| {
-        fs::write(
-            root.path().join("src/lib.rs"),
-            format!("#[test]\nfn {test}() {{}}\n"),
-        )
-        .unwrap();
-        std::process::Command::new("bash")
-            .arg("-c")
-            .arg(openapi_document_check_command(false))
-            .current_dir(root.path())
-            .env("CARGO_TERM_QUIET", "true")
-            .env("CARGO_TARGET_DIR", root.path().join("target"))
-            .output()
-            .unwrap()
-    };
     for (test, passes) in [
         ("committed_public_openapi_is_current", true),
         ("committed_public_document_renamed", false),
         ("unrelated_committed_public_openapi_is_current", false),
     ] {
-        let output = check(test);
+        let output = run_rust_document_check(root.path(), [&[test], &[], &[]]);
         assert_eq!(
             output.status.success(),
             passes,
@@ -62,14 +92,63 @@ fn rust_document_check_runs_quiet_cargo_without_rewriting_the_lockfile() {
     }
 
     // An outdated lockfile fails the check instead of being rewritten.
-    manifest("0.2.0");
-    let output = check("committed_public_openapi_is_current");
+    rust_workspace(root.path(), "0.2.0");
+    let output = run_rust_document_check(
+        root.path(),
+        [&["committed_public_openapi_is_current"], &[], &[]],
+    );
     assert!(
         !output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stdout)
     );
     assert_eq!(fs::read(root.path().join("Cargo.lock")).unwrap(), lockfile);
+}
+
+/// Real Cargo: each document test counts only in the package that the
+/// scaffold puts it in, so a test of that name in another crate of the
+/// workspace cannot pass the check for it.
+#[cfg(unix)]
+#[test]
+fn rust_document_check_runs_each_document_test_in_its_own_package() {
+    let root = TempDir::new().unwrap();
+    rust_workspace(root.path(), "0.1.0");
+    generate_lockfile(root.path());
+    let public = "committed_public_openapi_is_current";
+    let admin = "committed_admin_openapi_is_current";
+    let check = |tests: [&[&str]; 3], passes: bool, missing: Option<(&str, &str)>| {
+        let output = run_rust_document_check(root.path(), tests);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.success(),
+            passes,
+            "{tests:?}: {}{stderr}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        if let Some((name, suffix)) = missing {
+            assert!(
+                stderr.contains(&format!(
+                    "committed_{name}_openapi_is_current did not pass in {REPO_NAME}-{suffix}."
+                )),
+                "{tests:?}: {stderr}"
+            );
+        }
+    };
+
+    check([&[], &[], &[public]], false, Some(("public", "http")));
+    check([&[public], &[admin], &[]], true, None);
+    fs::write(root.path().join("openapi/admin.json"), "{}\n").unwrap();
+    check([&[public], &[admin], &[]], true, None);
+    check(
+        [&[public, admin], &[], &[admin]],
+        false,
+        Some(("admin", "admin-http")),
+    );
+    check(
+        [&[admin], &[public], &[public]],
+        false,
+        Some(("public", "http")),
+    );
 }
 
 #[cfg(unix)]
@@ -88,7 +167,7 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
         let tool = bin.join(if go { "go" } else { "cargo" });
         fs::write(
             &tool,
-            "#!/bin/sh\n[ \"$1\" = env ] && exit 0\nprintf '%s\\n' \"$*\" > \"$FAKE_ARGS\"\nprintf '%s\\n' \"$FAKE_OUTPUT\"\nexit \"$FAKE_STATUS\"\n",
+            "#!/bin/sh\n[ \"$1\" = env ] && exit 0\nprintf '%s\\n' \"$*\" >> \"$FAKE_ARGS\"\nprintf '%s\\n' \"$FAKE_OUTPUT\"\nexit \"$FAKE_STATUS\"\n",
         )
         .unwrap();
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
@@ -99,7 +178,7 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
         .unwrap();
         let result = std::process::Command::new("bash")
             .arg("-c")
-            .arg(openapi_document_check_command(go))
+            .arg(openapi_document_check_command(go, REPO_NAME))
             .current_dir(root.path())
             .env("PATH", path)
             .env("FAKE_ARGS", &args)
@@ -167,9 +246,19 @@ fn document_check_commands_fail_unless_each_document_test_passed() {
             "{label}"
         );
         let expected = if go {
-            "test -mod=readonly -count=1 -run ^TestOpenAPIIsCurrent$ -v ./internal/httpapi\n"
+            "test -mod=readonly -count=1 -run ^TestOpenAPIIsCurrent$ -v ./internal/httpapi\n".into()
         } else {
-            "test --workspace --locked openapi_is_current -- --format pretty\n"
+            // Each document test runs in its own package, the admin one
+            // beside its document.
+            [("public", "http"), ("admin", "admin-http")]
+                .into_iter()
+                .filter(|(name, _)| *name == "public" || documents.contains(name))
+                .map(|(name, suffix)| {
+                    format!(
+                        "test --locked -p {REPO_NAME}-{suffix} committed_{name}_openapi_is_current -- --format pretty\n"
+                    )
+                })
+                .collect::<String>()
         };
         assert_eq!(args, expected, "{label}");
         if status != "0" {
@@ -210,7 +299,7 @@ fn go_document_check_runs_outside_any_workspace() {
     ] {
         let output = std::process::Command::new("bash")
             .arg("-c")
-            .arg(openapi_document_check_command(true))
+            .arg(openapi_document_check_command(true, REPO_NAME))
             .current_dir(root.path())
             .env("PATH", &path)
             .env("GOWORK", root.path().join("go.work"))
@@ -345,7 +434,7 @@ fn go_document_check_leaves_module_and_workspace_checksums_alone() {
     let check = |goflags: &str| {
         go_command("bash", &app, goflags, true)
             .arg("-c")
-            .arg(openapi_document_check_command(true))
+            .arg(openapi_document_check_command(true, REPO_NAME))
             .output()
             .unwrap()
     };
@@ -442,7 +531,7 @@ fn go_document_check_leaves_module_and_workspace_checksums_alone() {
     );
     let output = go_command("bash", &workspace_app, "-modcacherw", true)
         .arg("-c")
-        .arg(openapi_document_check_command(true))
+        .arg(openapi_document_check_command(true, REPO_NAME))
         .output()
         .unwrap();
     assert!(!output.status.success());

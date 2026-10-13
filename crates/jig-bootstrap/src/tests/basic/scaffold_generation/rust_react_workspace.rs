@@ -501,6 +501,36 @@ fn assert_rendered_jig_answers(destination: &Path) {
         ],
     );
     let config: toml::Value = toml::from_str(&answers).unwrap();
+    // api:openapi runs each document test in the package that holds it.
+    let document_check = config["commands"]["api_openapi_command"].as_str().unwrap();
+    for (package, source, test) in [
+        (
+            "my-app-http",
+            "src/lib.rs",
+            "fn committed_public_openapi_is_current()",
+        ),
+        (
+            "my-app-admin-http",
+            "src/tests.rs",
+            "fn committed_admin_openapi_is_current()",
+        ),
+    ] {
+        assert!(
+            document_check.contains(&format!("package={package};")),
+            "{document_check}"
+        );
+        let root = destination.join("crates").join(package);
+        assert!(
+            fs::read_to_string(root.join("Cargo.toml"))
+                .unwrap()
+                .contains(&format!("name = \"{package}\"\n"))
+        );
+        assert!(
+            fs::read_to_string(root.join(source))
+                .unwrap()
+                .contains(test)
+        );
+    }
     let bootstrap = config["commands"]["repo_bootstrap_command"]
         .as_str()
         .unwrap();
