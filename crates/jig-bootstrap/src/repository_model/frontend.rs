@@ -234,13 +234,16 @@ pub(super) fn frontend_contract_inputs(
 /// passes. A customized general test command therefore cannot skip them.
 /// Rust pins the per-test format, which quiet Cargo would print as dots,
 /// keeps the lockfile as a read-only check must, always requires the public
-/// test, which every Rust scaffold has, and accepts each test only by its whole
-/// name, not one that merely ends with it, and only from the package that
-/// every Rust scaffold puts it in, named after the repository, so a test of
-/// that name in another crate cannot stand in for it. Go builds the backend
-/// module as a release does, outside any workspace, whose checksum file it
-/// would update even in read-only mode, and refuses to update go.sum, even
-/// under an inherited -mod=mod, so the check writes no checksum file.
+/// test, which every Rust scaffold has, and requires the admin test beside
+/// the admin document or the scaffold's admin crate, so deleting the document
+/// of an admin API, with or without its frontend, cannot skip it. It accepts
+/// each test only by its whole name, not one that merely ends with it, and
+/// only from the package that every Rust scaffold puts it in, named after the
+/// repository, so a test of that name in another crate cannot stand in for
+/// it. Go builds the backend module as a release does, outside any
+/// workspace, whose checksum file it would update even in read-only mode,
+/// and refuses to update go.sum, even under an inherited -mod=mod, so the
+/// check writes no checksum file.
 pub(super) fn openapi_document_check_command(go: bool, repo_name: &str) -> String {
     if go {
         concat!(
@@ -259,7 +262,8 @@ pub(super) fn openapi_document_check_command(go: bool, repo_name: &str) -> Strin
         format!(
             concat!(
                 "for name in public admin; do package={public}; ",
-                "if [ \"$name\" = admin ]; then [ -f openapi/admin.json ] || continue; package={admin}; fi; ",
+                "if [ \"$name\" = admin ]; then package={admin}; ",
+                "[ -f openapi/admin.json ] || [ -f \"crates/$package/Cargo.toml\" ] || continue; fi; ",
                 "output=$(cargo test --locked -p \"$package\" \"committed_${{name}}_openapi_is_current\" -- --format pretty 2>&1); ",
                 "status=$?; printf '%s\\n' \"$output\"; [ \"$status\" -eq 0 ] || exit \"$status\"; ",
                 "case \"$output\" in *\"::committed_${{name}}_openapi_is_current ... ok\"* ",
