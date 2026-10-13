@@ -282,13 +282,14 @@ fn capability_refresh_keeps_inputs_an_owner_declared_on_a_generated_check() {
     assert!(model.rust_ci_input_paths().contains(&"schemas/**".into()));
 }
 
-/// A contract check whose inputs its owner changed stays as its owner left
-/// it, as on update; an unmodified one is regenerated.
+/// A contract or document check whose inputs its owner changed stays as its
+/// owner left it, as on update; an unmodified one is regenerated.
 #[test]
 fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
     for (target, input) in [
         ("repo:frontend-contract-drift", "schemas/**"),
         ("repo:frontend-public-boundary", "docs/privileged/**"),
+        ("api:openapi", "schemas/**"),
     ] {
         let mut saved = saved_current_model("rust");
         let check = saved
@@ -315,6 +316,9 @@ fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
             .find(|action| action.target.to_string() == target)
             .unwrap();
         assert!(refreshed.inputs.contains(&input.into()), "{target}");
+        if target == "api:openapi" {
+            assert!(model.rust_ci_input_paths().contains(&input.into()));
+        }
     }
 }
 

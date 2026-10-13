@@ -160,8 +160,8 @@ pub fn refresh(
 }
 
 /// The prior actions that the refresh replaces with the generated ones: those
-/// that generation wrote and their owner left as it wrote them. A contract
-/// check with other inputs stays, as on update.
+/// that generation wrote and their owner left as it wrote them. A contract or
+/// document check with other inputs stays, as on update.
 fn managed_targets(
     generated: &AuthoredRepositoryModel,
     prior: &AuthoredRepositoryModel,
