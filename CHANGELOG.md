@@ -46,7 +46,8 @@
 - Re-adoption with a capability change keeps a generated target whose owner
   declared any of its fields, such as its inputs or dependencies, and a
   contract check or the backend's `openapi` document check, whatever adoption
-  named the backend, whose inputs the owner changed. It regenerated them as
+  named the backend, whose inputs the owner changed, or a document check whose
+  command key the owner renamed. It regenerated them as
   generation writes them, so a check could run before a target that it was
   declared to follow, or miss a change to an input its owner had added. A
   document check that generation no longer writes, as beside a backend that
