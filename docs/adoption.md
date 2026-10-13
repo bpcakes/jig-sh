@@ -123,7 +123,8 @@ Explicit footprint or SQLx capability changes refresh generated harness actions
 while retaining authored component identities. A generated action whose owner
 declared any of its fields, with provenance `declared`, stays as the owner
 wrote it, and so does a contract check or the backend's `openapi` document
-check, whatever adoption named the backend, whose inputs the owner changed.
+check, whatever adoption named the backend, whose inputs the owner changed, or
+a document check whose command key the owner renamed.
 A document check that generation no longer writes, as beside a backend that is
 no longer at the repository root, stays unless its owner left it as generated
 and no other target depends on it. Command overrides such as

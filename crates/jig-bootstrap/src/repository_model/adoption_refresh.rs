@@ -175,9 +175,10 @@ pub fn refresh(
 
 /// The prior actions that the refresh replaces with the generated ones, or
 /// drops: those that generation wrote and their owner left as it wrote them.
-/// As on update, a contract or document check with other inputs stays, and a
-/// boundary or document check that generation no longer writes leaves only if
-/// it is unmodified and no other target depends on it.
+/// As on update, a contract or document check with other inputs, or a document
+/// check with another command key, stays, and a boundary or document check
+/// that generation no longer writes leaves only if it is unmodified and no
+/// other target depends on it.
 fn managed_targets(
     generated: &AuthoredRepositoryModel,
     generated_commands: &BTreeMap<String, String>,
@@ -204,7 +205,7 @@ fn managed_targets(
                     .iter()
                     .find(|replacement| replacement.target == action.target)
                 {
-                    Some(replacement) => !super::frontend_migration::customized_contract_inputs(
+                    Some(replacement) => !super::frontend_migration::customized_contract_check(
                         &prior.components,
                         action,
                         replacement,

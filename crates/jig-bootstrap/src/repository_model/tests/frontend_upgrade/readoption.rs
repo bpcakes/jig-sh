@@ -307,6 +307,8 @@ fn capability_refresh_keeps_a_removed_document_check_removed() {
     }
 }
 
+/// A refresh keeps the command its owner set for the document check, also
+/// under a key that the owner renamed with the backend.
 #[test]
 fn capability_refresh_keeps_a_customized_document_check_command() {
     let custom = "cargo test --workspace --locked committed_ -- --format pretty";
@@ -320,6 +322,34 @@ fn capability_refresh_keeps_a_customized_document_check_command() {
 
     assert!(has_target(&model, "api:openapi"));
     assert_eq!(model.commands["api_openapi_command"], custom);
+
+    let mut saved = saved_current_model("rust");
+    rename_backend(&mut saved, "server");
+    saved
+        .actions
+        .iter_mut()
+        .find(|action| action.target.to_string() == "server:openapi")
+        .unwrap()
+        .runner = ActionRunner::command("server_openapi_command");
+    saved.commands.remove("api_openapi_command");
+    saved
+        .commands
+        .insert("server_openapi_command".into(), custom.into());
+
+    let answers = readopt_with_sqlx(&saved).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    let check = model
+        .actions
+        .iter()
+        .find(|action| action.target.to_string() == "server:openapi")
+        .unwrap();
+    assert_eq!(
+        check.runner,
+        ActionRunner::command("server_openapi_command")
+    );
+    assert_eq!(model.commands["server_openapi_command"], custom);
+    assert!(!model.commands.contains_key("api_openapi_command"));
 }
 
 #[test]

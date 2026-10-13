@@ -135,22 +135,26 @@ pub(super) fn predates_document_check(
             .is_none_or(|value| value == generated_command)
 }
 
-/// Whether a saved contract or document check, among the saved `components`,
-/// reads other inputs than generation gives it now. A capability refresh,
-/// which cannot change those inputs, keeps such a check, as its owner may
-/// have changed them; loading the model then updates a contract check that
-/// earlier generators wrote, as an update does.
-pub(super) fn customized_contract_inputs(
+/// Whether the owner changed a saved contract or document check, among the
+/// saved `components`, from what generation gives it now: its inputs, or the
+/// command key of a document check, which an owner may rename with the
+/// backend. A capability refresh, which cannot change either, keeps such a
+/// check with its command; loading the model then updates a contract check
+/// that earlier generators wrote, as an update does.
+pub(super) fn customized_contract_check(
     components: &[ComponentSpec],
     saved: &ActionSpec,
     generated: &ActionSpec,
 ) -> bool {
-    (is_backend_document_check(components, saved)
-        || (saved.target.component.as_str() == REPO_COMPONENT
-            && matches!(
-                saved.target.action.as_str(),
-                FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
-            )))
+    if is_backend_document_check(components, saved) {
+        return saved.inputs != generated.inputs
+            || command(&saved.runner) != command(&generated.runner);
+    }
+    saved.target.component.as_str() == REPO_COMPONENT
+        && matches!(
+            saved.target.action.as_str(),
+            FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
+        )
         && saved.inputs != generated.inputs
 }
 
