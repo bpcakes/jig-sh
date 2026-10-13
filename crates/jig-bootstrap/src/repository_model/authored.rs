@@ -38,11 +38,16 @@ impl AuthoredRepositoryModel {
         super::frontend_migration::lacks_document_check(self, commands)
     }
 
-    pub fn predates_document_check(&self, commands: &BTreeMap<String, String>, go: bool) -> bool {
+    pub fn predates_document_check(
+        &self,
+        commands: &BTreeMap<String, String>,
+        go: bool,
+        repo_name: &str,
+    ) -> bool {
         super::frontend_migration::predates_document_check(
             self,
             commands,
-            super::frontend::openapi_document_check_command(go),
+            &super::frontend::openapi_document_check_command(go, repo_name),
         )
     }
 

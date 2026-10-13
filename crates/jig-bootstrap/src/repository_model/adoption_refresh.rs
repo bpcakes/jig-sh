@@ -75,7 +75,11 @@ pub fn refresh(
                 .actions
                 .iter()
                 .any(|prior| prior.target == action.target)
-            && !prior.predates_document_check(prior_commands, answers.backend_language().is_go())
+            && !prior.predates_document_check(
+                prior_commands,
+                answers.backend_language().is_go(),
+                answers.repo_name(),
+            )
         {
             continue;
         }

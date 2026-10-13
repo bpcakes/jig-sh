@@ -9,6 +9,10 @@ impl RenderAnswers {
         &self.authored_repository_commands
     }
 
+    pub fn repo_name(&self) -> &str {
+        &self.repo_name
+    }
+
     pub fn default_branch(&self) -> &str {
         &self.default_branch
     }

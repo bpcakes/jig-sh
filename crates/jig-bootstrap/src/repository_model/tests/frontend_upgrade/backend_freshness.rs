@@ -81,7 +81,7 @@ pub(super) fn customize_frontend(model: &mut RepositoryRenderModel) {
 #[test]
 fn generation_adds_a_document_check_that_test_commands_cannot_skip() {
     for backend in ["rust", "go"] {
-        let command = openapi_document_check_command(backend == "go");
+        let command = openapi_document_check_command(backend == "go", "ExampleProject");
         let customized = custom_test_commands(backend).map(|(_, answer, custom)| {
             scaffolded_model(backend, &format!("{answer} = {custom:?}\n"))
         });
