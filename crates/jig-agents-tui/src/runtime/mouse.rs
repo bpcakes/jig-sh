@@ -20,6 +20,26 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent, now: Instant) -> Ac
     let position = Position::new(mouse.column, mouse.row);
     let areas = app.hit_areas();
     let inside = |area: Option<Rect>| area.is_some_and(|area| area.contains(position));
+    if mouse.kind == MouseEventKind::Down(MouseButton::Left) && inside(areas.fleet) {
+        app.toggle_fleet_details();
+        return Action::Redraw;
+    }
+    if app.fleet_details_open {
+        return match mouse.kind {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                if inside(areas.fleet_details) =>
+            {
+                let direction = if mouse.kind == MouseEventKind::ScrollDown {
+                    1
+                } else {
+                    -1
+                };
+                app.scroll_fleet_details(direction * DETAIL_WHEEL_LINES);
+                Action::Redraw
+            }
+            _ => Action::Ignore,
+        };
+    }
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             let Some(index) = home_at(app, position) else {
@@ -229,5 +249,57 @@ mod tests {
         let row = row_of(&app, 1);
         assert_eq!(click(&mut app, 10, row, Instant::now()), Action::Ignore);
         assert_eq!(app.selected, Some(0));
+    }
+
+    #[test]
+    fn fleet_panel_clicks_open_a_scrollable_view_without_activating_hidden_homes() {
+        let mut app = app(2);
+        let observed_at = 2_000_000_000;
+        app.apply_update_at(crate::HomeUpdate { index: 0, details: serde_json::json!({
+            "account": {"type": "chatgpt", "email": "account@example.com", "plan_type": "pro"},
+            "status": "authenticated",
+            "rate_limits": [{"id": "codex", "plan_type": "pro", "primary": {
+                "used_percent": 20, "duration_minutes": 300, "resets_at": observed_at + 9_000
+            }}]
+        }) }, observed_at);
+        draw(&app, 46, 12);
+        let now = Instant::now();
+        let hidden_row = row_of(&app, 1);
+        let fleet = app.hit_areas().fleet.unwrap();
+        assert_eq!(
+            click(&mut app, fleet.x + 2, fleet.y + 1, now),
+            Action::Redraw
+        );
+        assert!(app.fleet_details_open);
+        // An event arriving before the next draw must not hit the previous home's rows.
+        assert_eq!(click(&mut app, 10, hidden_row, now), Action::Ignore);
+        assert_eq!(app.selected, Some(0));
+        draw(&app, 46, 12);
+        assert!(app.hit_areas().rows.is_none());
+        assert!(app.hit_areas().details.is_none());
+        let details = app.hit_areas().fleet_details.unwrap();
+        assert_eq!(
+            handle_mouse(
+                &mut app,
+                event(MouseEventKind::ScrollDown, details.x + 2, details.y + 1),
+                now
+            ),
+            Action::Redraw
+        );
+        assert_eq!(app.fleet_scroll, 3);
+        assert_eq!(
+            click(&mut app, details.x + 2, details.y + 1, now),
+            Action::Ignore
+        );
+        assert_eq!(app.selected, Some(0));
+        assert_eq!(
+            click(&mut app, fleet.x + 2, fleet.y + 1, now),
+            Action::Redraw
+        );
+        assert!(!app.fleet_details_open);
+        draw(&app, 46, 12);
+        let row = row_of(&app, 0);
+        assert_eq!(click(&mut app, 10, row, now), Action::Redraw);
+        assert!(app.exit_state.is_none());
     }
 }

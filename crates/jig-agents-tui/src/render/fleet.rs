@@ -18,17 +18,23 @@ use super::{
 use crate::model::{FleetAssessment, FleetCapacityWindow, FleetOutcome};
 use crate::usage::remaining_percent;
 
+mod details;
+pub(super) use details::draw_details;
+
 pub(super) fn draw_fleet(frame: &mut Frame, area: Rect, view: &View<'_>) {
     let Some(fleet) = &view.fleet else {
         return;
     };
+    view.app.set_hit_areas(|areas| areas.fleet = Some(area));
     let compact = area.height <= 3;
     let title = if area.width < 70 {
         "fleet"
     } else {
         "fleet capacity"
     };
-    let mut block = panel(view, title, &fleet.coverage_label(), false);
+    let mut block = panel(view, title, &fleet.coverage_label(), false).title_bottom(Line::from(
+        Span::styled(" ?/F1 details ", Style::default().fg(view.theme.muted())),
+    ));
     if area.width >= 70
         && let Some(capacity) = fleet.capacity()
     {

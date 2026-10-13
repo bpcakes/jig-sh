@@ -150,7 +150,9 @@ impl Simulation {
         if !self.aligned {
             return SimulationOutcome::AlignmentBudgetExceeded;
         }
-        if !self.burn_observed() {
+        // Current availability is an observed fact even when no pace can be measured.
+        // An exhausted window at its exact start has zero elapsed time and zero rate.
+        if !self.burn_observed() && self.select(0.0).is_some() {
             return SimulationOutcome::NoGap {
                 burn_observed: false,
             };

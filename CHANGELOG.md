@@ -14,6 +14,8 @@
   capacities, or window timing stay excluded or unsupported, duplicate homes
   share one quota pool, and tied conflicting samples withhold that pool.
   Sample alignment and simulation both require quota in every account window.
+  Observed blocking remains visible even at zero elapsed window time. F1,
+  `?` outside search, or a panel click opens the full scrollable explanation.
   Live inspection and `r` refresh update the cached forecast. The current
   layout, 46×12 minimum, and `NO_COLOR` presentation remain supported.
 

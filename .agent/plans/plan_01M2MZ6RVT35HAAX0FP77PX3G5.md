@@ -23,8 +23,12 @@ The panel reuses the aligned simulation budgets for pooled quota meters and
 usable-account counts. Shaded meters show estimated demand per full window;
 staggered resets have no shared elapsed-time tick. Fleet assumptions and
 exclusions live in this global panel, while home details remain account-specific.
+F1, `?` outside search, or a panel click opens the complete global explanation
+with independent scrolling at every supported size. Home selection and search
+survive opening and closing it. Current blocking and recovery stay independent
+of pace evidence, including exhaustion at exactly zero elapsed window time.
 
-Current validation: all 167 `jig-agents-tui` tests pass, including refresh,
+Panel baseline validation before the follow-up repairs: all 167 `jig-agents-tui` tests passed, including refresh,
 nullable timing, and monochrome regressions. The five preflight checks passed:
 formatting, workspace Clippy, harness contract, file budgets, and the source
 runtime through the launcher. All 23 Codex/Claude launcher integration tests

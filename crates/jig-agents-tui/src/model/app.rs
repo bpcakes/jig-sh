@@ -8,11 +8,11 @@ use jig_tui::{ListViewportState, PreparedFuzzyText, sanitize_text};
 use ratatui::layout::Rect;
 
 use super::{
-    Details, ExitState, Focus, HomeRow, Inspection,
-    fleet::{self, FleetAssessment, FleetForecast},
-    unix_timestamp_now,
+    Details, ExitState, Focus, HomeRow, Inspection, fleet::FleetForecast, unix_timestamp_now,
 };
 use crate::{Home, HomeUpdate};
+
+mod fleet_view;
 
 /// Where the last frame drew the list rows and the details, so a mouse event
 /// can be mapped to what was on screen.
@@ -23,6 +23,8 @@ pub(crate) struct HitAreas {
     /// The rows themselves, below the column header.
     pub(crate) rows: Option<ListRows>,
     pub(crate) details: Option<Rect>,
+    pub(crate) fleet: Option<Rect>,
+    pub(crate) fleet_details: Option<Rect>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +50,9 @@ pub(crate) struct App {
     pub(crate) focus: Focus,
     pub(crate) detail_scroll: u16,
     detail_scroll_limit: Cell<u16>,
+    pub(crate) fleet_details_open: bool,
+    pub(crate) fleet_scroll: u16,
+    fleet_scroll_limit: Cell<u16>,
     list_viewport: ListViewportState,
     pub(crate) completed: usize,
     pub(crate) inspection_finished: bool,
@@ -85,6 +90,9 @@ impl App {
             focus: Focus::Homes,
             detail_scroll: 0,
             detail_scroll_limit: Cell::new(0),
+            fleet_details_open: false,
+            fleet_scroll: 0,
+            fleet_scroll_limit: Cell::new(0),
             list_viewport: ListViewportState::default(),
             completed: 0,
             inspection_finished: false,
@@ -108,7 +116,7 @@ impl App {
     #[cfg(test)]
     pub(crate) fn codex(homes: Vec<Home>, discovery_warnings: Vec<String>) -> Self {
         let mut app = Self::new("Codex Home Picker", homes, discovery_warnings);
-        app.subscription_buckets = vec![fleet::CODEX_SUBSCRIPTION_BUCKET.into()];
+        app.subscription_buckets = vec![super::fleet::CODEX_SUBSCRIPTION_BUCKET.into()];
         app.codex_fleet_forecast = true;
         app
     }
@@ -154,33 +162,6 @@ impl App {
             }
         }
         best.map(|(index, _)| index)
-    }
-
-    /// Whether this picker forecasts a collective Codex quota outlook.
-    ///
-    /// Only a Codex subscription picker opts in. Claude, static configurations, and
-    /// providers without subscription semantics keep their existing presentation.
-    pub(crate) fn fleet_forecast_enabled(&self) -> bool {
-        self.codex_fleet_forecast && !self.static_configuration
-    }
-
-    /// Collective quota forecast across every discovered home.
-    ///
-    /// This deliberately reads `rows` rather than `visible_indices()`: a search filter
-    /// changes what is displayed, never the account pool being forecast. `now` only affects
-    /// freshness and countdown presentation, never the modeled timeline.
-    pub(crate) fn fleet_assessment_at(&self, now: u64) -> Option<FleetAssessment> {
-        if !self.fleet_forecast_enabled() {
-            return None;
-        }
-        let mut cached = self.fleet_forecast.borrow_mut();
-        if cached
-            .as_ref()
-            .is_none_or(|(generation, _)| *generation != self.fleet_generation)
-        {
-            *cached = Some((self.fleet_generation, fleet::forecast(&self.rows)));
-        }
-        cached.as_ref().map(|(_, forecast)| forecast.assess_at(now))
     }
 
     pub(crate) fn apply_update(&mut self, update: HomeUpdate) {

@@ -78,11 +78,22 @@ fn draw_with(frame: &mut Frame, app: &App, theme: Theme, now: u64) {
     if let Some(area) = layout.fleet {
         fleet::draw_fleet(frame, area, &view);
     }
-    if let Some(list) = layout.list {
-        draw_list(frame, list, &view);
-    }
-    if let Some(details) = layout.details {
-        details::draw_details(frame, details, &view);
+    if app.fleet_details_open && view.fleet.is_some() {
+        let top = layout
+            .fleet
+            .map_or(layout.header.bottom(), |area| area.bottom());
+        fleet::draw_details(
+            frame,
+            Rect::new(area.x, top, area.width, layout.footer.y.saturating_sub(top)),
+            &view,
+        );
+    } else {
+        if let Some(list) = layout.list {
+            draw_list(frame, list, &view);
+        }
+        if let Some(details) = layout.details {
+            details::draw_details(frame, details, &view);
+        }
     }
     footer::draw_footer(frame, layout.footer, &view);
 }

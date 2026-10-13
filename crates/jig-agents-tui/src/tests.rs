@@ -674,6 +674,7 @@ fn bidi_controls_are_sanitized_while_script_joiners_are_preserved() {
 }
 
 mod fleet;
+mod fleet_details;
 mod projection_rendering;
 mod refresh;
 mod search_navigation;

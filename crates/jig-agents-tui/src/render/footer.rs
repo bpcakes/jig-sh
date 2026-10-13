@@ -48,6 +48,14 @@ const SEARCH: [Hint; 4] = [
     hint("Enter", "launch", 0),
     hint("Esc", "finish search", 1),
 ];
+const FLEET: [Hint; 6] = [
+    hint("↑↓", "scroll", 1),
+    hint("PgUp/PgDn", "jump", 3),
+    hint("?/F1", "close", 2),
+    hint(REFRESH, "refresh", 2),
+    hint("Esc", "back", 0),
+    hint("Ctrl-C", "cancel", 4),
+];
 
 pub(super) fn draw_footer(frame: &mut Frame, area: Rect, view: &View<'_>) {
     let app = view.app;
@@ -63,7 +71,9 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, view: &View<'_>) {
             Style::default().fg(theme.muted()),
         )
     } else {
-        let hints = if app.searching {
+        let hints = if app.fleet_details_open {
+            &FLEET[..]
+        } else if app.searching {
             &SEARCH[..]
         } else if app.focus == Focus::Details {
             &DETAILS[..]
@@ -89,7 +99,7 @@ pub(super) fn draw_footer(frame: &mut Frame, area: Rect, view: &View<'_>) {
         ]));
     }
     frame.render_widget(Paragraph::new(lines), area);
-    if app.searching && area.height > 1 {
+    if app.searching && !app.fleet_details_open && area.height > 1 {
         let prompt_width = u16::try_from(SEARCH_PROMPT.width()).unwrap_or(u16::MAX);
         let filter_width =
             u16::try_from(Line::from(app.filter.as_str()).width()).unwrap_or(u16::MAX);
