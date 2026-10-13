@@ -30,10 +30,8 @@ pub(super) fn document_check_deferred(
 }
 
 /// What an update says about a saved model from before the document check:
-/// how to add the check, or, when asking would leave a custom model as it
-/// is, how to declare it. Asking without API contracts, including without a
-/// saved repository model, says that the check does not apply, unless a
-/// custom model may keep its contracts under checks of its own.
+/// how to add the check, or, when asking would leave the model without one,
+/// how to declare it.
 pub(super) fn document_check_note(
     raw: &RawAnswers,
     commands: Option<&BTreeMap<String, String>>,
@@ -41,27 +39,14 @@ pub(super) fn document_check_note(
 ) -> Option<String> {
     let saved = raw.repository.as_ref().zip(commands);
     if raw.add_openapi_check {
-        let without_contracts = "--add-openapi-check applies only to a repository model with API contracts, and this one has none.";
-        let Some((repository, commands)) = saved else {
-            return Some(without_contracts.into());
-        };
-        if repository.has_document_check() {
-            return None;
-        }
-        if repository.frontend_contracts_enabled(commands) {
-            return custom.then(|| {
-                "--add-openapi-check left the custom repository model as it is; declare api:openapi in .jig.toml to add the check."
-                    .into()
-            });
-        }
-        return Some(
-            if custom {
-                "--add-openapi-check found none of the generated API contract checks in this custom repository model and left it as it is; declare api:openapi in .jig.toml to add the check."
-            } else {
-                without_contracts
-            }
-            .into(),
-        );
+        let checked = saved.is_some_and(|(repository, commands)| {
+            repository.has_document_check()
+                || (!custom && repository.frontend_contracts_enabled(commands))
+        });
+        return (!checked).then(|| {
+            "--add-openapi-check adds api:openapi only to a repository model that is not custom and has the generated API contract checks, so it left this one as it is; declare api:openapi in .jig.toml to add the check."
+                .into()
+        });
     }
     let (repository, commands) = saved?;
     if !repository.is_complete() || !repository.lacks_document_check(commands) {

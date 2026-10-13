@@ -238,7 +238,7 @@ fn managed_update_keeps_a_custom_model_eligible_for_the_document_check() {
         assert!(
             notes
                 .iter()
-                .any(|note| note.contains("left the custom repository model")),
+                .any(|note| note.contains("--add-openapi-check adds api:openapi only")),
             "{backend}: {notes:?}"
         );
 
@@ -263,12 +263,10 @@ fn managed_update_keeps_a_custom_model_eligible_for_the_document_check() {
     }
 }
 
-/// Without API contracts there is no document check to add, and asking says
-/// so instead of suggesting that the owner declare one, also without a saved
-/// repository model.
+/// Without API contracts, also without a saved repository model, asking adds
+/// no check and says how to declare one.
 #[test]
 fn managed_update_says_the_document_check_needs_api_contracts() {
-    let contracts_note = "--add-openapi-check applies only to a repository model with API contracts, and this one has none.";
     for backend in ["rust", "go"] {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(".jig.toml");
@@ -282,7 +280,9 @@ fn managed_update_says_the_document_check_needs_api_contracts() {
         let (_, notes) =
             RenderAnswers::from_managed_answers_file(&path, temp.path(), true).unwrap();
         assert!(
-            notes.iter().any(|note| note == contracts_note),
+            notes
+                .iter()
+                .any(|note| note.contains("--add-openapi-check adds api:openapi only")),
             "{backend}: {notes:?}"
         );
 
@@ -301,40 +301,8 @@ fn managed_update_says_the_document_check_needs_api_contracts() {
                 .iter()
                 .filter(|note| note.contains("openapi"))
                 .collect::<Vec<_>>(),
-            [contracts_note],
-            "{backend}"
-        );
-    }
-}
-
-/// A custom model without the generated drift check may keep its API
-/// contracts under checks of its own, so asking says how to declare the
-/// document check instead of that the model has no contracts.
-#[test]
-fn managed_update_says_how_to_declare_the_check_beside_contract_checks_of_its_own() {
-    for backend in ["rust", "go"] {
-        let mut model = legacy_model(backend);
-        let drift = target_id("repo", "frontend-contract-drift").unwrap();
-        model.actions.retain(|action| action.target != drift);
-        for action in &mut model.actions {
-            action.depends_on.retain(|target| *target != drift);
-        }
-        for profile in &mut model.profiles {
-            profile.targets.retain(|target| *target != drift);
-        }
-        model
-            .commands
-            .remove("repo_frontend_contract_drift_command");
-
-        let (_, notes) = update_answers(&model, backend, true);
-
-        assert_eq!(
-            notes
-                .iter()
-                .filter(|note| note.contains("openapi"))
-                .collect::<Vec<_>>(),
             [
-                "--add-openapi-check found none of the generated API contract checks in this custom repository model and left it as it is; declare api:openapi in .jig.toml to add the check."
+                "--add-openapi-check adds api:openapi only to a repository model that is not custom and has the generated API contract checks, so it left this one as it is; declare api:openapi in .jig.toml to add the check."
             ],
             "{backend}"
         );
@@ -379,7 +347,7 @@ fn managed_update_offers_the_check_beside_a_frontend_openapi_action() {
         assert!(
             notes
                 .iter()
-                .any(|note| note.contains("left the custom repository model")),
+                .any(|note| note.contains("--add-openapi-check adds api:openapi only")),
             "{backend}: {notes:?}"
         );
     }

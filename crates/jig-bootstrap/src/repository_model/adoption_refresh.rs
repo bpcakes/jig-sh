@@ -37,11 +37,7 @@ pub fn refresh(
     let mut model = prior.clone();
     let mut commands = prior_commands.clone();
     commands.retain(|_, value| !value.trim().is_empty());
-    let document_command = super::frontend::openapi_document_check_command(
-        answers.backend_language().is_go(),
-        answers.repo_name(),
-    );
-    let managed = managed_targets(&generated, prior, prior_commands, &document_command);
+    let managed = managed_targets(&generated, prior);
     for action in &prior.actions {
         if managed.contains(&action.target)
             && let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
@@ -163,40 +159,27 @@ pub fn refresh(
     Ok((model, commands))
 }
 
-/// The prior actions that the refresh replaces with the generated ones, or
-/// drops: those that generation wrote and their owner left as it wrote them.
-/// A contract or document check with other inputs, or a document check with
-/// another command key, stays, as on update, and a document check that
-/// generation no longer writes leaves only if it is unmodified and no other
-/// target depends on it.
+/// The prior actions that the refresh replaces with the generated ones: those
+/// that generation wrote and their owner left as it wrote them. A contract
+/// check with other inputs stays, as on update. A capability change cannot
+/// change the document check, so a saved one stays as its owner left it.
 fn managed_targets(
     generated: &AuthoredRepositoryModel,
     prior: &AuthoredRepositoryModel,
-    prior_commands: &BTreeMap<String, String>,
-    document_command: &str,
 ) -> BTreeSet<TargetId> {
     prior
         .actions
         .iter()
         .filter(|action| {
             generated_action(action, prior)
-                && match generated
+                && !super::frontend_migration::is_backend_document_check(&prior.components, action)
+                && !generated
                     .actions
                     .iter()
                     .find(|replacement| replacement.target == action.target)
-                {
-                    Some(replacement) => !super::frontend_migration::customized_contract_check(
-                        &prior.components,
-                        action,
-                        replacement,
-                    ),
-                    None => !super::frontend_migration::keeps_saved_document_check(
-                        prior,
-                        prior_commands,
-                        action,
-                        document_command,
-                    ),
-                }
+                    .is_some_and(|replacement| {
+                        super::frontend_migration::customized_contract_inputs(action, replacement)
+                    })
         })
         .map(|action| action.target.clone())
         .collect()
