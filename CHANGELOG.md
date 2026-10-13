@@ -48,7 +48,10 @@
   contract check or the backend's `openapi` document check, whatever adoption
   named the backend, whose inputs the owner changed. It regenerated them as
   generation writes them, so a check could run before a target that it was
-  declared to follow, or miss a change to an input its owner had added.
+  declared to follow, or miss a change to an input its owner had added. A
+  document check that generation no longer writes, as beside a backend that
+  is no longer at the repository root, stays unless its owner left it as
+  generated and no other target depends on it.
 - In repositories scaffolded with API contracts, a new `api:openapi` check
   owns OpenAPI document freshness and `repo:frontend-contract-drift` owns
   client freshness. `api:openapi` runs only the scaffold's committed-document

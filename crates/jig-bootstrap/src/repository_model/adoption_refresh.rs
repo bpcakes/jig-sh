@@ -37,7 +37,11 @@ pub fn refresh(
     let mut model = prior.clone();
     let mut commands = prior_commands.clone();
     commands.retain(|_, value| !value.trim().is_empty());
-    let managed = managed_targets(&generated, prior);
+    let document_command = super::frontend::openapi_document_check_command(
+        answers.backend_language().is_go(),
+        answers.repo_name(),
+    );
+    let managed = managed_targets(&generated, prior, prior_commands, &document_command);
     for action in &prior.actions {
         if managed.contains(&action.target)
             && let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
@@ -159,29 +163,39 @@ pub fn refresh(
     Ok((model, commands))
 }
 
-/// The prior actions that the refresh replaces with the generated ones: those
-/// that generation wrote and their owner left as it wrote them. A contract or
-/// document check with other inputs stays, as on update.
+/// The prior actions that the refresh replaces with the generated ones, or
+/// drops: those that generation wrote and their owner left as it wrote them.
+/// A contract or document check with other inputs stays, as on update, and a
+/// document check that generation no longer writes leaves only if it is
+/// unmodified and no other target depends on it.
 fn managed_targets(
     generated: &AuthoredRepositoryModel,
     prior: &AuthoredRepositoryModel,
+    prior_commands: &BTreeMap<String, String>,
+    document_command: &str,
 ) -> BTreeSet<TargetId> {
     prior
         .actions
         .iter()
         .filter(|action| {
             generated_action(action, prior)
-                && !generated
+                && match generated
                     .actions
                     .iter()
                     .find(|replacement| replacement.target == action.target)
-                    .is_some_and(|replacement| {
-                        super::frontend_migration::customized_contract_inputs(
-                            &prior.components,
-                            action,
-                            replacement,
-                        )
-                    })
+                {
+                    Some(replacement) => !super::frontend_migration::customized_contract_inputs(
+                        &prior.components,
+                        action,
+                        replacement,
+                    ),
+                    None => !super::frontend_migration::keeps_saved_document_check(
+                        prior,
+                        prior_commands,
+                        action,
+                        document_command,
+                    ),
+                }
         })
         .map(|action| action.target.clone())
         .collect()
