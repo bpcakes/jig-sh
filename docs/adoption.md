@@ -124,7 +124,9 @@ while retaining authored component identities. A generated action whose owner
 declared any of its fields, with provenance `declared`, stays as the owner
 wrote it, and so does a contract check or the backend's `openapi` document
 check, whatever adoption named the backend, whose inputs the owner changed.
-Command overrides such as
+A document check that generation no longer writes, as beside a backend that is
+no longer at the repository root, stays unless its owner left it as generated
+and no other target depends on it. Command overrides such as
 `--rust-test-command` follow the existing action’s legacy alias to its authored
 command key. An override with no command action owner, or one targeting a native
 action, is rejected before writing; edit the authored model for those changes.

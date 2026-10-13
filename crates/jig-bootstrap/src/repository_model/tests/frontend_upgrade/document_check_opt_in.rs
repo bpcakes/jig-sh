@@ -264,10 +264,28 @@ fn managed_update_keeps_a_custom_model_eligible_for_the_document_check() {
 }
 
 /// Without API contracts there is no document check to add, and asking says
-/// so instead of suggesting that the owner declare one.
+/// so instead of suggesting that the owner declare one, also without a saved
+/// repository model.
 #[test]
 fn managed_update_says_the_document_check_needs_api_contracts() {
+    let contracts_note = "--add-openapi-check applies only to a repository model with API contracts, and this one has none.";
     for backend in ["rust", "go"] {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".jig.toml");
+        fs::write(
+            &path,
+            format!(
+                "repo_name = \"ExampleProject\"\nbackend_language = {backend:?}\nsqlx_enabled = false\nschema_dump_enabled = false\n{APP}"
+            ),
+        )
+        .unwrap();
+        let (_, notes) =
+            RenderAnswers::from_managed_answers_file(&path, temp.path(), true).unwrap();
+        assert!(
+            notes.iter().any(|note| note == contracts_note),
+            "{backend}: {notes:?}"
+        );
+
         let model = RepositoryRenderModel::from_answers(&answers(&format!(
             "backend_language = {backend:?}\n{APP}"
         )))
@@ -283,9 +301,7 @@ fn managed_update_says_the_document_check_needs_api_contracts() {
                 .iter()
                 .filter(|note| note.contains("openapi"))
                 .collect::<Vec<_>>(),
-            [
-                "--add-openapi-check applies only to a repository model with API contracts, and this one has none."
-            ],
+            [contracts_note],
             "{backend}"
         );
     }

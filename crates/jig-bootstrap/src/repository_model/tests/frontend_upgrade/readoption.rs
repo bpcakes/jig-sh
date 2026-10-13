@@ -127,6 +127,85 @@ fn capability_refresh_keeps_the_contract_checks_beside_a_nested_backend() {
     }
 }
 
+/// A document check that generation no longer writes, beside a backend that
+/// left the repository root, stays with its command and profile entry when
+/// its owner changed its inputs or command or another target depends on it,
+/// and leaves with the other generated backend actions otherwise.
+#[test]
+fn capability_refresh_keeps_a_changed_document_check_of_a_nested_backend() {
+    fn check(model: &mut RepositoryRenderModel) -> &mut ActionSpec {
+        model
+            .actions
+            .iter_mut()
+            .find(|action| action.target.to_string() == "api:openapi")
+            .unwrap()
+    }
+    let nested = || {
+        let mut saved = saved_current_model("rust");
+        saved
+            .components
+            .iter_mut()
+            .find(|component| component.id.as_str() == "api")
+            .unwrap()
+            .root = "backend".into();
+        saved
+    };
+    let refresh = |saved: &RepositoryRenderModel| {
+        RepositoryRenderModel::from_answers(&readopt_with_sqlx(saved).unwrap()).unwrap()
+    };
+    assert!(!has_target(&refresh(&nested()), "api:openapi"));
+
+    let mut inputs = nested();
+    check(&mut inputs).inputs.push("schemas/**".into());
+    check(&mut inputs).inputs.sort();
+
+    let custom = "cd backend && cargo test --locked committed_public_openapi_is_current";
+    let mut command = nested();
+    command
+        .commands
+        .insert("api_openapi_command".into(), custom.into());
+
+    let mut dependent = nested();
+    let mut guard = ActionSpec::new(
+        target_id("repo", "release-guard").unwrap(),
+        ActionIntent::Check,
+        ActionRunner::command("repo_release_guard_command"),
+    );
+    guard.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+    guard.depends_on = vec![target_id("api", "openapi").unwrap()];
+    guard.provenance = provenance(&[
+        ("target", FieldProvenance::Declared),
+        ("runner", FieldProvenance::Declared),
+        ("depends_on", FieldProvenance::Declared),
+    ]);
+    dependent.actions.push(guard);
+    dependent.actions.sort_by(|a, b| a.target.cmp(&b.target));
+    dependent
+        .commands
+        .insert("repo_release_guard_command".into(), "true".into());
+
+    for (label, mut saved) in [
+        ("inputs", inputs),
+        ("command", command),
+        ("dependent", dependent),
+    ] {
+        let mut model = refresh(&saved);
+        assert!(has_target(&model, "api:openapi"), "{label}");
+        assert_eq!(
+            check(&mut model).inputs,
+            check(&mut saved).inputs,
+            "{label}"
+        );
+        assert_eq!(
+            model.commands.get("api_openapi_command"),
+            saved.commands.get("api_openapi_command"),
+            "{label}"
+        );
+        let target = check(&mut model).target.clone();
+        assert!(model.profiles[0].targets.contains(&target), "{label}");
+    }
+}
+
 #[test]
 fn capability_refresh_keeps_a_renamed_backend_document_check_in_ci() {
     let mut saved = saved_current_model("rust");

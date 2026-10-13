@@ -3,8 +3,8 @@ use super::{
     BOUNDARY_DESCRIPTION, BTreeMap, CLIENT_DRIFT_DESCRIPTION, CommandScope, ComponentSpec,
     FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance,
     HISTORICAL_DRIFT_DESCRIPTION, OPENAPI_DOCUMENT_CHECK_ACTION, OPENAPI_DOCUMENT_COMMAND_KEY,
-    PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel, TargetId, contract_check_action,
-    is_document_action, retire_saved_frontend_dependencies,
+    OPENAPI_INPUT, PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel, TargetId,
+    contract_check_action, is_document_action, retire_saved_frontend_dependencies,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -152,6 +152,42 @@ pub(super) fn customized_contract_inputs(
                 FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
             )))
         && saved.inputs != generated.inputs
+}
+
+/// Whether a capability refresh keeps a saved document check that generation
+/// no longer writes, as for a backend that is no longer at the repository
+/// root: one whose owner changed it from what generation wrote, its
+/// component's test inputs and openapi/** run by `generated_command`, or that
+/// another target depends on.
+pub(super) fn keeps_saved_document_check(
+    saved: &AuthoredRepositoryModel,
+    commands: &BTreeMap<String, String>,
+    check: &ActionSpec,
+    generated_command: &str,
+) -> bool {
+    if !is_backend_document_check(&saved.components, check) {
+        return false;
+    }
+    let mut inputs = saved
+        .actions
+        .iter()
+        .find(|action| {
+            action.target.component == check.target.component
+                && action.target.action.as_str() == "test"
+        })
+        .map(|tests| tests.inputs.clone())
+        .unwrap_or_default();
+    inputs.push(OPENAPI_INPUT.into());
+    inputs.sort();
+    inputs.dedup();
+    check.inputs != inputs
+        || command(&check.runner)
+            .and_then(|key| commands.get(key))
+            .is_some_and(|value| value != generated_command)
+        || saved
+            .actions
+            .iter()
+            .any(|action| action.depends_on.contains(&check.target))
 }
 
 /// Normalize only generated legacy fields, both for custom-model preservation
