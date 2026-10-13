@@ -3,8 +3,8 @@ use super::{
     BOUNDARY_DESCRIPTION, BTreeMap, CLIENT_DRIFT_DESCRIPTION, CommandScope, ComponentSpec,
     FRONTEND_CONTRACT_DRIFT_ACTION, FRONTEND_PUBLIC_BOUNDARY_ACTION, FieldProvenance,
     HISTORICAL_DRIFT_DESCRIPTION, OPENAPI_DOCUMENT_CHECK_ACTION, OPENAPI_DOCUMENT_COMMAND_KEY,
-    OPENAPI_INPUT, PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel, TargetId,
-    contract_check_action, is_document_action, retire_saved_frontend_dependencies,
+    PUBLIC_DOCUMENT_INPUTS, REPO_COMPONENT, RepositoryRenderModel, TargetId, contract_check_action,
+    is_document_action, retire_saved_frontend_dependencies,
 };
 
 // Lockfile and workspace inputs the contract checks gained when frontends
@@ -87,7 +87,10 @@ pub(super) fn client_only_drift(actions: &[ActionSpec]) -> bool {
     })
 }
 
-/// Whether the saved model has a document check.
+/// Whether the saved model has a document check: an action of that name on a
+/// Rust or Go component, where the backend workflows look for one, whatever
+/// adoption or the owner named the component. An action of that name on
+/// another component, such as a frontend, is the owner's own.
 pub(super) fn has_document_check(saved: &AuthoredRepositoryModel) -> bool {
     saved
         .actions
@@ -95,11 +98,8 @@ pub(super) fn has_document_check(saved: &AuthoredRepositoryModel) -> bool {
         .any(|action| is_backend_document_check(&saved.components, action))
 }
 
-/// Whether `action` is a document check: an action of that name on a Rust or
-/// Go component, where the backend workflows look for one, whatever adoption
-/// or the owner named the component. An action of that name on another
-/// component, such as a frontend, is the owner's own.
-fn is_backend_document_check(components: &[ComponentSpec], action: &ActionSpec) -> bool {
+/// Whether `action` is a document check, on a Rust or Go component.
+pub(super) fn is_backend_document_check(components: &[ComponentSpec], action: &ActionSpec) -> bool {
     ["rust", "go"]
         .into_iter()
         .any(|adapter| is_document_action(components, action, adapter))
@@ -135,64 +135,17 @@ pub(super) fn predates_document_check(
             .is_none_or(|value| value == generated_command)
 }
 
-/// Whether the owner changed a saved contract or document check, among the
-/// saved `components`, from what generation gives it now: its inputs, or the
-/// command key of a document check, which an owner may rename with the
-/// backend. A capability refresh, which cannot change either, keeps such a
-/// check with its command; loading the model then updates a contract check
-/// that earlier generators wrote, as an update does.
-pub(super) fn customized_contract_check(
-    components: &[ComponentSpec],
-    saved: &ActionSpec,
-    generated: &ActionSpec,
-) -> bool {
-    if is_backend_document_check(components, saved) {
-        return saved.inputs != generated.inputs
-            || command(&saved.runner) != command(&generated.runner);
-    }
+/// Whether a saved contract check reads other inputs than generation gives it
+/// now. A capability refresh, which cannot change those inputs, keeps such a
+/// check, as its owner may have changed them; loading the model then updates
+/// one that earlier generators wrote, as an update does.
+pub(super) fn customized_contract_inputs(saved: &ActionSpec, generated: &ActionSpec) -> bool {
     saved.target.component.as_str() == REPO_COMPONENT
         && matches!(
             saved.target.action.as_str(),
             FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
         )
         && saved.inputs != generated.inputs
-}
-
-/// Whether a capability refresh keeps a saved document check that generation
-/// no longer writes, as for a backend that is no longer at the repository
-/// root: one whose owner changed it from what generation wrote, its
-/// component's test inputs and openapi/** run by `generated_command` under
-/// the generated command key, or that another target depends on.
-pub(super) fn keeps_saved_document_check(
-    saved: &AuthoredRepositoryModel,
-    commands: &BTreeMap<String, String>,
-    check: &ActionSpec,
-    generated_command: &str,
-) -> bool {
-    if !is_backend_document_check(&saved.components, check) {
-        return false;
-    }
-    let mut inputs = saved
-        .actions
-        .iter()
-        .find(|action| {
-            action.target.component == check.target.component
-                && action.target.action.as_str() == "test"
-        })
-        .map(|tests| tests.inputs.clone())
-        .unwrap_or_default();
-    inputs.push(OPENAPI_INPUT.into());
-    inputs.sort();
-    inputs.dedup();
-    check.inputs != inputs
-        || command(&check.runner) != Some(OPENAPI_DOCUMENT_COMMAND_KEY)
-        || command(&check.runner)
-            .and_then(|key| commands.get(key))
-            .is_some_and(|value| value != generated_command)
-        || saved
-            .actions
-            .iter()
-            .any(|action| action.depends_on.contains(&check.target))
 }
 
 /// Normalize only generated legacy fields, both for custom-model preservation

@@ -37,17 +37,7 @@ pub fn refresh(
     let mut model = prior.clone();
     let mut commands = prior_commands.clone();
     commands.retain(|_, value| !value.trim().is_empty());
-    let document_command = super::frontend::openapi_document_check_command(
-        answers.backend_language().is_go(),
-        answers.repo_name(),
-    );
-    let managed = managed_targets(
-        &generated,
-        &generated_commands,
-        prior,
-        prior_commands,
-        &document_command,
-    );
+    let managed = managed_targets(&generated, &generated_commands, prior, prior_commands);
     drop_managed_commands(prior, &managed, &mut commands);
     model
         .actions
@@ -173,18 +163,17 @@ pub fn refresh(
     Ok((model, commands))
 }
 
-/// The prior actions that the refresh replaces with the generated ones, or
-/// drops: those that generation wrote and their owner left as it wrote them.
-/// As on update, a contract or document check with other inputs, or a document
-/// check with another command key, stays, and a boundary or document check
-/// that generation no longer writes leaves only if it is unmodified and no
-/// other target depends on it.
+/// The prior actions that the refresh replaces with the generated ones: those
+/// that generation wrote and their owner left as it wrote them. As on update,
+/// a contract check with other inputs stays, and a boundary check that
+/// generation no longer writes leaves only if it is unmodified and no other
+/// target depends on it. A capability change cannot change the document
+/// check, so a saved one stays as its owner left it.
 fn managed_targets(
     generated: &AuthoredRepositoryModel,
     generated_commands: &BTreeMap<String, String>,
     prior: &AuthoredRepositoryModel,
     prior_commands: &BTreeMap<String, String>,
-    document_command: &str,
 ) -> BTreeSet<TargetId> {
     let keeps_boundary = super::frontend_migration::keeps_saved_boundary(
         generated,
@@ -200,23 +189,14 @@ fn managed_targets(
                 && !(keeps_boundary
                     && action.target.component.as_str() == REPO_COMPONENT
                     && action.target.action.as_str() == FRONTEND_PUBLIC_BOUNDARY_ACTION)
-                && match generated
+                && !super::frontend_migration::is_backend_document_check(&prior.components, action)
+                && !generated
                     .actions
                     .iter()
                     .find(|replacement| replacement.target == action.target)
-                {
-                    Some(replacement) => !super::frontend_migration::customized_contract_check(
-                        &prior.components,
-                        action,
-                        replacement,
-                    ),
-                    None => !super::frontend_migration::keeps_saved_document_check(
-                        prior,
-                        prior_commands,
-                        action,
-                        document_command,
-                    ),
-                }
+                    .is_some_and(|replacement| {
+                        super::frontend_migration::customized_contract_inputs(action, replacement)
+                    })
         })
         .map(|action| action.target.clone())
         .collect()

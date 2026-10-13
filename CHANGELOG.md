@@ -45,14 +45,10 @@
   declared provenance, is kept.
 - Re-adoption with a capability change keeps a generated target whose owner
   declared any of its fields, such as its inputs or dependencies, and a
-  contract check or the backend's `openapi` document check, whatever adoption
-  named the backend, whose inputs the owner changed, or a document check whose
-  command key the owner renamed. It regenerated them as
+  contract check whose inputs the owner changed, and leaves a saved
+  `openapi` document check of the backend as it is. It regenerated them as
   generation writes them, so a check could run before a target that it was
-  declared to follow, or miss a change to an input its owner had added. A
-  document check that generation no longer writes, as beside a backend that
-  is no longer at the repository root, stays unless its owner left it as
-  generated and no other target depends on it.
+  declared to follow, or miss a change to an input its owner had added.
 - In repositories scaffolded with API contracts, a new `api:openapi` check
   owns OpenAPI document freshness and `repo:frontend-contract-drift` owns
   client freshness. `api:openapi` runs only the scaffold's committed-document

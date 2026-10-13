@@ -127,111 +127,6 @@ fn capability_refresh_keeps_the_contract_checks_beside_a_nested_backend() {
     }
 }
 
-/// A document check that generation no longer writes, beside a backend that
-/// left the repository root, stays with its command and profile entry when
-/// its owner changed its inputs or command or another target depends on it,
-/// and leaves with the other generated backend actions otherwise.
-#[test]
-fn capability_refresh_keeps_a_changed_document_check_of_a_nested_backend() {
-    fn check(model: &mut RepositoryRenderModel) -> &mut ActionSpec {
-        model
-            .actions
-            .iter_mut()
-            .find(|action| action.target.to_string() == "api:openapi")
-            .unwrap()
-    }
-    let nested = || {
-        let mut saved = saved_current_model("rust");
-        saved
-            .components
-            .iter_mut()
-            .find(|component| component.id.as_str() == "api")
-            .unwrap()
-            .root = "backend".into();
-        saved
-    };
-    let refresh = |saved: &RepositoryRenderModel| {
-        RepositoryRenderModel::from_answers(&readopt_with_sqlx(saved).unwrap()).unwrap()
-    };
-    assert!(!has_target(&refresh(&nested()), "api:openapi"));
-
-    let mut inputs = nested();
-    check(&mut inputs).inputs.push("schemas/**".into());
-    check(&mut inputs).inputs.sort();
-
-    let custom = "cd backend && cargo test --locked committed_public_openapi_is_current";
-    let mut command = nested();
-    command
-        .commands
-        .insert("api_openapi_command".into(), custom.into());
-
-    let mut dependent = nested();
-    let mut guard = ActionSpec::new(
-        target_id("repo", "release-guard").unwrap(),
-        ActionIntent::Check,
-        ActionRunner::command("repo_release_guard_command"),
-    );
-    guard.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-    guard.depends_on = vec![target_id("api", "openapi").unwrap()];
-    guard.provenance = provenance(&[
-        ("target", FieldProvenance::Declared),
-        ("runner", FieldProvenance::Declared),
-        ("depends_on", FieldProvenance::Declared),
-    ]);
-    dependent.actions.push(guard);
-    dependent.actions.sort_by(|a, b| a.target.cmp(&b.target));
-    dependent
-        .commands
-        .insert("repo_release_guard_command".into(), "true".into());
-
-    for (label, mut saved) in [
-        ("inputs", inputs),
-        ("command", command),
-        ("dependent", dependent),
-    ] {
-        let mut model = refresh(&saved);
-        assert!(has_target(&model, "api:openapi"), "{label}");
-        assert_eq!(
-            check(&mut model).inputs,
-            check(&mut saved).inputs,
-            "{label}"
-        );
-        assert_eq!(
-            model.commands.get("api_openapi_command"),
-            saved.commands.get("api_openapi_command"),
-            "{label}"
-        );
-        let target = check(&mut model).target.clone();
-        assert!(model.profiles[0].targets.contains(&target), "{label}");
-    }
-
-    // So does one whose owner renamed its command key with the backend.
-    let mut renamed = nested();
-    rename_backend(&mut renamed, "server");
-    renamed
-        .actions
-        .iter_mut()
-        .find(|action| action.target.to_string() == "server:openapi")
-        .unwrap()
-        .runner = ActionRunner::command("server_openapi_command");
-    let generated = renamed.commands.remove("api_openapi_command").unwrap();
-    renamed
-        .commands
-        .insert("server_openapi_command".into(), generated.clone());
-    let model = refresh(&renamed);
-    let check = model
-        .actions
-        .iter()
-        .find(|action| action.target.to_string() == "server:openapi")
-        .unwrap();
-    assert_eq!(
-        check.runner,
-        ActionRunner::command("server_openapi_command")
-    );
-    assert_eq!(model.commands["server_openapi_command"], generated);
-    assert!(model.profiles[0].targets.contains(&check.target));
-}
-
 #[test]
 fn capability_refresh_keeps_a_renamed_backend_document_check_in_ci() {
     let mut saved = saved_current_model("rust");
@@ -333,8 +228,6 @@ fn capability_refresh_keeps_a_removed_document_check_removed() {
     }
 }
 
-/// A refresh keeps the command its owner set for the document check, also
-/// under a key that the owner renamed with the backend.
 #[test]
 fn capability_refresh_keeps_a_customized_document_check_command() {
     let custom = "cargo test --workspace --locked committed_ -- --format pretty";
@@ -348,34 +241,6 @@ fn capability_refresh_keeps_a_customized_document_check_command() {
 
     assert!(has_target(&model, "api:openapi"));
     assert_eq!(model.commands["api_openapi_command"], custom);
-
-    let mut saved = saved_current_model("rust");
-    rename_backend(&mut saved, "server");
-    saved
-        .actions
-        .iter_mut()
-        .find(|action| action.target.to_string() == "server:openapi")
-        .unwrap()
-        .runner = ActionRunner::command("server_openapi_command");
-    saved.commands.remove("api_openapi_command");
-    saved
-        .commands
-        .insert("server_openapi_command".into(), custom.into());
-
-    let answers = readopt_with_sqlx(&saved).unwrap();
-    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-
-    let check = model
-        .actions
-        .iter()
-        .find(|action| action.target.to_string() == "server:openapi")
-        .unwrap();
-    assert_eq!(
-        check.runner,
-        ActionRunner::command("server_openapi_command")
-    );
-    assert_eq!(model.commands["server_openapi_command"], custom);
-    assert!(!model.commands.contains_key("api_openapi_command"));
 }
 
 #[test]
@@ -512,6 +377,54 @@ fn capability_refresh_keeps_a_retired_boundary_command_that_another_target_runs(
     );
 }
 
+/// A capability change cannot change the document check, so a refresh
+/// leaves a saved one as its owner left it: with other inputs, under a key
+/// renamed with the backend, or beside a backend no longer at the root.
+#[test]
+fn capability_refresh_leaves_a_saved_document_check_as_it_is() {
+    for (backend, key, root, input) in [
+        ("api", "api_openapi_command", ".", Some("schemas/**")),
+        ("server", "server_openapi_command", ".", None),
+        ("api", "api_openapi_command", "backend", None),
+    ] {
+        let mut saved = saved_current_model("rust");
+        rename_backend(&mut saved, backend);
+        saved
+            .components
+            .iter_mut()
+            .find(|component| component.id.as_str() == backend)
+            .unwrap()
+            .root = root.into();
+        let target = format!("{backend}:openapi");
+        let check = saved
+            .actions
+            .iter_mut()
+            .find(|action| action.target.to_string() == target)
+            .unwrap();
+        check.runner = ActionRunner::command(key);
+        check.inputs.extend(input.map(str::to_owned));
+        let check = check.clone();
+        let command = saved.commands.remove("api_openapi_command").unwrap();
+        saved.commands.insert(key.into(), command.clone());
+
+        let answers = readopt_with_sqlx(&saved).unwrap();
+        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        let refreshed = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == target)
+            .unwrap_or_else(|| panic!("{target} {root}"));
+        assert_eq!(refreshed.runner, check.runner, "{target} {root}");
+        assert_eq!(refreshed.inputs, check.inputs, "{target} {root}");
+        assert_eq!(model.commands[key], command, "{target} {root}");
+        assert!(
+            model.profiles[0].targets.contains(&check.target),
+            "{target} {root}"
+        );
+    }
+}
+
 /// A dependency that an owner declared on a generated check survives the
 /// refresh that regenerates the check.
 #[test]
@@ -596,9 +509,8 @@ fn capability_refresh_keeps_inputs_an_owner_declared_on_a_generated_check() {
     assert!(model.rust_ci_input_paths().contains(&"schemas/**".into()));
 }
 
-/// A contract or document check whose inputs its owner changed stays as its
-/// owner left it, as on update, whatever adoption named the backend; an
-/// unmodified one is regenerated.
+/// A contract check whose inputs its owner changed stays as its owner left
+/// it, as on update; an unmodified one is regenerated.
 #[test]
 fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
     // A Rust scaffold with an admin app has both contract checks.
@@ -612,14 +524,11 @@ fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
     current
         .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
         .unwrap();
-    for (backend, target, input) in [
-        ("api", "repo:frontend-contract-drift", "schemas/**"),
-        ("api", "repo:frontend-public-boundary", "docs/privileged/**"),
-        ("api", "api:openapi", "schemas/**"),
-        ("server", "server:openapi", "schemas/**"),
+    for (target, input) in [
+        ("repo:frontend-contract-drift", "schemas/**"),
+        ("repo:frontend-public-boundary", "docs/privileged/**"),
     ] {
         let mut saved = current.clone();
-        rename_backend(&mut saved, backend);
         let check = saved
             .actions
             .iter_mut()
@@ -645,12 +554,6 @@ fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
             .find(|action| action.target.to_string() == target)
             .unwrap();
         assert!(refreshed.inputs.contains(&input.into()), "{target}");
-        if target.ends_with(":openapi") {
-            assert!(
-                model.rust_ci_input_paths().contains(&input.into()),
-                "{target}"
-            );
-        }
     }
 }
 

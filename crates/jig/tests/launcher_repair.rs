@@ -541,7 +541,7 @@ fn launcher_forwards_the_openapi_check_opt_in_to_update() {
     assert_eq!(
         report["warnings"],
         serde_json::json!([
-            "--add-openapi-check applies only to a repository model with API contracts, and this one has none."
+            "--add-openapi-check adds api:openapi only to a repository model that is not custom and has the generated API contract checks, so it left this one as it is; declare api:openapi in .jig.toml to add the check."
         ])
     );
 }
