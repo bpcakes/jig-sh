@@ -12,18 +12,23 @@ projection, and recommendation behavior is unchanged.
 
 ## Current integration
 
-Updated on October 12, 2026, against master `740673fa`. The implementation now
-lives in `jig-agents-tui`, uses the shared theme and wrapped details, reserves a
-second Codex header row in the current layout, and refreshes its cached forecast
+Updated on October 13, 2026, against master `740673fa`. The implementation now
+lives in `jig-agents-tui`, uses the shared theme and a dedicated fleet panel above the home list, and refreshes its cached forecast
 when inspection or refresh changes the cohort. Stale results offer `r` to refresh.
 The scenario models scheduled window resets; banked resets are explicitly excluded.
 Accounts without a reset time or duration remain outside the forecast, while their
 known per-account usage remains visible. Retired structured-work journals stay local.
 
-Current validation: all 161 `jig-agents-tui` tests pass, including refresh,
+The panel reuses the aligned simulation budgets for pooled quota meters and
+usable-account counts. Shaded meters show estimated demand per full window;
+staggered resets have no shared elapsed-time tick. Fleet assumptions and
+exclusions live in this global panel, while home details remain account-specific.
+
+Current validation: all 167 `jig-agents-tui` tests pass, including refresh,
 nullable timing, and monochrome regressions. The five preflight checks passed:
 formatting, workspace Clippy, harness contract, file budgets, and the source
-runtime through the launcher.
+runtime through the launcher. All 23 Codex/Claude launcher integration tests
+and the full 4,517-test workspace suite passed; two tests were skipped.
 
 The sections below record the original September implementation. Their old gate
 commands and results are historical evidence; current checks follow

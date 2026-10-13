@@ -15,6 +15,7 @@ use list::draw_list;
 pub(crate) use theme::Theme;
 
 mod details;
+mod fleet;
 mod footer;
 mod layout;
 mod list;
@@ -74,6 +75,9 @@ fn draw_with(frame: &mut Frame, app: &App, theme: Theme, now: u64) {
 
     let layout = layout::picker_layout(area, app);
     draw_header(frame, layout.header, &view);
+    if let Some(area) = layout.fleet {
+        fleet::draw_fleet(frame, area, &view);
+    }
     if let Some(list) = layout.list {
         draw_list(frame, list, &view);
     }
@@ -167,19 +171,11 @@ fn draw_header(frame: &mut Frame, area: Rect, view: &View<'_>) {
     } else {
         short
     };
-    let mut lines = vec![Line::from(vec![
+    let lines = vec![Line::from(vec![
         Span::styled(title, theme.badge()),
         Span::raw("  "),
         Span::styled(status, Style::default().fg(color)),
     ])];
-    if app.exit_state.is_none()
-        && let Some(fleet) = &view.fleet
-    {
-        lines.push(Line::from(Span::styled(
-            format!(" {}", fleet.summary_label_at(view.now)),
-            fleet_style(theme, fleet),
-        )));
-    }
     frame.render_widget(Paragraph::new(lines), area);
 }
 

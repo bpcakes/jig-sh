@@ -159,26 +159,6 @@ fn detail_lines(view: &View<'_>, width: usize) -> Vec<Detail> {
         }
         lines.push(Detail::labeled(label, value, label_width, label_style));
     }
-    // Coverage describes every home, including when the selected home is still loading.
-    if let Some(fleet) = &view.fleet {
-        lines.push(blank());
-        lines.push(styled(
-            "Codex fleet forecast",
-            Style::default().fg(theme.accent()).bold(),
-        ));
-        let facts = fleet.detail_lines_at(view.now);
-        let label_width = facts
-            .iter()
-            .map(|(label, _)| label.width())
-            .max()
-            .unwrap_or(0)
-            .min(LABEL_LIMIT);
-        lines.extend(
-            facts
-                .iter()
-                .map(|(label, value)| Detail::labeled(label, value, label_width, label_style)),
-        );
-    }
     for (label, error) in errors {
         lines.push(error_line(theme.bad(), &format!("{label} error: "), &error));
     }

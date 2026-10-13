@@ -614,4 +614,5 @@ fn a_stale_sample_states_its_alignment_limit_instead_of_a_horizon_limit() {
     );
 }
 
+mod capacity;
 mod timeline;

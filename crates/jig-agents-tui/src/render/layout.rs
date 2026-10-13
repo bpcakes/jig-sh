@@ -11,6 +11,8 @@ pub(super) const MIN_WIDTH: u16 = 46;
 pub(super) const MIN_HEIGHT: u16 = 12;
 pub(super) const STACKED_ROW_HEIGHT: u16 = 2;
 const HEADER_HEIGHT: u16 = 1;
+const FLEET_HEIGHT: u16 = 7;
+const COMPACT_FLEET_HEIGHT: u16 = 3;
 const FOOTER_HEIGHT: u16 = 1;
 const SEARCH_FOOTER_HEIGHT: u16 = 2;
 const TABLE_CHROME_HEIGHT: u16 = 3;
@@ -61,20 +63,28 @@ impl ListStyle {
 /// or, when too short for both, only the focused pane (Tab switches).
 pub(super) struct PickerLayout {
     pub(super) header: Rect,
+    pub(super) fleet: Option<Rect>,
     pub(super) list: Option<Rect>,
     pub(super) details: Option<Rect>,
     pub(super) footer: Rect,
 }
 
 pub(super) fn picker_layout(area: Rect, app: &App) -> PickerLayout {
-    let header_height = HEADER_HEIGHT + u16::from(app.fleet_forecast_enabled());
+    let fleet_height = if !app.fleet_forecast_enabled() {
+        0
+    } else if area.height < 22 {
+        COMPACT_FLEET_HEIGHT
+    } else {
+        FLEET_HEIGHT
+    };
     let footer_height = if app.searching || !app.filter.is_empty() {
         SEARCH_FOOTER_HEIGHT
     } else {
         FOOTER_HEIGHT
     };
-    let [header, content, footer] = Layout::vertical([
-        Constraint::Length(header_height),
+    let [header, fleet, content, footer] = Layout::vertical([
+        Constraint::Length(HEADER_HEIGHT),
+        Constraint::Length(fleet_height),
         Constraint::Min(0),
         Constraint::Length(footer_height),
     ])
@@ -83,7 +93,7 @@ pub(super) fn picker_layout(area: Rect, app: &App) -> PickerLayout {
     // than the visible ones, so starting or typing a search never flips it.
     let height = area
         .height
-        .saturating_sub(header_height + SEARCH_FOOTER_HEIGHT);
+        .saturating_sub(HEADER_HEIGHT + fleet_height + SEARCH_FOOTER_HEIGHT);
     let row_height = list_row_height(app, content.width);
     let list_height = stacked_list_height(height, app.rows.len(), row_height);
     let (list, details) = if height.saturating_sub(list_height) >= COMFORTABLE_DETAILS_HEIGHT {
@@ -105,6 +115,7 @@ pub(super) fn picker_layout(area: Rect, app: &App) -> PickerLayout {
     };
     PickerLayout {
         header,
+        fleet: (fleet_height > 0).then_some(fleet),
         list,
         details,
         footer,

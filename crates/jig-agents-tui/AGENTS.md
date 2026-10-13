@@ -8,7 +8,7 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 
 - `src/lib.rs`: `select_provider_with_cancellation` is the only entrypoint; callers supply the title, an explicit primary subscription bucket, and an optional inspection source. This is a same-release boundary supplied by `jig-sh`; configuration selection returns the original entry index so modes sharing a path remain distinct.
 - `src/model.rs`: home rows; `src/model/inspection.rs` decodes additive inspection data, `src/model/app.rs` owns filtering and selection, and `src/model/configuration.rs` prepares static or inspected configuration entries.
-- `src/render.rs`: frame entrypoint, header, and shared pane and status styles. `src/render/layout.rs` owns every breakpoint and decides which panes are visible and which list style fits; `src/render/list.rs` composes the list rows, `src/render/details.rs` builds the selected-home pane, `src/render/wrap.rs` wraps its lines, `src/render/meter.rs` draws usage meters, `src/render/theme.rs` owns the palette and its color-depth fallbacks, and `src/render/footer.rs` fits key hints to the width.
+- `src/render.rs`: frame entrypoint, header, and shared pane and status styles. `src/render/layout.rs` owns every breakpoint and decides which panes are visible and which list style fits; `src/render/fleet.rs` draws the global quota and forecast panel; `src/render/list.rs` composes the list rows, `src/render/details.rs` builds the selected-home pane, `src/render/wrap.rs` wraps its lines, `src/render/meter.rs` draws usage meters, `src/render/theme.rs` owns the palette and its color-depth fallbacks, and `src/render/footer.rs` fits key hints to the width.
 - `src/model/gauge.rs`: per-window meter data (used, elapsed, projected) derived from the same sample as the projection.
 - `src/model/fleet.rs`: Codex collective quota outcomes and coverage; `src/model/fleet/cohort.rs` assembles comparable account pools, and `src/model/fleet/simulation.rs` owns the pure reset-aware engine.
 - `examples/picker_preview.rs`: the real picker with example homes and simulated inspection, for presentation work (`cargo run -p jig-agents-tui --example picker_preview`).
@@ -22,7 +22,7 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 - Meter glyphs or the palette: `src/render/meter.rs` and `src/render/theme.rs`.
 - Detail pane content, order, or wrapping: `src/render/details.rs`.
 - Footer key hints and search prompt: `src/render/footer.rs`.
-- Header, loading, or small-terminal presentation: `src/render.rs`.
+- Global fleet panel: `src/render/fleet.rs`. Header and loading presentation: `src/render.rs`; panel sizing and small-terminal layout: `src/render/layout.rs`.
 - Breakpoints, pane arrangement, or pane sizes: `src/render/layout.rs`.
 - CLI/runtime data boundary: `src/lib.rs`.
 - Collective quota outcomes and assumptions: `src/model/fleet.rs`; eligibility and sample classification: `src/model/fleet/cohort.rs`.
@@ -35,6 +35,7 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 - Do not read authentication files or the Keychain; account and usage details arrive only through `InspectionSource`.
 - Missing or additive JSON fields render as unknown instead of panicking.
 - Enable the fleet forecast only for inspected Codex subscription pickers. Forecast every discovered row, independent of search or selection, and invalidate its cache when inspection or refresh changes the cohort. Unknown capacity, identity, or window timing stays visibly unsupported or partial.
+- Fleet quota meters use the same aligned, distinct account pools as the simulation. Their fill is pooled used quota; shade is aggregate estimated consumption over one full window, normalized by pooled capacity. Staggered resets have no shared elapsed-time tick, and warmup withholds the shaded estimate. Usable-account counts require quota in every window.
 - Sample alignment advances an account's windows together under the same all-windows usability constraint as simulation. A warming pace spends no observed quota during alignment but still contributes to pooled demand.
 - Color only reinforces text: every status, stale sample, and outcome is also written out, and `NO_COLOR` keeps the picker usable. Use glyphs the common Nerd Fonts include (check before adding one; `★`, `✗`, and `⚠` are missing from Fira Code).
 - Panes stack whenever the details keep a comfortable height below the list; side by side is only for terminals too short for that, and keeps the details within their readable width range. The arrangement depends on the terminal size and the number of homes, never on the selection or the search.

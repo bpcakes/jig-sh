@@ -18,7 +18,7 @@ mod projection;
 pub(crate) use crate::usage::WindowRole;
 use crate::usage::{self, remaining_percent};
 pub(crate) use app::{App, HitAreas, ListRows};
-pub(crate) use fleet::{FleetAssessment, FleetOutcome};
+pub(crate) use fleet::{FleetAssessment, FleetCapacityWindow, FleetOutcome};
 pub(crate) use gauge::{Gauge, WindowView};
 pub(crate) use projection::{Projection, UsageSnapshotAssessment};
 use projection::{UsageSnapshotFreshness, WindowProjection};

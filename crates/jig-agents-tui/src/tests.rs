@@ -543,7 +543,12 @@ fn discovery_warnings_remain_visible_after_successful_inspection() {
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("discovery partial"), "{rendered}");
     assert!(rendered.contains("Discovery warning"), "{rendered}");
-    assert!(rendered.contains("home candidate"), "{rendered}");
+    let text = rendered
+        .replace(['│', '"'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(text.contains("home candidate"), "{rendered}");
 }
 
 #[test]
@@ -565,7 +570,12 @@ fn unknown_update_diagnostic_survives_clean_worker_completion() {
 
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Worker error"), "{rendered}");
-    assert!(rendered.contains("index 99"), "{rendered}");
+    let text = rendered
+        .replace(['│', '"'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(text.contains("index 99"), "{rendered}");
     assert!(rendered.contains("Inspection stopped"), "{rendered}");
     assert!(!rendered.contains("Inspection complete"), "{rendered}");
 }

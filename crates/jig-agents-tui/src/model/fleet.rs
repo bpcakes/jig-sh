@@ -11,6 +11,7 @@
 
 use jig_tui::format_countdown;
 
+use super::Gauge;
 use crate::usage::WindowRole;
 
 mod cohort;
@@ -140,12 +141,10 @@ pub(crate) struct FleetCoverage {
 }
 
 impl FleetCoverage {
-    #[cfg(test)]
     pub(crate) fn included(&self) -> usize {
         self.included
     }
 
-    #[cfg(test)]
     pub(crate) fn homes(&self) -> usize {
         self.homes
     }
@@ -168,6 +167,21 @@ impl FleetCoverage {
     }
 }
 
+/// Quota at the common forecast origin, across distinct comparable account pools.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct FleetCapacity {
+    pub(crate) usable_accounts: usize,
+    pub(crate) windows: Vec<FleetCapacityWindow>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FleetCapacityWindow {
+    pub(crate) role: WindowRole,
+    /// Fill is pooled used quota. Shade is estimated consumption over one full
+    /// window, normalized by the pool's capacity, rather than a shared reset.
+    pub(crate) gauge: Gauge,
+}
+
 /// The cached, `now`-independent forecast for one inspection generation.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FleetForecast {
@@ -181,6 +195,7 @@ pub(crate) struct FleetForecast {
     /// Whether a participating window is still inside its warmup. Reported alongside an
     /// observed outcome so a blocked pool never implies a trusted consumption estimate.
     pace_collecting: bool,
+    capacity: Option<FleetCapacity>,
 }
 
 /// A forecast paired with the freshness of the samples it was built from.
@@ -201,6 +216,27 @@ impl FleetForecast {
 }
 
 impl FleetAssessment {
+    pub(crate) fn capacity(&self) -> Option<&FleetCapacity> {
+        self.forecast.capacity.as_ref()
+    }
+
+    pub(crate) fn pace_collecting(&self) -> bool {
+        self.forecast.pace_collecting
+    }
+
+    pub(crate) fn horizon_label(&self) -> String {
+        horizon_span(self.forecast.origin, self.forecast.horizon_at)
+    }
+
+    pub(crate) fn coverage_label(&self) -> String {
+        let coverage = &self.forecast.coverage;
+        if coverage.is_complete() {
+            format!("All accounts {}/{}", coverage.included(), coverage.homes())
+        } else {
+            format!("Fleet partial {}/{}", coverage.included(), coverage.homes())
+        }
+    }
+
     pub(crate) fn outcome(&self) -> &FleetOutcome {
         &self.forecast.outcome
     }
@@ -213,7 +249,7 @@ impl FleetAssessment {
         self.stale
     }
 
-    /// Compact status text for the picker header.
+    /// Compact status text for an outlook without quota meters.
     pub(crate) fn summary_label_at(&self, now: u64) -> String {
         let forecast = &self.forecast;
         if let FleetOutcome::Unsupported(reason) = forecast.outcome {
@@ -355,7 +391,7 @@ impl FleetAssessment {
         lines
     }
 
-    fn limiting_label(&self) -> Option<String> {
+    pub(crate) fn limiting_label(&self) -> Option<String> {
         let limiting = match &self.forecast.outcome {
             FleetOutcome::BlockedNow { limiting, .. } | FleetOutcome::GapRisk { limiting, .. } => {
                 limiting

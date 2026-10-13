@@ -52,7 +52,7 @@ fn the_forecast_survives_terminal_widths_down_to_the_supported_minimum() {
 }
 
 #[test]
-fn the_detail_pane_explains_the_forecast_assumptions_for_any_selected_row() {
+fn the_fleet_panel_explains_the_forecast_assumptions_for_any_selected_row() {
     const NOW: u64 = 2_000_000_000;
     let now = NOW;
     // The second row is still loading, so the pane must explain the pool even when the
@@ -69,7 +69,7 @@ fn the_detail_pane_explains_the_forecast_assumptions_for_any_selected_row() {
 
         let rendered = terminal.backend().to_string();
         for expected in [
-            "Codex fleet forecast",
+            "fleet capacity",
             "gap risk",
             "window-average pace",
             "periodic approximation",

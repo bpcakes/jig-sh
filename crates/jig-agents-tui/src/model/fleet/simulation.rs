@@ -11,7 +11,11 @@
 
 use std::collections::BTreeMap;
 
-use super::{DEPLETED_PERCENT, FULL_QUOTA_PERCENT, FleetAccount, WORK_BUDGET, WindowRole};
+use super::{
+    DEPLETED_PERCENT, FULL_QUOTA_PERCENT, FleetAccount, FleetCapacity, FleetCapacityWindow,
+    WORK_BUDGET, WindowRole,
+};
+use crate::model::Gauge;
 use crate::usage::remaining_percent;
 
 /// Timeline resolution below which two events are treated as simultaneous.
@@ -59,6 +63,45 @@ struct SimWindow {
 }
 
 impl Simulation {
+    /// Reuses aligned budgets and the cohort's demand. No additional simulation
+    /// or invented common reset is needed to render the pool's quota meters.
+    pub(super) fn capacity_at_origin(&self, warming: bool) -> Option<FleetCapacity> {
+        if !self.aligned {
+            return None;
+        }
+        let first = self.accounts.first()?;
+        let count = self.accounts.len() as f64;
+        let windows = first
+            .iter()
+            .enumerate()
+            .map(|(index, window)| {
+                let remaining = self
+                    .accounts
+                    .iter()
+                    .map(|account| account[index].remaining)
+                    .sum::<f64>()
+                    / count;
+                let projected = window.demand * window.duration / count;
+                FleetCapacityWindow {
+                    role: window.role,
+                    gauge: Gauge {
+                        used: Some((FULL_QUOTA_PERCENT - remaining).clamp(0.0, FULL_QUOTA_PERCENT)),
+                        elapsed: None,
+                        projected: (!warming && projected.is_finite()).then_some(projected),
+                    },
+                }
+            })
+            .collect();
+        Some(FleetCapacity {
+            usable_accounts: self
+                .accounts
+                .iter()
+                .filter(|windows| usable(windows))
+                .count(),
+            windows,
+        })
+    }
+
     /// Aligns every sample to one forecast origin and pools demand per quota dimension.
     ///
     /// Accounts arrive in a stable identity order, which is also the allocation tie-break,

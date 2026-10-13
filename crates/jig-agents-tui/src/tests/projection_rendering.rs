@@ -55,8 +55,13 @@ fn rendering_marks_projection_as_an_aging_usage_snapshot() {
     assert!(rendered.contains("Usage sample"), "{rendered}");
     assert!(rendered.contains("1h ago"), "{rendered}");
     // Another home is still inspecting, so refresh waits for that round.
+    let text = rendered
+        .replace(['│', '"'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(
-        rendered.contains("r refreshes once inspection finishes"),
+        text.contains("r refreshes once inspection finishes"),
         "{rendered}"
     );
 }
@@ -83,7 +88,7 @@ fn rendering_labels_sub_minute_reset_countdowns_without_zero_minutes() {
 #[test]
 fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
     const OBSERVED_AT: u64 = 2_000_000_000;
-    let backend = TestBackend::new(168, 30);
+    let backend = TestBackend::new(180, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = app(homes());
     app.apply_update_at(
@@ -154,7 +159,13 @@ fn common_width_lists_keep_stale_state_visible() {
 
         let rendered = terminal.backend().to_string();
         // The list names the stale outcome in text, not only in muted color.
-        let list = rendered.split("╰").next().unwrap();
+        let list = rendered
+            .split("╭ homes")
+            .nth(1)
+            .unwrap()
+            .split("╰")
+            .next()
+            .unwrap();
         assert!(list.contains("stale · "), "{width}: {rendered}");
         assert!(list.contains("~50% left"), "{width}: {rendered}");
     }
@@ -269,7 +280,7 @@ fn common_width_lists_keep_non_selected_projection_outcomes_visible() {
             "{width}: {rendered}"
         );
         assert!(rendered.contains("60%"), "{width}: {rendered}");
-        assert!(rendered.contains("out ~1.2d early"), "{width}: {rendered}");
+        assert!(rendered.contains("runs out ~1.2d"), "{width}: {rendered}");
     }
 }
 
@@ -312,7 +323,7 @@ fn compact_warmup_shows_current_remaining_instead_of_only_collecting() {
 #[test]
 fn full_table_breakpoint_keeps_long_projection_labels_visible() {
     const NOW: u64 = 2_000_000_000;
-    let backend = TestBackend::new(168, 30);
+    let backend = TestBackend::new(180, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = app(homes());
     let mut exhausted = projected_update(1, 100.0, 10_080, 0.5, NOW);

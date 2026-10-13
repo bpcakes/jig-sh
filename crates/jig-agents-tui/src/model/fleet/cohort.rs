@@ -219,7 +219,9 @@ pub(in crate::model) fn forecast(rows: &[HomeRow]) -> FleetForecast {
         .into_iter()
         .map(|candidate| candidate.account)
         .collect::<Vec<_>>();
-    let outcome = match Simulation::new(&accounts, origin, longest_window).run() {
+    let simulation = Simulation::new(&accounts, origin, longest_window);
+    let capacity = simulation.capacity_at_origin(warming);
+    let outcome = match simulation.run() {
         SimulationOutcome::AlignmentBudgetExceeded => {
             FleetOutcome::Unsupported(FleetUnsupported::AlignmentBudget)
         }
@@ -267,6 +269,7 @@ pub(in crate::model) fn forecast(rows: &[HomeRow]) -> FleetForecast {
         capacity_class,
         windows,
         pace_collecting: warming,
+        capacity,
     }
 }
 
@@ -280,6 +283,7 @@ fn unsupported(reason: FleetUnsupported, coverage: FleetCoverage) -> FleetForeca
         capacity_class: None,
         windows: Vec::new(),
         pace_collecting: false,
+        capacity: None,
     }
 }
 
@@ -293,6 +297,7 @@ fn collecting(coverage: FleetCoverage) -> FleetForecast {
         capacity_class: None,
         windows: Vec::new(),
         pace_collecting: false,
+        capacity: None,
     }
 }
 
