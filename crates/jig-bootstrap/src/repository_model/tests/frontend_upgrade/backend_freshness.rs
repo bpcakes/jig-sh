@@ -38,12 +38,12 @@ fn custom_test_commands(backend: &str) -> [(&'static str, &'static str, &'static
     }
 }
 
-/// A model generated for a repository upgraded from an earlier generator.
+/// A model generated for a repository upgraded from an earlier generator,
+/// which always declared a boundary check.
 fn generated_model(backend: &str, answers: &str) -> RepositoryRenderModel {
-    RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
-        "backend_language = {backend:?}\n{answers}{APP}"
-    )))
-    .unwrap()
+    let mut upgraded = scaffold_answers(&format!("backend_language = {backend:?}\n{answers}{APP}"));
+    upgraded.enable_scaffolded_public_boundary();
+    RepositoryRenderModel::from_answers(&upgraded).unwrap()
 }
 
 pub(super) fn find<'a>(model: &'a RepositoryRenderModel, target: &str) -> Option<&'a ActionSpec> {

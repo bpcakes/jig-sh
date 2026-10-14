@@ -81,14 +81,97 @@ fn scaffolded_frontends_reach_backend_changes_only_through_contracts() {
                 "contract drift must not read {input}"
             );
         }
-        let profile = model
+        let verify = model
             .profiles
             .iter()
             .find(|profile| profile.id.as_str() == DEFAULT_PROFILE)
             .unwrap();
-        assert!(profile.targets.contains(&drift.target));
-        assert!(profile.targets.contains(&documents.target));
+        assert!(verify.targets.contains(&drift.target));
+        assert!(verify.targets.contains(&documents.target));
+        assert_boundary_guards_only_the_rust_admin_api(&model, backend.is_empty());
     }
+}
+
+/// Only the Rust admin API has a privileged surface to guard; the boundary
+/// reads its dependency graph, not its sources.
+fn assert_boundary_guards_only_the_rust_admin_api(model: &RepositoryRenderModel, rust: bool) {
+    let boundary = model
+        .actions
+        .iter()
+        .find(|item| item.target.to_string() == "repo:frontend-public-boundary");
+    let Some(boundary) = boundary.filter(|_| rust) else {
+        assert_eq!(boundary.is_some(), rust);
+        return;
+    };
+    assert!(
+        model
+            .profiles
+            .iter()
+            .find(|profile| profile.id.as_str() == DEFAULT_PROFILE)
+            .unwrap()
+            .targets
+            .contains(&boundary.target)
+    );
+    for input in ["Cargo.toml", "Cargo.lock", "docs/public/**", "openapi/**"] {
+        assert!(boundary.inputs.contains(&input.into()), "{input}");
+    }
+    for input in ["**/*.rs", "**/*.go", "go.mod"] {
+        assert!(!boundary.inputs.contains(&input.into()), "{input}");
+    }
+}
+
+/// The shared inputs cover every workspace's package manifests, which is all
+/// the boundary check reads there, so a workspace at the repository root
+/// does not make every change select it; the drift check reads the whole
+/// workspace.
+#[test]
+fn boundary_check_reads_no_workspace_sources() {
+    let model = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
+        "frontend_workspace_roots = [\".\"]\n{FRONTEND_APPS}"
+    )))
+    .unwrap();
+
+    let boundary = action(&model, "repo:frontend-public-boundary");
+    assert!(
+        !boundary.inputs.contains(&"**".into()),
+        "{:?}",
+        boundary.inputs
+    );
+    assert!(boundary.inputs.contains(&"**/package.json".into()));
+    assert!(
+        action(&model, "repo:frontend-contract-drift")
+            .inputs
+            .contains(&"**".into())
+    );
+}
+
+#[test]
+fn rust_scaffolds_without_an_admin_frontend_have_no_boundary_check() {
+    let model = RepositoryRenderModel::from_answers(&scaffold_answers(
+        r#"
+[[frontend_apps]]
+name = "web"
+dir = "frontend/web"
+coverage_threshold = 80
+kind = "vite"
+role = "spa"
+"#,
+    ))
+    .unwrap();
+
+    assert!(model.frontend_contracts_enabled());
+    assert!(
+        !model
+            .actions
+            .iter()
+            .any(|item| item.target.action.as_str() == "frontend-public-boundary")
+    );
+    assert!(
+        !model
+            .commands
+            .values()
+            .any(|value| value.contains("contracts-boundary-check"))
+    );
 }
 
 fn with_saved_backend_dependency(

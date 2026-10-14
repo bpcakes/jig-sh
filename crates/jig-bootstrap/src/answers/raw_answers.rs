@@ -662,6 +662,7 @@ impl RawAnswers {
             authored_repository,
             authored_repository_commands: BTreeMap::new(),
             scaffolded_frontend_contracts: false,
+            scaffolded_public_boundary: false,
             go_postgres_integration_script: false,
             client_only_contract_drift: false,
             openapi_check_command: self.openapi_check_command,

@@ -1,6 +1,7 @@
 use super::*;
 
 mod backend_freshness;
+mod boundary;
 mod document_check_opt_in;
 mod document_commands;
 mod readoption;
@@ -14,6 +15,15 @@ kind = "vite"
 role = "spa"
 "#;
 
+const ADMIN_APP: &str = r#"
+[[frontend_apps]]
+name = "admin"
+dir = "frontend/admin"
+coverage_threshold = 85
+kind = "vite"
+role = "admin"
+"#;
+
 // Backend inputs the contract checks read before the lockfile cutover.
 const LEGACY_BACKEND_INPUTS: &[&str] = &[
     "Cargo.toml",
@@ -24,15 +34,40 @@ const LEGACY_BACKEND_INPUTS: &[&str] = &[
     "**/*.go",
 ];
 
+// The same inputs after the lockfile cutover.
+const LOCKFILE_BACKEND_INPUTS: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "**/Cargo.toml",
+    "**/Cargo.lock",
+    "**/*.rs",
+    "go.mod",
+    "go.sum",
+    "go.work",
+    "go.work.sum",
+    "**/go.mod",
+    "**/go.sum",
+    "**/go.work",
+    "**/go.work.sum",
+    "**/*.go",
+    "vendor/modules.txt",
+    "**/vendor/modules.txt",
+];
+
 fn legacy_model(backend: &str) -> RepositoryRenderModel {
     saved_model(backend, LEGACY_BACKEND_INPUTS)
 }
 
-/// A model saved by an earlier generator whose contract checks read
-/// `backend_inputs` and which had no document check.
 fn saved_model(backend: &str, backend_inputs: &[&str]) -> RepositoryRenderModel {
+    saved_model_with(backend, APP, backend_inputs)
+}
+
+/// A model saved by an earlier generator: it always declared a boundary
+/// check, its contract checks read `backend_inputs`, and it had no document
+/// check.
+fn saved_model_with(backend: &str, apps: &str, backend_inputs: &[&str]) -> RepositoryRenderModel {
     let mut model = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
-        "backend_language = {backend:?}\n{APP}"
+        "backend_language = {backend:?}\n{apps}"
     )))
     .unwrap();
     for component in &mut model.components {
@@ -46,6 +81,29 @@ fn saved_model(backend: &str, backend_inputs: &[&str]) -> RepositoryRenderModel 
     // Frontend checks used to pull in the contract checks.
     let drift = target_id("repo", "frontend-contract-drift").unwrap();
     let boundary = target_id("repo", "frontend-public-boundary").unwrap();
+    if !model.actions.iter().any(|item| item.target == boundary) {
+        let description = if backend == "go" {
+            "Check public frontend manifests and artifacts for privileged markers."
+        } else {
+            "Check the repository-wide public/private dependency boundary."
+        };
+        let index = model
+            .actions
+            .iter()
+            .position(|item| item.target == drift)
+            .unwrap();
+        model.actions.insert(
+            index + 1,
+            contract_check_action("frontend-public-boundary", description, Vec::new()).unwrap(),
+        );
+        let targets = &mut model.profiles[0].targets;
+        let index = targets.iter().position(|target| target == &drift).unwrap();
+        targets.insert(index + 1, boundary.clone());
+        model.commands.insert(
+            "repo_frontend_public_boundary_command".into(),
+            "scripts/check-webapps.sh contracts-boundary-check frontend/web".into(),
+        );
+    }
     for action in &mut model.actions {
         match action.target.to_string().as_str() {
             "web:typecheck" => action.depends_on = vec![drift.clone(), boundary.clone()],
@@ -97,9 +155,22 @@ fn saved_model(backend: &str, backend_inputs: &[&str]) -> RepositoryRenderModel 
     model
 }
 
+/// What jig generates for a saved legacy scaffold, which always declared a
+/// boundary check; only a Rust one keeps it.
+fn generated_model(backend: &str, apps: &str) -> RepositoryRenderModel {
+    let mut answers = scaffold_answers(&format!("backend_language = {backend:?}\n{apps}"));
+    answers.enable_scaffolded_public_boundary();
+    RepositoryRenderModel::from_answers(&answers).unwrap()
+}
+
 /// Loads `model` as `jig update` does.
 fn load_saved(model: &RepositoryRenderModel, backend: &str) -> RenderAnswers {
     update_answers(model, backend, false).0
+}
+
+/// Loads `model`, saved with the frontend `apps`, as `jig update` does.
+fn load_saved_with(model: &RepositoryRenderModel, backend: &str, apps: &str) -> RenderAnswers {
+    update_answers_with(model, backend, apps, false).0
 }
 
 /// Loads `model` as `jig update --add-openapi-check` does.
@@ -113,12 +184,23 @@ fn update_answers(
     backend: &str,
     add_openapi_check: bool,
 ) -> (RenderAnswers, Vec<String>) {
+    update_answers_with(model, backend, APP, add_openapi_check)
+}
+
+/// The answers and notes of an update of `model`, saved with the frontend
+/// `apps`.
+fn update_answers_with(
+    model: &RepositoryRenderModel,
+    backend: &str,
+    apps: &str,
+    add_openapi_check: bool,
+) -> (RenderAnswers, Vec<String>) {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join(".jig.toml");
     fs::write(
         &path,
         format!(
-            "repo_name = \"ExampleProject\"\nbackend_language = {backend:?}\nsqlx_enabled = false\nschema_dump_enabled = false\n{APP}\n{}\n{}",
+            "repo_name = \"ExampleProject\"\nbackend_language = {backend:?}\nsqlx_enabled = false\nschema_dump_enabled = false\n{apps}\n{}\n{}",
             model.authored_toml().unwrap(),
             model.commands_toml().unwrap()
         ),
@@ -174,7 +256,7 @@ fn managed_update_upgrades_legacy_contract_models_and_keeps_them_generated() {
     for (backend, backend_inputs) in ["rust", "go"].into_iter().flat_map(|backend| {
         [
             (backend, LEGACY_BACKEND_INPUTS),
-            (backend, BACKEND_CONTRACT_INPUTS),
+            (backend, LOCKFILE_BACKEND_INPUTS),
         ]
     }) {
         let saved = saved_model(backend, backend_inputs);
@@ -182,15 +264,20 @@ fn managed_update_upgrades_legacy_contract_models_and_keeps_them_generated() {
         assert!(answers.authored_repository().is_none());
         assert!(answers.scaffolded_frontend_contracts());
         let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
-        let current = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
-            "backend_language = {backend:?}\n{APP}"
-        )))
-        .unwrap();
+        let current = generated_model(backend, APP);
         assert_eq!(
             upgraded.authored_toml().unwrap(),
             current.authored_toml().unwrap()
         );
         assert_eq!(upgraded.commands, current.commands);
+        assert_eq!(
+            upgraded
+                .actions
+                .iter()
+                .any(|item| item.target.action.as_str() == "frontend-public-boundary"),
+            backend == "rust",
+            "{backend}"
+        );
         let reloaded = load_saved(&upgraded, backend);
         assert!(reloaded.authored_repository().is_none());
         assert!(reloaded.scaffolded_frontend_contracts());
@@ -237,30 +324,35 @@ fn managed_update_retires_the_dependency_of_uncontracted_frontends_and_keeps_the
 
 #[test]
 fn managed_update_keeps_a_declared_contract_check_dependency() {
-    let mut saved = legacy_model("rust");
-    let typecheck = saved
-        .actions
-        .iter_mut()
-        .find(|item| item.target.to_string() == "web:typecheck")
-        .unwrap();
-    typecheck
-        .provenance
-        .insert("depends_on".into(), FieldProvenance::Declared);
-    let expected = typecheck.depends_on.clone();
-
-    let answers = load_saved(&saved, "rust");
-    let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
-
-    assert!(answers.authored_repository().is_some());
-    let find = |target: &str| {
-        upgraded
+    // Go would otherwise retire its boundary check; the declared dependency
+    // keeps it in both languages.
+    for backend in ["rust", "go"] {
+        let mut saved = legacy_model(backend);
+        let typecheck = saved
             .actions
-            .iter()
-            .find(|item| item.target.to_string() == target)
-            .unwrap()
-    };
-    assert_eq!(find("web:typecheck").depends_on, expected);
-    assert!(find("web:build").depends_on.is_empty());
+            .iter_mut()
+            .find(|item| item.target.to_string() == "web:typecheck")
+            .unwrap();
+        typecheck
+            .provenance
+            .insert("depends_on".into(), FieldProvenance::Declared);
+        let expected = typecheck.depends_on.clone();
+
+        let answers = load_saved(&saved, backend);
+        let upgraded = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert!(answers.authored_repository().is_some());
+        let find = |target: &str| {
+            upgraded
+                .actions
+                .iter()
+                .find(|item| item.target.to_string() == target)
+                .unwrap_or_else(|| panic!("{backend}: missing {target}"))
+        };
+        assert_eq!(find("web:typecheck").depends_on, expected);
+        assert!(find("web:build").depends_on.is_empty());
+        find("repo:frontend-public-boundary");
+    }
 }
 
 #[test]
@@ -323,10 +415,7 @@ fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
         Some("Custom frontend description")
     );
     assert!(frontend.depends_on.is_empty());
-    let current = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
-        "backend_language = \"rust\"\n{APP}"
-    )))
-    .unwrap();
+    let current = generated_model("rust", APP);
     let find = |model: &RepositoryRenderModel, target: &str| {
         model
             .actions
@@ -360,9 +449,8 @@ fn managed_update_refreshes_generated_inputs_inside_a_custom_model() {
         drift
     );
     let boundary = find(&upgraded, "repo:frontend-public-boundary");
-    for input in ["Cargo.lock", "go.sum", "go.work", "vendor/modules.txt"] {
-        assert!(boundary.inputs.contains(&input.into()), "{input}");
-    }
+    assert!(boundary.inputs.contains(&"Cargo.lock".into()));
+    assert!(!boundary.inputs.contains(&"**/*.rs".into()));
 }
 
 #[test]

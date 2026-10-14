@@ -346,6 +346,129 @@ pub(super) fn assert_admin_http_crate(destination: &Path) {
     );
 }
 
+/// boundary-check inspects what the change under review declares: the
+/// public API's dependency tree, the public manifests, and the public
+/// documents. It skips build output, which an earlier build may have left
+/// stale; public-check scans that output when it is released.
+#[cfg(unix)]
+pub(super) fn assert_admin_boundary_check_skips_stale_build_output(destination: &Path) {
+    use std::ffi::OsStr;
+
+    if !node_available() {
+        return;
+    }
+    install_fake_openapi_ts(destination);
+    let fake_bin = destination.join(".fake-cargo-tree");
+    fs::create_dir_all(&fake_bin).unwrap();
+    // `cargo tree` prints the dependency tree that the test supplies.
+    write_executable_test_script(
+        &fake_bin.join("cargo"),
+        "#!/bin/sh\nprintf '%s\\n' \"$JIG_TEST_CARGO_TREE\"\n",
+    );
+    let public_tree = OsStr::new("my-app-api v0.1.0\nmy-app-http v0.1.0");
+    let run_args = |args: &[&str], tree: &OsStr| {
+        let output = run_contracts(
+            destination,
+            args,
+            &fake_bin,
+            &[("JIG_TEST_CARGO_TREE", tree)],
+        );
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let run = |mode: &str, tree: &OsStr| run_args(&[mode], tree);
+    let write_privileged = |path: &str| {
+        let path = destination.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "see openapi/admin.json\n").unwrap();
+    };
+
+    let (passed, stderr) = run("boundary-check", public_tree);
+    assert!(passed, "{stderr}");
+
+    for path in [
+        "apps/web/dist/assets/index.js",
+        "apps/landing/dist/index.html",
+        "target/debug/my-app-api",
+        "target/release/my-app-api",
+    ] {
+        write_privileged(path);
+    }
+    let (passed, stderr) = run("boundary-check", public_tree);
+    assert!(
+        passed,
+        "boundary-check scanned stale build output: {stderr}"
+    );
+    let (passed, stderr) = run("public-check", public_tree);
+    assert!(!passed, "public-check accepted privileged build output");
+    assert!(stderr.contains("contains privileged marker"), "{stderr}");
+
+    // public-check scans the API binaries on their own, also when the
+    // frontend output is left to the build that produced it.
+    for dist in ["apps/web/dist", "apps/landing/dist"] {
+        fs::remove_dir_all(destination.join(dist)).unwrap();
+    }
+    for args in [
+        &["public-check"][..],
+        &["public-check", "--skip-frontend-artifacts"],
+    ] {
+        let (passed, stderr) = run_args(args, public_tree);
+        assert!(!passed, "{args:?} accepted a privileged API binary");
+        assert!(
+            stderr.contains("Public artifact target/debug/my-app-api contains privileged marker"),
+            "{stderr}"
+        );
+    }
+
+    // check-webapps.sh scans each bundle right after build:bundle builds it.
+    assert!(
+        fs::read_to_string(destination.join("scripts/check-webapps.sh"))
+            .unwrap()
+            .contains("run_contract_script artifact-check \"$app_dir/dist\"")
+    );
+    write_privileged("apps/web/dist/assets/index.js");
+    let (passed, stderr) = run_args(&["artifact-check", "apps/web/dist"], public_tree);
+    assert!(!passed, "artifact-check accepted a privileged bundle");
+    assert!(stderr.contains("contains privileged marker"), "{stderr}");
+
+    let (passed, stderr) = run(
+        "boundary-check",
+        OsStr::new("my-app-api v0.1.0\nmy-app-admin-http v0.1.0"),
+    );
+    assert!(!passed, "boundary-check accepted a privileged dependency");
+    assert!(
+        stderr.contains("Public API dependency tree contains privileged package my-app-admin-http"),
+        "{stderr}"
+    );
+
+    let manifest = destination.join("crates/my-app-http/Cargo.toml");
+    let declared = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, format!("{declared}# openapi/admin.json\n")).unwrap();
+    let (passed, stderr) = run("boundary-check", public_tree);
+    fs::write(&manifest, declared).unwrap();
+    assert!(
+        !passed,
+        "boundary-check accepted a privileged public manifest"
+    );
+    assert!(
+        stderr.contains("public manifest crates/my-app-http/Cargo.toml contains privileged marker"),
+        "{stderr}"
+    );
+
+    write_privileged("docs/public/guide.md");
+    let (passed, stderr) = run("boundary-check", public_tree);
+    assert!(
+        !passed,
+        "boundary-check accepted a privileged public document"
+    );
+    assert!(
+        stderr.contains("Public artifact docs/public/guide.md contains privileged marker"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn run_init_rust_react_scaffold_omits_admin_contract_without_admin_frontend() {
     let _guard = lock_env();

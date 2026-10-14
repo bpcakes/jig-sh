@@ -72,7 +72,9 @@ if (mode === "generate" || mode === "check") {
   }
   await withStagedClients();
 } else if (mode === "boundary-check") {
-  await assertPublicBoundary([], true);
+  // Build output is scanned right after it is built; whatever an earlier
+  // build left on disk says nothing about the change under review.
+  await assertPublicBoundary([], true, false, false);
 } else if (mode === "client-check") {
   await assertPublicBoundary([], false);
   await withStagedClients();
@@ -234,6 +236,7 @@ async function assertPublicBoundary(
   explicitArtifacts,
   checkBackendDependencies,
   includeFrontendArtifacts = true,
+  includeBuildOutputs = true,
 ) {
   const manifests = [
 [% if backend_language == "go" %]
@@ -264,19 +267,28 @@ async function assertPublicBoundary(
   }
 [% endif %]
 
-  await assertPublicArtifacts(explicitArtifacts, true, includeFrontendArtifacts);
+  await assertPublicArtifacts(
+    explicitArtifacts,
+    true,
+    includeFrontendArtifacts,
+    includeBuildOutputs,
+  );
 }
 
 async function assertPublicArtifacts(
   explicitArtifacts,
   includeConventionalArtifacts,
   includeFrontendArtifacts = true,
+  includeBuildOutputs = true,
 ) {
   const conventionalArtifacts = includeConventionalArtifacts ? [
-    ...(includeFrontendArtifacts ? publicFrontendDirs.map((directory) => join(directory, "dist")) : []),
+    ...(includeBuildOutputs && includeFrontendArtifacts
+      ? publicFrontendDirs.map((directory) => join(directory, "dist"))
+      : []),
 [% if backend_language == "rust" %]
-    "target/debug/<<[ package_name ]>>-api",
-    "target/release/<<[ package_name ]>>-api",
+    ...(includeBuildOutputs
+      ? ["target/debug/<<[ package_name ]>>-api", "target/release/<<[ package_name ]>>-api"]
+      : []),
 [% endif %]
     "docs/public",
     "public-docs",

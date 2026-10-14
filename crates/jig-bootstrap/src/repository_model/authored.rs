@@ -22,6 +22,10 @@ impl AuthoredRepositoryModel {
         super::frontend_migration::contracts_enabled(&self.actions, commands)
     }
 
+    pub fn public_boundary_enabled(&self, commands: &BTreeMap<String, String>) -> bool {
+        super::frontend_migration::public_boundary_enabled(&self.actions, commands)
+    }
+
     pub fn client_only_contract_drift(&self) -> bool {
         super::frontend_migration::client_only_drift(&self.actions)
     }
@@ -81,8 +85,14 @@ impl RepositoryRenderModel {
                 authored_commands,
             )
         });
-        let authored = upgraded.as_ref().unwrap_or(authored);
+        let saved = authored;
+        let authored = upgraded.as_ref().unwrap_or(saved);
         let mut commands = authored_commands.clone();
+        super::frontend_migration::drop_retired_contract_commands(
+            &saved.actions,
+            &authored.actions,
+            &mut commands,
+        );
         refresh_managed_rust_file_loc_command(
             &authored.actions,
             &mut commands,

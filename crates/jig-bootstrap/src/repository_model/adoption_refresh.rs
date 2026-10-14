@@ -37,15 +37,8 @@ pub fn refresh(
     let mut model = prior.clone();
     let mut commands = prior_commands.clone();
     commands.retain(|_, value| !value.trim().is_empty());
-    let managed = managed_targets(&generated, prior);
-    for action in &prior.actions {
-        if managed.contains(&action.target)
-            && let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
-                &action.runner
-        {
-            commands.remove(command);
-        }
-    }
+    let managed = managed_targets(&generated, &generated_commands, prior, prior_commands);
+    drop_managed_commands(prior, &managed, &mut commands);
     model
         .actions
         .retain(|action| !managed.contains(&action.target));
@@ -87,6 +80,17 @@ pub fn refresh(
                 answers.backend_language().is_go(),
                 answers.repo_name(),
             )
+        {
+            continue;
+        }
+        // Nor does it restore a boundary check that the model lacks: its
+        // owner removed it, even where an admin app remains.
+        if action.target.component.as_str() == REPO_COMPONENT
+            && action.target.action.as_str() == FRONTEND_PUBLIC_BOUNDARY_ACTION
+            && !prior
+                .actions
+                .iter()
+                .any(|prior| prior.target == action.target)
         {
             continue;
         }
@@ -160,18 +164,31 @@ pub fn refresh(
 }
 
 /// The prior actions that the refresh replaces with the generated ones: those
-/// that generation wrote and their owner left as it wrote them. A contract
-/// check with other inputs stays, as on update. A capability change cannot
-/// change the document check, so a saved one stays as its owner left it.
+/// that generation wrote and their owner left as it wrote them. As on update,
+/// a contract check with other inputs stays, and a boundary check that
+/// generation no longer writes leaves only if it is unmodified and no other
+/// target depends on it. A capability change cannot change the document
+/// check, so a saved one stays as its owner left it.
 fn managed_targets(
     generated: &AuthoredRepositoryModel,
+    generated_commands: &BTreeMap<String, String>,
     prior: &AuthoredRepositoryModel,
+    prior_commands: &BTreeMap<String, String>,
 ) -> BTreeSet<TargetId> {
+    let keeps_boundary = super::frontend_migration::keeps_saved_boundary(
+        generated,
+        generated_commands,
+        prior,
+        prior_commands,
+    );
     prior
         .actions
         .iter()
         .filter(|action| {
             generated_action(action, prior)
+                && !(keeps_boundary
+                    && action.target.component.as_str() == REPO_COMPONENT
+                    && action.target.action.as_str() == FRONTEND_PUBLIC_BOUNDARY_ACTION)
                 && !super::frontend_migration::is_backend_document_check(&prior.components, action)
                 && !generated
                     .actions
@@ -183,6 +200,34 @@ fn managed_targets(
         })
         .map(|action| action.target.clone())
         .collect()
+}
+
+/// Removes the commands of the managed actions. A command that a retained
+/// action still runs stays, as on update.
+fn drop_managed_commands(
+    prior: &AuthoredRepositoryModel,
+    managed: &BTreeSet<TargetId>,
+    commands: &mut BTreeMap<String, String>,
+) {
+    let runner_command = |action: &ActionSpec| match &action.runner {
+        ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
+            Some(command.clone())
+        }
+        _ => None,
+    };
+    let (managed_actions, retained_actions): (Vec<_>, Vec<_>) = prior
+        .actions
+        .iter()
+        .partition(|action| managed.contains(&action.target));
+    let retained = retained_actions
+        .into_iter()
+        .filter_map(runner_command)
+        .collect::<BTreeSet<_>>();
+    for command in managed_actions.into_iter().filter_map(runner_command) {
+        if !retained.contains(&command) {
+            commands.remove(&command);
+        }
+    }
 }
 
 fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> bool {

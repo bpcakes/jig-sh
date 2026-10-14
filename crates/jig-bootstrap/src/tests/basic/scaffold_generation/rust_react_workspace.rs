@@ -604,6 +604,8 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert_rendered_jig_answers(&destination);
     #[cfg(unix)]
     assert_rust_drift_check_skips_the_backend(&destination);
+    #[cfg(unix)]
+    assert_admin_boundary_check_skips_stale_build_output(&destination);
 }
 
 /// drift-check regenerates the clients from the committed documents and

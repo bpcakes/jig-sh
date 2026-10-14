@@ -1,6 +1,8 @@
 //! Re-adoption with a capability change regenerates the harness actions
 //! around the saved components, whatever their names and roots.
 
+use std::path::Path;
+
 use super::*;
 use crate::adopt_infer::{ComponentSelectionOpts, infer_adopt_answers};
 use crate::answers::{AnswerInput, HarnessFootprint};
@@ -9,24 +11,67 @@ use crate::answers::{AnswerInput, HarnessFootprint};
 /// the answers as `jig adopt . --write --sqlx-enabled true` does.
 fn readopt_with_sqlx(model: &RepositoryRenderModel) -> Result<RenderAnswers> {
     let temp = TempDir::new().unwrap();
-    let root = temp.path();
+    readopt_apps_with_sqlx_at(temp.path(), model, APP)
+}
+
+/// Re-adopts the repository at `root`, saved as `model` with the frontend
+/// `apps`, enabling SQLx.
+fn readopt_apps_with_sqlx_at(
+    root: &Path,
+    model: &RepositoryRenderModel,
+    apps: &str,
+) -> Result<RenderAnswers> {
+    readopt_at(
+        root,
+        &format!(
+            "repo_name = \"ExampleProject\"\nbackend_language = \"rust\"\nharness_footprint = \"full\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{apps}"
+        ),
+        model,
+        AnswerOpts {
+            harness_footprint: Some(HarnessFootprint::Full),
+            sqlx_enabled: Some(true),
+            rust_migration_dir: Some("migrations".into()),
+            ..AnswerOpts::default()
+        },
+    )
+}
+
+/// Re-adopts a Go repository saved as `model` without a recorded harness
+/// footprint, passing the full one, which refreshes the harness.
+fn readopt_go_with_full_footprint(model: &RepositoryRenderModel) -> Result<RenderAnswers> {
+    let temp = TempDir::new().unwrap();
+    readopt_at(
+        temp.path(),
+        &format!(
+            "repo_name = \"ExampleProject\"\nbackend_language = \"go\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{APP}"
+        ),
+        model,
+        AnswerOpts {
+            harness_footprint: Some(HarnessFootprint::Full),
+            ..AnswerOpts::default()
+        },
+    )
+}
+
+/// Re-adopts the repository at `root`, whose `.jig.toml` holds `answers` and
+/// `model`, resolving `opts` as `jig adopt . --write` does.
+fn readopt_at(
+    root: &Path,
+    answers: &str,
+    model: &RepositoryRenderModel,
+    mut opts: AnswerOpts,
+) -> Result<RenderAnswers> {
     let path = root.join(".jig.toml");
     fs::write(
         &path,
         format!(
-            "repo_name = \"ExampleProject\"\nbackend_language = \"rust\"\nharness_footprint = \"full\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{APP}\n{}\n{}",
+            "{answers}\n{}\n{}",
             model.authored_toml().unwrap(),
             model.commands_toml().unwrap()
         ),
     )
     .unwrap();
     let mut inference = infer_adopt_answers(root);
-    let mut opts = AnswerOpts {
-        harness_footprint: Some(HarnessFootprint::Full),
-        sqlx_enabled: Some(true),
-        rust_migration_dir: Some("migrations".into()),
-        ..AnswerOpts::default()
-    };
     let mut input = AnswerInput::from_file(&path)?;
     input.prepare_adoption(
         &mut inference,
@@ -198,6 +243,140 @@ fn capability_refresh_keeps_a_customized_document_check_command() {
     assert_eq!(model.commands["api_openapi_command"], custom);
 }
 
+#[test]
+fn capability_refresh_keeps_a_removed_boundary_check_removed() {
+    let apps = format!("{APP}{ADMIN_APP}");
+    let mut scaffold = scaffold_answers(&format!("backend_language = \"rust\"\n{apps}"));
+    scaffold.enable_client_only_contract_drift();
+    let mut saved = RepositoryRenderModel::from_answers(&scaffold).unwrap();
+    saved
+        .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    saved
+        .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    let boundary = target_id("repo", "frontend-public-boundary").unwrap();
+    let readopt = |saved: &RepositoryRenderModel| {
+        let temp = TempDir::new().unwrap();
+        let answers = readopt_apps_with_sqlx_at(temp.path(), saved, &apps).unwrap();
+        RepositoryRenderModel::from_answers(&answers).unwrap()
+    };
+
+    // The refresh regenerates the boundary check that the model has.
+    assert!(has_target(
+        &readopt(&saved),
+        "repo:frontend-public-boundary"
+    ));
+
+    let command = "repo_frontend_public_boundary_command";
+    assert!(saved.commands.contains_key(command));
+    saved.actions.retain(|action| action.target != boundary);
+    for profile in &mut saved.profiles {
+        profile.targets.retain(|target| *target != boundary);
+    }
+    saved.commands.remove(command);
+
+    let model = readopt(&saved);
+
+    assert!(
+        model
+            .components
+            .iter()
+            .any(|component| component.adapters.iter().any(|adapter| adapter == "sqlx"))
+    );
+    assert!(!has_target(&model, "repo:frontend-public-boundary"));
+    assert!(!model.commands.contains_key(command));
+    assert!(
+        model
+            .profiles
+            .iter()
+            .all(|profile| !profile.targets.contains(&boundary))
+    );
+}
+
+/// Like an update, a refresh retires an unmodified Go boundary check, which
+/// guards nothing, but keeps one that another target depends on or that its
+/// owner customized.
+#[test]
+fn capability_refresh_retires_a_go_boundary_check_only_as_an_update_would() {
+    let boundary = target_id("repo", "frontend-public-boundary").unwrap();
+    let mut depended_on = legacy_model("go");
+    let mut guard = ActionSpec::new(
+        target_id("repo", "release-guard").unwrap(),
+        ActionIntent::Check,
+        ActionRunner::command("repo_release_guard_command"),
+    );
+    guard.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+    guard.depends_on = vec![boundary.clone()];
+    guard.provenance = provenance(&[
+        ("target", FieldProvenance::Declared),
+        ("runner", FieldProvenance::Declared),
+        ("depends_on", FieldProvenance::Declared),
+    ]);
+    depended_on.actions.push(guard);
+    depended_on.actions.sort_by(|a, b| a.target.cmp(&b.target));
+    depended_on
+        .commands
+        .insert("repo_release_guard_command".into(), "true".into());
+    let mut customized = legacy_model("go");
+    customized
+        .actions
+        .iter_mut()
+        .find(|action| action.target == boundary)
+        .unwrap()
+        .inputs
+        .push("docs/privileged/**".into());
+
+    for (label, saved, kept) in [
+        ("unmodified", legacy_model("go"), false),
+        ("depended on", depended_on, true),
+        ("customized", customized, true),
+    ] {
+        let answers = readopt_go_with_full_footprint(&saved).unwrap();
+        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        assert_eq!(
+            has_target(&model, "repo:frontend-public-boundary"),
+            kept,
+            "{label}"
+        );
+        assert!(
+            has_target(&model, "repo:frontend-contract-drift"),
+            "{label}"
+        );
+    }
+}
+
+/// Retiring a Go boundary check keeps its command while another target runs
+/// it, as an update does.
+#[test]
+fn capability_refresh_keeps_a_retired_boundary_command_that_another_target_runs() {
+    let mut saved = legacy_model("go");
+    let mut audit = ActionSpec::new(
+        target_id("repo", "public-audit").unwrap(),
+        ActionIntent::Check,
+        ActionRunner::command("repo_frontend_public_boundary_command"),
+    );
+    audit.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+    audit.provenance = provenance(&[
+        ("target", FieldProvenance::Declared),
+        ("runner", FieldProvenance::Declared),
+    ]);
+    saved.actions.push(audit);
+    saved.actions.sort_by(|a, b| a.target.cmp(&b.target));
+    let command = saved.commands["repo_frontend_public_boundary_command"].clone();
+
+    let answers = readopt_go_with_full_footprint(&saved).unwrap();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(!has_target(&model, "repo:frontend-public-boundary"));
+    assert!(has_target(&model, "repo:public-audit"));
+    assert_eq!(
+        model.commands["repo_frontend_public_boundary_command"],
+        command
+    );
+}
+
 /// A capability change cannot change the document check, so a refresh
 /// leaves a saved one as its owner left it: with other inputs, under a key
 /// renamed with the backend, or beside a backend no longer at the root.
@@ -334,11 +513,22 @@ fn capability_refresh_keeps_inputs_an_owner_declared_on_a_generated_check() {
 /// it, as on update; an unmodified one is regenerated.
 #[test]
 fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
+    // A Rust scaffold with an admin app has both contract checks.
+    let apps = format!("{APP}{ADMIN_APP}");
+    let mut scaffold = scaffold_answers(&format!("backend_language = \"rust\"\n{apps}"));
+    scaffold.enable_client_only_contract_drift();
+    let mut current = RepositoryRenderModel::from_answers(&scaffold).unwrap();
+    current
+        .prepare_runner_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
+    current
+        .prepare_freshness_epoch(jig_context::CURRENT_CONTRACT_VERSION)
+        .unwrap();
     for (target, input) in [
         ("repo:frontend-contract-drift", "schemas/**"),
         ("repo:frontend-public-boundary", "docs/privileged/**"),
     ] {
-        let mut saved = saved_current_model("rust");
+        let mut saved = current.clone();
         let check = saved
             .actions
             .iter_mut()
@@ -347,7 +537,8 @@ fn capability_refresh_keeps_contract_checks_whose_inputs_their_owner_changed() {
         check.inputs.push(input.into());
         check.inputs.sort();
 
-        let answers = readopt_with_sqlx(&saved).unwrap();
+        let temp = TempDir::new().unwrap();
+        let answers = readopt_apps_with_sqlx_at(temp.path(), &saved, &apps).unwrap();
         let model = RepositoryRenderModel::from_answers(&answers).unwrap();
 
         assert!(

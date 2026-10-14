@@ -1,10 +1,13 @@
-//! A refresh can retire generated component and target dependencies. Name
-//! each one so an owner who relied on it can restore it deliberately.
+//! A refresh can retire generated frontend contract checks and component and
+//! target dependencies. Name each one so an owner who relied on it can
+//! restore it deliberately.
 
 use super::*;
 
-/// Lists the dependencies that the staged `.jig.toml` drops from components
-/// and targets that both versions declare.
+/// Lists the frontend contract checks that the staged `.jig.toml` drops, and
+/// the dependencies it drops from components and targets that both versions
+/// declare. Other targets leave only when a migration replaces them, which
+/// needs no restoring.
 pub fn retired_dependency_notes(
     seed_repo_path: Option<&Path>,
     staged_destination: &Path,
@@ -16,6 +19,14 @@ pub fn retired_dependency_notes(
         return Ok(Vec::new());
     };
     let mut notes = Vec::new();
+    let staged_targets = dependencies(&staged, "actions", target_key);
+    for target in dependencies(&existing, "actions", target_key).keys() {
+        if is_frontend_contract_check(target) && !staged_targets.contains_key(target) {
+            notes.push(format!(
+                "Target `{target}` is no longer generated and was removed from .jig.toml. Restore it there if you rely on it."
+            ));
+        }
+    }
     for (kind, table, key) in [
         (
             "Component",
@@ -116,6 +127,12 @@ depends_on = ["api"]
 [[repository.actions]]
 target = { component = "web", action = "typecheck" }
 depends_on = [{ component = "repo", action = "frontend-contract-drift" }]
+
+[[repository.actions]]
+target = { component = "repo", action = "frontend-public-boundary" }
+
+[[repository.actions]]
+target = { component = "repo", action = "rust-file-loc" }
 "#,
         );
         write(
@@ -131,14 +148,22 @@ depends_on = []
 
 [[repository.actions]]
 target = { component = "web", action = "typecheck" }
+
+[[repository.actions]]
+target = { component = "repo", action = "file-budget" }
 "#,
         );
 
+        // The retired boundary check is named; the replaced file-size check
+        // is not.
         let notes = retired_dependency_notes(Some(existing.path()), staged.path()).unwrap();
 
-        assert_eq!(notes.len(), 2, "{notes:?}");
-        assert!(notes[0].starts_with("Component `web` no longer depends on `api`."));
-        assert!(notes[1].starts_with(
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(
+            notes[0].starts_with("Target `repo:frontend-public-boundary` is no longer generated")
+        );
+        assert!(notes[1].starts_with("Component `web` no longer depends on `api`."));
+        assert!(notes[2].starts_with(
             "Target `web:typecheck` no longer depends on `repo:frontend-contract-drift`."
         ));
     }
