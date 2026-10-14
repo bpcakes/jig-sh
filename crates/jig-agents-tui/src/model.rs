@@ -11,6 +11,7 @@ use crate::Home;
 mod app;
 mod configuration;
 mod gauge;
+mod inspection;
 mod projection;
 
 pub(crate) use crate::usage::WindowRole;
@@ -171,43 +172,11 @@ pub(crate) struct Details {
     pub(crate) buckets: Vec<RateLimitBucket>,
     pub(crate) inspection_error: Option<String>,
     pub(crate) usage_error: Option<String>,
+    pub(crate) banked_resets: Option<String>,
     observed_at: u64,
 }
 
 impl Details {
-    fn from_value(mut value: Value, observed_at: u64, subscription_buckets: &[String]) -> Self {
-        sanitize_value(&mut value);
-        let account = value.get("account").filter(|account| account.is_object());
-        let inferred_status = if account.is_some() {
-            "authenticated"
-        } else if value.get("account").is_some_and(Value::is_null) {
-            "not logged in"
-        } else {
-            "unknown"
-        };
-        Self {
-            account_type: text_at(account, "type"),
-            email: text_at(account, "email"),
-            plan: text_at(account, "plan_type"),
-            status: value
-                .get("status")
-                .and_then(Value::as_str)
-                .filter(|status| !status.is_empty())
-                .unwrap_or(inferred_status)
-                .to_owned(),
-            buckets: value
-                .get("rate_limits")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|value| RateLimitBucket::from_value(value, subscription_buckets))
-                .collect(),
-            inspection_error: optional_text(&value, "inspection_error"),
-            usage_error: optional_text(&value, "usage_error"),
-            observed_at,
-        }
-    }
-
     pub(crate) fn account_label(&self) -> &str {
         if self.email != UNKNOWN {
             &self.email

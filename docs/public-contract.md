@@ -36,14 +36,27 @@ Every `doctor --json` check carries a stable boolean `operator_only`. Operator-o
 
 `scripts/jig codex homes --json` returns a runtime-owned `schema_version: 1` report of local Codex home paths, account identity, plan type, and per-home errors. A home's `status` records stable account state such as `not logged in` or `unknown`; `inspection_error` records account/app-server inspection failure, while `usage_error` records a rate-limit failure after a logged-in account was observed. Both are mirrored in the top-level `errors` array with distinct `kind` values. A logged-out home is a complete observation even when usage was requested: rate-limit usage is not applicable, so an app-server usage failure is not surfaced as `usage_error` and does not change `outcome` to `partial`. Add `--usage` to include every rate-limit bucket and the server-reported durations and reset times. If account inspection succeeds for a logged-in account but usage inspection fails, the report retains the account and records the usage failure. Account and usage data come from the Codex app-server API; Jig does not parse `auth.json`. This output contains local paths and account email addresses and should be handled as user data. Its top-level `representation_lossy` boolean reports whether any non-UTF-8 home path or Codex executable value had to be replaced for JSON display. `scripts/jig codex launch HOME --dry-run --json` and `scripts/jig codex resume SESSION_ID --dry-run --json` are `schema_version: 1` structured launch previews; the latter reports `command: "codex resume"` and includes the injected `resume` and normalized session-ID arguments before caller-supplied arguments. Their `representation_lossy` boolean additionally covers forwarded arguments. Human terminal previews replace control characters before display and explicitly warn when the shown shell command is therefore not launch-equivalent; JSON retains the original string values except for reported non-UTF-8 conversion. A real launch or resume replaces the Jig process on Unix and therefore rejects `--json`; forwarded Codex arguments begin after `--` and retain their original boundaries. On platforms without process replacement, Jig waits for Codex and exits with Codex's shell-compatible status.
 
+Codex home inspections include nullable `banked_resets`, sourced from the
+app-server's `rateLimitResetCredits.availableCount` when usage is requested.
+An unsigned integer is the available count, including zero; null means it is
+unavailable, invalid, or usage was not requested. The count does not depend on
+the optional, potentially truncated credit details, which Jig does not expose.
+Banked resets break automatic selection ties in current headroom; they do not
+change available quota, eligibility, or the picker's pace-based recommendation.
+
 `jig codex launch --auto --dry-run --json` and the equivalent Claude command
 extend the existing launch preview with `selection`. Its `strategy` is
-`"headroom"`, `scope` is `"all_reported_windows"`, and `reason` is `"selected"`
+`"headroom"`, `tie_breakers` is `["banked_resets", "discovery_order"]`,
+`scope` is `"all_reported_windows"`, and `reason` is `"selected"`
 or `"no_eligible_home"`. `selected_index` indexes `candidates` or is null.
 `assessed_at` and per-candidate `observed_at` are Unix seconds; an unobserved
 candidate has a null timestamp. `partial`, `timed_out`, and `warnings` describe
 inspection coverage. Candidate entries contain `index`, `name`, display `path`,
-`representation_lossy`, `current`, provider `details`, and `assessment`.
+`representation_lossy`, `current`, provider `details`, nullable `banked_resets`,
+and `assessment`. Equal remaining percentages favor the highest known reset
+count, then discovery order. Missing or invalid counts remain null in JSON and
+earn no ranking bonus, tying with zero; they do not make valid usage ineligible
+or the inspection partial. Jig does not redeem resets.
 The assessment contains `reason`, nullable `remaining_percent`, and nullable
 `limiting_window` (`bucket`, nullable `bucket_name`, `window`,
 nullable `duration_minutes`, nullable `resets_at`). Known utilization is scored

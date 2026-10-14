@@ -10,6 +10,9 @@ use crate::cli::output::usage::{
 use crate::cli::output::command_display::CommandDisplay;
 use crate::cli::output::{value_bool, value_str};
 
+#[cfg(test)]
+mod banked_resets_tests;
+
 pub(in crate::cli) fn format_codex_homes_summary(value: &serde_json::Value) -> String {
     format_codex_homes(value)
 }
@@ -69,6 +72,12 @@ fn format_codex_home_fields(home: &serde_json::Value, usage_included: bool) -> S
     let inspection_error = value_str(home, "inspection_error");
     let usage_error = value_str(home, "usage_error");
     let mut fields = vec![name, account, plan];
+    if usage_included && account_observed && inspection_error.is_none() {
+        let resets = home["banked_resets"]
+            .as_u64()
+            .map_or_else(|| "unknown".to_owned(), |count| count.to_string());
+        fields.push(format!("Banked resets: {resets}"));
+    }
     if usage_included && account_observed && inspection_error.is_none() && usage_error.is_none() {
         fields.push(crate::cli::output::usage::format_limits(
             &home["rate_limits"],

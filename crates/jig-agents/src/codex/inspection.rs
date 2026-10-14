@@ -25,6 +25,7 @@ pub(super) fn inspection_failure(error: impl Into<String>) -> JsonValue {
     json!({
         "account": null,
         "rate_limits": [],
+        "banked_resets": null,
         "status": "unknown",
         "inspection_error": error,
         "usage_error": null
@@ -38,6 +39,14 @@ pub(super) fn inspected_home_json(
     let account = match normalize_account(&response.account) {
         Ok(account) => account,
         Err(error) => return inspection_failure(error),
+    };
+    let banked_resets = if include_usage && !account.is_null() {
+        response
+            .rate_limits
+            .as_ref()
+            .and_then(|usage| usage["rateLimitResetCredits"]["availableCount"].as_u64())
+    } else {
+        None
     };
     let rate_limits = if account.is_null() {
         Vec::new()
@@ -68,6 +77,7 @@ pub(super) fn inspected_home_json(
     json!({
         "account": account,
         "rate_limits": rate_limits,
+        "banked_resets": banked_resets,
         "usage_included": include_usage,
         "status": status,
         "inspection_error": null,
@@ -176,6 +186,61 @@ pub(super) fn normalized_window(window: Option<&JsonValue>) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn inspect_resets(usage: JsonValue, include_usage: bool, logged_in: bool) -> JsonValue {
+        inspected_home_json(
+            AppServerAccountResponse {
+                account: json!({"account": logged_in.then(|| json!({"type": "chatgpt"}))}),
+                rate_limits: Some(usage),
+                usage_error: None,
+            },
+            include_usage,
+        )
+    }
+
+    #[test]
+    fn banked_resets_use_available_count_not_credit_detail_length() {
+        for count in [0, 7, u64::MAX] {
+            let result = inspect_resets(
+                json!({"rateLimitResetCredits": {
+                    "availableCount": count,
+                    "credits": [{"id": "example-reset-credit"}]
+                }}),
+                true,
+                true,
+            );
+            assert_eq!(result["banked_resets"], count);
+            // Missing windows do not discard a known count.
+            assert!(result["usage_error"].is_string());
+            assert!(!result.to_string().contains("example-reset-credit"));
+        }
+    }
+
+    #[test]
+    fn unavailable_banked_resets_remain_unknown() {
+        for usage in [
+            json!({}),
+            json!({"rateLimitResetCredits": null}),
+            json!({"rateLimitResetCredits": {}}),
+            json!({"rateLimitResetCredits": {"availableCount": null}}),
+            json!({"rateLimitResetCredits": {"availableCount": -1}}),
+            json!({"rateLimitResetCredits": {"availableCount": 1.5}}),
+            json!({"rateLimitResetCredits": {"availableCount": "3"}}),
+        ] {
+            assert_eq!(
+                inspect_resets(usage, true, true)["banked_resets"],
+                JsonValue::Null
+            );
+        }
+        for (include_usage, logged_in) in [(false, true), (true, false)] {
+            let result = inspect_resets(
+                json!({"rateLimitResetCredits": {"availableCount": 3}}),
+                include_usage,
+                logged_in,
+            );
+            assert!(result["banked_resets"].is_null());
+        }
+    }
 
     #[test]
     fn malformed_present_windows_stay_unknown_instead_of_disappearing() {

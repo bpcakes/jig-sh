@@ -61,8 +61,12 @@ fn summary(value: &Value) -> String {
     let remaining = candidate["assessment"]["remaining_percent"]
         .as_f64()
         .unwrap_or_default();
+    let reserves = candidate["banked_resets"]
+        .as_u64()
+        .map(|count| format!("; banked resets: {count}"))
+        .unwrap_or_default();
     format!(
-        "  Auto selection: {} remaining in the limiting window{}\n  Full selection decision: rerun with --dry-run --json",
+        "  Auto selection: {} remaining in the limiting window{reserves}{}\n  Full selection decision: rerun with --dry-run --json",
         jig_tui::format_percent(remaining),
         if selection["partial"] == true {
             " (partial inspection)"
