@@ -55,6 +55,12 @@ pub(super) struct RenderAnswers {
     #[serde(skip)]
     go_postgres_integration_script: bool,
     #[serde(skip)]
+    client_only_contract_drift: bool,
+    #[serde(skip)]
+    openapi_check_command: Option<String>,
+    #[serde(skip)]
+    document_check_deferred: bool,
+    #[serde(skip)]
     repository_projection_hint: RepositoryProjectionHint,
     repo_name: String,
     default_branch: String,
@@ -330,6 +336,7 @@ impl AnswerInputShape {
 
 mod adoption;
 mod adoption_commands;
+mod document_check;
 mod resolution;
 
 impl RenderAnswers {
@@ -521,6 +528,16 @@ impl RenderAnswers {
         self.go_postgres_integration_script = true;
     }
 
+    /// The repository's contract script is the client-only one that a
+    /// scaffold writes, so its drift check never reads the backend.
+    pub(super) const fn client_only_contract_drift(&self) -> bool {
+        self.client_only_contract_drift
+    }
+
+    pub(super) fn enable_client_only_contract_drift(&mut self) {
+        self.client_only_contract_drift = true;
+    }
+
     pub(super) fn dev_apps_configured(&self) -> bool {
         !self.dev_apps.is_empty() || !self.generated_frontend_dev_apps.is_empty()
     }
@@ -636,6 +653,9 @@ fn loaded_repository_model_is_custom(
     if authored_repository.frontend_contracts_enabled(authored_repository_commands) {
         generated_answers.enable_scaffolded_frontend_contracts();
     }
+    if authored_repository.client_only_contract_drift() {
+        generated_answers.enable_client_only_contract_drift();
+    }
     let Ok(generated) =
         crate::repository_model::RepositoryRenderModel::from_answers(&generated_answers)
     else {
@@ -655,6 +675,10 @@ fn resolve_render_answers(
             .as_ref()
             .is_some_and(|commands| repository.frontend_contracts_enabled(commands))
     });
+    let client_only_contract_drift = raw
+        .repository
+        .as_ref()
+        .is_some_and(AuthoredRepositoryModel::client_only_contract_drift);
     let authored_repository = preserve_repository_model
         .then(|| raw.repository.take())
         .flatten()
@@ -664,6 +688,9 @@ fn resolve_render_answers(
         raw.resolve_with_authored_repository(default_repo_name, authored_repository)?;
     if scaffolded_frontend_contracts {
         answers.enable_scaffolded_frontend_contracts();
+    }
+    if client_only_contract_drift {
+        answers.enable_client_only_contract_drift();
     }
     if let Some(authored_repository_commands) = authored_repository_commands
         && answers.authored_repository.is_some()

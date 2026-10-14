@@ -123,6 +123,7 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
             template_mode: None,
             recopy,
             launcher_only: false,
+            add_openapi_check: false,
             force: true,
             vcs_ref: None,
             defaults: true,

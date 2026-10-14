@@ -515,6 +515,37 @@ fn launcher_rejects_drift_from_the_repository_contract_before_dispatch() {
     )), "{stderr}");
 }
 
+#[test]
+fn launcher_forwards_the_openapi_check_opt_in_to_update() {
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("openapi-opt-in");
+    let jig = env!("CARGO_BIN_EXE_jig");
+    initialize_embedded_repo(jig, &destination, "openapi-opt-in");
+
+    let update = Command::new(destination.join("scripts/jig"))
+        .args([
+            "--json",
+            "update",
+            "--add-openapi-check",
+            "--force",
+            "--no-input",
+        ])
+        .env("JIG_DEV_BIN", jig)
+        .env_remove("JIG_REPO_ROOT")
+        .current_dir(&destination)
+        .output()
+        .unwrap();
+    assert_success(&update, "launcher update adding the OpenAPI check");
+    // Only the binary reports this, so the launcher passed the option through.
+    let report: Value = serde_json::from_slice(&update.stdout).unwrap();
+    assert_eq!(
+        report["warnings"],
+        serde_json::json!([
+            "--add-openapi-check adds api:openapi only to a repository model that is not custom and has the generated API contract checks, so it left this one as it is; declare api:openapi in .jig.toml to add the check."
+        ])
+    );
+}
+
 fn launcher_text(path: &Path) -> String {
     fs::read_to_string(path).unwrap()
 }

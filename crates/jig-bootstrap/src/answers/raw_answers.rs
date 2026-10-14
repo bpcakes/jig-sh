@@ -43,6 +43,17 @@ pub(super) struct RawAnswers {
     pub(super) go_lint_command: Option<String>,
     pub(super) go_test_command: Option<String>,
     pub(super) go_test_locked_command: Option<String>,
+    /// The saved document check's command; not an answer.
+    #[serde(skip)]
+    pub(super) openapi_check_command: Option<String>,
+    /// Whether the owner asked this update to give a saved model from before
+    /// the document check the check; not an answer.
+    #[serde(skip)]
+    pub(super) add_openapi_check: bool,
+    /// Whether generation leaves out the document check of a saved model
+    /// from before it; not an answer.
+    #[serde(skip)]
+    pub(super) document_check_deferred: bool,
     pub(super) sqlc_check_command: Option<String>,
     pub(super) typescript_lint_command: Option<String>,
     pub(super) typescript_typecheck_command: Option<String>,
@@ -172,6 +183,11 @@ impl RawAnswers {
                 "api_test_locked_command",
             );
         }
+        inherit_repository_command(
+            &mut self.openapi_check_command,
+            commands,
+            "api_openapi_command",
+        );
         inherit_repository_command(&mut self.sqlx_check_command, commands, "api_sqlx_command");
         inherit_repository_command(
             &mut self.schema_dump_command,
@@ -647,6 +663,9 @@ impl RawAnswers {
             authored_repository_commands: BTreeMap::new(),
             scaffolded_frontend_contracts: false,
             go_postgres_integration_script: false,
+            client_only_contract_drift: false,
+            openapi_check_command: self.openapi_check_command,
+            document_check_deferred: self.document_check_deferred,
             repository_projection_hint: self.repository_projection_hint,
             repo_name,
             default_branch: self.default_branch.unwrap_or_else(|| "main".into()),

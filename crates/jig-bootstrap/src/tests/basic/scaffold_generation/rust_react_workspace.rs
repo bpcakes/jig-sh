@@ -213,7 +213,16 @@ fn assert_generated_ci_workflows(destination: &Path) {
         );
         assert!(paths.iter().any(|path| path == "migrations/**"));
         assert!(paths.iter().any(|path| path == ".sqlx/**"));
+        assert!(paths.iter().any(|path| path == "openapi/**"));
     }
+    // The test job also proves that the committed documents match the backend.
+    assert!(
+        rust_workflow_yaml["jobs"]["test"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["run"] == "scripts/jig check api:openapi")
+    );
     assert_eq!(
         rust_workflow_yaml["jobs"]["clippy"]["env"]["SQLX_OFFLINE_DIR"],
         "${{ github.workspace }}/.sqlx"
@@ -492,6 +501,41 @@ fn assert_rendered_jig_answers(destination: &Path) {
         ],
     );
     let config: toml::Value = toml::from_str(&answers).unwrap();
+    // api:openapi runs each document test in the package that holds it, and
+    // requires the admin one where the admin crate is.
+    let document_check = config["commands"]["api_openapi_command"].as_str().unwrap();
+    assert!(
+        document_check.contains("[ -f \"crates/$package/Cargo.toml\" ]"),
+        "{document_check}"
+    );
+    for (package, source, test) in [
+        (
+            "my-app-http",
+            "src/lib.rs",
+            "fn committed_public_openapi_is_current()",
+        ),
+        (
+            "my-app-admin-http",
+            "src/tests.rs",
+            "fn committed_admin_openapi_is_current()",
+        ),
+    ] {
+        assert!(
+            document_check.contains(&format!("package={package};")),
+            "{document_check}"
+        );
+        let root = destination.join("crates").join(package);
+        assert!(
+            fs::read_to_string(root.join("Cargo.toml"))
+                .unwrap()
+                .contains(&format!("name = \"{package}\"\n"))
+        );
+        assert!(
+            fs::read_to_string(root.join(source))
+                .unwrap()
+                .contains(test)
+        );
+    }
     let bootstrap = config["commands"]["repo_bootstrap_command"]
         .as_str()
         .unwrap();
@@ -558,6 +602,43 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert_http_contract_and_test_support(&destination);
     assert_database_support_and_docs(&destination);
     assert_rendered_jig_answers(&destination);
+    #[cfg(unix)]
+    assert_rust_drift_check_skips_the_backend(&destination);
+}
+
+/// drift-check regenerates the clients from the committed documents and
+/// never builds or runs the backend.
+#[cfg(unix)]
+fn assert_rust_drift_check_skips_the_backend(destination: &Path) {
+    if !node_available() {
+        return;
+    }
+    install_fake_openapi_ts(destination);
+    let fake_bin = destination.join(".fake-bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    write_executable_test_script(
+        &fake_bin.join("cargo"),
+        "#!/bin/sh\n: > \"$JIG_TEST_CARGO_MARKER\"\nexit 91\n",
+    );
+    let marker = destination.join(".backend-build-ran");
+    let before = regular_file_tree_snapshot(destination);
+
+    let output = run_contracts_mode(
+        destination,
+        "drift-check",
+        &fake_bin,
+        &[("JIG_TEST_CARGO_MARKER", marker.as_os_str())],
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!marker.exists(), "drift-check invoked cargo");
+    assert_eq!(regular_file_tree_snapshot(destination), before);
+    assert_drift_check_rejects_a_stale_client(destination, &fake_bin);
+    assert_drift_check_scans_the_public_document(destination, &fake_bin);
 }
 
 #[cfg(unix)]

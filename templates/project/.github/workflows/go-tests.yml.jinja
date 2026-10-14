@@ -9,7 +9,9 @@ on:
 [% if go_sqlc_ci_enabled %]
       - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
+[% if "openapi/**" not in go_ci_input_paths %]
       - "openapi/**"
+[% endif %]
 [% if go_postgres_integration_ci_enabled %]
       - "scripts/test-postgres.sh"
 [% endif %]
@@ -29,7 +31,9 @@ on:
 [% if go_sqlc_ci_enabled %]
       - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
+[% if "openapi/**" not in go_ci_input_paths %]
       - "openapi/**"
+[% endif %]
 [% if go_postgres_integration_ci_enabled %]
       - "scripts/test-postgres.sh"
 [% endif %]
@@ -94,6 +98,8 @@ jobs:
       - run: scripts/jig check <<[ go_fmt_ci_target ]>>
       - run: scripts/jig check <<[ go_lint_ci_target ]>>
       - run: scripts/jig check <<[ go_test_locked_ci_target ]>>
+[% for openapi_target in go_openapi_check_targets %]      - run: scripts/jig check <<[ openapi_target ]>>
+[% endfor -%]
 [% if go_sqlc_ci_enabled %]      - run: scripts/jig check <<[ go_sqlc_ci_target ]>>
 [% endif -%]
 [% if go_postgres_integration_ci_enabled %]

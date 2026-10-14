@@ -105,6 +105,7 @@ fn recopy_preserves_legacy_check_policy_and_tracker_in_pinned_templates() {
             template_mode: None,
             recopy: true,
             launcher_only: false,
+            add_openapi_check: false,
             force: true,
             vcs_ref: None,
             defaults: true,

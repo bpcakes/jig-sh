@@ -62,18 +62,26 @@ impl AnswerInput {
         } else {
             path_base.join(path)
         };
-        let mut input = Self::from_file_with_reader(&path, read)?;
+        let mut input = Self::from_file_with_reader(&path, read, false)?;
         input.preserve_repository_model = true;
         Ok(input)
     }
 
     pub(crate) fn from_file(path: &Path) -> Result<Self> {
-        Self::from_file_with_reader(path, |path| fs::read_to_string(path))
+        Self::from_file_with_reader(path, |path| fs::read_to_string(path), false)
+    }
+
+    /// Loads the answers file for `jig update`, whose owner may ask with
+    /// `--add-openapi-check` to give a saved model from before the document
+    /// check the check.
+    pub(crate) fn from_update_file(path: &Path, add_openapi_check: bool) -> Result<Self> {
+        Self::from_file_with_reader(path, |path| fs::read_to_string(path), add_openapi_check)
     }
 
     fn from_file_with_reader(
         path: &Path,
         read: impl FnOnce(&Path) -> std::io::Result<String>,
+        add_openapi_check: bool,
     ) -> Result<Self> {
         let text = read(path).with_context(|| format!("Failed to read {}", path.display()))?;
         let value = toml::from_str::<toml::Value>(&text)
@@ -85,15 +93,25 @@ impl AnswerInput {
         let mut raw = value
             .try_into::<RawAnswers>()
             .with_context(|| format!("Failed to parse {}", path.display()))?;
+        raw.add_openapi_check = add_openapi_check;
         raw.normalize_repository_model(&table);
         raw.normalize_app_dirs()?;
         raw.normalize_legacy_frontend_metadata(&table);
         let mut authored_repository_commands = authored_repository_commands_from_table(&table);
-        let migration_notes =
+        let mut migration_notes =
             normalize_generated_clippy_defaults(&mut raw, &mut authored_repository_commands)
                 .warnings();
+        raw.document_check_deferred = super::document_check::document_check_deferred(
+            &raw,
+            authored_repository_commands.as_ref(),
+        );
         let preserve_repository_model =
             loaded_repository_model_is_custom(&raw, authored_repository_commands.as_ref());
+        migration_notes.extend(super::document_check::document_check_note(
+            &raw,
+            authored_repository_commands.as_ref(),
+            preserve_repository_model,
+        ));
         Ok(Self {
             raw,
             shape: AnswerInputShape::from_table(&table),

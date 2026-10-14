@@ -37,15 +37,13 @@ pub fn refresh(
     let mut model = prior.clone();
     let mut commands = prior_commands.clone();
     commands.retain(|_, value| !value.trim().is_empty());
-    let mut managed = BTreeSet::new();
+    let managed = managed_targets(&generated, prior);
     for action in &prior.actions {
-        if generated_action(action, prior) {
-            managed.insert(action.target.clone());
-            if let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
+        if managed.contains(&action.target)
+            && let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
                 &action.runner
-            {
-                commands.remove(command);
-            }
+        {
+            commands.remove(command);
         }
     }
     model
@@ -73,6 +71,23 @@ pub fn refresh(
             .collect::<Vec<_>>();
         if !owners.is_empty() {
             retained_owners.insert(action.target, owners);
+            continue;
+        }
+        // As on update, only a model that predates the document check gains
+        // it; a refresh never restores a check its owner removed, even beside
+        // another component's, nor runs it through a command the owner keeps
+        // under its key.
+        if action.target.action.as_str() == OPENAPI_DOCUMENT_CHECK_ACTION
+            && !prior
+                .actions
+                .iter()
+                .any(|prior| prior.target == action.target)
+            && !prior.predates_document_check(
+                prior_commands,
+                answers.backend_language().is_go(),
+                answers.repo_name(),
+            )
+        {
             continue;
         }
         if let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
@@ -144,11 +159,46 @@ pub fn refresh(
     Ok((model, commands))
 }
 
+/// The prior actions that the refresh replaces with the generated ones: those
+/// that generation wrote and their owner left as it wrote them. A contract
+/// check with other inputs stays, as on update. A capability change cannot
+/// change the document check, so a saved one stays as its owner left it.
+fn managed_targets(
+    generated: &AuthoredRepositoryModel,
+    prior: &AuthoredRepositoryModel,
+) -> BTreeSet<TargetId> {
+    prior
+        .actions
+        .iter()
+        .filter(|action| {
+            generated_action(action, prior)
+                && !super::frontend_migration::is_backend_document_check(&prior.components, action)
+                && !generated
+                    .actions
+                    .iter()
+                    .find(|replacement| replacement.target == action.target)
+                    .is_some_and(|replacement| {
+                        super::frontend_migration::customized_contract_inputs(action, replacement)
+                    })
+        })
+        .map(|action| action.target.clone())
+        .collect()
+}
+
 fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> bool {
     // Resource declarations describe this exact implementation, including a
     // wrapper's inner Cargo invocation. Preserve its owner and command rather
     // than discarding or transplanting the opt-in onto regenerated code.
     if !action.resources.is_empty() {
+        return false;
+    }
+    // A field that its owner declared belongs to them, and replacing the action
+    // would discard it. Generation itself declares only frontend targets.
+    if action
+        .provenance
+        .iter()
+        .any(|(field, source)| field != "target" && *source == FieldProvenance::Declared)
+    {
         return false;
     }
     // A policy assertion belongs to this implementation and its input set.

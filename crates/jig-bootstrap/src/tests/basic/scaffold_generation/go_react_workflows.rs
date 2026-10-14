@@ -70,7 +70,13 @@ fn assert_go_test_workflow(destination: &Path) {
             ("actions-rust-lang/setup-rust-toolchain@v1", 2),
         ],
     );
-    for target in ["api:fmt", "api:lint", "api:test-locked", "api:sqlc"] {
+    for target in [
+        "api:fmt",
+        "api:lint",
+        "api:test-locked",
+        "api:openapi",
+        "api:sqlc",
+    ] {
         assert_contains_all(&go_tests, &[&format!("scripts/jig check {target}")]);
     }
     assert_quoted_workflow_path_counts(
@@ -99,6 +105,25 @@ fn assert_go_test_workflow(destination: &Path) {
     );
     assert_contains_all(&go_tests, &["run: bash scripts/test-postgres.sh"]);
     assert_paths_absent(destination, &[".go-version"]);
+}
+
+fn drift_reads_go(destination: &Path) -> bool {
+    let config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(destination.join(".jig.toml")).unwrap())
+            .unwrap();
+    config["repository"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| {
+            action["target"]["component"].as_str() == Some("repo")
+                && action["target"]["action"].as_str() == Some("frontend-contract-drift")
+        })
+        .unwrap()["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|input| input.as_str() == Some("**/*.go"))
 }
 
 #[test]
@@ -221,54 +246,37 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     }
 
     #[cfg(unix)]
-    if Command::new("node")
-        .arg("--version")
-        .status()
-        .is_ok_and(|status| status.success())
-    {
-        let fake_module = destination.join("node_modules/@hey-api/openapi-ts");
-        fs::create_dir_all(&fake_module).unwrap();
-        fs::write(
-            fake_module.join("package.json"),
-            r#"{"name":"@hey-api/openapi-ts","type":"module","exports":"./index.js"}"#,
-        )
-        .unwrap();
-        fs::write(
-            fake_module.join("index.js"),
-            r#"import { cp } from "node:fs/promises";
-
-export async function createClient({ output }) {
-  await cp("packages/public-api-client/src/generated", output, { recursive: true });
-}
-"#,
-        )
-        .unwrap();
-
+    if node_available() {
+        install_fake_openapi_ts(&destination);
         let fake_bin = destination.join(".fake-bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_executable_test_script(
             &fake_bin.join("go"),
             "#!/bin/sh\n: > \"$JIG_TEST_GO_MARKER\"\nexit 91\n",
         );
-        let backend_marker = destination.join(".backend-exporter-ran");
-        let path = std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        )))
-        .unwrap();
+        let backend_marker = destination.join(".backend-ran");
         let before = regular_file_tree_snapshot(&destination);
 
-        let output = Command::new("node")
-            .args(["scripts/contracts.mjs", "client-check"])
-            .current_dir(&destination)
-            .env("PATH", path)
-            .env("JIG_TEST_GO_MARKER", &backend_marker)
-            .output()
-            .unwrap();
+        // The backend document check owns document freshness, so neither
+        // client check runs Go.
+        for mode in ["client-check", "drift-check"] {
+            let output = run_contracts_mode(
+                &destination,
+                mode,
+                &fake_bin,
+                &[("JIG_TEST_GO_MARKER", backend_marker.as_os_str())],
+            );
 
-        assert_rust_only_command_output_success("client-check", &output);
-        assert_paths_absent(&destination, &[".backend-exporter-ran"]);
-        assert_eq!(regular_file_tree_snapshot(&destination), before);
+            assert_rust_only_command_output_success(mode, &output);
+            assert_paths_absent(&destination, &[".backend-ran"]);
+            assert_eq!(regular_file_tree_snapshot(&destination), before);
+        }
+        assert_drift_check_rejects_a_stale_client(&destination, &fake_bin);
+        assert_drift_check_scans_the_public_document(&destination, &fake_bin);
     }
+
+    // An update keeps the scaffold's client-only drift check off the backend.
+    assert!(!drift_reads_go(&destination));
 
     let nested_module_dir = destination.join("services/api");
     fs::create_dir_all(&nested_module_dir).unwrap();
@@ -329,4 +337,118 @@ export async function createClient({ output }) {
     let go_tests = fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
     assert_contains_all(&go_tests, &["scripts/jig check api:sqlc"]);
     assert_contains_none(&go_tests, &["postgres-integration:"]);
+}
+
+/// A repository scaffolded before the document check gains it only when its
+/// owner asks with `jig update --add-openapi-check`; until then each update
+/// says how, and the Go workflow runs no document check.
+#[test]
+fn update_adds_the_document_check_to_an_older_repository_when_asked() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("go-older-contracts");
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            frontends: vec![ScaffoldFrontend {
+                name: "web".into(),
+                kind: ScaffoldFrontendKind::Spa,
+                custom_default_name: false,
+            }],
+            frontend_list: Vec::new(),
+            metrics: None,
+            jobs: None,
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("go-older-contracts".into()),
+            go_module: Some("example.com/go-older-contracts".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    // Save the model as generators before the document check did: no check,
+    // and a drift check that exports the documents from the backend.
+    let is_check = |target: &toml::Value| {
+        target["component"].as_str() == Some("api") && target["action"].as_str() == Some("openapi")
+    };
+    let config_path = destination.join(".jig.toml");
+    let mut config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let repository = &mut config["repository"];
+    let actions = repository["actions"].as_array_mut().unwrap();
+    actions.retain(|action| !is_check(&action["target"]));
+    let drift = actions
+        .iter_mut()
+        .find(|action| action["target"]["action"].as_str() == Some("frontend-contract-drift"))
+        .unwrap();
+    drift["description"] = "Check repository-wide OpenAPI and generated-client drift.".into();
+    let inputs = drift["inputs"].as_array_mut().unwrap();
+    inputs.extend(
+        [
+            "Cargo.toml",
+            "**/Cargo.toml",
+            "**/*.rs",
+            "go.mod",
+            "**/go.mod",
+            "**/*.go",
+        ]
+        .map(toml::Value::from),
+    );
+    inputs.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    inputs.dedup();
+    for profile in repository["profiles"].as_array_mut().unwrap() {
+        profile["targets"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|target| !is_check(target));
+    }
+    config["commands"]
+        .as_table_mut()
+        .unwrap()
+        .remove("api_openapi_command");
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    let has_check = || {
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap()
+            ["repository"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| is_check(&action["target"]))
+    };
+    let go_tests =
+        || fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
+
+    let report = run_update(update_opts(&destination, template.path(), true)).unwrap();
+
+    assert!(!has_check());
+    assert!(drift_reads_go(&destination));
+    assert_contains_none(&go_tests(), &["scripts/jig check api:openapi"]);
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .is_some_and(|warning| warning.contains("jig update --add-openapi-check"))),
+        "{report:#}"
+    );
+
+    let mut opts = update_opts(&destination, template.path(), true);
+    opts.add_openapi_check = true;
+    run_update(opts).unwrap();
+
+    assert!(has_check());
+    assert_contains_all(&go_tests(), &["scripts/jig check api:openapi"]);
 }

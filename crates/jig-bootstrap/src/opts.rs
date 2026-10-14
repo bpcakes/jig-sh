@@ -422,6 +422,12 @@ pub struct UpdateOpts {
         help = "Repair only the managed launcher and installer from this binary's embedded templates"
     )]
     pub launcher_only: bool,
+    #[arg(
+        long,
+        conflicts_with = "launcher_only",
+        help = "Add the api:openapi check of the committed OpenAPI documents to a repository model from before it"
+    )]
+    pub add_openapi_check: bool,
     #[arg(long, help = "Overwrite changed template-managed files")]
     pub force: bool,
     #[arg(long, help = "Git revision to render from the template source")]

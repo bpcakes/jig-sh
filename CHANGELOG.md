@@ -16,6 +16,9 @@
   reports now include model-scoped weekly limits such as Fable.
   Known utilization remains selectable when no reset time is supplied; malformed
   windows stay ineligible while valid neighboring Claude usage remains visible.
+- `jig update --add-openapi-check` gives a repository scaffolded with API
+  contracts before this release the `api:openapi` check of its committed
+  OpenAPI documents. Until its owner asks, each update says how.
 
 ### Fixed
 
@@ -28,19 +31,15 @@
   components no longer depend on the backend component: their checks read
   their own inputs, including `openapi/**` and the generated API clients, so a
   backend change cannot change their results. A frontend whose package
-  scripts compile or run backend code must declare those files as inputs. In
-  repositories scaffolded with API contracts, `repo:frontend-contract-drift`
-  catches backend changes that alter the contracts, and now also runs when
-  only `Cargo.lock`, `go.sum`, or Go workspace files change. `jig update`
-  removes the backend dependency from existing frontend components in
-  `.jig.toml` while it is still the generated single dependency on the
-  repository-root backend with inferred provenance, including under an
+  scripts compile or run backend code must declare those files as inputs.
+  `jig update` removes the backend dependency from existing frontend
+  components in `.jig.toml` while it is still the generated single dependency
+  on the repository-root backend with inferred provenance, including under an
   adopted backend id such as `workspace`, and names each dependency it
-  removes; a dependency with declared provenance is kept. Existing generated
-  contract actions also gain the new lockfile and workspace inputs, while
-  authored inputs and commands survive. Unmodified saved models remain
-  eligible for generated updates. The refreshed `.agent/jig-contract.json` is
-  reported as a conflict, so review it and accept it with `--force`.
+  removes; a dependency with declared provenance is kept. Unmodified saved
+  models remain eligible for generated updates. The refreshed
+  `.agent/jig-contract.json` is reported as a conflict, so review it and
+  accept it with `--force`.
 - Frontend `typecheck` and `build` checks no longer depend on the contract
   checks. Those checks produce nothing a frontend check reads, so a
   frontend-only change, or `scripts/jig check web:typecheck`, no longer runs
@@ -49,6 +48,48 @@
   generated dependencies, `typecheck` on both contract checks and `build` on
   the boundary check, and names each one; any other dependency, or one with
   declared provenance, is kept.
+- Re-adoption with a capability change keeps a generated target whose owner
+  declared any of its fields, such as its inputs or dependencies, and a
+  contract check whose inputs the owner changed, and leaves a saved
+  `openapi` document check of the backend as it is. It regenerated them as
+  generation writes them, so a check could run before a target that it was
+  declared to follow, or miss a change to an input its owner had added.
+- In repositories scaffolded with API contracts, a new `api:openapi` check
+  owns OpenAPI document freshness and `repo:frontend-contract-drift` owns
+  client freshness. `api:openapi` runs only the scaffold's committed-document
+  tests, each in the package that holds it, uncached and without changing the
+  lockfile or checksum files (`cargo test --locked -p <repo>-http
+  committed_public_openapi_is_current`, and the admin test in
+  `<repo>-admin-http` when that crate or `openapi/admin.json` exists, or
+  `GOWORK=off go test -mod=readonly -count=1 -run '^TestOpenAPIIsCurrent$'`,
+  because Go replays a cached pass when only a document outside the module
+  changed and records workspace checksums even in read-only mode), and fails
+  unless each passed, so customizing or caching the general backend tests,
+  renaming a document test, deleting the admin document, or another crate's
+  test of the same name cannot skip them. It reads the backend test inputs
+  and `openapi/**`, and belongs to the default profile. The generated Rust and
+  Go workflows run every read-only `openapi` check of a component in their
+  language, whatever adoption or its owner named the component. The Go check
+  builds the backend module outside any `go.work` workspace, as releases do,
+  so its `go.mod` and `go.sum` must resolve every dependency; a backend that
+  needs workspace modules sets `api_openapi_command`, which updates keep like
+  the other backend commands, and a failing check says so when a workspace
+  would have applied. The drift check reads only the documents, the generated
+  clients, and the JavaScript toolchain, so backend changes no longer select
+  it. Newly scaffolded repositories also run it without exporting from the
+  backend: it regenerates the clients from the committed documents and
+  compares them. An existing `scripts/contracts.mjs` belongs to its repository
+  and keeps its behavior, so a repository upgraded from an earlier version
+  keeps a drift check that reads the backend, whose own script still exports
+  from it; the drift check's description records which kind it is. A
+  repository generated before this release gains `api:openapi` only when its
+  owner asks, with `jig update --add-openapi-check`, because the check runs
+  the scaffold's document tests by name and those belong to the application;
+  the check then runs `api_openapi_command` if the owner set one. Until then
+  its drift check keeps exporting the documents from the backend, and each
+  update says how to add the check. A check its owner then removes stays
+  removed, re-adoption included, and a custom repository model keeps its
+  targets.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the
@@ -59,6 +100,8 @@
   `client-check` scans. A frontend app at the repository root now triggers
   the workflow on any change; its filter was `./**`, which matched nothing.
   `jig update` reports the refreshed workflow as a conflict.
+- `scripts/jig init` accepts `--metrics` and `--jobs`. The generated launcher
+  rejected both because it could not find the destination past them.
 
 ## v0.8.0 - 2026-10-09
 

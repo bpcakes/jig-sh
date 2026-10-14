@@ -120,7 +120,11 @@ actions and dependencies without adopting newly discovered manifests. To change
 an existing authored model, edit `.jig.toml`; initial-adoption selection flags are
 rejected there so the preview cannot promise a change that preservation discards.
 Explicit footprint or SQLx capability changes refresh generated harness actions
-while retaining authored component identities. Command overrides such as
+while retaining authored component identities. A generated action whose owner
+declared any of its fields, with provenance `declared`, stays as the owner
+wrote it, and so does a contract check whose inputs the owner changed. A
+saved `openapi` document check of the backend stays as it is.
+Command overrides such as
 `--rust-test-command` follow the existing action’s legacy alias to its authored
 command key. An override with no command action owner, or one targeting a native
 action, is rejected before writing; edit the authored model for those changes.

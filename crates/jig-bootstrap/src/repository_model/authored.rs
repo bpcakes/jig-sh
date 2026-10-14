@@ -22,6 +22,31 @@ impl AuthoredRepositoryModel {
         super::frontend_migration::contracts_enabled(&self.actions, commands)
     }
 
+    pub fn client_only_contract_drift(&self) -> bool {
+        super::frontend_migration::client_only_drift(&self.actions)
+    }
+
+    pub fn has_document_check(&self) -> bool {
+        super::frontend_migration::has_document_check(self)
+    }
+
+    pub fn lacks_document_check(&self, commands: &BTreeMap<String, String>) -> bool {
+        super::frontend_migration::lacks_document_check(self, commands)
+    }
+
+    pub fn predates_document_check(
+        &self,
+        commands: &BTreeMap<String, String>,
+        go: bool,
+        repo_name: &str,
+    ) -> bool {
+        super::frontend_migration::predates_document_check(
+            self,
+            commands,
+            &super::frontend::openapi_document_check_command(go, repo_name),
+        )
+    }
+
     pub fn has_adapter(&self, expected: &str) -> bool {
         self.components
             .iter()

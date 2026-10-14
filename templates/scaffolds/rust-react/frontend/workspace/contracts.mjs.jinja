@@ -65,7 +65,12 @@ if (mode === "generate" || mode === "check") {
   await assertPublicBoundary([], true);
   await withStagedContracts(mode);
 } else if (mode === "drift-check") {
-  await withStagedContracts("check");
+  // The backend document check proves that each committed document matches
+  // the backend; this proves that the generated clients match the documents.
+  for (const contract of contracts.filter(({ name }) => name === "public")) {
+    await scanArtifact(resolve(contract.document), "committed public OpenAPI document");
+  }
+  await withStagedClients();
 } else if (mode === "boundary-check") {
   await assertPublicBoundary([], true);
 } else if (mode === "client-check") {

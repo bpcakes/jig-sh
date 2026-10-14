@@ -162,6 +162,8 @@ fn rendered_jig_workflows_cache_the_installer_runtime_profile() {
             )
             .unwrap();
             checked_jobs += assert_jig_jobs_cache_release_runtime(&workflow, workflow_name);
+            // Without document contracts, there is no document check to run.
+            assert!(!workflow.contains("api:openapi"), "{workflow_name}");
         }
     }
 

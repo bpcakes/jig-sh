@@ -146,6 +146,13 @@ impl RepositoryRenderModel {
         authored: &AuthoredRepositoryModel,
         authored_commands: &BTreeMap<String, String>,
     ) -> bool {
+        let adopted =
+            frontend_migration::with_generated_document_check(self, authored, authored_commands);
+        let (authored, authored_commands) = adopted
+            .as_ref()
+            .map_or((authored, authored_commands), |(authored, commands)| {
+                (authored, commands)
+            });
         let authored =
             frontend_migration::upgrade_saved_projection(self, authored, authored_commands);
         let current = self.affected_ignore == authored.affected_ignore
@@ -186,6 +193,7 @@ impl RepositoryRenderModel {
 
     pub(super) fn go_ci_input_paths(&self) -> Vec<String> {
         self.backend_ci_input_paths(
+            "go",
             &["go", "go-postgres"],
             &[
                 tool::FMT_CHECK,
@@ -198,6 +206,7 @@ impl RepositoryRenderModel {
 
     pub(super) fn rust_ci_input_paths(&self) -> Vec<String> {
         self.backend_ci_input_paths(
+            "rust",
             &["rust", "sqlx"],
             &[tool::FMT_CHECK, tool::CLIPPY, tool::TEST_LOCKED],
         )
@@ -222,7 +231,14 @@ impl RepositoryRenderModel {
         file_budget::render_seed_policy(self)
     }
 
-    fn backend_ci_input_paths(&self, adapters: &[&str], aliases: &[&str]) -> Vec<String> {
+    /// The paths that select a backend workflow: what its checks, including
+    /// the document check, and their dependencies read.
+    fn backend_ci_input_paths(
+        &self,
+        language: &str,
+        adapters: &[&str],
+        aliases: &[&str],
+    ) -> Vec<String> {
         let owning_components = self
             .components
             .iter()
@@ -254,6 +270,11 @@ impl RepositoryRenderModel {
                         .any(|alias| aliases.contains(&alias.as_str()))
             })
             .map(|action| action.target.clone())
+            .chain(
+                self.openapi_document_checks(language)
+                    .into_iter()
+                    .map(|check| check.target.clone()),
+            )
             .collect::<Vec<_>>();
         let mut visited = BTreeSet::new();
         while let Some(target) = pending.pop() {
@@ -465,10 +486,19 @@ impl<'a> ModelBuilder<'a> {
         } else {
             "Check the repository-wide public/private dependency boundary."
         };
+        let drift_description = if self.answers.client_only_contract_drift() {
+            CLIENT_DRIFT_DESCRIPTION
+        } else if self.answers.document_check_deferred() {
+            // The model still predates the document check, which an update
+            // adds when its owner asks.
+            HISTORICAL_DRIFT_DESCRIPTION
+        } else {
+            EXPORTING_DRIFT_DESCRIPTION
+        };
         for (action_id, description, mode) in [
             (
                 FRONTEND_CONTRACT_DRIFT_ACTION,
-                "Check repository-wide OpenAPI and generated-client drift.",
+                drift_description,
                 "contracts-drift-check",
             ),
             (
@@ -492,6 +522,7 @@ impl<'a> ModelBuilder<'a> {
             action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
             action.inputs = frontend_contract_inputs(
                 action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION,
+                !self.answers.client_only_contract_drift(),
                 self.answers.frontend_workspace_roots(),
             );
             action.provenance = provenance(&[
@@ -503,7 +534,7 @@ impl<'a> ModelBuilder<'a> {
             ]);
             self.insert_action(action)?;
         }
-        Ok(())
+        self.add_openapi_document_check()
     }
 
     fn add_adapter_actions(

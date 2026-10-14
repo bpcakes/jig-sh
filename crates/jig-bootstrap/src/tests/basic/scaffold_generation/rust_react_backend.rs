@@ -80,6 +80,8 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "probes::mount(boundary, readiness)?",
             "pub async fn in_process(state: AppState) -> Result<InProcessClient, BoxError>",
             "documented_paths_are_served_routes_or_boundary_probes",
+            // The generated api:openapi check requires this test to pass.
+            "fn committed_public_openapi_is_current()",
         ],
     );
     assert_contains_none(

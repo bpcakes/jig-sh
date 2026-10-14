@@ -45,6 +45,7 @@ fn update(repo: &Path, template: &Path, recopy: bool) {
         template_mode: None,
         recopy,
         launcher_only: false,
+        add_openapi_check: false,
         force: false,
         vcs_ref: None,
         defaults: true,

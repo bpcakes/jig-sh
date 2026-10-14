@@ -373,6 +373,7 @@ fn update_opts(repo: &Path, template: &Path, force: bool) -> UpdateOpts {
         template_mode: None,
         recopy: true,
         launcher_only: false,
+        add_openapi_check: false,
         force,
         vcs_ref: None,
         defaults: true,
