@@ -96,7 +96,8 @@
   can outlive its admin app. Go scaffolds, which cannot have an admin API,
   and new Rust scaffolds without an admin frontend no longer get it. The
   check now reads the Cargo manifests and lockfiles instead of every backend
-  source, and a newly scaffolded `scripts/contracts.mjs` no longer scans
+  source, and package manifests instead of every file in a frontend
+  workspace, and a newly scaffolded `scripts/contracts.mjs` no longer scans
   `dist/` and `target/` before the build, which only saw whatever an earlier
   build left behind; the artifact checks that run right after a build still
   scan its output. Repositories count as scaffolded with contracts when the
@@ -104,8 +105,9 @@
   `client-check` step without a boundary check. `jig update` narrows the
   inputs of a generated boundary check, removes an unmodified Go one with its
   profile entry and command unless another target depends on it, and names
-  each removed target; re-adoption retires a Go one only as an update does. A
-  boundary check that its owner removes stays removed, re-adoption included.
+  each contract check it removes; re-adoption retires a Go one only as an
+  update does. A boundary check that its owner removes stays removed,
+  re-adoption included.
 - The generated `webapp-checks.yml` triggers on the files its job reads
   instead of a Go backend's paths. A Go repository's workflow no longer runs
   on Go source changes, or on every change when the backend sits at the

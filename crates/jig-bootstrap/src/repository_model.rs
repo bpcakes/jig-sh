@@ -35,6 +35,20 @@ const RUST_WORKSPACE_COMPONENT: &str = "workspace";
 const DEFAULT_PROFILE: &str = "verify";
 const FRONTEND_CONTRACT_DRIFT_ACTION: &str = "frontend-contract-drift";
 const FRONTEND_PUBLIC_BOUNDARY_ACTION: &str = "frontend-public-boundary";
+
+/// Whether `target` names a generated frontend contract check. Generation
+/// can stop writing one, while every other generated target leaves only
+/// through a migration that replaces it, as `repo:rust-file-loc` becomes
+/// `repo:file-budget`.
+pub(super) fn is_frontend_contract_check(target: &str) -> bool {
+    target.split_once(':').is_some_and(|(component, action)| {
+        component == REPO_COMPONENT
+            && matches!(
+                action,
+                FRONTEND_CONTRACT_DRIFT_ACTION | FRONTEND_PUBLIC_BOUNDARY_ACTION
+            )
+    })
+}
 // Explicit action inputs take precedence; these defaults suppress only
 // repository guidance, docs, and hosted-CI metadata. Unlisted files such as
 // `.gitignore`, `Makefile`, and `justfile` deliberately remain fail-closed.

@@ -73,13 +73,24 @@ fn run_contracts_mode(
     fake_bin: &Path,
     env: &[(&str, &std::ffi::OsStr)],
 ) -> std::process::Output {
+    run_contracts(destination, &[mode], fake_bin, env)
+}
+
+/// Runs `scripts/contracts.mjs` with `args`, a mode and its arguments.
+fn run_contracts(
+    destination: &Path,
+    args: &[&str],
+    fake_bin: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> std::process::Output {
     let path = std::env::join_paths(std::iter::once(fake_bin.to_path_buf()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .unwrap();
     let mut command = Command::new("node");
     command
-        .args(["scripts/contracts.mjs", mode])
+        .arg("scripts/contracts.mjs")
+        .args(args)
         .current_dir(destination)
         .env("PATH", path);
     for (key, value) in env {

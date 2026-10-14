@@ -206,10 +206,12 @@ pub(super) const BACKEND_CONTRACT_INPUTS: &[&str] = &[
 ];
 
 /// The client-only drift check regenerates the clients from the committed
-/// documents, so it reads only the contract surface; the backend document
-/// check owns document freshness. A drift check whose script exports from the
-/// backend also reads the backend. The boundary check reads the Cargo
-/// dependency graph and committed public documentation.
+/// documents, so it reads only the contract surface, including the frontend
+/// workspaces; the backend document check owns document freshness. A drift
+/// check whose script exports from the backend also reads the backend. The
+/// boundary check reads the Cargo dependency graph, the package manifests,
+/// which the shared inputs cover in every workspace, and committed public
+/// documentation, but no workspace's sources.
 pub(super) fn frontend_contract_inputs(
     public_boundary: bool,
     drift_reads_backend: bool,
@@ -219,11 +221,6 @@ pub(super) fn frontend_contract_inputs(
         .iter()
         .map(|input| (*input).to_owned())
         .collect::<Vec<_>>();
-    inputs.extend(
-        workspace_roots
-            .iter()
-            .map(|root| component_root_input(root)),
-    );
     if public_boundary {
         inputs.extend(
             BOUNDARY_MANIFEST_INPUTS
@@ -231,8 +228,15 @@ pub(super) fn frontend_contract_inputs(
                 .chain(PUBLIC_DOCUMENT_INPUTS)
                 .map(|input| (*input).into()),
         );
-    } else if drift_reads_backend {
-        inputs.extend(BACKEND_CONTRACT_INPUTS.iter().map(|input| (*input).into()));
+    } else {
+        inputs.extend(
+            workspace_roots
+                .iter()
+                .map(|root| component_root_input(root)),
+        );
+        if drift_reads_backend {
+            inputs.extend(BACKEND_CONTRACT_INPUTS.iter().map(|input| (*input).into()));
+        }
     }
     inputs.sort();
     inputs.dedup();

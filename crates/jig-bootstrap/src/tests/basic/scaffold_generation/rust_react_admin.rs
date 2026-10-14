@@ -366,10 +366,10 @@ pub(super) fn assert_admin_boundary_check_skips_stale_build_output(destination: 
         "#!/bin/sh\nprintf '%s\\n' \"$JIG_TEST_CARGO_TREE\"\n",
     );
     let public_tree = OsStr::new("my-app-api v0.1.0\nmy-app-http v0.1.0");
-    let run = |mode: &str, tree: &OsStr| {
-        let output = run_contracts_mode(
+    let run_args = |args: &[&str], tree: &OsStr| {
+        let output = run_contracts(
             destination,
-            mode,
+            args,
             &fake_bin,
             &[("JIG_TEST_CARGO_TREE", tree)],
         );
@@ -378,6 +378,7 @@ pub(super) fn assert_admin_boundary_check_skips_stale_build_output(destination: 
             String::from_utf8_lossy(&output.stderr).into_owned(),
         )
     };
+    let run = |mode: &str, tree: &OsStr| run_args(&[mode], tree);
     let write_privileged = |path: &str| {
         let path = destination.join(path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -402,6 +403,34 @@ pub(super) fn assert_admin_boundary_check_skips_stale_build_output(destination: 
     );
     let (passed, stderr) = run("public-check", public_tree);
     assert!(!passed, "public-check accepted privileged build output");
+    assert!(stderr.contains("contains privileged marker"), "{stderr}");
+
+    // public-check scans the API binaries on their own, also when the
+    // frontend output is left to the build that produced it.
+    for dist in ["apps/web/dist", "apps/landing/dist"] {
+        fs::remove_dir_all(destination.join(dist)).unwrap();
+    }
+    for args in [
+        &["public-check"][..],
+        &["public-check", "--skip-frontend-artifacts"],
+    ] {
+        let (passed, stderr) = run_args(args, public_tree);
+        assert!(!passed, "{args:?} accepted a privileged API binary");
+        assert!(
+            stderr.contains("Public artifact target/debug/my-app-api contains privileged marker"),
+            "{stderr}"
+        );
+    }
+
+    // check-webapps.sh scans each bundle right after build:bundle builds it.
+    assert!(
+        fs::read_to_string(destination.join("scripts/check-webapps.sh"))
+            .unwrap()
+            .contains("run_contract_script artifact-check \"$app_dir/dist\"")
+    );
+    write_privileged("apps/web/dist/assets/index.js");
+    let (passed, stderr) = run_args(&["artifact-check", "apps/web/dist"], public_tree);
+    assert!(!passed, "artifact-check accepted a privileged bundle");
     assert!(stderr.contains("contains privileged marker"), "{stderr}");
 
     let (passed, stderr) = run(

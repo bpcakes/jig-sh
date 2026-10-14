@@ -120,6 +120,31 @@ fn assert_boundary_guards_only_the_rust_admin_api(model: &RepositoryRenderModel,
     }
 }
 
+/// The shared inputs cover every workspace's package manifests, which is all
+/// the boundary check reads there, so a workspace at the repository root
+/// does not make every change select it; the drift check reads the whole
+/// workspace.
+#[test]
+fn boundary_check_reads_no_workspace_sources() {
+    let model = RepositoryRenderModel::from_answers(&scaffold_answers(&format!(
+        "frontend_workspace_roots = [\".\"]\n{FRONTEND_APPS}"
+    )))
+    .unwrap();
+
+    let boundary = action(&model, "repo:frontend-public-boundary");
+    assert!(
+        !boundary.inputs.contains(&"**".into()),
+        "{:?}",
+        boundary.inputs
+    );
+    assert!(boundary.inputs.contains(&"**/package.json".into()));
+    assert!(
+        action(&model, "repo:frontend-contract-drift")
+            .inputs
+            .contains(&"**".into())
+    );
+}
+
 #[test]
 fn rust_scaffolds_without_an_admin_frontend_have_no_boundary_check() {
     let model = RepositoryRenderModel::from_answers(&scaffold_answers(
