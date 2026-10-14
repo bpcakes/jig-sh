@@ -43,9 +43,9 @@ sleep 30
     for expected in ["\x1b[?1000h", "Codex Home Picker", "codex-work"] {
         read_until(&mut master, &mut output, expected, Duration::from_secs(3));
     }
-    // At 120x30 two homes stack one per line below the column header: the
-    // second home is on screen row 4, which SGR mouse reports count from 1.
-    let click = b"\x1b[<0;11;5M\x1b[<0;11;5m";
+    // At 120x30 the fleet panel is followed by a two-line home table.
+    // The second home starts on screen row 12; SGR counts from 1.
+    let click = b"\x1b[<0;11;13M\x1b[<0;11;13m";
     master.write_all(click).unwrap();
     master.write_all(click).unwrap();
     read_until(

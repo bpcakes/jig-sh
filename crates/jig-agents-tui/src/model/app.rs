@@ -1,10 +1,18 @@
-use std::{cell::Cell, collections::HashSet, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    time::Instant,
+};
 
 use jig_tui::{ListViewportState, PreparedFuzzyText, sanitize_text};
 use ratatui::layout::Rect;
 
-use super::{Details, ExitState, Focus, HomeRow, Inspection, unix_timestamp_now};
+use super::{
+    Details, ExitState, Focus, HomeRow, Inspection, fleet::FleetForecast, unix_timestamp_now,
+};
 use crate::{Home, HomeUpdate};
+
+mod fleet_view;
 
 /// Where the last frame drew the list rows and the details, so a mouse event
 /// can be mapped to what was on screen.
@@ -15,6 +23,8 @@ pub(crate) struct HitAreas {
     /// The rows themselves, below the column header.
     pub(crate) rows: Option<ListRows>,
     pub(crate) details: Option<Rect>,
+    pub(crate) fleet: Option<Rect>,
+    pub(crate) fleet_details: Option<Rect>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +40,9 @@ pub(crate) struct App {
     pub(crate) subscription_buckets: Vec<String>,
     pub(crate) title: String,
     pub(crate) static_configuration: bool,
+    /// Opted into explicitly by the Codex picker. Other providers and configuration views
+    /// keep their existing per-account presentation unchanged.
+    pub(crate) codex_fleet_forecast: bool,
     pub(crate) rows: Vec<HomeRow>,
     pub(crate) selected: Option<usize>,
     pub(crate) filter: String,
@@ -37,6 +50,9 @@ pub(crate) struct App {
     pub(crate) focus: Focus,
     pub(crate) detail_scroll: u16,
     detail_scroll_limit: Cell<u16>,
+    pub(crate) fleet_details_open: bool,
+    pub(crate) fleet_scroll: u16,
+    fleet_scroll_limit: Cell<u16>,
     list_viewport: ListViewportState,
     pub(crate) completed: usize,
     pub(crate) inspection_finished: bool,
@@ -47,6 +63,10 @@ pub(crate) struct App {
     pub(crate) discovery_warnings: Vec<String>,
     pub(crate) tick: usize,
     pub(crate) exit_state: Option<ExitState>,
+    /// Bumped whenever inspection changes the row set's usage facts, so the fleet forecast
+    /// is recomputed once per generation instead of once per frame.
+    fleet_generation: usize,
+    fleet_forecast: RefCell<Option<(usize, FleetForecast)>>,
     hit_areas: Cell<HitAreas>,
     /// The home last clicked and when, to recognize a double click.
     pub(crate) last_click: Option<(usize, Instant)>,
@@ -62,6 +82,7 @@ impl App {
             subscription_buckets: Vec::new(),
             title: sanitize_text(title),
             static_configuration: false,
+            codex_fleet_forecast: false,
             rows: homes.into_iter().map(HomeRow::new).collect(),
             selected,
             filter: String::new(),
@@ -69,6 +90,9 @@ impl App {
             focus: Focus::Homes,
             detail_scroll: 0,
             detail_scroll_limit: Cell::new(0),
+            fleet_details_open: false,
+            fleet_scroll: 0,
+            fleet_scroll_limit: Cell::new(0),
             list_viewport: ListViewportState::default(),
             completed: 0,
             inspection_finished: false,
@@ -81,6 +105,8 @@ impl App {
                 .collect(),
             tick: 0,
             exit_state: None,
+            fleet_generation: 0,
+            fleet_forecast: RefCell::new(None),
             hit_areas: Cell::new(HitAreas::default()),
             last_click: None,
         }
@@ -90,7 +116,8 @@ impl App {
     #[cfg(test)]
     pub(crate) fn codex(homes: Vec<Home>, discovery_warnings: Vec<String>) -> Self {
         let mut app = Self::new("Codex Home Picker", homes, discovery_warnings);
-        app.subscription_buckets = vec!["codex".into()];
+        app.subscription_buckets = vec![super::fleet::CODEX_SUBSCRIPTION_BUCKET.into()];
+        app.codex_fleet_forecast = true;
         app
     }
 
@@ -159,6 +186,7 @@ impl App {
             observed_at,
             &self.subscription_buckets,
         )));
+        self.fleet_generation = self.fleet_generation.wrapping_add(1);
         self.reconcile_selection();
     }
 
@@ -174,6 +202,7 @@ impl App {
                 row.set_inspection(Inspection::Unavailable);
             }
         }
+        self.fleet_generation = self.fleet_generation.wrapping_add(1);
     }
 
     /// Inspection can run again once the previous round has finished.
@@ -184,6 +213,7 @@ impl App {
     /// Starts a new inspection round. Rows keep their previous sample, marked
     /// as refreshing, until their new one arrives.
     pub(crate) fn begin_refresh(&mut self) {
+        self.fleet_generation = self.fleet_generation.wrapping_add(1);
         self.refreshed = true;
         self.inspection_finished = false;
         self.completed = 0;

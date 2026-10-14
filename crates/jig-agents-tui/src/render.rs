@@ -7,12 +7,15 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::model::{App, ExitState, HitAreas, Projection, unix_timestamp_now};
+use crate::model::{
+    App, ExitState, FleetAssessment, FleetOutcome, HitAreas, Projection, unix_timestamp_now,
+};
 use layout::{MIN_HEIGHT, MIN_WIDTH};
 use list::draw_list;
 pub(crate) use theme::Theme;
 
 mod details;
+mod fleet;
 mod footer;
 mod layout;
 mod list;
@@ -29,6 +32,7 @@ pub(super) struct View<'a> {
     pub(super) theme: Theme,
     pub(super) now: u64,
     pub(super) best: Option<usize>,
+    pub(super) fleet: Option<FleetAssessment>,
 }
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
@@ -53,6 +57,7 @@ fn draw_with(frame: &mut Frame, app: &App, theme: Theme, now: u64) {
         theme,
         now,
         best: app.best_projection_index_at(now),
+        fleet: app.fleet_assessment_at(now),
     };
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         app.set_detail_scroll_limit(0);
@@ -70,11 +75,25 @@ fn draw_with(frame: &mut Frame, app: &App, theme: Theme, now: u64) {
 
     let layout = layout::picker_layout(area, app);
     draw_header(frame, layout.header, &view);
-    if let Some(list) = layout.list {
-        draw_list(frame, list, &view);
+    if let Some(area) = layout.fleet {
+        fleet::draw_fleet(frame, area, &view);
     }
-    if let Some(details) = layout.details {
-        details::draw_details(frame, details, &view);
+    if app.fleet_details_open && view.fleet.is_some() {
+        let top = layout
+            .fleet
+            .map_or(layout.header.bottom(), |area| area.bottom());
+        fleet::draw_details(
+            frame,
+            Rect::new(area.x, top, area.width, layout.footer.y.saturating_sub(top)),
+            &view,
+        );
+    } else {
+        if let Some(list) = layout.list {
+            draw_list(frame, list, &view);
+        }
+        if let Some(details) = layout.details {
+            details::draw_details(frame, details, &view);
+        }
     }
     footer::draw_footer(frame, layout.footer, &view);
 }
@@ -163,14 +182,29 @@ fn draw_header(frame: &mut Frame, area: Rect, view: &View<'_>) {
     } else {
         short
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(title, theme.badge()),
-            Span::raw("  "),
-            Span::styled(status, Style::default().fg(color)),
-        ])),
-        area,
-    );
+    let lines = vec![Line::from(vec![
+        Span::styled(title, theme.badge()),
+        Span::raw("  "),
+        Span::styled(status, Style::default().fg(color)),
+    ])];
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn fleet_style(theme: Theme, fleet: &FleetAssessment) -> Style {
+    let color = if fleet.is_stale() {
+        theme.muted()
+    } else {
+        match fleet.outcome() {
+            FleetOutcome::BlockedNow { .. } => theme.bad(),
+            FleetOutcome::GapRisk { .. } => theme.warn(),
+            FleetOutcome::NoGap {
+                burn_observed: true,
+            } if fleet.coverage().is_complete() => theme.good(),
+            FleetOutcome::NoGap { .. } => theme.warn(),
+            FleetOutcome::Collecting | FleetOutcome::Unsupported(_) => theme.muted(),
+        }
+    };
+    Style::default().fg(color)
 }
 
 /// A rounded pane titled in its border. The focused pane gets an accent

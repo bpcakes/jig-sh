@@ -16,6 +16,7 @@ use crate::{
     render,
 };
 
+mod fleet;
 mod mouse;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -191,6 +192,9 @@ pub(crate) enum Action {
 pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return Action::Cancel;
+    }
+    if let Some(action) = fleet::handle_key(app, key) {
+        return action;
     }
     if app.searching {
         return match key.code {

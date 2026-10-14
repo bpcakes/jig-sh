@@ -52,6 +52,7 @@ fn filtered_selection_stays_visible_across_table_layout_changes() {
                             theme: Theme::default(),
                             now: 0,
                             best: None,
+                            fleet: None,
                         },
                     )
                 })
@@ -75,6 +76,7 @@ fn filtered_selection_stays_visible_across_table_layout_changes() {
                         theme: Theme::default(),
                         now: 0,
                         best: None,
+                        fleet: None,
                     },
                 )
             })
@@ -169,13 +171,14 @@ fn stacked_list_fits_its_rows_and_leaves_the_rest_to_details() {
     let (list, details) = (layout.list.unwrap(), layout.details.unwrap());
     assert_eq!(list.height, 3 + 2 * 2);
     assert_eq!(details.y, list.bottom());
-    // One header row and one footer row leave 22 for the panes.
-    assert_eq!(details.height, 22 - list.height);
+    // Header, fleet panel, and footer leave fifteen rows for the panes.
+    assert_eq!(layout.fleet.unwrap().height, 7);
+    assert_eq!(details.height, 15 - list.height);
 
     let layout = layout::picker_layout(area, &example_app(30));
     let (list, details) = (layout.list.unwrap(), layout.details.unwrap());
-    assert_eq!(list.height, 13, "a long list keeps to its share");
-    assert_eq!(details.height, 9);
+    assert_eq!(list.height, 9, "a long list keeps to its share");
+    assert_eq!(details.height, 6);
 }
 
 #[test]
@@ -183,13 +186,13 @@ fn short_narrow_terminals_show_only_the_focused_pane() {
     let mut app = example_app(4);
     let area = Rect::new(0, 0, 80, 12);
     let layout = layout::picker_layout(area, &app);
-    assert_eq!(layout.list.map(|list| list.height), Some(10));
+    assert_eq!(layout.list.map(|list| list.height), Some(7));
     assert!(layout.details.is_none());
 
     app.toggle_focus();
     let layout = layout::picker_layout(area, &app);
     assert!(layout.list.is_none());
-    assert_eq!(layout.details.map(|details| details.height), Some(10));
+    assert_eq!(layout.details.map(|details| details.height), Some(7));
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
     terminal.draw(|frame| draw_at(frame, &app, 0)).unwrap();
@@ -426,4 +429,113 @@ fn no_color_keeps_every_glyph_and_status_without_any_color() {
     for text in ["›", "◆", "●", "━", "█", "│", "out ~1.2d early", "42% used"] {
         assert!(screen.contains(text), "missing {text}: {screen}");
     }
+}
+
+#[test]
+fn the_fleet_forecast_keeps_coverage_and_risk_visible_without_color() {
+    use ratatui::style::Color;
+    const NOW: u64 = 2_000_000_000;
+    let mut app = example_app(1);
+    app.apply_update_at(
+        crate::HomeUpdate {
+            index: 0,
+            details: serde_json::json!({
+                "account": {"type": "chatgpt", "email": "person@example.com", "plan_type": "pro"},
+                "rate_limits": [{
+                    "id": "codex",
+                    "primary": {"used_percent": 90, "duration_minutes": 300, "resets_at": NOW + 9_000}
+                }]
+            }),
+        },
+        NOW,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|frame| draw_with(frame, &app, Theme::new(theme::ColorDepth::Monochrome), NOW))
+        .unwrap();
+    assert!(
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .all(|cell| cell.fg == Color::Reset && cell.bg == Color::Reset)
+    );
+    let screen = terminal.backend().to_string();
+    for expected in ["All accounts 1/1", "gap risk", "fleet capacity"] {
+        assert!(screen.contains(expected), "{screen}");
+    }
+}
+
+#[test]
+fn the_top_panel_has_pooled_meters_and_precedes_the_home_list() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = example_app(1);
+    app.apply_update_at(crate::HomeUpdate {
+        index: 0,
+        details: serde_json::json!({
+            "account": {"type": "chatgpt", "email": "person@example.com", "plan_type": "pro"},
+            "rate_limits": [{"id": "codex",
+                "primary": {"used_percent": 25, "duration_minutes": 300, "resets_at": NOW + 9_000},
+                "secondary": {"used_percent": 50, "duration_minutes": 10_080, "resets_at": NOW + 302_400}
+            }]
+        }),
+    }, NOW);
+    let screen = render(&app, 120, 40, NOW).backend().to_string();
+    assert!(screen.find("╭ fleet capacity").unwrap() < screen.find("╭ homes").unwrap());
+    let fleet = screen
+        .split("╭ fleet capacity")
+        .nth(1)
+        .unwrap()
+        .split("╰")
+        .next()
+        .unwrap();
+    for expected in [
+        "1/1 usable",
+        "75% left",
+        "50% left",
+        "~50% / window",
+        "~100% / window",
+        "█",
+        "▄",
+    ] {
+        assert!(fleet.contains(expected), "missing {expected}: {screen}");
+    }
+    assert!(
+        !fleet.contains("person@example.com"),
+        "pool overview is independent of the selected home"
+    );
+}
+
+#[test]
+fn mixed_plans_withhold_the_capacity_meters() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = example_app(2);
+    for (index, plan) in ["pro", "plus"].into_iter().enumerate() {
+        app.apply_update_at(crate::HomeUpdate {
+            index,
+            details: serde_json::json!({
+                "account": {"type": "chatgpt", "email": format!("person{index}@example.com"), "plan_type": plan},
+                "rate_limits": [{"id": "codex", "primary": {
+                    "used_percent": 25, "duration_minutes": 300, "resets_at": NOW + 9_000
+                }}]
+            }),
+        }, NOW);
+    }
+    let screen = render(&app, 120, 40, NOW).backend().to_string();
+    let fleet = screen
+        .split("╭ fleet capacity")
+        .nth(1)
+        .unwrap()
+        .split("╰")
+        .next()
+        .unwrap();
+    assert!(
+        fleet.contains("mixed capacities need comparable quota weights"),
+        "{screen}"
+    );
+    assert!(
+        !fleet.contains('█') && !fleet.contains('▄'),
+        "unsupported capacities must not become a pooled meter: {screen}"
+    );
 }

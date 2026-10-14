@@ -12,7 +12,8 @@ pub(crate) struct Gauge {
     pub(crate) used: Option<f64>,
     /// The fraction of the window that had elapsed when the sample was taken.
     pub(crate) elapsed: Option<f64>,
-    /// Used quota at reset if the sampled pace holds, once past the warmup.
+    /// Estimated usage once past warmup. Individual windows project to their
+    /// reset; pooled windows estimate consumption over a full window duration.
     pub(crate) projected: Option<f64>,
 }
 

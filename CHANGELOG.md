@@ -4,6 +4,21 @@
 
 ### Added
 
+- Add a reset-aware collective quota forecast to the `jig codex launch`
+  picker. A panel above the home list shows pooled quota meters, usable account
+  counts, coverage, modeled gap risk, and scheduled capacity return across every
+  discovered Codex account pool. Solid meters show used quota; shaded extensions
+  show window-average consumption per complete window. The panel explains the
+  window-average pace, matching-plan capacity assumption, allocation scenario,
+  and periodic reset model; banked resets are excluded. Unknown identities,
+  capacities, or window timing stay excluded or unsupported, duplicate homes
+  share one quota pool, and tied conflicting samples withhold that pool.
+  Sample alignment and simulation both require quota in every account window.
+  Observed blocking remains visible even at zero elapsed window time. F1,
+  `?` outside search, or a panel click opens the full scrollable explanation.
+  Live inspection and `r` refresh update the cached forecast. The current
+  layout, 46×12 minimum, and `NO_COLOR` presentation remain supported.
+
 - Show Codex banked reset counts in the picker's account details and
   `codex homes --usage`, including JSON. Missing counts remain unknown.
   Automatic selection favors more banked resets when current headroom ties;
