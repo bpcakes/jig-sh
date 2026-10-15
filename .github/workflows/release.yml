@@ -156,10 +156,15 @@ jobs:
         if: ${{ steps.version.outputs.tag_exists != 'true' }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          # CI owns generated release notes; local runs keep the no-overwrite
-          # guard unless the caller opts in.
+          # CI owns initial release notes; retries preserve a prepared section.
           RELEASE_NOTES_FORCE: "1"
-        run: scripts/release.sh prepare "$VERSION"
+        run: |
+          if [[ "$(scripts/release.sh version)" == "$VERSION" ]] &&
+             scripts/release-notes.sh print "$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION is already prepared; preserving its changelog."
+          else
+            scripts/release.sh prepare "$VERSION"
+          fi
 
       - name: Check release prep diff
         if: ${{ steps.version.outputs.tag_exists != 'true' }}
