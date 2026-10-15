@@ -66,6 +66,7 @@ fn invalid_usage_stays_unknown_and_tui_keeps_reset_status() {
             used_percent,
             duration_minutes: Some(0),
             resets_at: Some(0),
+            not_started: false,
         };
         assert_eq!(window.usage_amounts(), "usage unavailable");
         assert_eq!(window.usage_detail(), "usage unavailable · 0m window");
@@ -79,6 +80,7 @@ fn invalid_usage_stays_unknown_and_tui_keeps_reset_status() {
         used_percent: Some(125.0),
         duration_minutes: None,
         resets_at: None,
+        not_started: false,
     };
     assert_eq!(window.usage_amounts(), "125% used · 0% left");
     assert_eq!(window.usage_detail(), "125% used · 0% left · ? window");

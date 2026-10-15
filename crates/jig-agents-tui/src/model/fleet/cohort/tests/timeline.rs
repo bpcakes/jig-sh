@@ -12,7 +12,7 @@ fn single_account_gap_matches_the_existing_linear_exhaustion_calculation() {
         account("a@example.com", "pro", vec![paced(60.0, WEEKLY, 0.5)]),
     )];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     let FleetOutcome::GapRisk {
         gap_at,
@@ -46,7 +46,7 @@ fn pooled_budget_and_demand_match_the_analytical_single_window_result() {
         ),
     ];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     let FleetOutcome::GapRisk { gap_at, .. } = forecast.outcome else {
         panic!("expected gap risk, got {:?}", forecast.outcome);
@@ -68,7 +68,7 @@ fn idle_spare_absorbs_demand_so_one_exhausted_row_is_not_a_fleet_gap() {
     ];
 
     assert_eq!(
-        forecast(&rows).outcome,
+        forecast(&rows, CODEX).outcome,
         FleetOutcome::NoGap {
             burn_observed: true
         }
@@ -92,7 +92,7 @@ fn an_early_reset_extends_runway_past_the_no_reset_estimate() {
     ];
 
     assert_eq!(
-        forecast(&rows).outcome,
+        forecast(&rows, CODEX).outcome,
         FleetOutcome::NoGap {
             burn_observed: true
         }
@@ -110,7 +110,7 @@ fn a_gap_before_a_later_refill_is_reported_even_though_capacity_returns() {
         ),
     )];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     let FleetOutcome::GapRisk {
         gap_at,
@@ -142,7 +142,7 @@ fn an_unused_allowance_is_replaced_at_reset_rather_than_accumulated() {
     )];
 
     assert_eq!(
-        forecast(&rows).outcome,
+        forecast(&rows, CODEX).outcome,
         FleetOutcome::NoGap {
             burn_observed: true
         }
@@ -161,12 +161,12 @@ fn exhaustion_exactly_at_a_restoring_reset_is_not_an_outage() {
     )];
 
     assert_eq!(
-        forecast(&exact).outcome,
+        forecast(&exact, CODEX).outcome,
         FleetOutcome::NoGap {
             burn_observed: true
         }
     );
-    let FleetOutcome::GapRisk { gap_at, .. } = forecast(&over).outcome else {
+    let FleetOutcome::GapRisk { gap_at, .. } = forecast(&over, CODEX).outcome else {
         panic!("a slightly faster pace should run out before the reset");
     };
     // 49.5% remaining at 50.5% per 9_000s runs out 179s before the 9_000s reset.
@@ -196,7 +196,7 @@ fn positive_per_dimension_sums_do_not_make_a_complementary_pair_usable() {
         ),
     ];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     let FleetOutcome::BlockedNow { limiting, .. } = &forecast.outcome else {
         panic!("expected a blocked fleet, got {:?}", forecast.outcome);
@@ -215,7 +215,7 @@ fn a_sibling_window_reset_does_not_declare_an_account_recovered() {
         ),
     )];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     let FleetOutcome::BlockedNow { recovers_at, .. } = forecast.outcome else {
         panic!("expected a blocked fleet, got {:?}", forecast.outcome);
@@ -240,8 +240,8 @@ fn simultaneous_resets_produce_the_same_result_in_either_row_order() {
     );
 
     assert_eq!(
-        forecast(&[first.clone(), second.clone()]).outcome,
-        forecast(&[second, first]).outcome
+        forecast(&[first.clone(), second.clone()], CODEX).outcome,
+        forecast(&[second, first], CODEX).outcome
     );
 }
 
@@ -260,12 +260,12 @@ fn an_exhausted_account_keeps_contributing_its_demand_estimate() {
     );
 
     assert_eq!(
-        forecast(std::slice::from_ref(&spare)).outcome,
+        forecast(std::slice::from_ref(&spare), CODEX).outcome,
         FleetOutcome::NoGap {
             burn_observed: false
         }
     );
-    let FleetOutcome::GapRisk { gap_at, .. } = forecast(&[exhausted, spare]).outcome else {
+    let FleetOutcome::GapRisk { gap_at, .. } = forecast(&[exhausted, spare], CODEX).outcome else {
         panic!("retained demand should exhaust the spare account");
     };
     // 100% spare capacity at 400% per 5h window lasts 4_500s.
@@ -285,7 +285,7 @@ fn all_zero_usage_reports_no_observed_burn_instead_of_sustainability() {
         ),
     ];
 
-    let assessment = forecast(&rows).assess_at(ORIGIN);
+    let assessment = forecast(&rows, CODEX).assess_at(ORIGIN);
 
     assert_eq!(
         assessment.outcome(),
@@ -312,7 +312,7 @@ fn nonzero_usage_inside_the_warmup_window_collects_instead_of_reporting_zero_bur
         ),
     ];
 
-    let assessment = forecast(&rows).assess_at(ORIGIN);
+    let assessment = forecast(&rows, CODEX).assess_at(ORIGIN);
 
     assert_eq!(assessment.outcome(), &FleetOutcome::Collecting);
     assert_eq!(
@@ -335,7 +335,7 @@ fn a_warming_sibling_does_not_hide_an_already_blocked_pool() {
         ),
     )];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     let FleetOutcome::BlockedNow {
         recovers_at,
@@ -389,7 +389,7 @@ fn a_warming_pace_cannot_extrapolate_an_account_into_exhaustion() {
         ),
     ];
 
-    assert_eq!(forecast(&rows).outcome, FleetOutcome::Collecting);
+    assert_eq!(forecast(&rows, CODEX).outcome, FleetOutcome::Collecting);
 }
 
 #[test]
@@ -422,7 +422,7 @@ fn alignment_does_not_spend_quota_an_account_could_not_have_used() {
         ),
     ];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     let FleetOutcome::BlockedNow { recovers_at, .. } = forecast.outcome else {
         panic!("expected a blocked fleet, got {:?}", forecast.outcome);
@@ -459,12 +459,12 @@ fn an_account_blocked_through_alignment_still_contributes_its_demand() {
     // The spare account alone reports no burn at all, so any gap below comes from the blocked
     // account's retained pace.
     assert_eq!(
-        forecast(std::slice::from_ref(&spare)).outcome,
+        forecast(std::slice::from_ref(&spare), CODEX).outcome,
         FleetOutcome::NoGap {
             burn_observed: false
         }
     );
-    let FleetOutcome::GapRisk { gap_at, .. } = forecast(&[blocked, spare]).outcome else {
+    let FleetOutcome::GapRisk { gap_at, .. } = forecast(&[blocked, spare], CODEX).outcome else {
         panic!("retained demand should exhaust the spare account inside the horizon");
     };
     assert!(gap_at < ORIGIN + FIVE_HOUR * 60, "gap at {gap_at}");
@@ -481,7 +481,7 @@ fn a_warming_sibling_still_withholds_a_forecast_when_quota_remains() {
         ),
     )];
 
-    assert_eq!(forecast(&rows).outcome, FleetOutcome::Collecting);
+    assert_eq!(forecast(&rows, CODEX).outcome, FleetOutcome::Collecting);
 }
 
 #[test]
@@ -499,7 +499,7 @@ fn unusable_window_metadata_excludes_an_account_without_inventing_quota() {
     ] {
         let rows = [row("solo", account("a@example.com", "pro", vec![primary]))];
 
-        let forecast = forecast(&rows);
+        let forecast = forecast(&rows, CODEX);
 
         assert_eq!(
             forecast.outcome,
@@ -519,6 +519,7 @@ fn nonfinite_usage_never_becomes_a_quota_or_a_pace() {
             used_percent: Some(used_percent),
             duration_minutes: Some(WEEKLY),
             resets_at: Some(i64::try_from(ORIGIN + 60).unwrap()),
+            not_started: false,
         };
 
         assert!(fleet_window(&window, ORIGIN).is_none());

@@ -1,4 +1,4 @@
-//! Application and rendering behavior of the Codex fleet forecast.
+//! Application and rendering behavior of the provider fleet forecast.
 
 use super::*;
 use crate::{ConfigurationHome, model::FleetOutcome};
@@ -162,7 +162,7 @@ fn repeated_draws_reuse_one_forecast_per_inspection_generation() {
 }
 
 #[test]
-fn other_providers_and_configuration_views_gain_no_forecast() {
+fn pickers_without_a_subscription_bucket_or_inspection_gain_no_forecast() {
     const NOW: u64 = 2_000_000_000;
     let entries = || {
         vec![ConfigurationHome {
@@ -179,7 +179,7 @@ fn other_providers_and_configuration_views_gain_no_forecast() {
             "Claude Home Picker",
             entries(),
             Vec::new(),
-            true,
+            false,
             Some("claude"),
         ),
         App::provider("Example Agent Picker", entries(), Vec::new(), true, None),
@@ -198,6 +198,109 @@ fn other_providers_and_configuration_views_gain_no_forecast() {
         let rendered = terminal.backend().to_string();
         assert!(!rendered.contains("fleet"), "{rendered}");
         assert!(!rendered.contains("Fleet"), "{rendered}");
+    }
+}
+
+/// A Claude home as its inspection reports it: the rate-limit tier on the subscription
+/// bucket, a model allowance beside it, and no banked resets.
+fn claude_update(index: usize, email: &str, five_hour: serde_json::Value, now: u64) -> HomeUpdate {
+    HomeUpdate {
+        index,
+        details: json!({
+            "account": {"type": "Claude", "email": email, "plan_type": "max"},
+            "status": "authenticated",
+            "rate_limits": [
+                {
+                    "id": "claude",
+                    "name": "Claude",
+                    "capacity_tier": "default_claude_max_5x",
+                    "primary": five_hour,
+                    "secondary": {"used_percent": 30.0, "duration_minutes": 10_080, "resets_at": now + 302_400}
+                },
+                {
+                    "id": "seven_day_opus",
+                    "name": "Opus",
+                    "primary": {"used_percent": 95.0, "duration_minutes": 10_080, "resets_at": now + 302_400},
+                    "secondary": null
+                }
+            ],
+            "usage_included": true,
+            "inspection_error": null,
+            "usage_error": null
+        }),
+    }
+}
+
+#[test]
+fn the_claude_picker_forecasts_its_own_subscription_bucket() {
+    const NOW: u64 = 2_000_000_000;
+    let entries = ["claude", "claude-work"]
+        .into_iter()
+        .map(|name| ConfigurationHome {
+            home: Home {
+                path: format!("/tmp/ExampleHome/.{name}").into(),
+                name: name.into(),
+                current: name == "claude",
+            },
+            details: Vec::new(),
+        })
+        .collect();
+    let mut app = App::provider(
+        "Claude Home Picker",
+        entries,
+        Vec::new(),
+        true,
+        Some("claude"),
+    );
+    app.apply_update_at(
+        claude_update(
+            0,
+            "person0@example.com",
+            json!({"used_percent": 40.0, "duration_minutes": 300, "resets_at": NOW + 9_000}),
+            NOW,
+        ),
+        NOW,
+    );
+    // An idle account's five-hour window has not started, so it reports no reset.
+    app.apply_update_at(
+        claude_update(
+            1,
+            "person1@example.com",
+            json!({"used_percent": 0.0, "duration_minutes": 300, "resets_at": null, "started": false}),
+            NOW,
+        ),
+        NOW,
+    );
+    app.finish_inspection(None);
+
+    let assessment = app.fleet_assessment_at(NOW).expect("Claude fleet forecast");
+    assert_eq!(assessment.coverage_label(), "All accounts 2/2");
+    assert_eq!(
+        assessment.outcome(),
+        &FleetOutcome::NoGap {
+            burn_observed: true
+        }
+    );
+    let details = assessment.detail_lines_at(NOW);
+    assert!(details.contains(&(
+        "Capacity basis".to_owned(),
+        "equal quotas assumed across plan default_claude_max_5x".to_owned()
+    )));
+    assert!(details.iter().all(|(label, _)| label != "Banked resets"));
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, NOW))
+        .unwrap();
+    let rendered = terminal.backend().to_string();
+    for expected in ["fleet capacity", "All accounts 2/2", "no gap projected"] {
+        assert!(
+            rendered.contains(expected),
+            "missing {expected}: {rendered}"
+        );
+    }
+    for absent in ["Codex", "banked"] {
+        assert!(!rendered.contains(absent), "{absent}: {rendered}");
     }
 }
 

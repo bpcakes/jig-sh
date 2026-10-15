@@ -40,9 +40,9 @@ pub(crate) struct App {
     pub(crate) subscription_buckets: Vec<String>,
     pub(crate) title: String,
     pub(crate) static_configuration: bool,
-    /// Opted into explicitly by the Codex picker. Other providers and configuration views
-    /// keep their existing per-account presentation unchanged.
-    pub(crate) codex_fleet_forecast: bool,
+    /// The subscription bucket an inspected provider picker forecasts as a fleet. Pickers
+    /// without one, and configuration views, keep the per-account presentation only.
+    pub(crate) fleet_bucket: Option<String>,
     pub(crate) rows: Vec<HomeRow>,
     pub(crate) selected: Option<usize>,
     pub(crate) filter: String,
@@ -82,7 +82,7 @@ impl App {
             subscription_buckets: Vec::new(),
             title: sanitize_text(title),
             static_configuration: false,
-            codex_fleet_forecast: false,
+            fleet_bucket: None,
             rows: homes.into_iter().map(HomeRow::new).collect(),
             selected,
             filter: String::new(),
@@ -116,8 +116,8 @@ impl App {
     #[cfg(test)]
     pub(crate) fn codex(homes: Vec<Home>, discovery_warnings: Vec<String>) -> Self {
         let mut app = Self::new("Codex Home Picker", homes, discovery_warnings);
-        app.subscription_buckets = vec![super::fleet::CODEX_SUBSCRIPTION_BUCKET.into()];
-        app.codex_fleet_forecast = true;
+        app.subscription_buckets = vec!["codex".into()];
+        app.fleet_bucket = Some("codex".into());
         app
     }
 

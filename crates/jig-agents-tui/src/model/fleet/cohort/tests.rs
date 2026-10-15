@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 use super::*;
 use crate::Home;
 
+/// The provider these Codex-shaped fixtures model.
+const CODEX: &str = "codex";
 const ORIGIN: u64 = 2_000_000_000;
 const FIVE_HOUR: u64 = 300;
 const WEEKLY: u64 = 10_080;
@@ -44,6 +46,7 @@ fn account(email: &str, plan: &str, windows: Vec<Value>) -> Value {
             "secondary": iterator.next().unwrap_or(Value::Null),
             "reached": null
         }],
+        "banked_resets": 0,
         "inspection_error": null,
         "usage_error": null
     })
@@ -58,7 +61,7 @@ fn row_at(name: &str, observed_at: u64, details: Value) -> HomeRow {
     row.set_inspection(Inspection::Ready(Details::from_value(
         details,
         observed_at,
-        &[CODEX_SUBSCRIPTION_BUCKET.to_owned()],
+        &[CODEX.to_owned()],
     )));
     row
 }
@@ -89,7 +92,7 @@ fn a_single_window_account_keeps_its_reported_schema() {
         account("a@example.com", "pro", vec![paced(20.0, WEEKLY, 0.5)]),
     )];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert_eq!(forecast.windows, vec![WindowRole::Weekly]);
     assert!(
@@ -111,7 +114,7 @@ fn duplicate_window_durations_are_unsupported_rather_than_merged() {
         ),
     )];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert_eq!(
         forecast.coverage.exclusions,
@@ -141,7 +144,7 @@ fn different_window_layouts_are_not_pooled_by_displayed_role() {
     ];
 
     assert_eq!(
-        forecast(&rows).outcome,
+        forecast(&rows, CODEX).outcome,
         FleetOutcome::Unsupported(FleetUnsupported::MixedWindowSchemas)
     );
 }
@@ -161,7 +164,7 @@ fn duplicate_identities_collapse_into_one_quota_pool() {
         ),
     ];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert_eq!(forecast.coverage.included, 1);
     assert_eq!(forecast.coverage.homes, 2);
@@ -197,7 +200,7 @@ fn tied_conflicting_duplicate_samples_are_unresolved_in_either_row_order() {
         [optimistic.clone(), pessimistic.clone()],
         [pessimistic, optimistic],
     ] {
-        let forecast = forecast(&rows);
+        let forecast = forecast(&rows, CODEX);
 
         assert_eq!(forecast.coverage.included, 0);
         assert_eq!(
@@ -231,7 +234,7 @@ fn a_strictly_newer_duplicate_sample_resolves_a_tied_disagreement() {
         ),
     ];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert_eq!(forecast.coverage.included, 1);
     assert_eq!(
@@ -252,7 +255,7 @@ fn an_unknown_account_identity_keeps_coverage_incomplete() {
     let rows = [row("solo", details)];
 
     assert_eq!(
-        forecast(&rows).coverage.exclusions,
+        forecast(&rows, CODEX).coverage.exclusions,
         vec![(FleetExclusion::UnknownIdentity, 1)]
     );
 }
@@ -270,7 +273,7 @@ fn mixed_capacity_classes_refuse_to_assume_equal_quotas() {
         ),
     ];
 
-    let assessment = forecast(&rows).assess_at(ORIGIN);
+    let assessment = forecast(&rows, CODEX).assess_at(ORIGIN);
 
     assert_eq!(
         assessment.outcome(),
@@ -290,7 +293,7 @@ fn an_unknown_capacity_class_is_excluded_instead_of_assumed_equal() {
     let rows = [row("solo", details)];
 
     assert_eq!(
-        forecast(&rows).coverage.exclusions,
+        forecast(&rows, CODEX).coverage.exclusions,
         vec![(FleetExclusion::UnknownCapacityClass, 1)]
     );
 }
@@ -306,7 +309,7 @@ fn a_reported_unknown_plan_is_missing_capacity_rather_than_a_capacity_class() {
         )
     });
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert!(forecast.coverage.included == 0, "{:?}", forecast.coverage);
     assert_eq!(
@@ -325,7 +328,7 @@ fn an_unknown_account_plan_does_not_shadow_a_reported_bucket_plan() {
     details["account"]["plan_type"] = json!("unknown");
     let rows = [row("solo", details)];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert_eq!(forecast.coverage.included, 1);
     assert_eq!(forecast.coverage.exclusions, Vec::new());
@@ -356,7 +359,7 @@ fn unavailable_inputs_are_named_instead_of_producing_an_all_account_conclusion()
         loading_row("loading"),
     ];
 
-    let assessment = forecast(&rows).assess_at(ORIGIN);
+    let assessment = forecast(&rows, CODEX).assess_at(ORIGIN);
 
     assert_eq!(assessment.coverage().included(), 1);
     assert_eq!(assessment.coverage().homes(), 5);
@@ -376,7 +379,7 @@ fn unavailable_inputs_are_named_instead_of_producing_an_all_account_conclusion()
 fn inspection_that_has_not_finished_collects_instead_of_reporting_unsupported() {
     let rows = [loading_row("one"), loading_row("two")];
 
-    let assessment = forecast(&rows).assess_at(ORIGIN);
+    let assessment = forecast(&rows, CODEX).assess_at(ORIGIN);
 
     assert_eq!(assessment.outcome(), &FleetOutcome::Collecting);
     assert_eq!(
@@ -412,7 +415,7 @@ fn samples_with_different_observation_times_share_one_forecast_origin() {
         ),
     ];
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert_eq!(forecast.origin, ORIGIN);
     let FleetOutcome::GapRisk { gap_at, .. } = forecast.outcome else {
@@ -430,7 +433,7 @@ fn the_assessment_goes_stale_when_real_time_passes_the_sample_expiry() {
         "solo",
         account("a@example.com", "pro", vec![paced(60.0, WEEKLY, 0.5)]),
     )];
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert!(!forecast.assess_at(ORIGIN + 899).is_stale());
     let stale = forecast.assess_at(ORIGIN + 900);
@@ -450,7 +453,7 @@ fn a_gap_is_labeled_as_scenario_risk_with_its_assumptions_visible() {
         account("a@example.com", "pro", vec![paced(60.0, WEEKLY, 0.5)]),
     )];
 
-    let assessment = forecast(&rows).assess_at(ORIGIN);
+    let assessment = forecast(&rows, CODEX).assess_at(ORIGIN);
     let summary = assessment.summary_label_at(ORIGIN);
     let details = assessment.detail_lines_at(ORIGIN);
 
@@ -474,6 +477,11 @@ fn a_gap_is_labeled_as_scenario_risk_with_its_assumptions_visible() {
                 "work transferable between accounts · earliest reset used first".to_owned()
             ),
             (
+                "Quota scope".to_owned(),
+                "primary subscription bucket only · model and other allowances not modeled"
+                    .to_owned()
+            ),
+            (
                 "Rate basis".to_owned(),
                 "window-average pace per account window".to_owned()
             ),
@@ -483,7 +491,8 @@ fn a_gap_is_labeled_as_scenario_risk_with_its_assumptions_visible() {
             ),
             (
                 "Reset model".to_owned(),
-                "periodic approximation from each reported window duration".to_owned()
+                "periodic approximation from each reported window duration · an unstarted window begins at first use"
+                    .to_owned()
             ),
             (
                 "Banked resets".to_owned(),
@@ -506,7 +515,7 @@ fn a_modeled_instant_that_real_time_has_passed_reads_as_now() {
         account("a@example.com", "pro", vec![window(99.5, FIVE_HOUR, 300)]),
     )];
 
-    let assessment = forecast(&rows).assess_at(ORIGIN);
+    let assessment = forecast(&rows, CODEX).assess_at(ORIGIN);
     assert!(!assessment.is_stale());
 
     assert_eq!(
@@ -529,7 +538,7 @@ fn a_generic_usage_bucket_is_not_treated_as_codex_subscription_quota() {
     let rows = [row("solo", details)];
 
     assert_eq!(
-        forecast(&rows).coverage.exclusions,
+        forecast(&rows, CODEX).coverage.exclusions,
         vec![(FleetExclusion::NoSubscriptionQuota, 1)]
     );
 }
@@ -556,7 +565,7 @@ fn cohort(count: usize, used_percent: f64) -> Vec<HomeRow> {
 fn a_realistic_cohort_forecasts_a_full_weekly_horizon_of_short_window_resets() {
     let rows = cohort(64, 10.0);
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert_eq!(forecast.coverage.included, 64);
     assert_eq!(
@@ -571,7 +580,7 @@ fn a_realistic_cohort_forecasts_a_full_weekly_horizon_of_short_window_resets() {
 fn an_oversized_cohort_states_its_budget_limit_instead_of_running_long() {
     let rows = cohort(1_024, 10.0);
 
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
 
     assert_eq!(forecast.coverage.included, 1_024);
     assert_eq!(
@@ -609,11 +618,12 @@ fn a_stale_sample_states_its_alignment_limit_instead_of_a_horizon_limit() {
     ];
 
     assert_eq!(
-        forecast(&rows).outcome,
+        forecast(&rows, CODEX).outcome,
         FleetOutcome::Unsupported(FleetUnsupported::AlignmentBudget)
     );
 }
 
 mod availability;
 mod capacity;
+mod providers;
 mod timeline;

@@ -105,6 +105,7 @@ mod tests {
             used_percent: used,
             duration_minutes: Some(10_080),
             resets_at: Some(i64::try_from(NOW + remaining).unwrap()),
+            not_started: false,
         }
     }
 
@@ -138,6 +139,7 @@ mod tests {
             used_percent: Some(25.0),
             duration_minutes: Some(300),
             resets_at: None,
+            not_started: false,
         };
         assert_eq!(
             unknown_reset.gauge_at(NOW),

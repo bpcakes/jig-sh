@@ -21,7 +21,7 @@ impl AgentProvider for Claude {
         executable_env: "JIG_CLAUDE_BIN",
         usage: true,
         inspect_on_list: false,
-        subscription_bucket: Some("claude"),
+        subscription_bucket: Some(super::usage::SUBSCRIPTION_BUCKET),
     };
 
     fn resolve(&self, input: &Path) -> Result<Self::Home> {

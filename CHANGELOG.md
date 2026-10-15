@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Added
+
+- Extend the reset-aware fleet quota forecast to the `jig claude launch`
+  picker. The same panel, explanation, and controls as Codex pool the
+  five-hour and weekly windows of Claude's subscription bucket across
+  distinct accounts; Sonnet, Opus, and model-scoped allowances stay
+  per-account. Claude usage inspection now reports the login's rate-limit
+  tier as the subscription bucket's `capacity_tier`, including in
+  `claude homes --usage --json`. Max tiers of different sizes are refused as
+  mixed capacities, and a login that does not record its tier is excluded as
+  unknown capacity instead of treated as equal. A subscription window the
+  usage endpoint reports with zero utilization and a null reset is marked
+  `"started": false`, so an idle account still contributes its full
+  allowance; this follows observed, undocumented endpoint behavior.
+
+### Changed
+
+- The fleet forecast is provider-neutral. It pools the bucket each provider
+  names, lets a provider's stated quota tier decide capacity, and counts a
+  window its provider reports as not started as a full allowance whose period
+  begins at first use; any other missing or unreadable reset still excludes
+  the account. The explanation states that only the primary subscription
+  bucket is modeled, and mentions banked resets only for accounts that
+  report them.
+
 ### Fixed
 
 - `jig claude launch --auto` and `jig claude homes --usage` read Claude logins

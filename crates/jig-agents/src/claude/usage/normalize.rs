@@ -1,13 +1,15 @@
 use chrono::DateTime;
 use serde_json::{Value, json};
 
+use super::SUBSCRIPTION_BUCKET;
+
 pub(crate) fn limits(value: &Value) -> Result<Vec<Value>, String> {
     let mut buckets = Vec::new();
-    let primary = window(&value["five_hour"], 300);
-    let secondary = window(&value["seven_day"], 10_080);
+    let primary = subscription_window(&value["five_hour"], 300);
+    let secondary = subscription_window(&value["seven_day"], 10_080);
     if !primary.is_null() || !secondary.is_null() {
         buckets.push(
-            json!({"id":"claude", "name":"Claude", "primary":primary, "secondary":secondary}),
+            json!({"id":SUBSCRIPTION_BUCKET, "name":"Claude", "primary":primary, "secondary":secondary}),
         );
     }
     for (key, name) in [
@@ -59,6 +61,18 @@ pub(crate) fn limits(value: &Value) -> Result<Vec<Value>, String> {
         return Err("Claude returned no supported subscription usage windows".into());
     }
     Ok(buckets)
+}
+
+/// A subscription window, marked `started: false` when the endpoint reports zero utilization
+/// with an explicitly null reset: the shape observed for an account that has not used the
+/// window since it last ended. The endpoint documents neither field, so only that exact shape
+/// is marked, and an omitted or unreadable reset stays unknown.
+fn subscription_window(value: &Value, duration: u64) -> Value {
+    let mut normalized = window(value, duration);
+    if value["utilization"].as_f64() == Some(0.0) && value.get("resets_at") == Some(&Value::Null) {
+        normalized["started"] = json!(false);
+    }
+    normalized
 }
 
 fn window(value: &Value, duration: u64) -> Value {
