@@ -1,4 +1,7 @@
-//! Reset-aware collective quota forecast for a cohort of Codex subscription accounts.
+//! Reset-aware collective quota forecast for a cohort of one provider's subscription accounts.
+//!
+//! The forecast is provider-neutral: the picker names the provider's primary subscription
+//! bucket, and only that bucket's windows join the cohort.
 //!
 //! This answers one question: at the estimated aggregate pace, with work transferable
 //! between the participating accounts, does the modeled pool reach a period in which no
@@ -18,10 +21,6 @@ mod cohort;
 mod simulation;
 
 pub(super) use cohort::forecast;
-
-/// Bucket identity that enables the fleet forecast. Other providers and generic buckets
-/// deliberately keep the existing per-account presentation only.
-pub(crate) const CODEX_SUBSCRIPTION_BUCKET: &str = "codex";
 
 /// One account window's full allowance in the reported percentage units.
 const FULL_QUOTA_PERCENT: f64 = 100.0;
@@ -64,7 +63,7 @@ impl FleetExclusion {
             Self::UsageError => "usage error",
             Self::SignedOut => "signed out",
             Self::NotAuthenticated => "not authenticated",
-            Self::NoSubscriptionQuota => "no Codex subscription quota",
+            Self::NoSubscriptionQuota => "no subscription quota",
             Self::IncompleteWindowData => "incomplete window data",
             Self::DuplicateWindowDurations => "ambiguous window durations",
             Self::UnknownCapacityClass => "unknown plan capacity",
@@ -78,7 +77,7 @@ impl FleetExclusion {
 /// Why the cohort cannot be forecast at all.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FleetUnsupported {
-    /// No home supplied comparable Codex subscription quota.
+    /// No home supplied comparable subscription quota.
     NoEligibleAccount,
     /// Pooling across different quota capacities needs comparable capacity weights, which
     /// the normalized inspection payload does not supply.
@@ -96,7 +95,7 @@ pub(crate) enum FleetUnsupported {
 impl FleetUnsupported {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::NoEligibleAccount => "no comparable Codex quota data",
+            Self::NoEligibleAccount => "no comparable subscription quota data",
             Self::MixedCapacityClasses => "mixed capacities need comparable quota weights",
             Self::MixedWindowSchemas => "mixed window layouts cannot be pooled",
             Self::AlignmentBudget => "sample alignment budget reached before the forecast origin",
@@ -195,6 +194,9 @@ pub(crate) struct FleetForecast {
     /// Whether a participating window is still inside its warmup. Reported alongside an
     /// observed outcome so a blocked pool never implies a trusted consumption estimate.
     pace_collecting: bool,
+    /// Whether a participating account reports banked resets, which the scenario excludes.
+    /// Providers without them are not told about a reset kind they never offer.
+    banked_resets: bool,
     capacity: Option<FleetCapacity>,
 }
 
@@ -222,6 +224,10 @@ impl FleetAssessment {
 
     pub(crate) fn pace_collecting(&self) -> bool {
         self.forecast.pace_collecting
+    }
+
+    pub(crate) fn banked_resets(&self) -> bool {
+        self.forecast.banked_resets
     }
 
     pub(crate) fn horizon_label(&self) -> String {
@@ -363,6 +369,10 @@ impl FleetAssessment {
             "work transferable between accounts · earliest reset used first".to_owned(),
         ));
         lines.push((
+            "Quota scope".to_owned(),
+            "primary subscription bucket only · model and other allowances not modeled".to_owned(),
+        ));
+        lines.push((
             "Rate basis".to_owned(),
             "window-average pace per account window".to_owned(),
         ));
@@ -375,12 +385,14 @@ impl FleetAssessment {
         ));
         lines.push((
             "Reset model".to_owned(),
-            "periodic approximation from each reported window duration".to_owned(),
+            "periodic approximation from each reported window duration · an unstarted window begins at first use".to_owned(),
         ));
-        lines.push((
-            "Banked resets".to_owned(),
-            "not modeled · forecast uses scheduled window resets only".to_owned(),
-        ));
+        if forecast.banked_resets {
+            lines.push((
+                "Banked resets".to_owned(),
+                "not modeled · forecast uses scheduled window resets only".to_owned(),
+            ));
+        }
         lines.push((
             "Horizon".to_owned(),
             format!(
@@ -447,7 +459,9 @@ pub(super) struct FleetWindow {
     role: WindowRole,
     used_percent: f64,
     rate: f64,
-    resets_at: u64,
+    /// `None` for a window that has not started: it reported no usage and no reset, so it
+    /// holds a full allowance and its period begins when work first charges it.
+    resets_at: Option<u64>,
     /// Whether too little of this window has elapsed for its pace to be evidence. The rate is
     /// still pooled into fleet demand, but it must not spend observed quota during alignment.
     warming: bool,

@@ -263,7 +263,12 @@ fn every_list_style_shows_whole_usage_and_names_the_projected_window() {
     let app = claude_app(NOW);
     for width in [50, 80, 104, 130, 170] {
         let screen = render(&app, width, 40, NOW).backend().to_string();
-        let list = screen.split("╰").next().unwrap();
+        // The fleet panel above the list closes with its own border.
+        let list = screen
+            .split("╭ homes")
+            .nth(1)
+            .and_then(|list| list.split("╰").next())
+            .unwrap();
         if width >= 60 {
             // Every window's used quota sits beside its meter.
             for used in ["42%", "18%", "12%", "61%", "80%", "30%", "5%", "9%"] {
@@ -412,7 +417,8 @@ fn no_color_keeps_every_glyph_and_status_without_any_color() {
     use ratatui::style::Color;
     const NOW: u64 = 1_800_000_000;
     let app = claude_app(NOW);
-    let mut terminal = Terminal::new(TestBackend::new(120, 34)).unwrap();
+    // Tall enough to keep the list stacked above the details below the fleet panel.
+    let mut terminal = Terminal::new(TestBackend::new(120, 42)).unwrap();
     terminal
         .draw(|frame| draw_with(frame, &app, Theme::new(theme::ColorDepth::Monochrome), NOW))
         .unwrap();

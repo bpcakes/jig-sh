@@ -61,6 +61,27 @@ fn missing_and_malformed_limits_are_unavailable_instead_of_zero() {
     assert_eq!(limits[0]["primary"]["used_percent"], 0.0);
     assert!(limits[0]["primary"]["resets_at"].is_null());
     assert_eq!(limits[0]["primary"]["invalid"], true);
+    // An unreadable reset is unknown timing, never a window that has not started.
+    assert!(limits[0]["primary"].get("started").is_none());
+}
+
+#[test]
+fn only_an_explicitly_null_reset_with_zero_usage_marks_a_window_not_started() {
+    let limits = normalize::limits(&json!({
+        "five_hour":{"utilization":0,"resets_at":null},
+        "seven_day":{"utilization":0},
+        "seven_day_opus":{"utilization":0,"resets_at":null},
+    }))
+    .unwrap();
+    assert_eq!(limits[0]["primary"]["started"], false);
+    // An omitted reset is missing data rather than the endpoint's idle shape.
+    assert!(limits[0]["secondary"].get("started").is_none());
+    // Model allowances are not subscription windows.
+    assert!(limits[1]["primary"].get("started").is_none());
+
+    let limits =
+        normalize::limits(&json!({"five_hour":{"utilization":5,"resets_at":null}})).unwrap();
+    assert!(limits[0]["primary"].get("started").is_none());
 }
 
 #[test]
@@ -117,11 +138,36 @@ fn malformed_scoped_limits_preserve_valid_usage_and_mark_unknown_capacity() {
 
 #[test]
 fn credentials_are_read_without_exposing_tokens_and_expiry_is_checked_in_milliseconds() {
-    let credential = credentials::parse(br#"{"claudeAiOauth":{"accessToken":"example-secret-token","refreshToken":"example-refresh-token","expiresAt":2000,"subscriptionType":"max","scopes":["user:profile"]}}"#).unwrap();
+    let credential = credentials::parse(br#"{"claudeAiOauth":{"accessToken":"example-secret-token","refreshToken":"example-refresh-token","expiresAt":2000,"subscriptionType":"max","rateLimitTier":"default_claude_max_20x","scopes":["user:profile"]}}"#).unwrap();
     assert!(credential.usage_error(1999).is_none());
     assert!(credential.usage_error(2000).unwrap().contains("expired"));
     let report = inspected(&credential, None, Err("Usage unavailable".into()));
     assert_eq!(report["account"]["plan_type"], "max");
+    let limits = normalize::limits(&json!({
+        "five_hour":{"utilization":10,"resets_at":"2026-09-10T12:30:00Z"},
+        "seven_day_opus":{"utilization":4,"resets_at":null},
+    }))
+    .unwrap();
+    let tiered = inspected(&credential, None, Ok(limits.clone()));
+    // The tier sizes the subscription bucket's quota, not the model allowances.
+    assert_eq!(
+        tiered["rate_limits"][0]["capacity_tier"],
+        "default_claude_max_20x"
+    );
+    assert!(tiered["rate_limits"][1].get("capacity_tier").is_none());
+    // A login without a tier states that its capacity is unknown rather than omitting it.
+    let untiered = credentials::parse(
+        br#"{"claudeAiOauth":{"accessToken":"example-token","subscriptionType":"max"}}"#,
+    )
+    .unwrap();
+    let untiered = inspected(&untiered, None, Ok(limits));
+    assert!(untiered["rate_limits"][0]["capacity_tier"].is_null());
+    assert!(
+        untiered["rate_limits"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("capacity_tier")
+    );
     assert!(report["account"]["email"].is_null());
     assert_eq!(report["usage_error"], "Usage unavailable");
     assert!(!report.to_string().contains("secret-token"));

@@ -12,6 +12,8 @@ fn partial_app() -> App {
         "duration_minutes": 10_080,
         "resets_at": NOW + 302_400
     });
+    // Codex reports banked resets, so the explanation says the scenario excludes them.
+    update.details["banked_resets"] = json!(2);
     app.apply_update_at(update, NOW);
     app.finish_inspection(None);
     app

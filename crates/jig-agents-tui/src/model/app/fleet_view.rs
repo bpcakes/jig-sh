@@ -4,9 +4,9 @@ use super::App;
 use crate::model::fleet::{self, FleetAssessment};
 
 impl App {
-    /// Only inspected Codex subscription pickers opt into the collective outlook.
+    /// Only inspected pickers with a primary subscription bucket forecast the fleet.
     pub(crate) fn fleet_forecast_enabled(&self) -> bool {
-        self.codex_fleet_forecast && !self.static_configuration
+        self.fleet_bucket.is_some() && !self.static_configuration
     }
 
     /// Search changes visible homes, never the modeled pool. Time changes freshness and
@@ -15,12 +15,13 @@ impl App {
         if !self.fleet_forecast_enabled() {
             return None;
         }
+        let bucket = self.fleet_bucket.as_deref()?;
         let mut cached = self.fleet_forecast.borrow_mut();
         if cached
             .as_ref()
             .is_none_or(|(generation, _)| *generation != self.fleet_generation)
         {
-            *cached = Some((self.fleet_generation, fleet::forecast(&self.rows)));
+            *cached = Some((self.fleet_generation, fleet::forecast(&self.rows, bucket)));
         }
         cached.as_ref().map(|(_, forecast)| forecast.assess_at(now))
     }
