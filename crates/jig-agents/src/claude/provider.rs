@@ -69,10 +69,7 @@ impl AgentProvider for Claude {
         Ok(Discovery {
             choices,
             warnings: homes.warnings,
-            inspection: Some(Box::new(super::usage::Inspection::new(
-                selections,
-                mode == InspectionMode::Interactive,
-            ))),
+            inspection: Some(Box::new(super::usage::Inspection::new(selections, mode))),
         })
     }
 

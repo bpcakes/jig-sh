@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `jig claude launch --auto` and `jig claude homes --usage` read Claude logins
+  stored in the macOS Keychain. They read through Apple's `/usr/bin/security`
+  tool, as the picker does, using permission already granted, so `--auto` no
+  longer finds every home ineligible. A read that would wait on a permission
+  dialog is abandoned after two seconds and names the picker as the place to
+  allow access.
+
 ## v0.9.0 - 2026-10-14
 
 ### Added

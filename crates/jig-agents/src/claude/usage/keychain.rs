@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
@@ -8,7 +10,14 @@ mod silent;
 #[cfg(test)]
 mod tests;
 
+use crate::agent_provider::InspectionMode;
 use crate::claude::Home;
+
+/// The picker waits while the user answers a permission dialog.
+const PICKER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// A tool read with permission already granted returns at once. Headless
+/// inspection stops waiting on one that needs the user to answer a dialog.
+const HEADLESS_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) fn service(home: &Home) -> Result<String, String> {
     if home.default_config {
@@ -28,7 +37,7 @@ pub(super) fn service(home: &Home) -> Result<String, String> {
 
 pub(super) fn read(
     home: &Home,
-    allow_prompt: bool,
+    mode: InspectionMode,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
     let service = service(home)?;
@@ -50,19 +59,19 @@ pub(super) fn read(
         .skip_authenticated_items(true);
     read_with(
         query,
-        allow_prompt,
+        mode,
         cancelled,
         ItemSearchOptions::search,
-        || prompt::read(&service, &account, cancelled),
+        |timeout| prompt::read(&service, &account, timeout, cancelled),
     )
 }
 
 fn read_with(
     mut query: ItemSearchOptions,
-    allow_prompt: bool,
+    mode: InspectionMode,
     cancelled: &(dyn Fn() -> bool + Sync),
     mut search: impl FnMut(&ItemSearchOptions) -> security_framework::base::Result<Vec<SearchResult>>,
-    prompt: impl FnOnce() -> Result<Zeroizing<Vec<u8>>, String>,
+    tool_read: impl FnOnce(Duration) -> Result<Zeroizing<Vec<u8>>, String>,
 ) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
     match silent::search(&query, &mut search) {
         Ok(items) => {
@@ -86,9 +95,12 @@ fn read_with(
     if cancelled() {
         return Err("Claude usage inspection was cancelled".into());
     }
-    if allow_prompt {
-        prompt().map(Some)
-    } else {
-        Err("Claude Keychain credentials require permission; open jig claude launch to allow access".into())
+    // Jig's own read never asks for trust, so a protected item is read through
+    // Apple's security tool, whose permission survives Jig rebuilds and upgrades.
+    match mode {
+        InspectionMode::Interactive => tool_read(PICKER_READ_TIMEOUT).map(Some),
+        InspectionMode::Headless => tool_read(HEADLESS_READ_TIMEOUT).map(Some).map_err(|_| {
+            "Claude Keychain credentials require permission; open the jig claude launch picker and choose Always Allow".into()
+        }),
     }
 }

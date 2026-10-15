@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::{Home, Homes};
+use crate::agent_provider::InspectionMode;
 
 mod account;
 mod credentials;
@@ -16,15 +17,12 @@ mod tests;
 
 pub struct Inspection {
     homes: Vec<Home>,
-    allow_keychain_prompt: bool,
+    mode: InspectionMode,
 }
 
 impl Inspection {
-    pub fn new(homes: Vec<Home>, allow_keychain_prompt: bool) -> Self {
-        Self {
-            homes,
-            allow_keychain_prompt,
-        }
+    pub fn new(homes: Vec<Home>, mode: InspectionMode) -> Self {
+        Self { homes, mode }
     }
 
     pub fn inspect(
@@ -41,7 +39,7 @@ impl Inspection {
             if cancelled() {
                 break;
             }
-            let details = match credentials::load(home, self.allow_keychain_prompt, cancelled) {
+            let details = match credentials::load(home, self.mode, cancelled) {
                 Ok(credential) => {
                     let usage = if let Some(error) =
                         credential.usage_error(chrono::Utc::now().timestamp_millis())
@@ -91,7 +89,7 @@ fn inspected(
 pub fn report(homes: Homes, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Value> {
     let mut report = homes.report();
     report["usage_included"] = json!(true);
-    let inspection = Inspection::new(homes.selections(), false);
+    let inspection = Inspection::new(homes.selections(), InspectionMode::Headless);
     inspection
         .inspect(
             &mut |index, details| {
