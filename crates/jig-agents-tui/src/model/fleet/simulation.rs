@@ -58,7 +58,8 @@ struct SimWindow {
     /// This account's own observed pace, used only to carry its sample to the forecast
     /// origin. Zero for a window whose pace is not yet evidence.
     self_rate: f64,
-    /// Next modeled reset, as seconds after the forecast origin.
+    /// Next modeled reset, as seconds after the forecast origin. Infinite for a window that
+    /// has not started; its period begins when work first charges it.
     resets_at: f64,
 }
 
@@ -129,7 +130,9 @@ impl Simulation {
                         // on the way to the origin. It still counts toward fleet demand, which
                         // conserves the estimated workload.
                         self_rate: if window.warming { 0.0 } else { window.rate },
-                        resets_at: offset_from(window.resets_at, origin),
+                        resets_at: window
+                            .resets_at
+                            .map_or(f64::INFINITY, |reset| offset_from(reset, origin)),
                     })
                     .collect::<Vec<_>>();
                 aligned &= align_to_origin(&mut windows, offset_from(account.observed_at, origin));
@@ -187,7 +190,7 @@ impl Simulation {
                 }
             }
             let step = (target - elapsed).max(0.0);
-            self.charge(index, step);
+            self.charge(index, elapsed, step);
             elapsed = target;
             self.apply_resets(elapsed);
         };
@@ -256,8 +259,10 @@ impl Simulation {
             .min_by(f64::total_cmp)
     }
 
-    fn charge(&mut self, index: usize, step: f64) {
-        charge(&mut self.accounts[index], step, |window| window.demand);
+    fn charge(&mut self, index: usize, from: f64, step: f64) {
+        charge(&mut self.accounts[index], from, step, |window| {
+            window.demand
+        });
     }
 
     fn apply_resets(&mut self, elapsed: f64) {
@@ -323,7 +328,9 @@ fn align_to_origin(windows: &mut [SimWindow], observed_at: f64) -> bool {
                     target = depleted_at;
                 }
             }
-            charge(windows, target - elapsed, |window| window.self_rate);
+            charge(windows, elapsed, target - elapsed, |window| {
+                window.self_rate
+            });
         }
         elapsed = target;
     }
@@ -358,9 +365,17 @@ fn self_depletion(windows: &[SimWindow]) -> Option<f64> {
         .min_by(f64::total_cmp)
 }
 
-fn charge(windows: &mut [SimWindow], step: f64, rate: impl Fn(&SimWindow) -> f64) {
+/// Spends each window's allowance at `rate` for `step` seconds starting at `from`.
+fn charge(windows: &mut [SimWindow], from: f64, step: f64, rate: impl Fn(&SimWindow) -> f64) {
     for window in windows {
-        let remaining = window.remaining - rate(window) * step;
+        let spent = rate(window) * step;
+        // Work opens an unstarted window's period. A step never outlasts a dimension's
+        // duration while that dimension has demand, because the accounts that create the
+        // demand have periodic resets that bound every step.
+        if spent > 0.0 && window.resets_at.is_infinite() {
+            window.resets_at = from + window.duration;
+        }
+        let remaining = window.remaining - spent;
         window.remaining = if remaining > DEPLETED_PERCENT {
             remaining.min(FULL_QUOTA_PERCENT)
         } else {

@@ -14,6 +14,9 @@ pub(crate) use normalize::limits as normalize_limits;
 #[cfg(test)]
 mod tests;
 
+/// The normalized bucket for the subscription's own five-hour and weekly windows.
+pub(super) const SUBSCRIPTION_BUCKET: &str = "claude";
+
 pub struct Inspection {
     homes: Vec<Home>,
     allow_keychain_prompt: bool,
@@ -77,10 +80,19 @@ fn inspected(
     email: Option<String>,
     usage: Result<Vec<Value>, String>,
 ) -> Value {
-    let (limits, error) = match usage {
+    let (mut limits, error) = match usage {
         Ok(limits) => (limits, None),
         Err(error) => (Vec::new(), Some(error)),
     };
+    // The subscription type does not identify quota size (`max` spans several tiers), so the
+    // subscription bucket states its tier explicitly, including `null` when the login does
+    // not record one. A consumer must then treat the capacity as unknown, not as `max`.
+    if let Some(bucket) = limits
+        .iter_mut()
+        .find(|bucket| bucket["id"] == SUBSCRIPTION_BUCKET)
+    {
+        bucket["capacity_tier"] = json!(credential.rate_limit_tier);
+    }
     json!({
         "account":{"type":"Claude", "email":email, "plan_type":credential.subscription_type},
         "status":"authenticated", "rate_limits":limits,

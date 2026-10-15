@@ -1,6 +1,6 @@
 use jig_tui::sanitize_text;
 
-use super::{App, fleet::CODEX_SUBSCRIPTION_BUCKET};
+use super::App;
 use crate::ConfigurationHome;
 
 impl App {
@@ -17,7 +17,7 @@ impl App {
             Self::configuration(title, homes, warnings)
         };
         app.subscription_buckets = subscription_bucket.into_iter().map(str::to_owned).collect();
-        app.codex_fleet_forecast = subscription_bucket == Some(CODEX_SUBSCRIPTION_BUCKET);
+        app.fleet_bucket = subscription_bucket.map(str::to_owned);
         app
     }
 
@@ -32,7 +32,7 @@ impl App {
             .unzip();
         let mut app = Self::new(title, homes, warnings);
         app.static_configuration = true;
-        app.codex_fleet_forecast = false;
+        app.fleet_bucket = None;
         app.inspection_finished = true;
         app.completed = app.rows.len();
         for (row, details) in app.rows.iter_mut().zip(details) {

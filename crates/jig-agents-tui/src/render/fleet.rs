@@ -111,11 +111,13 @@ fn full_lines(view: &View<'_>, fleet: &FleetAssessment, width: usize) -> Vec<Lin
                 .take(2)
                 .map(|window| window_line(view, fleet, window, role_width, width)),
         );
+        let assumptions = if fleet.banked_resets() {
+            "Equal quotas · window-average pace · periodic approximation · banked resets excluded"
+        } else {
+            "Equal quotas · window-average pace · periodic approximation"
+        };
         lines.push(Line::from(Span::styled(
-            truncate(
-                "Equal quotas · window-average pace · periodic approximation · banked resets excluded",
-                width,
-            ),
+            truncate(assumptions, width),
             Style::default().fg(view.theme.muted()),
         )));
         let limiting = fleet

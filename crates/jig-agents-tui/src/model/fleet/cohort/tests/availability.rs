@@ -16,7 +16,7 @@ fn exhausted_quota_at_zero_elapsed_time_reports_blocking_and_recovery() {
                     .collect(),
             ),
         )];
-        let forecast = forecast(&rows);
+        let forecast = forecast(&rows, CODEX);
         let FleetOutcome::BlockedNow {
             recovers_at,
             limiting,
@@ -49,7 +49,7 @@ fn quota_remaining_at_zero_elapsed_time_still_collects_pace() {
             vec![paced(50.0, FIVE_HOUR, 0.0), paced(0.0, WEEKLY, 0.0)],
         ),
     )];
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
     assert_eq!(forecast.outcome, FleetOutcome::Collecting);
     let capacity = forecast.capacity.unwrap();
     assert_eq!(capacity.usable_accounts, 1);
@@ -71,7 +71,7 @@ fn unused_quota_at_zero_elapsed_time_reports_no_observed_burn() {
             vec![paced(0.0, FIVE_HOUR, 0.0), paced(0.0, WEEKLY, 0.0)],
         ),
     )];
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
     assert_eq!(
         forecast.outcome,
         FleetOutcome::NoGap {

@@ -310,6 +310,10 @@ pub(crate) struct RateLimitBucket {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) plan: String,
+    /// The quota tier a provider states for this bucket when its plans do not identify quota
+    /// size. `None` when the provider states no tier; `UNKNOWN` when it states that the tier
+    /// is unknown.
+    pub(crate) capacity_tier: Option<String>,
     pub(crate) reached: String,
     pub(crate) windows: Vec<RateLimitWindow>,
 }
@@ -331,6 +335,9 @@ impl RateLimitBucket {
             id: value_str(value, "id"),
             name: value_str(value, "name"),
             plan: value_str(value, "plan_type"),
+            capacity_tier: value
+                .get("capacity_tier")
+                .map(|_| value_str(value, "capacity_tier")),
             reached: value_str(value, "reached"),
             windows,
         })
@@ -454,6 +461,9 @@ pub(crate) struct RateLimitWindow {
     pub(crate) used_percent: Option<f64>,
     pub(crate) duration_minutes: Option<u64>,
     pub(crate) resets_at: Option<i64>,
+    /// The provider reported that this window has not started: it has no reset yet, and its
+    /// period opens on first use. A missing reset without this report is unknown timing.
+    pub(crate) not_started: bool,
 }
 
 impl RateLimitWindow {
@@ -463,6 +473,7 @@ impl RateLimitWindow {
             used_percent: value.get("used_percent").and_then(Value::as_f64),
             duration_minutes: value.get("duration_minutes").and_then(Value::as_u64),
             resets_at: value.get("resets_at").and_then(Value::as_i64),
+            not_started: value.get("started").and_then(Value::as_bool) == Some(false),
         })
     }
 

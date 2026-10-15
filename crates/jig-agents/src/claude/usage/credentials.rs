@@ -15,6 +15,8 @@ pub(super) struct Credential {
     pub(super) access_token: Zeroizing<String>,
     pub(super) expires_at: Option<i64>,
     pub(super) subscription_type: Option<String>,
+    /// The quota size within the subscription; `max` alone spans several tiers.
+    pub(super) rate_limit_tier: Option<String>,
     pub(super) scopes: Option<Vec<String>>,
 }
 

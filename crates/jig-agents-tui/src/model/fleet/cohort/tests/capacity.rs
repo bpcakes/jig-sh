@@ -18,7 +18,7 @@ fn pooled_meters_count_distinct_capacity_and_preserve_the_pace_basis() {
             account("b@example.com", "pro", vec![paced(10.0, WEEKLY, 0.5)]),
         ),
     ];
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
     let capacity = forecast.capacity.unwrap();
     assert_eq!(capacity.usable_accounts, 2);
     assert_eq!(capacity.windows.len(), 1);
@@ -52,7 +52,7 @@ fn surviving_quota_is_not_presented_as_a_usable_account() {
             ),
         ),
     ];
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
     assert!(matches!(forecast.outcome, FleetOutcome::BlockedNow { .. }));
     let capacity = forecast.capacity.unwrap();
     assert_eq!(capacity.usable_accounts, 0);
@@ -79,7 +79,7 @@ fn pooled_capacity_uses_budgets_at_the_common_origin() {
             account("b@example.com", "pro", vec![window(0.0, 60, 1_800)]),
         ),
     ];
-    let capacity = forecast(&rows).capacity.unwrap();
+    let capacity = forecast(&rows, CODEX).capacity.unwrap();
     // The older sample is 1,200 seconds into its hour: 20/1,200 points/s.
     // It spends ten more points reaching the origin, making pooled usage 15%.
     assert_eq!(capacity.windows[0].gauge.used, Some(15.0));
@@ -92,7 +92,7 @@ fn warmup_shows_observed_capacity_without_a_projected_ghost() {
         "ExampleWarming",
         account("a@example.com", "pro", vec![paced(95.0, WEEKLY, 0.03)]),
     )];
-    let forecast = forecast(&rows);
+    let forecast = forecast(&rows, CODEX);
     assert_eq!(forecast.outcome, FleetOutcome::Collecting);
     let capacity = forecast.capacity.unwrap();
     assert_eq!(capacity.usable_accounts, 1);

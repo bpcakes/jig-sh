@@ -12,8 +12,8 @@ use super::super::{
 };
 use super::simulation::{Simulation, SimulationOutcome};
 use super::{
-    CODEX_SUBSCRIPTION_BUCKET, FleetAccount, FleetCoverage, FleetExclusion, FleetForecast,
-    FleetOutcome, FleetUnsupported, FleetWindow,
+    FleetAccount, FleetCoverage, FleetExclusion, FleetForecast, FleetOutcome, FleetUnsupported,
+    FleetWindow,
 };
 use crate::usage::{self, WindowRole};
 
@@ -25,6 +25,7 @@ struct Candidate {
     capacity_class: String,
     expires_at: u64,
     warming: bool,
+    banked_resets: bool,
 }
 
 impl Candidate {
@@ -106,12 +107,13 @@ impl PoolEntry {
 /// Builds the cohort from every discovered row and forecasts it.
 ///
 /// Callers must pass the complete row set, never a filtered view: typing a search must not
-/// change the fleet being forecast.
-pub(in crate::model) fn forecast(rows: &[HomeRow]) -> FleetForecast {
+/// change the fleet being forecast. `subscription_bucket` names the provider's primary
+/// subscription bucket; other buckets never join the cohort.
+pub(in crate::model) fn forecast(rows: &[HomeRow], subscription_bucket: &str) -> FleetForecast {
     let mut exclusions: BTreeMap<FleetExclusion, usize> = BTreeMap::new();
     let mut pools: BTreeMap<String, PoolEntry> = BTreeMap::new();
     for row in rows {
-        match candidate(row) {
+        match candidate(row, subscription_bucket) {
             Err(exclusion) => *exclusions.entry(exclusion).or_default() += 1,
             // Duplicate supplied identities are conservatively one quota pool. Home paths and
             // display labels are not proof of independence, so a pool is never counted twice.
@@ -196,6 +198,7 @@ pub(in crate::model) fn forecast(rows: &[HomeRow]) -> FleetForecast {
         .map(|candidate| candidate.expires_at)
         .min();
     let warming = candidates.iter().any(|candidate| candidate.warming);
+    let banked_resets = candidates.iter().any(|candidate| candidate.banked_resets);
     let windows = candidates
         .first()
         .map(|candidate| {
@@ -269,6 +272,7 @@ pub(in crate::model) fn forecast(rows: &[HomeRow]) -> FleetForecast {
         capacity_class,
         windows,
         pace_collecting: warming,
+        banked_resets,
         capacity,
     }
 }
@@ -283,6 +287,7 @@ fn unsupported(reason: FleetUnsupported, coverage: FleetCoverage) -> FleetForeca
         capacity_class: None,
         windows: Vec::new(),
         pace_collecting: false,
+        banked_resets: false,
         capacity: None,
     }
 }
@@ -297,11 +302,12 @@ fn collecting(coverage: FleetCoverage) -> FleetForecast {
         capacity_class: None,
         windows: Vec::new(),
         pace_collecting: false,
+        banked_resets: false,
         capacity: None,
     }
 }
 
-fn candidate(row: &HomeRow) -> Result<Candidate, FleetExclusion> {
+fn candidate(row: &HomeRow, subscription_bucket: &str) -> Result<Candidate, FleetExclusion> {
     let details = match row.inspection() {
         Inspection::Loading => return Err(FleetExclusion::Loading),
         Inspection::Unavailable => return Err(FleetExclusion::InspectionUnavailable),
@@ -322,7 +328,7 @@ fn candidate(row: &HomeRow) -> Result<Candidate, FleetExclusion> {
     let bucket = details
         .buckets
         .iter()
-        .find(|bucket| bucket.id == CODEX_SUBSCRIPTION_BUCKET)
+        .find(|bucket| bucket.id == subscription_bucket)
         .ok_or(FleetExclusion::NoSubscriptionQuota)?;
     if bucket.windows.is_empty() {
         return Err(FleetExclusion::NoSubscriptionQuota);
@@ -354,6 +360,7 @@ fn candidate(row: &HomeRow) -> Result<Candidate, FleetExclusion> {
         capacity_class,
         expires_at: bucket.quota_expires_at(details.observed_at),
         warming,
+        banked_resets: details.banked_resets.is_some(),
     })
 }
 
@@ -368,7 +375,14 @@ fn all_durations_distinct(windows: &[RateLimitWindow]) -> bool {
 /// Equal-capacity normalization is only an estimate, so it needs a reported plan to
 /// stand on. A mixed or unknown plan must stay visibly unsupported instead of silently
 /// treating different quotas as equal.
+///
+/// A provider whose plans do not identify quota size states the bucket's capacity tier
+/// instead. That statement alone decides: an unknown tier is unknown capacity, never a
+/// reason to fall back to a plan that spans several quota sizes.
 fn capacity_class(details: &Details, bucket: &RateLimitBucket) -> Option<String> {
+    if let Some(tier) = &bucket.capacity_tier {
+        return reports_capacity(tier).then(|| tier.clone());
+    }
     [details.plan.as_str(), bucket.plan.as_str()]
         .into_iter()
         .find(|plan| reports_capacity(plan))
@@ -390,7 +404,21 @@ fn fleet_window(window: &RateLimitWindow, observed_at: u64) -> Option<FleetWindo
     let used = usage::valid_used_percent(window.used_percent)?;
     let duration_minutes = window.duration_minutes.filter(|minutes| *minutes > 0)?;
     let duration = duration_minutes.checked_mul(60)?;
-    let resets_at = u64::try_from(window.resets_at?).ok()?;
+    let role = WindowRole::for_subscription(Some(duration_minutes))?;
+    // A missing, null, or unreadable reset is unknown timing. Only a window its provider
+    // reports as not started, with no usage, holds an observed full allowance without a reset;
+    // its period opens on first use and it has no pace.
+    let Some(resets_at) = window.resets_at else {
+        return (window.not_started && used == 0.0).then_some(FleetWindow {
+            duration,
+            role,
+            used_percent: used,
+            rate: 0.0,
+            resets_at: None,
+            warming: false,
+        });
+    };
+    let resets_at = u64::try_from(resets_at).ok()?;
     let start = resets_at.checked_sub(duration)?;
     let elapsed = observed_at
         .checked_sub(start)
@@ -407,10 +435,10 @@ fn fleet_window(window: &RateLimitWindow, observed_at: u64) -> Option<FleetWindo
     }
     Some(FleetWindow {
         duration,
-        role: WindowRole::for_subscription(Some(duration_minutes))?,
+        role,
         used_percent: used,
         rate,
-        resets_at,
+        resets_at: Some(resets_at),
         warming,
     })
 }
