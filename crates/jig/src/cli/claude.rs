@@ -40,7 +40,7 @@ pub(crate) struct ClaudeLaunchOpts {
     /// Claude home name or path; omit to choose interactively.
     #[arg(value_name = "HOME")]
     pub(crate) home: Option<PathBuf>,
-    /// Select the home with most remaining subscription headroom without prompts.
+    /// Select the home with most remaining subscription headroom without waiting on prompts.
     #[arg(long = "auto", conflicts_with = "home")]
     pub(crate) auto_select: bool,
     /// Print the selected home and command without launching Claude.
