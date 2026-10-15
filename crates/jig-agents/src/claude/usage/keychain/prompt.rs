@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 pub(super) fn read(
     service: &str,
     account: &str,
+    timeout: Duration,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Zeroizing<Vec<u8>>, String> {
     let mut command = Command::new("/usr/bin/security");
@@ -18,7 +19,7 @@ pub(super) fn read(
         .stderr(Stdio::null());
     run_owned_process_tree_with_cooperative_interaction(
         &mut command,
-        Duration::from_secs(30),
+        timeout,
         |stdin, mut stdout, deadline| {
             drop(stdin);
             let mut bytes = Zeroizing::new(Vec::new());

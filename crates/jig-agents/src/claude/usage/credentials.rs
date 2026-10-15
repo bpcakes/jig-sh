@@ -4,6 +4,7 @@ use std::io::Read;
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
+use crate::agent_provider::InspectionMode;
 use crate::claude::Home;
 
 const CREDENTIAL_LIMIT: u64 = 64 * 1024;
@@ -64,7 +65,7 @@ impl Credential {
 
 pub(super) fn load(
     home: &Home,
-    allow_keychain_prompt: bool,
+    mode: InspectionMode,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Credential, String> {
     // These selectors can change credential authority independently of HOME. Do not
@@ -91,11 +92,11 @@ pub(super) fn load(
         default_config: home.default_config,
     };
     #[cfg(target_os = "macos")]
-    if let Some(bytes) = super::keychain::read(&home, allow_keychain_prompt, cancelled)? {
+    if let Some(bytes) = super::keychain::read(&home, mode, cancelled)? {
         return parse(&bytes);
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = (allow_keychain_prompt, cancelled);
+    let _ = (mode, cancelled);
     read_file(&home)
 }
 

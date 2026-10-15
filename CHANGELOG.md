@@ -27,6 +27,15 @@
   bucket is modeled, and mentions banked resets only for accounts that
   report them.
 
+### Fixed
+
+- `jig claude launch --auto` and `jig claude homes --usage` read Claude logins
+  stored in the macOS Keychain. They read through Apple's `/usr/bin/security`
+  tool, as the picker does, so `--auto` no longer finds every home ineligible.
+  A read that waits on a permission dialog, which may appear briefly, is
+  abandoned after two seconds, and that home names the picker as the place to
+  allow access.
+
 ## v0.9.0 - 2026-10-14
 
 ### Added
