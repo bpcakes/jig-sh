@@ -70,7 +70,10 @@ fn check(
         Expected::Stored => assert_eq!(&**result.unwrap().unwrap(), b"example-stored-token"),
         Expected::Missing => assert!(result.unwrap().is_none()),
         Expected::ToolRead => assert_eq!(&**result.unwrap().unwrap(), b"example-tool-token"),
-        Expected::PermissionRequired => assert!(result.unwrap_err().contains("require permission")),
+        Expected::PermissionRequired => {
+            let error = result.unwrap_err();
+            assert!(error.contains("require permission") && error.contains("jig claude launch"));
+        }
         Expected::ToolDenied => assert!(result.unwrap_err().contains("denied")),
         Expected::Cancelled => assert!(result.unwrap_err().contains("cancelled")),
     }

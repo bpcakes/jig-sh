@@ -26,8 +26,9 @@ Providers own report schemas and inspection scheduling because existing contract
 differ. Codex plain listing inspects accounts through its app-server; Claude plain
 listing only discovers directories, and `--usage` opts into credential/network
 access. Claude's picker waits up to 30 seconds for a Keychain permission dialog;
-headless inspection uses only permission already granted and stops waiting after
-two seconds. These policies remain in provider adapters rather than the common CLI.
+headless inspection reads through the same tool, which may briefly show that
+dialog, but stops waiting after two seconds. These policies remain in provider
+adapters rather than the common CLI.
 
 `SessionProvider` is an optional extension implemented by Codex for session-home
 lookup; like `homes_report`, it takes a cancellation callback, and the CLI owns
