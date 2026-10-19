@@ -101,3 +101,59 @@ fn migration_immutability_reports_markdown_a_migration_symlink_loads() {
     assert_eq!(violations.len(), 1, "{violations:?}");
     assert!(violations[0].contains("Change detected (M) in migrations/body.md"));
 }
+
+#[cfg(unix)]
+#[test]
+fn migration_immutability_checks_markdown_when_only_the_base_has_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    write_sqlx_policy_repo(temp.path());
+    let migrations = temp.path().join("migrations");
+    fs::create_dir_all(&migrations).unwrap();
+    fs::write(migrations.join("body.md"), "create table items (id int);\n").unwrap();
+    symlink("body.md", migrations.join("001_create.up.sql")).unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-qm", "initial"]);
+    fs::remove_file(migrations.join("001_create.up.sql")).unwrap();
+    fs::write(migrations.join("body.md"), "drop table items;\n").unwrap();
+    git(temp.path(), &["add", "-A"]);
+    git(
+        temp.path(),
+        &["commit", "-qm", "unlink and change the migration"],
+    );
+
+    let violations = violations_against_parent(temp.path());
+
+    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert!(violations[0].contains("Change detected (D) in migrations/001_create.up.sql"));
+    assert!(violations[1].contains("Change detected (M) in migrations/body.md"));
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_immutability_checks_markdown_when_only_head_has_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    write_sqlx_policy_repo(temp.path());
+    let migrations = temp.path().join("migrations");
+    fs::create_dir_all(&migrations).unwrap();
+    fs::write(migrations.join("body.md"), "create table items (id int);\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-qm", "initial"]);
+    symlink("body.md", migrations.join("002_create.up.sql")).unwrap();
+    fs::write(migrations.join("body.md"), "drop table items;\n").unwrap();
+    git(temp.path(), &["add", "-A"]);
+    git(
+        temp.path(),
+        &["commit", "-qm", "link and change the migration"],
+    );
+
+    let violations = violations_against_parent(temp.path());
+
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(violations[0].contains("Change detected (M) in migrations/body.md"));
+}
