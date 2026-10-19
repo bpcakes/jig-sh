@@ -320,6 +320,10 @@ flat SQLx migration directory, including uncommitted additions; one reversible
 up/down pair may share a version. See [migration configuration](configuration.md#required-keys)
 for scope, alternate layouts, and repositories with multiple sources.
 
+The check ignores Markdown files (`*.md`) in the migration directory, which
+SQLx and Goose do not load as migrations, unless either compared revision has a
+symlink inside that directory.
+
 ## Stable JSON Behavior
 
 All successful stable CLI JSON command responses are JSON objects unless a runtime-owned command explicitly documents a human-output flag. Stable response fields are additive: existing fields should keep their names, types, and meanings for the current contract version, and new fields may be added.

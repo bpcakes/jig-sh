@@ -630,12 +630,23 @@ fn check_migration_immutability(
             dir,
         ],
     )?;
-    let mut violations = migration_immutability_violations(&bytes);
+    // A migration can load a Markdown file through a symlink, so Markdown is
+    // only exempt when neither compared tree has a symlink in the directory.
+    let exempt_documentation = !migration_dir_has_symlink(ctx.root(), &opts.changed_against, dir)?
+        && !migration_dir_has_symlink(ctx.root(), "HEAD", dir)?;
+    let mut violations = migration_immutability_violations(&bytes, exempt_documentation);
     violations.extend(migration_versions::violations(ctx)?);
     Ok(json!({ "ok": violations.is_empty(), "violations": violations }))
 }
 
-fn migration_immutability_violations(bytes: &[u8]) -> Vec<String> {
+fn migration_dir_has_symlink(root: &Path, revision: &str, dir: &str) -> Result<bool> {
+    let tree = git_output(root, &["ls-tree", "-r", "-z", revision, "--", dir])?;
+    Ok(tree
+        .split(|byte| *byte == 0)
+        .any(|entry| entry.starts_with(b"120000 ")))
+}
+
+fn migration_immutability_violations(bytes: &[u8], exempt_documentation: bool) -> Vec<String> {
     let mut violations = Vec::new();
     let entries = split_nul(bytes);
     let mut index = 0usize;
@@ -651,18 +662,34 @@ fn migration_immutability_violations(bytes: &[u8]) -> Vec<String> {
             let old_path = entries[index].clone();
             let new_path = entries[index + 1].clone();
             index += 2;
+            // Renaming documentation into a migration only adds a migration.
+            if exempt_documentation && is_migration_documentation(&old_path) {
+                continue;
+            }
             violations.push(format!(
                 "{old_path}: Existing migration files are immutable. Rename detected ({status}): {old_path} -> {new_path}. Add a new forward-only migration instead."
             ));
         } else if index < entries.len() {
             let path = entries[index].clone();
             index += 1;
+            if exempt_documentation && is_migration_documentation(&path) {
+                continue;
+            }
             violations.push(format!(
                 "{path}: Existing migration files are immutable. Change detected ({status}) in {path}. Add a new forward-only migration instead."
             ));
         }
     }
     violations
+}
+
+/// Markdown in the migration directory, such as an `AGENTS.md` guide or a
+/// README, documents the migrations. SQLx loads only `.sql` files and Goose
+/// only `.sql` and `.go` files, so it may change like other documentation.
+fn is_migration_documentation(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 fn slugify(value: &str) -> String {
