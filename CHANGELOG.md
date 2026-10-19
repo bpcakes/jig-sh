@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `jig check migration-immutability` no longer reports Markdown files in the
+  migration directory, such as an `AGENTS.md` guide or a README. Updating the
+  guidance next to migrations failed the check as if a migration had changed.
+  Changed, deleted, and renamed migrations are still reported, including a
+  migration renamed to Markdown.
+
 ## v0.9.1 - 2026-10-15
 
 ### Added

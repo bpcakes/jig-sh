@@ -12,6 +12,7 @@ use crate::test_env::TestRepoBuilder;
 use crate::test_support::write_v6_schema_policy_repo;
 
 mod migration_fixture;
+mod migration_immutability;
 mod migration_layout;
 use migration_fixture::write_v6_mixed_migration_policy_repo;
 

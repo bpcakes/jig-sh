@@ -651,18 +651,34 @@ fn migration_immutability_violations(bytes: &[u8]) -> Vec<String> {
             let old_path = entries[index].clone();
             let new_path = entries[index + 1].clone();
             index += 2;
+            // Renaming documentation into a migration only adds a migration.
+            if is_migration_documentation(&old_path) {
+                continue;
+            }
             violations.push(format!(
                 "{old_path}: Existing migration files are immutable. Rename detected ({status}): {old_path} -> {new_path}. Add a new forward-only migration instead."
             ));
         } else if index < entries.len() {
             let path = entries[index].clone();
             index += 1;
+            if is_migration_documentation(&path) {
+                continue;
+            }
             violations.push(format!(
                 "{path}: Existing migration files are immutable. Change detected ({status}) in {path}. Add a new forward-only migration instead."
             ));
         }
     }
     violations
+}
+
+/// Markdown in the migration directory, such as an `AGENTS.md` guide or a
+/// README, documents the migrations. No migration runner reads it, so it may
+/// change like any other documentation.
+fn is_migration_documentation(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 fn slugify(value: &str) -> String {
