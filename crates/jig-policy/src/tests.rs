@@ -557,7 +557,7 @@ target = "api:test"
 fn migration_immutability_parses_nul_name_status_entries() {
     let bytes = b"A\0migrations/002_added.up.sql\0M\0migrations/001_changed.up.sql\0R100\0migrations/001_old.up.sql\0migrations/001_new.up.sql\0D\0migrations/001_deleted.down.sql\0T\0migrations/001_type.sql\0";
 
-    let violations = migration_immutability_violations(bytes);
+    let violations = migration_immutability_violations(bytes, true);
 
     assert_eq!(violations.len(), 4);
     assert!(violations.iter().all(|violation| {
@@ -586,7 +586,7 @@ fn migration_immutability_parses_nul_name_status_entries() {
 
 #[test]
 fn migration_immutability_ignores_truncated_rename_entry() {
-    let violations = migration_immutability_violations(b"R100\0migrations/old.sql\0");
+    let violations = migration_immutability_violations(b"R100\0migrations/old.sql\0", true);
 
     assert!(violations.is_empty());
 }

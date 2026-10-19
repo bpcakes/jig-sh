@@ -320,8 +320,9 @@ flat SQLx migration directory, including uncommitted additions; one reversible
 up/down pair may share a version. See [migration configuration](configuration.md#required-keys)
 for scope, alternate layouts, and repositories with multiple sources.
 
-The check ignores Markdown files (`*.md`) in the migration directory: they
-document the migrations, and no migration runner reads them.
+The check ignores Markdown files (`*.md`) in the migration directory, which
+SQLx and Goose do not load as migrations, unless either compared revision has a
+symlink inside that directory.
 
 ## Stable JSON Behavior
 

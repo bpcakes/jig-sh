@@ -8,7 +8,9 @@
   migration directory, such as an `AGENTS.md` guide or a README. Updating the
   guidance next to migrations failed the check as if a migration had changed.
   Changed, deleted, and renamed migrations are still reported, including a
-  migration renamed to Markdown.
+  migration renamed to Markdown. When either compared revision has a symlink in
+  the migration directory, Markdown there is checked like a migration, because
+  a migration can load it through the link.
 
 ## v0.9.1 - 2026-10-15
 
