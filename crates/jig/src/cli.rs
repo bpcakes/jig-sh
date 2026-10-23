@@ -331,7 +331,7 @@ pub(crate) enum CommandKind {
         after_help = codex::CODEX_AFTER_HELP
     )]
     Codex(CodexCommand),
-    /// Inspect Claude configuration homes or launch Claude Code with a selected home.
+    /// Inspect Claude configuration homes, launch Claude Code, or resume a session from its owning home.
     #[command(name = root_commands::CLAUDE.name, display_order = root_commands::CLAUDE.display_order, subcommand, after_help = claude::AFTER_HELP)]
     Claude(ClaudeCommand),
     /// Generate the repository agent guide map.

@@ -56,6 +56,10 @@ fn top_level_help_describes_common_commands() {
         &help,
         "Inspect Codex homes, launch Codex, or resume a session from its owning home",
     );
+    assert_help_contains(
+        &help,
+        "Inspect Claude configuration homes, launch Claude Code, or resume a session from its owning home",
+    );
     assert_help_omits(&help, "generate-sqlx-unchecked-queries-todo");
 }
 
@@ -457,6 +461,29 @@ fn codex_help_distinguishes_homes_from_configuration_profiles() {
     assert_help_contains(
         &resume_help,
         "jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20 --dry-run -- --search",
+    );
+}
+
+#[test]
+fn claude_help_describes_session_resume() {
+    let claude_help = rendered_help(&["claude"]);
+    assert_help_contains(
+        &claude_help,
+        "jig claude resume 2f4c6e8a-1b3d-4f5a-8c7e-9d0b1a2c3e4f",
+    );
+
+    let resume_help = rendered_help(&["claude", "resume"]);
+    assert_help_contains(&resume_help, "every discovered Claude home");
+    assert_help_contains(&resume_help, "--home");
+    assert_help_contains(&resume_help, "show lookup progress");
+    assert_help_contains(&resume_help, "CLAUDE_CONFIG_DIR currently selects");
+    assert_help_contains(
+        &resume_help,
+        "forwarded to Claude after --resume SESSION_ID",
+    );
+    assert_help_contains(
+        &resume_help,
+        "jig claude resume 2f4c6e8a-1b3d-4f5a-8c7e-9d0b1a2c3e4f --dry-run -- --fork-session",
     );
 }
 

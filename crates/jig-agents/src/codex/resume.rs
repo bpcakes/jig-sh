@@ -11,19 +11,7 @@ use super::{
 };
 
 pub fn normalize_session_id(input: &str) -> Result<String> {
-    let bytes = input.as_bytes();
-    let valid = bytes.len() == 36
-        && bytes.iter().enumerate().all(|(index, byte)| match index {
-            8 | 13 | 18 | 23 => *byte == b'-',
-            _ => byte.is_ascii_hexdigit(),
-        });
-    if !valid {
-        bail!(
-            "Invalid Codex session ID '{}'; expected a UUID",
-            sanitize_text(input)
-        )
-    }
-    Ok(input.to_ascii_lowercase())
+    crate::session_id::normalize(input, "Codex")
 }
 
 pub fn resolve_resume_home_with_cancellation<F>(

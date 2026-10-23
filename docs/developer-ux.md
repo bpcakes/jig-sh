@@ -175,7 +175,7 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig status` collects local repository, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
-- `scripts/jig claude homes` lists Claude Code configuration directories; `scripts/jig claude launch` opens the shared searchable picker or an explicit home. Add `--usage` for subscription limits.
+- `scripts/jig claude homes` lists Claude Code configuration directories; `scripts/jig claude launch` opens the shared searchable picker or an explicit home. Add `--usage` for subscription limits. `scripts/jig claude resume SESSION_ID` reports lookup progress while finding the home whose transcripts hold a session, then resumes it with Claude.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
 - `scripts/jig info inputs` previews action input declarations (`inputs_policy` and `source_state`) without writing files.
 

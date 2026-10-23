@@ -30,10 +30,14 @@ headless inspection reads through the same tool, which may briefly show that
 dialog, but stops waiting after two seconds. These policies remain in provider
 adapters rather than the common CLI.
 
-`SessionProvider` is an optional extension implemented by Codex for session-home
-lookup; like `homes_report`, it takes a cancellation callback, and the CLI owns
-the process-wide signal supervision around it. Other providers do not need a dummy implementation. Provider-specific
-resume argument construction and session validation remain with the Codex CLI.
+`SessionProvider` is an optional extension implemented by Codex and Claude for
+session-home lookup; like `homes_report`, it takes a cancellation callback, and
+the CLI owns the process-wide signal supervision around it. Other providers do
+not need a dummy implementation. Codex asks each home's app-server for the
+thread; Claude looks for the transcript file in each home's `projects`
+directory. Both resume automatically only when exactly one home matches and
+lookup coverage was complete. Each provider's CLI keeps its resume argument
+construction and calls its provider's session-ID validation.
 
 ## Identity and lifetime rules
 
