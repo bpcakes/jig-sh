@@ -7,6 +7,7 @@ pub mod claude;
 pub mod codex;
 pub mod home_paths;
 pub mod selection;
+mod session_id;
 
 #[cfg(test)]
 use jig_context::test_support as test_env;

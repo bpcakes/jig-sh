@@ -321,6 +321,7 @@ tooling for the people running them:
 ```sh
 scripts/jig claude homes             # list Claude Code configuration homes
 scripts/jig claude launch work       # launch Claude Code with a selected home
+scripts/jig claude resume <session>  # resume a Claude session from its owning home
 scripts/jig codex homes              # list Codex homes and their accounts
 scripts/jig codex resume <session>   # resume a Codex session from its owning home
 scripts/jig agent doctor             # check that Jig's Codex skills are registered

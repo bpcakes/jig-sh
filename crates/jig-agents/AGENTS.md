@@ -9,7 +9,8 @@
 - `src/agent_provider.rs`: the `AgentProvider`, `SessionProvider`, and `HomeInspection` contract.
 - `src/selection.rs`: prompt-free selection by remaining subscription headroom; retains provider-owned home identities and emits diagnostic decisions.
 - `src/codex.rs` and `src/codex/`: Codex homes, app-server inspection, session resume lookup, and `codex/provider.rs`.
-- `src/claude.rs` and `src/claude/`: Claude homes, `claude/provider.rs`, and read-only subscription usage under `claude/usage/`.
+- `src/claude.rs` and `src/claude/`: Claude homes, `claude/provider.rs`, transcript-based session resume lookup in `claude/resume.rs`, and read-only subscription usage under `claude/usage/`.
+- `src/session_id.rs`: UUID session-ID validation shared by both providers.
 - `src/home_paths.rs`: path primitives shared by both providers.
 
 ## Edit here for X
@@ -18,6 +19,7 @@
 - Change shared Claude/Codex path primitives: `src/home_paths.rs`; keep discovery and default-home policy in the provider modules.
 - Change Claude credential lookup and subscription usage: `src/claude/usage/`; the account email recorded in a home's `.claude.json` is read in `src/claude/usage/account.rs`.
 - Change Codex app-server inspection or session lookup: `src/codex/app_server.rs` or `src/codex/resume.rs`.
+- Change Claude session lookup or its discovery-coverage rules: `src/claude/resume.rs`; discovery itself stays in `src/claude.rs`.
 
 ## Invariants
 

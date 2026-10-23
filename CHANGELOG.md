@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- `jig claude resume SESSION_ID` finds the Claude home that holds a session and
+  launches `claude --resume SESSION_ID` there, as `jig codex resume` does for
+  Codex. Jig looks for the session's transcript under each discovered home's
+  `projects` directory and keeps the working directory, so Claude resolves the
+  project as usual. A session in `~/.claude` keeps the native default
+  configuration unless `CLAUDE_CONFIG_DIR` currently selects that directory. A
+  session found in several homes, or a single match while another home could
+  not be read, requires `--home HOME`, which also skips the lookup. Arguments
+  after `--` follow the session ID, and `--dry-run --json` reports
+  `command: "claude resume"`.
+
 ### Fixed
 
 - `jig check migration-immutability` no longer reports Markdown files in the

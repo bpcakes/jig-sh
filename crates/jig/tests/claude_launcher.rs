@@ -763,3 +763,6 @@ fn pseudo_terminal() -> (File, File) {
     );
     (master, slave)
 }
+
+#[path = "claude_launcher/resume.rs"]
+mod resume;

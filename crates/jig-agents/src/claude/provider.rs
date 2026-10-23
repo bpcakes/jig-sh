@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::agent_provider::{
     AgentProvider, Choice, Discovery, HomeInspection, InspectionMode, Metadata, PreparedLaunch,
+    SessionProvider,
 };
 
 pub struct Claude;
@@ -108,6 +109,17 @@ impl AgentProvider for Claude {
         } else {
             Ok(homes.report())
         }
+    }
+}
+
+impl SessionProvider for Claude {
+    fn resolve_session(
+        &self,
+        session: &str,
+        cancelled: &(dyn Fn() -> bool + Sync),
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Self::Home> {
+        super::resolve_resume_home_with_cancellation(session, cancelled, progress)
     }
 }
 

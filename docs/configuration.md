@@ -605,9 +605,13 @@ scripts/jig claude homes
 scripts/jig claude launch work
 scripts/jig claude launch default -- --resume
 scripts/jig claude launch work --dry-run --json -- --model sonnet
+scripts/jig claude resume 2f4c6e8a-1b3d-4f5a-8c7e-9d0b1a2c3e4f -- --fork-session
+scripts/jig claude resume 2f4c6e8a-1b3d-4f5a-8c7e-9d0b1a2c3e4f --home work
 ```
 
 Arguments after `--` pass directly to Claude without shell parsing. A launch dry run reports `config_dir: null` when the variable will be unset, or its selected value otherwise. Launch preserves the caller's working directory, stdin, stdout, stderr, and remaining environment, and returns Claude's exit status. Existing environment-based authentication settings therefore still apply. Set `JIG_CLAUDE_BIN` to select another Claude executable. `--json` is supported for listing and launch dry runs; real launches reject it before starting Claude. Human dry runs warn when non-UTF-8 values or terminal controls make the display differ from the actual launch. Dry runs never create directories or start Claude. Home selection does not copy settings or credentials between accounts.
+
+Use `scripts/jig claude resume SESSION_ID` when the session's home is unknown. Jig validates the UUID, looks in every discovered home for the session's transcript at `projects/*/SESSION_ID.jsonl`, reports lookup progress on an interactive terminal, and launches `claude --resume SESSION_ID` with the single matching home. The lookup only lists directories and checks file metadata; it does not start Claude, read credentials, or open transcripts. That layout is a Claude implementation detail rather than a stable public API. Launch preserves the working directory, so Claude resolves the session's project as `claude --resume` would there. A session in `~/.claude` resumes with the native default configuration, leaving `CLAUDE_CONFIG_DIR` unset, unless `CLAUDE_CONFIG_DIR` currently selects that directory, in which case the explicit override is kept; other homes set `CLAUDE_CONFIG_DIR`. A missing session reports every checked home and any lookup or discovery failures. A session found in multiple homes—possible after copying a home—is ambiguous and requires `--home HOME`. Jig also requires `--home` when one home matches but another discovered home could not be read or home enumeration was incomplete, because automatic lookup cannot prove the match is unique. A candidate that is missing or is not a directory cannot contain the session and therefore remains a warning without blocking a unique match. The `--home` option skips the lookup and accepts the same names and paths as `claude launch`. Arguments after `--` are forwarded to Claude after `--resume SESSION_ID` without shell parsing. Add `--dry-run` to inspect the resolved launch; `--json` is accepted only with `--dry-run` and suppresses terminal progress.
 
 Use `scripts/jig claude homes --usage` (or add `--json`) for a one-shot usage report without opening the picker. Plain `homes`, explicit-home launches, and explicit-home dry runs do not read credentials or fetch limits. Usage inspection reads each home's saved Claude subscription login from the macOS Keychain or `.credentials.json`, reads the signed-in account's email from the `.claude.json` Claude keeps for that home (`~/.claude.json` for the native default), then makes a read-only request to `https://api.anthropic.com/api/oauth/usage`, the endpoint used by Claude Code's `/usage`. The `claude` bucket reports the login's rate-limit tier as `capacity_tier`, such as `default_claude_max_20x`, or `null` when the login does not record one, because the account's `max` subscription type spans several quota sizes. Its five-hour or weekly window carries `"started": false` when the endpoint reports zero utilization with an explicitly null reset. This endpoint and credential layout are implementation details, not a stable public API; unsupported responses produce an unavailable message. API-key and third-party-provider limits are not subscription limits.
 
@@ -615,7 +619,7 @@ On macOS, the interactive picker first tries noninteractive Keychain access with
 
 Credentials stay in memory and are not included in reports, logs, or receipts; Jig never refreshes tokens, starts a Claude session, or rewrites authentication or settings. An expired login must be refreshed by Claude. Ambient authentication or credential-storage overrides produce an unavailable result rather than attributing another login to a home. Requests have a five-second timeout, do not follow redirects, and do not retry on rate limiting. A failed home remains launchable and makes the report `partial`, with unknown usage instead of a zero estimate. Reopen the picker to fetch a new snapshot.
 
-Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars) as its configuration-directory override. This launcher provides home selection; use Claude's forwarded `--resume` option within the selected home to resume a conversation.
+Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars) as its configuration-directory override. This launcher provides home selection; `scripts/jig claude resume SESSION_ID` finds the home that holds a conversation, and Claude's own `--resume` and `--continue` options can still be forwarded to a selected home.
 
 ## Automatic home selection
 
@@ -691,11 +695,11 @@ alias claude='jig claude launch --auto --'
 Use a globally installed `jig` on PATH. Agent subprocesses should invoke Jig
 explicitly because they generally do not inherit shell aliases. This is not a
 complete replacement for every native subcommand: use a fixed home for login,
-logout, configuration changes, and continue/resume, or `jig codex resume ID` for
-session-home lookup. A wrapper executable must set `JIG_CODEX_BIN` or
-`JIG_CLAUDE_BIN` to the real binary to prevent recursion. Automatic selection
-does not retry a started session, reserve capacity for concurrent launches, or
-cache usage between invocations.
+logout, configuration changes, and continue/resume, or `jig codex resume ID` and
+`jig claude resume ID` for session-home lookup. A wrapper executable must set
+`JIG_CODEX_BIN` or `JIG_CLAUDE_BIN` to the real binary to prevent recursion.
+Automatic selection does not retry a started session, reserve capacity for
+concurrent launches, or cache usage between invocations.
 
 ## `work` Shape
 

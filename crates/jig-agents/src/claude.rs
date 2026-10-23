@@ -12,9 +12,12 @@ use crate::home_paths::{
     is_bare_home_name, prefixed_home, same_path,
 };
 
+pub use self::resume::{normalize_session_id, resolve_resume_home_with_cancellation};
+
 pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 
 pub mod provider;
+mod resume;
 pub mod usage;
 
 pub struct Homes {
@@ -23,9 +26,11 @@ pub struct Homes {
     pub warnings: Vec<String>,
     default: PathBuf,
     current_is_default: bool,
+    /// False when discovery may have missed a home; missing candidates cannot hold sessions.
+    complete: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Home {
     pub path: PathBuf,
     pub default_config: bool,
@@ -50,6 +55,7 @@ pub fn discover_homes() -> Result<Homes> {
     let default = root.join(".claude");
     let mut candidates = vec![default.clone(), current.clone()];
     let mut warnings = Vec::new();
+    let mut complete = true;
     match fs::read_dir(&root) {
         Ok(entries) => {
             for entry in entries {
@@ -64,12 +70,16 @@ pub fn discover_homes() -> Result<Homes> {
                     }
                     Ok(_) => {}
                     Err(error) => {
+                        complete = false;
                         warnings.push(format!("Failed to inspect a Claude home: {error}"))
                     }
                 }
             }
         }
-        Err(error) => warnings.push(format!("Failed to discover Claude homes: {error}")),
+        Err(error) => {
+            complete = false;
+            warnings.push(format!("Failed to discover Claude homes: {error}"))
+        }
     }
     // Prefer the default home, then use stable path ordering for symlink aliases.
     candidates.sort();
@@ -98,10 +108,13 @@ pub fn discover_homes() -> Result<Homes> {
                 if candidate == default
                     && (current_is_default || current != default)
                     && error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => warnings.push(format!(
-                "Failed to inspect Claude home {}: {error}",
-                candidate.display()
-            )),
+            Err(error) => {
+                complete &= resume::is_absent(&error);
+                warnings.push(format!(
+                    "Failed to inspect Claude home {}: {error}",
+                    candidate.display()
+                ))
+            }
         }
     }
     Ok(Homes {
@@ -110,6 +123,7 @@ pub fn discover_homes() -> Result<Homes> {
         warnings,
         default,
         current_is_default,
+        complete,
     })
 }
 
@@ -231,11 +245,19 @@ impl Homes {
 }
 
 pub fn dry_run_report(home: &Home, args: &[OsString]) -> Value {
+    command_dry_run_report("claude launch", home, args)
+}
+
+pub fn resume_dry_run_report(home: &Home, args: &[OsString]) -> Value {
+    command_dry_run_report("claude resume", home, args)
+}
+
+fn command_dry_run_report(command: &str, home: &Home, args: &[OsString]) -> Value {
     let bin = claude_bin();
     json!({
         "schema_version": 1,
         "ok": true,
-        "command": "claude launch",
+        "command": command,
         "dry_run": true,
         "home": home.path.to_string_lossy(),
         "config_dir": if home.default_config { None } else { Some(home.path.to_string_lossy()) },

@@ -59,6 +59,14 @@ pub(in crate::cli) fn homes_summary(value: &Value) -> String {
 }
 
 pub(in crate::cli) fn launch_summary(value: &Value) -> String {
+    command_summary(value, "Claude launch")
+}
+
+pub(in crate::cli) fn resume_summary(value: &Value) -> String {
+    command_summary(value, "Claude resume")
+}
+
+fn command_summary(value: &Value, label: &str) -> String {
     let mut display = CommandDisplay::default();
     let args = value["args"]
         .as_array()
@@ -70,7 +78,7 @@ pub(in crate::cli) fn launch_summary(value: &Value) -> String {
         })
         .unwrap_or_default();
     let output = format!(
-        "Claude launch (dry run)\n  CLAUDE_CONFIG_DIR: {}\n  Executable: {}\n  Arguments (display only; not shell syntax): {args}",
+        "{label} (dry run)\n  CLAUDE_CONFIG_DIR: {}\n  Executable: {}\n  Arguments (display only; not shell syntax): {args}",
         if value["config_dir"].is_null() {
             "unset (Claude default configuration)".to_owned()
         } else {
@@ -89,7 +97,25 @@ fn text(value: &Value) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::homes_summary;
+    use super::{homes_summary, resume_summary};
+
+    #[test]
+    fn resume_summary_identifies_the_resume_dry_run() {
+        let summary = resume_summary(&json!({
+            "config_dir": "/tmp/ExampleHome/.claude-work",
+            "claude_bin": "claude",
+            "args": ["--resume", "2f4c6e8a-1b3d-4f5a-8c7e-9d0b1a2c3e4f"]
+        }));
+        assert!(summary.starts_with("Claude resume (dry run)"), "{summary}");
+        assert!(
+            summary.contains("CLAUDE_CONFIG_DIR: /tmp/ExampleHome/.claude-work"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains(r#""--resume" "2f4c6e8a-1b3d-4f5a-8c7e-9d0b1a2c3e4f""#),
+            "{summary}"
+        );
+    }
 
     #[test]
     fn usage_summary_names_the_signed_in_account_when_known() {

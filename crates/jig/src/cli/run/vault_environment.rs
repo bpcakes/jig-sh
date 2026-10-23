@@ -83,6 +83,7 @@ mod tests {
         &["bootstrap"],
         &["setup"],
         &["claude", "launch", "work"],
+        &["claude", "resume", "2f4c6e8a-1b3d-4f5a-8c7e-9d0b1a2c3e4f"],
         &["update", "."],
         &["init", "ExampleProject", "--no-vault"],
         &["adopt", "."],
