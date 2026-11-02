@@ -134,6 +134,7 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
             .unwrap();
         let (mut master, slave) =
             pseudo_terminal(100, 30).expect("field prompt test requires a PTY");
+        let terminal = slave.try_clone().unwrap();
         let original = terminal_attributes(&master);
         let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
         command
@@ -155,7 +156,7 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
         set_nonblocking(&master);
         let mut output = Vec::new();
         read_until(&mut master, &mut output, "Field value: ", TIMEOUT);
-        send_input(&mut master, &mut output, input);
+        send_input(&mut master, &terminal, &mut output, input);
         let status = wait_for_child_while_draining(&mut child, &mut master, &mut output, TIMEOUT)
             .unwrap_or_else(|| {
                 panic!(
@@ -196,22 +197,27 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
     }
 }
 
-fn send_input(master: &mut File, output: &mut Vec<u8>, input: &[u8]) {
+fn send_input(master: &mut File, terminal: &File, output: &mut Vec<u8>, input: &[u8]) {
     let deadline = Instant::now() + TIMEOUT;
     let mut remaining = input;
     if input.starts_with(b"start") {
         master.write_all(b"start").unwrap();
         read_until(master, output, "Field value: start", TIMEOUT);
-        // These Alt keys share CSI/SS3 prefixes. Pause long enough for
-        // their ambiguity timeout, then continue editing and submit.
+        // These Alt keys share CSI/SS3 prefixes. The prompt redraws only once
+        // a prefix's ambiguity timeout has completed it, so wait for that
+        // redraw rather than sleeping: on a loaded runner either side's timer
+        // can overrun, merging the prefix with the next key.
         for prefix in [b"\x1b[", b"\x1bO"] {
+            let offset = output.len();
             master.write_all(prefix).unwrap();
-            std::thread::sleep(Duration::from_millis(150));
+            read_until_from(master, output, offset, "Field value: start", TIMEOUT);
         }
         // Exercise a key sequence split across separate terminal reads,
-        // including the readiness wait after its Escape prefix.
+        // including the readiness wait after its Escape prefix. Send the rest
+        // as soon as the prompt has read the Escape, well within its 100 ms
+        // sequence timeout.
         master.write_all(b"\x1b").unwrap();
-        std::thread::sleep(Duration::from_millis(20));
+        wait_until_prompt_reads(terminal);
         remaining = &input[6..];
     }
     while !remaining.is_empty() {
@@ -223,6 +229,35 @@ fn send_input(master: &mut File, output: &mut Vec<u8>, input: &[u8]) {
         }
         assert!(Instant::now() < deadline, "sending input timed out");
         std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Returns once the prompt has read everything written to its terminal.
+/// Spinning instead of sleeping keeps timer slack on a loaded runner out of
+/// the prompt's sequence timeout. Linux PTYs deliver writes asynchronously,
+/// so an empty queue counts only after input arrived or a short grace period.
+fn wait_until_prompt_reads(terminal: &File) {
+    let grace = Instant::now() + Duration::from_millis(5);
+    let deadline = Instant::now() + TIMEOUT;
+    let mut arrived = false;
+    loop {
+        let mut pending: libc::c_int = 0;
+        // SAFETY: `terminal` is a live PTY slave and FIONREAD writes one c_int.
+        assert_eq!(
+            unsafe { libc::ioctl(terminal.as_raw_fd(), libc::FIONREAD, &mut pending) },
+            0,
+            "reading pending PTY input failed: {}",
+            std::io::Error::last_os_error()
+        );
+        arrived |= pending > 0;
+        if pending == 0 && (arrived || Instant::now() >= grace) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the prompt did not read its terminal input"
+        );
+        std::thread::yield_now();
     }
 }
 
