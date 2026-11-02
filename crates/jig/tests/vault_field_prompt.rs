@@ -27,6 +27,8 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
     let passphrase = SecretString::from(PASSPHRASE.to_owned());
     vault.init(&passphrase).unwrap();
     let reference = "jig://ExampleProject/FIELD";
+    let long_value = "L".repeat(5000);
+    let long_input = format!("{long_value}\n");
     // Exercise both implicit and explicit terminal prompt selection.
     for (text, explicit, input, expected, success) in [
         (
@@ -53,11 +55,32 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
         (
             true,
             true,
-            b"partial\x04\x04".as_slice(),
+            b"partial\x04".as_slice(),
             b"preserved-value".as_slice(),
             false,
         ),
         (true, true, b"\n".as_slice(), b"".as_slice(), true),
+        (
+            true,
+            true,
+            long_input.as_bytes(),
+            long_value.as_bytes(),
+            true,
+        ),
+        (
+            true,
+            false,
+            b"\x03".as_slice(),
+            b"preserved-value".as_slice(),
+            false,
+        ),
+        (
+            true,
+            false,
+            " café  \x7f\r".as_bytes(),
+            " café ".as_bytes(),
+            true,
+        ),
     ] {
         vault
             .set_field(
@@ -69,6 +92,7 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
             .unwrap();
         let (mut master, slave) =
             pseudo_terminal(100, 30).expect("field prompt test requires a PTY");
+        let original = terminal_attributes(&master);
         let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
         command
             .args(["vault", "field", "set", reference, "--home"])
@@ -89,11 +113,37 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
         set_nonblocking(&master);
         let mut output = Vec::new();
         read_until(&mut master, &mut output, "Field value: ", TIMEOUT);
-        master.write_all(input).unwrap();
+        let deadline = Instant::now() + TIMEOUT;
+        let mut remaining = input;
+        while !remaining.is_empty() {
+            read_available(&mut master, &mut output);
+            match master.write(&remaining[..remaining.len().min(256)]) {
+                Ok(written) => remaining = &remaining[written..],
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("failed to send terminal input: {error}"),
+            }
+            assert!(Instant::now() < deadline, "sending input timed out");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let status = wait_for_child_while_draining(&mut child, &mut master, &mut output, TIMEOUT)
-            .expect("field prompt did not finish");
+            .unwrap_or_else(|| {
+                panic!(
+                    "field prompt did not finish (text={text}, input_len={}): {}",
+                    input.len(),
+                    String::from_utf8_lossy(&output[output.len().saturating_sub(800)..])
+                )
+            });
         let rendered = String::from_utf8_lossy(&output);
         assert_eq!(status.success(), success, "{rendered}");
+        let restored = terminal_attributes(&master);
+        assert_eq!(
+            restored.c_lflag, original.c_lflag,
+            "terminal local flags were not restored"
+        );
+        assert_eq!(
+            restored.c_iflag, original.c_iflag,
+            "terminal input flags were not restored"
+        );
         assert!(!rendered.contains(PASSPHRASE));
         if text && input.starts_with(b"visible") {
             assert!(rendered.contains("visible-sentinel"));
@@ -221,4 +271,17 @@ fn read_until_from(
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn terminal_attributes(slave: &File) -> libc::termios {
+    // SAFETY: zero is a valid initial representation and tcgetattr fills it.
+    let mut attributes = unsafe { std::mem::zeroed::<libc::termios>() };
+    // SAFETY: `slave` is live and `attributes` is writable.
+    assert_eq!(
+        unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut attributes) },
+        0,
+        "reading PTY attributes failed: {}",
+        std::io::Error::last_os_error()
+    );
+    attributes
 }
