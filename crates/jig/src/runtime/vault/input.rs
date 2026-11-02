@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn text_input_requires_submission_and_preserves_empty_and_unicode() {
-        for bytes in [b"".as_slice(), b"partial", b"partial\x04", b"\xc3"] {
+        for mut bytes in [b"".as_slice(), b"partial", b"partial\x04", b"\xc3"] {
             assert!(read_text_input(&mut bytes, &mut Vec::new()).is_err());
         }
         for (bytes, expected) in [("\n", ""), (" café  \x7f\r", " café ")] {
