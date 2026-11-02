@@ -135,6 +135,41 @@ class TestBuildReuseTests(unittest.TestCase):
         self.assertIn("-j", runs[-1])
         self.assertIn("Affected-test scope since HEAD^1: rdeps(=example-core)", result.stdout)
 
+    def test_exclusion_narrows_every_workspace_phase(self):
+        self.stub_affected_selection("rdeps(=example-core)")
+        self.env["JIG_TEST_AFFECTED_BASE"] = "HEAD^1"
+        self.env["JIG_TEST_EXCLUDE"] = "test(/^example::slow::/)"
+        result = self.invoke("workspace")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runs = self.runs()
+        self.assertEqual(len(runs), 3)
+        for args in runs:
+            self.assertTrue(args[args.index("-E") + 1].startswith(
+                "((rdeps(=example-core)) & not (test(/^example::slow::/))) & "))
+            self.assertIn("--no-tests=pass", args)
+        self.assertIn("Excluded tests: test(/^example::slow::/)", result.stdout)
+
+    def test_exclusion_without_affected_base_still_allows_empty_phases(self):
+        self.env["JIG_TEST_EXCLUDE"] = "test(/^example::slow::/)"
+        result = self.invoke("workspace")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for args in self.runs():
+            self.assertTrue(args[args.index("-E") + 1].startswith(
+                "((all()) & not (test(/^example::slow::/))) & "))
+            self.assertIn("--no-tests=pass", args)
+
+    def test_exclusion_does_not_narrow_minimal_modes(self):
+        self.env["JIG_TEST_EXCLUDE"] = "test(/^example::slow::/)"
+        for mode in ("minimal", "minimal-focused"):
+            with self.subTest(mode=mode):
+                (self.repo / "calls.jsonl").unlink(missing_ok=True)
+                (self.repo / "tests-started").unlink(missing_ok=True)
+                result = self.invoke(mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for args in self.runs():
+                    self.assertFalse(any("example::slow" in arg for arg in args))
+                self.assertNotIn("Excluded tests", result.stdout)
+
     def test_affected_base_does_not_narrow_minimal_modes(self):
         self.stub_affected_selection("none()")
         self.env["JIG_TEST_AFFECTED_BASE"] = "HEAD^1"

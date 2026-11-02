@@ -27,34 +27,9 @@ on:
       - "AGENTS.md"
       - "**/AGENTS.md"
       - "agent-map.md"
-  push:
-    branches:
-      - master
-    paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain"
-      - "rust-toolchain.toml"
-      - ".clippy.toml"
-      - "clippy.toml"
-      - ".config/nextest.toml"
-      - ".jig.toml"
-      - ".jig/source-runtime-version"
-      - ".agent/jig-contract.json"
-      - "scripts/**"
-      - "templates/project/**"
-      - "templates/scaffolds/**"
-      - "examples/**"
-      - "tests/fixtures/**"
-      - ".cargo/**"
-      - ".github/workflows/rust-tests.yml"
-      - ".jig/file-budget.toml"
-      - ".github/workflows/repo-policy.yml"
-      - ".beadroll.json"
-      - "AGENTS.md"
-      - "**/AGENTS.md"
-      - "agent-map.md"
+  # Merges to master are checked together each night instead of one by one.
+  schedule:
+    - cron: "23 4 * * *"
   merge_group:
     types:
       - checks_requested
@@ -68,22 +43,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  nightly-gate:
+    # A nightly run skips every job when this workflow's last nightly run
+    # already checked the current master commit.
+    if: ${{ github.event_name == 'schedule' }}
+    name: Check for untested master commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          sparse-checkout: scripts/ci
+      - name: Compare with the last nightly run
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/nightly-scope.py
+
   clippy:
+    needs: nightly-gate
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' }}
     name: Rust lint and repository policy (${{ matrix.os }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.timeout }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            runner: ubuntu-latest
-            cache-key: clippy
-            timeout: 30
-          - os: macos-latest
-            runner: macos-latest
-            cache-key: clippy-macos
-            timeout: 45
+        # Pull requests check Linux only; nightly, merge queue, and manual
+        # runs add macOS. A matrix include entry would add macOS back, so
+        # per-platform settings are derived from matrix.os below.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     env:
       JIG_DEV_BIN: target/debug/jig
     steps:
@@ -107,7 +102,7 @@ jobs:
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           # Cache all three command configurations from this job together.
-          shared-key: rust-${{ runner.os }}-${{ matrix.cache-key }}-combined-v1
+          shared-key: rust-${{ runner.os }}-${{ matrix.os == 'macos-latest' && 'clippy-macos' || 'clippy' }}-combined-v1
       - name: Build current Jig binary
         if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
         id: build
@@ -149,9 +144,10 @@ jobs:
                 --comparison-exact-tree "$JIG_MERGE_GROUP_BASE" \
                 --comparison-provenance explicit
               ;;
-            workflow_dispatch)
+            workflow_dispatch|schedule)
               # Checkout fetches remote refs but creates only the selected local branch.
-              comparison_base="$(git merge-base HEAD "refs/remotes/origin/$JIG_DEFAULT_BRANCH")"
+              # Scheduled events may omit repository metadata; they run on the default branch.
+              comparison_base="$(git merge-base HEAD "refs/remotes/origin/${JIG_DEFAULT_BRANCH:-$GITHUB_REF_NAME}")"
               scripts/jig check repo:file-budget \
                 --comparison-exact-tree "$comparison_base" \
                 --comparison-provenance explicit

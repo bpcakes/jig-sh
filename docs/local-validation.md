@@ -84,38 +84,59 @@ On pull requests, the Linux and macOS `test-locked` jobs still compile every
 target but run only the tests the pull request can affect: they set
 `JIG_TEST_AFFECTED_BASE` to the merge commit's first parent, and
 `scripts/ci/test-rust.sh` intersects each phase with
-`scripts/test-rust-affected.py --filterset`. Pushes to `master`, merge queues,
-and manual runs leave it unset and run the whole suite, so `master` is always
-tested in full, after merge if not before. The selection is printed in the job
-log.
+`scripts/test-rust-affected.py --filterset`. Nightly runs, merge queues, and
+manual runs leave it unset and run the whole suite. The selection is printed in
+the job log.
+
+The macOS job on pull requests also sets `JIG_TEST_EXCLUDE` to a Nextest
+filterset that `scripts/ci/test-rust.sh` removes from every workspace phase:
+jig-bootstrap's `tests::frontend_adoption` package-manager scenarios, which take
+about 30% of macOS test time. The Linux job still runs them on pull requests,
+and the nightly macOS run keeps them, including their Node 24 coverage. The macOS job
+also runs the launcher parity check with Apple's stock Bash 3.2 and the
+source-runtime unit tests.
+
+Merges to `master` do not start CI. The Rust Tests and Repo Policy workflows run
+on `master` each night instead (04:23 UTC), covering every job, platform, and
+feature mode at once. Each run's first job, `scripts/ci/nightly-scope.py`,
+compares `master` with the commit that workflow's last completed nightly run
+tested, and the run skips its other jobs when nothing has landed since.
+Cancelled nightly runs do not count as tested, and lookup failures run the
+suite. Nightly runs on `master` also refresh the dependency caches that pull
+requests restore. GitHub sends scheduled-run failure notifications to whoever
+last changed the workflow's `cron` line, so a failing `master` is reported the
+morning after the merge that broke it rather than right away.
 
 The Repo Policy workflow builds Jig once on each of Linux and macOS, then reuses
-that binary for Clippy and file-budget checks. Each platform job also runs
+that binary for Clippy and file-budget checks. Pull requests run only the Linux
+job; nightly, merge queue, and manual runs add macOS. Each platform job also runs
 no-default-features Clippy and the serial dev-proxy test harness; Linux retains
 the standalone dev-proxy Clippy command. These checks share one cache containing
 their distinct Cargo configurations. Both the serial proxy harness and the full
 workspace Nextest coverage are retained. The Linux job also validates the
 agent map and tracker triage adapter. Its path filters include Rust, policy, and agent-guide
 inputs. When every changed path is `.beadroll.json`, an `AGENTS.md`, or
-`agent-map.md`, only Linux repository policy checks run; the macOS job stops
-after checkout and classification, and both platforms skip Clippy and proxy
+`agent-map.md`, only Linux repository policy checks run, without Clippy or proxy
 tests. Unknown paths, unavailable comparison trees, manual runs, and merge
 queues retain full policy coverage. The generated project workflows retain
 their own layout in
 `templates/project/.github/workflows/`.
 
-Manual policy runs compare the selected ref with its merge base against the
-remote default branch, so they also work without a local `master` branch.
+Manual and nightly policy runs compare the selected ref with its merge base
+against the remote default branch, so they also work without a local `master`
+branch. On `master` itself, the comparison base is the same commit.
 
-The locked test suite uses `scripts/ci/test-rust.sh workspace`. Minimal-feature
-jobs use `minimal-focused` on pull requests and `minimal` on master, merge
-queues, and full manual runs. Both modes compile every minimal-feature test
-target; focused mode executes CLI/JSON and launcher-repair integration tests,
-proxy-disabled dispatch and discovery, runtime compatibility, configuration
-and TLD validation, and template/runtime repair tests. Full default-feature
-tests and all-target minimal Clippy still run on both platforms for every PR.
-This intentionally reduces repeated minimal-feature runtime coverage on PRs;
-master and merge queues retain the exhaustive matrix.
+The locked test suite uses `scripts/ci/test-rust.sh workspace`. The Linux
+minimal-feature job uses `minimal-focused` on pull requests and `minimal` on
+nightly, merge queue, and full manual runs; the macOS minimal-feature job runs
+only `minimal`, and not on pull requests. Both modes compile every
+minimal-feature test target; focused mode executes CLI/JSON and launcher-repair
+integration tests, proxy-disabled dispatch and discovery, runtime compatibility,
+configuration and TLD validation, and template/runtime repair tests. Full
+default-feature tests still run on both platforms for every PR, and all-target
+minimal Clippy on Linux. This intentionally reduces repeated minimal-feature
+and macOS coverage on PRs; nightly runs and merge queues retain the exhaustive
+matrix.
 
 For exhaustive execution, each invocation builds the complete selected set
 of test binaries once, then passes Cargo and binary metadata to Nextest for
@@ -165,10 +186,13 @@ from the source workspace. CI sets absolute `JIG_FIXTURE_TARGET_DIR` and
 `JIG_GENERATED_RUST_TARGET_DIR` paths under `.agent/.cache/`; fixture repositories and
 installation roots remain temporary. The fresh-Cargo-home Git installation test
 also keeps a separate temporary target so its different registry paths cannot
-invalidate the shared dependency artifacts. The pull-request/push fixture job sets
+invalidate the shared dependency artifacts. The CI fixture job sets
 `CARGO_PROFILE_RELEASE_OPT_LEVEL=0` for ordinary installation fixtures, which test
 paths, profiles, and compatibility. The isolated Git installation clears that
-override and exercises the normal optimized release profile. Release validation
+override and exercises the normal optimized release profile, except on pull
+requests: there the job sets `JIG_FIXTURE_GIT_INSTALL_INHERIT_OPT_LEVEL=1`, and
+the Git installation keeps the lowered opt-level, because building it optimized
+from a fresh Cargo home took about four minutes. Release validation
 does not set the override: all its installation fixtures retain production
 optimization. Cache keys include the Cargo profile environment, so these
 configurations cannot share incompatible artifacts. Without these overrides,
@@ -182,8 +206,9 @@ A failed recheck removes prior evidence. Standalone release commands without thi
 override still perform full validation.
 
 The Release binaries workflow builds native archives on Linux and macOS for both
-x86-64 and ARM64. Changes to binary distribution tooling also run that matrix on
-pull requests. Repository policy and each release target run
+x86-64 and ARM64. Changes to binary distribution tooling also build the x86-64
+Linux archive on pull requests; releases and manual runs build all four.
+Repository policy and each release target run
 `scripts/check-vault-production-features.py` to reject `jig-vault/test-utils`
 in the production Cargo dependency graph. The guard excludes dev-dependencies;
 isolated test-support builds remain available. Run its real-Cargo regression

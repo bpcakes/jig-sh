@@ -22,6 +22,13 @@ if [ "$mode" = workspace ] && [ -n "${JIG_TEST_AFFECTED_BASE:-}" ]; then
   scope_args=(--no-tests=pass)
   echo "Affected-test scope since $JIG_TEST_AFFECTED_BASE: $scope"
 fi
+# JIG_TEST_EXCLUDE is a Nextest filterset that workspace runs leave to other
+# CI runs; macOS pull requests use it to skip tests Linux already covers.
+if [ "$mode" = workspace ] && [ -n "${JIG_TEST_EXCLUDE:-}" ]; then
+  scope="($scope) & not ($JIG_TEST_EXCLUDE)"
+  scope_args=(--no-tests=pass)
+  echo "Excluded tests: $JIG_TEST_EXCLUDE"
+fi
 
 metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/jig-test-build.XXXXXX")"
 trap 'rm -rf "$metadata_dir"' EXIT
