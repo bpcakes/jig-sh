@@ -23,7 +23,9 @@ use super::VaultRawOutcome;
 const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
 const VAULT_FILE_NAME: &str = "vault.json";
 
+mod input;
 mod lifecycle;
+use input::read_field_value_from_prompt;
 mod recovery;
 mod scope;
 pub(super) mod tui;
@@ -518,10 +520,10 @@ fn set_field(request: VaultFieldSetRequest) -> Result<Value> {
     let value = match request.value_source {
         VaultSecretValueSource::Auto => {
             if std::io::stdin().is_terminal() {
-                read_field_value_from_prompt()?
+                read_field_value_from_prompt(kind)?
             } else {
                 bail!(
-                    "vault field set REF defaults to hidden prompt only in an interactive terminal; use --value-stdin for piped or redirected input"
+                    "vault field set REF defaults to a terminal prompt only in an interactive terminal; use --value-stdin for piped or redirected input"
                 );
             }
         }
@@ -529,12 +531,12 @@ fn set_field(request: VaultFieldSetRequest) -> Result<Value> {
             let stdin = std::io::stdin();
             if stdin.is_terminal() {
                 bail!(
-                    "--value-stdin requires piped or redirected stdin; use --value-prompt for hidden terminal input"
+                    "--value-stdin requires piped or redirected stdin; use --value-prompt for terminal input"
                 );
             }
             read_secret_value(stdin.lock())?
         }
-        VaultSecretValueSource::Prompt => read_field_value_from_prompt()?,
+        VaultSecretValueSource::Prompt => read_field_value_from_prompt(kind)?,
     };
     let changed = !vault
         .set_field(&passphrase, reference, kind, value)?
@@ -745,15 +747,6 @@ fn read_secret_value_from_prompt() -> Result<SecretBytes> {
     }
     let mut value =
         prompt_zeroizing("Secret value: ").context("failed to read secret value from terminal")?;
-    Ok(SecretBytes::new(std::mem::take(&mut *value).into_bytes()))
-}
-
-fn read_field_value_from_prompt() -> Result<SecretBytes> {
-    if !hidden_terminal_input_available() {
-        bail!("--value-prompt requires an interactive terminal; use --value-stdin for automation");
-    }
-    let mut value =
-        prompt_zeroizing("Field value: ").context("failed to read field value from terminal")?;
     Ok(SecretBytes::new(std::mem::take(&mut *value).into_bytes()))
 }
 

@@ -1754,6 +1754,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "croner",
+ "crossterm",
  "dirs",
  "dotenvy",
  "flate2",

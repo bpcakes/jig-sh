@@ -15,6 +15,7 @@ use ulid::Ulid;
 
 mod browse;
 mod commands;
+mod details_scroll;
 mod line_editor;
 mod model;
 mod peek;
@@ -32,6 +33,8 @@ mod format_version_tests;
 mod passphrase_policy_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod text_display_tests;
 
 /// Public information available before a vault is unlocked.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -352,7 +355,7 @@ pub trait VaultBackend: Send + Sync + 'static {
     /// Rechecks vault-home state without unlocking or creating a home.
     fn home_state(&self) -> Result<VaultHomeState, VaultUiError>;
 
-    /// Authenticates and returns a complete metadata snapshot.
+    /// Authenticates and returns metadata with non-secret text previews.
     fn unlock(&self, passphrase: SecretBytes) -> Result<VaultSnapshot, VaultUiError>;
 
     /// Creates a new vault and enters an unlocked session.
@@ -377,7 +380,7 @@ pub trait VaultBackend: Send + Sync + 'static {
     /// Refreshes metadata using the current process-local credential.
     fn refresh(&self) -> Result<VaultSnapshot, VaultUiError>;
 
-    /// Performs one typed operation. Results may contain metadata only.
+    /// Performs one typed operation. Results may contain metadata and non-secret text previews, never concealed values.
     fn execute(&self, action: VaultAction) -> Result<VaultActionResult, VaultUiError>;
 
     /// Performs one typed operation with cooperative cancellation available to

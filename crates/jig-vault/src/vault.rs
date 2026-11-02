@@ -51,6 +51,7 @@ mod envelope;
 mod lifecycle;
 mod migration;
 mod restore_txn;
+mod snapshot;
 mod transaction;
 mod witnessed;
 
@@ -768,7 +769,7 @@ pub struct FieldRecord {
     pub value_len: usize,
 }
 
-/// Complete authenticated vault metadata for one interactive refresh.
+/// Authenticated vault metadata, optionally including non-secret display previews.
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VaultSnapshot {
@@ -780,6 +781,7 @@ pub struct VaultSnapshot {
     pub fields: Vec<FieldRecord>,
     pub legacy_secrets: Vec<SecretRecord>,
     pub audit: AuditVerification,
+    text_values: snapshot::TextValues,
 }
 
 /// Opaque identity of one authenticated encrypted vault-state generation.
@@ -1567,27 +1569,6 @@ impl VaultStore {
                 .map(|vault| vault.list_fields())
         })
         .map_err(|error| self.map_open_error(error))
-    }
-
-    pub(crate) fn snapshot(&self, passphrase: &SecretString) -> Result<VaultSnapshot> {
-        self.with_lock(|| {
-            let vault = self.open_unlocked(passphrase)?;
-            let audit = vault.verify_audit_unlocked(self).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::AuditTampered,
-                    "vault audit chain verification failed",
-                    error,
-                )
-            })?;
-            Ok(vault.snapshot(audit))
-        })
-        .map_err(|error| {
-            if error.is::<ClassifiedVaultError>() {
-                vault_error_from_anyhow(VaultErrorKind::Internal, error)
-            } else {
-                self.map_open_error(error)
-            }
-        })
     }
 
     fn mutate_if_unchanged(
@@ -2408,6 +2389,7 @@ impl OpenVault {
             fields: self.list_fields(),
             legacy_secrets,
             audit,
+            text_values: snapshot::TextValues::default(),
         }
     }
 

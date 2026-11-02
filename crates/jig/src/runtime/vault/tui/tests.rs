@@ -11,6 +11,7 @@ mod integrity;
 mod lifecycle;
 mod rekey_policy;
 mod stale_copy;
+mod text_display;
 
 fn request(home: std::path::PathBuf) -> VaultTuiRequest {
     VaultTuiRequest {
