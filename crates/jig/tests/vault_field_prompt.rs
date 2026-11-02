@@ -27,7 +27,7 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
     let passphrase = SecretString::from(PASSPHRASE.to_owned());
     vault.init(&passphrase).unwrap();
     let reference = "jig://ExampleProject/FIELD";
-    let long_value = "L".repeat(5000);
+    let long_value = "L".repeat(jig_vault::MAX_SECRET_VALUE_LEN);
     let long_input = format!("{long_value}\n");
     // Exercise both implicit and explicit terminal prompt selection.
     for (text, explicit, input, expected, success) in [
@@ -60,6 +60,20 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
             false,
         ),
         (true, true, b"\n".as_slice(), b"".as_slice(), true),
+        (
+            true,
+            true,
+            b"pending\x1b".as_slice(),
+            b"preserved-value".as_slice(),
+            false,
+        ),
+        (
+            true,
+            true,
+            "start\x1b[D\x1b[3~\x1bOH\x1bOF\x1b[1;5C\x1bx\x1béend\n".as_bytes(),
+            b"startend".as_slice(),
+            true,
+        ),
         (
             true,
             true,
@@ -115,9 +129,18 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
         read_until(&mut master, &mut output, "Field value: ", TIMEOUT);
         let deadline = Instant::now() + TIMEOUT;
         let mut remaining = input;
+        if input.starts_with(b"start") {
+            master.write_all(b"start").unwrap();
+            read_until(&mut master, &mut output, "Field value: start", TIMEOUT);
+            // Exercise a key sequence split across separate terminal reads,
+            // including the readiness wait after its Escape prefix.
+            master.write_all(b"\x1b").unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            remaining = &input[6..];
+        }
         while !remaining.is_empty() {
             read_available(&mut master, &mut output);
-            match master.write(&remaining[..remaining.len().min(256)]) {
+            match master.write(&remaining[..remaining.len().min(4096)]) {
                 Ok(written) => remaining = &remaining[written..],
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(error) => panic!("failed to send terminal input: {error}"),
@@ -150,6 +173,12 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
         }
         if !text {
             assert!(!rendered.contains("concealed-sentinel"), "{rendered}");
+        }
+        if input.len() > jig_vault::MAX_SECRET_VALUE_LEN {
+            assert!(
+                output.len() < input.len(),
+                "paste output must not amplify every character"
+            );
         }
         let mut saved = Vec::new();
         vault

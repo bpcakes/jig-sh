@@ -1,4 +1,5 @@
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use crossterm::terminal;
@@ -6,6 +7,8 @@ use jig_vault::{FieldKind, MAX_SECRET_VALUE_LEN, SecretBytes};
 use zeroize::Zeroizing;
 
 use super::lifecycle::{hidden_terminal_input_available, prompt_zeroizing};
+
+mod terminal_input;
 
 pub(super) fn read_field_value_from_prompt(kind: FieldKind) -> Result<SecretBytes> {
     if !hidden_terminal_input_available() {
@@ -21,7 +24,7 @@ pub(super) fn read_field_value_from_prompt(kind: FieldKind) -> Result<SecretByte
     terminal::enable_raw_mode().context("failed to prepare text field input")?;
     let guard = RawInput;
     let mut output = std::io::stderr().lock();
-    let result = read_text_input(&mut std::io::stdin().lock(), &mut output);
+    let result = terminal_input::read(&mut output);
     let restored = terminal::disable_raw_mode();
     drop(guard);
     writeln!(output)?;
@@ -36,17 +39,25 @@ impl Drop for RawInput {
     }
 }
 
-fn read_text_input(input: &mut impl Read, output: &mut impl Write) -> Result<SecretBytes> {
+fn read_text_input(
+    input: &mut BufReader<impl Read>,
+    output: &mut impl Write,
+    mut wait: impl FnMut(Duration) -> std::io::Result<bool>,
+) -> Result<SecretBytes> {
     let mut value = Zeroizing::new(String::new());
+    draw_text_input(output, &value)?;
     loop {
-        draw_text_input(output, &value)?;
         let mut bytes = [0; 4];
         input
             .read_exact(&mut bytes[..1])
             .context("text field input ended before submission; value was not saved")?;
         match bytes[0] {
-            b'\r' | b'\n' => return Ok(SecretBytes::new(std::mem::take(&mut *value).into_bytes())),
-            3 | 4 | 27 => bail!("text field input cancelled; value was not saved"),
+            b'\r' | b'\n' => {
+                draw_text_input(output, &value)?;
+                return Ok(SecretBytes::new(std::mem::take(&mut *value).into_bytes()));
+            }
+            3 | 4 => bail!("text field input cancelled; value was not saved"),
+            27 => terminal_input::skip_escape(input, &mut wait)?,
             8 | 127 => {
                 value.pop();
             }
@@ -54,13 +65,7 @@ fn read_text_input(input: &mut impl Read, output: &mut impl Write) -> Result<Sec
             b'\t' => append_text(&mut value, '\t')?,
             0..=31 => {}
             first => {
-                let width = match first {
-                    0..=127 => 1,
-                    0xc2..=0xdf => 2,
-                    0xe0..=0xef => 3,
-                    0xf0..=0xf4 => 4,
-                    _ => bail!("text field input is not valid UTF-8; value was not saved"),
-                };
+                let width = utf8_width(first)?;
                 input
                     .read_exact(&mut bytes[1..width])
                     .context("text field input ended before submission; value was not saved")?;
@@ -72,6 +77,22 @@ fn read_text_input(input: &mut impl Read, output: &mut impl Write) -> Result<Sec
                 )?;
             }
         }
+        // One redraw per buffered batch, including the last typed character
+        // before blocking for more input. Do not fill the buffer just to decide
+        // whether to draw: that could block with the newest input still hidden.
+        if input.buffer().is_empty() {
+            draw_text_input(output, &value)?;
+        }
+    }
+}
+
+fn utf8_width(first: u8) -> Result<usize> {
+    match first {
+        0..=127 => Ok(1),
+        0xc2..=0xdf => Ok(2),
+        0xe0..=0xef => Ok(3),
+        0xf0..=0xf4 => Ok(4),
+        _ => bail!("text field input is not valid UTF-8; value was not saved"),
     }
 }
 
@@ -105,17 +126,66 @@ mod tests {
 
     #[test]
     fn text_input_requires_submission_and_preserves_empty_and_unicode() {
-        for mut bytes in [b"".as_slice(), b"partial", b"partial\x04", b"\xc3"] {
-            assert!(read_text_input(&mut bytes, &mut Vec::new()).is_err());
+        for bytes in [
+            b"".as_slice(),
+            b"partial",
+            b"partial\x04",
+            b"\xc3",
+            b"partial\x1b",
+        ] {
+            assert!(
+                read_text_input(&mut BufReader::new(bytes), &mut Vec::new(), |_| Ok(false))
+                    .is_err()
+            );
         }
         for (bytes, expected) in [("\n", ""), (" café  \x7f\r", " café ")] {
             assert_eq!(
-                read_text_input(&mut bytes.as_bytes(), &mut Vec::new())
-                    .unwrap()
-                    .as_slice(),
+                read_text_input(
+                    &mut BufReader::new(bytes.as_bytes()),
+                    &mut Vec::new(),
+                    |_| Ok(false)
+                )
+                .unwrap()
+                .as_slice(),
                 expected.as_bytes()
             );
         }
+    }
+
+    #[test]
+    fn navigation_and_alt_sequences_are_consumed_across_buffer_boundaries() {
+        let bytes = "start\x1b[D\x1b[3~\x1bOH\x1bOF\x1b[1;5C\x1bx\x1béend\n".as_bytes();
+        for capacity in [1, 2, 4, 4096] {
+            let value = read_text_input(
+                &mut BufReader::with_capacity(capacity, bytes),
+                &mut Vec::new(),
+                |_| Ok(true),
+            )
+            .unwrap();
+            assert_eq!(value.as_slice(), b"startend");
+        }
+    }
+
+    #[test]
+    fn maximum_paste_preserves_utf8_with_bounded_redraws() {
+        let value = "é".repeat(MAX_SECRET_VALUE_LEN / 2);
+        let input = format!("{value}\n");
+        let mut output = Vec::new();
+        let actual = read_text_input(
+            &mut BufReader::with_capacity(4096, input.as_bytes()),
+            &mut output,
+            |_| Ok(false),
+        )
+        .unwrap();
+        assert_eq!(actual.as_slice(), value.as_bytes());
+        let redraws = output
+            .windows(b"Field value:".len())
+            .filter(|window| *window == b"Field value:")
+            .count();
+        assert!(
+            redraws <= MAX_SECRET_VALUE_LEN / 4096 + 2,
+            "{redraws} redraws"
+        );
     }
 
     #[test]

@@ -22,6 +22,10 @@ pub(super) fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
                 .and_then(|snapshot| snapshot.text_value(&field.reference))
             {
                 Some(text) => key_value("Value", if text.is_empty() { "(empty)" } else { text }),
+                None if field.kind == jig_vault::FieldKind::Text => Line::from(Span::styled(
+                    "Text preview unavailable.",
+                    Style::default().fg(WARN),
+                )),
                 None => Line::from(Span::styled(
                     "Value hidden. Use Peek to view it.",
                     Style::default().fg(MUTED),

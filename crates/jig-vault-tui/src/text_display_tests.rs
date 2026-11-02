@@ -111,3 +111,35 @@ fn minimum_details_exposes_text_and_scrolls_wrapped_content() {
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
     assert!(terminal.backend().to_string().contains("OTHER-VALUE"));
 }
+
+#[test]
+fn text_without_a_preview_is_shown_as_unavailable_in_details() {
+    use jig_vault::{FieldKind, SecretBytes, Vault};
+    use secrecy::SecretString;
+
+    let temp = tempfile::tempdir().unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("ExampleVault"))).unwrap();
+    let passphrase = SecretString::from("correct horse battery staple".to_owned());
+    vault.init(&passphrase).unwrap();
+    let reference = "jig://ExampleProject/FIELD".parse().unwrap();
+    vault
+        .set_field(
+            &passphrase,
+            reference,
+            FieldKind::Text,
+            SecretBytes::new(b"example".to_vec()),
+        )
+        .unwrap();
+    let mut app = browsing_app();
+    // A metadata snapshot supplies the same absent-preview state produced for
+    // a malformed field, without adding corruption hooks to the public API.
+    app.apply_snapshot(vault.snapshot(&passphrase).unwrap());
+    app.selected_entry = Some(EntryIdentity::Field(
+        "jig://ExampleProject/FIELD".parse().unwrap(),
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Text preview unavailable"), "{rendered}");
+    assert!(!rendered.contains("Use Peek"), "{rendered}");
+}
