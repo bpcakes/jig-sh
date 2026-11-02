@@ -181,6 +181,49 @@ mod tests {
     }
 
     #[test]
+    fn sequence_lookahead_preserves_submission_editing_and_unicode() {
+        for bytes in [
+            "pending\x1b[\r",
+            "pending\x1bO\n",
+            "pending\x1b[é\r",
+            "pending\x1bOé\r",
+            "pending\x1b[\x7fx\r",
+            "pending\x1bO\t\r",
+        ] {
+            let expected = if bytes.contains('é') {
+                "pendingé"
+            } else if bytes.contains('\x7f') {
+                "pendinx"
+            } else if bytes.contains('\t') {
+                "pending\t"
+            } else {
+                "pending"
+            };
+            for capacity in [1, 2, 4096] {
+                let actual = read_text_input(
+                    &mut BufReader::with_capacity(capacity, bytes.as_bytes()),
+                    &mut Vec::new(),
+                    |_| Ok(true),
+                )
+                .unwrap();
+                assert_eq!(actual.as_slice(), expected.as_bytes());
+            }
+        }
+        for final_byte in b'A'..=b'E' {
+            let bytes = [b'x', 27, b'[', b'[', final_byte, b'\r'];
+            for capacity in [1, 2, 4096] {
+                let actual = read_text_input(
+                    &mut BufReader::with_capacity(capacity, bytes.as_slice()),
+                    &mut Vec::new(),
+                    |_| Ok(true),
+                )
+                .unwrap();
+                assert_eq!(actual.as_slice(), b"x");
+            }
+        }
+    }
+
+    #[test]
     fn maximum_paste_preserves_utf8_with_bounded_redraws() {
         let value = "é".repeat(MAX_SECRET_VALUE_LEN / 2);
         let input = format!("{value}\n");
