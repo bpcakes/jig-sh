@@ -35,7 +35,7 @@ Own vault scope, passphrase capture, raw-output dispatch, lifecycle, and the CLI
 - `vault migrate --to` accepts only targets 2 and 3; the TUI migrates to `jig_vault::LATEST_VAULT_FORMAT_VERSION`.
 - The TUI adapter carries a witnessed restore's fence into `VaultActionResult::Restored { other_copies_stale }`, matching the CLI's `other_copies_stale` report.
 - Backup restore must use the static absent-target path; it may prepare missing private parent directories, but must never resolve or create the selected vault home before restore preflight and installation.
-- The Vault TUI fixes one resolved scope for its lifetime, retains only a process-local credential in the CLI-owned backend, and must join its sole action worker before lock or terminal restoration. TUI action results and ordinary Ratatui frames remain metadata-only; private export and transient Peek consume plaintext only in their immediate hardened/terminal-safe sinks and never return it to the model.
+- The Vault TUI fixes one resolved scope for its lifetime, retains only a process-local credential in the CLI-owned backend, and must join its sole action worker before lock or terminal restoration. TUI action results and ordinary Ratatui frames may include non-secret text previews but never concealed values; private export and transient Peek consume plaintext only in their immediate hardened/terminal-safe sinks and never return it to the model.
 
 ## Common commands
 

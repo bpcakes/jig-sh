@@ -26,7 +26,7 @@ use crate::{
     viewport::ViewportSize,
 };
 
-const SENTINEL: &[u8] = b"vault-tui-plaintext-sentinel";
+pub(super) const SENTINEL: &[u8] = b"vault-tui-plaintext-sentinel";
 
 fn descriptor(exists: bool) -> VaultDescriptor {
     VaultDescriptor {
@@ -78,7 +78,7 @@ fn snapshot() -> VaultSnapshot {
             SecretBytes::new(b"legacy-secret".to_vec()),
         )
         .unwrap();
-    vault.snapshot(&passphrase).unwrap()
+    vault.display_snapshot(&passphrase).unwrap()
 }
 
 fn empty_snapshot() -> VaultSnapshot {
@@ -89,7 +89,7 @@ fn empty_snapshot() -> VaultSnapshot {
     vault.snapshot(&passphrase).unwrap()
 }
 
-fn browsing_app() -> App {
+pub(super) fn browsing_app() -> App {
     let mut app = App::new(descriptor(true));
     app.apply_snapshot(snapshot());
     app

@@ -6,9 +6,9 @@
 
 ## Key entrypoints
 
-- `src/lib.rs`: same-release metadata-only backend boundary and public runner.
+- `src/lib.rs`: same-release backend boundary with non-secret text previews and public runner.
 - `src/model.rs`: screen states, exact selection identity, filtering, and form transitions.
-- `src/render.rs`: responsive Ratatui presentation; render data must remain metadata-only.
+- `src/render.rs`: responsive Ratatui presentation; render data may include non-secret text previews, never concealed values.
 - `src/runtime.rs`: terminal event loop, action worker ownership, and direct controlled-output coordination.
 - `src/secret_input.rs`: bounded zeroizing protected input.
 - `src/tools.rs`: lifecycle-tool palette, protected forms, and import/restore confirmations.
@@ -22,7 +22,7 @@
 
 ## Invariants
 
-- Never place concealed vault values or passphrases in model strings, Ratatui buffers, errors, logs, debug output, or action results. An interactively entered `text` field value is intentionally visible in its form, but remains redacted from debug output and actions.
+- Never place concealed vault values or passphrases in model strings, Ratatui buffers, errors, logs, debug output, or action results. `text` field values are intentionally visible in forms and unlocked Details; display snapshots include bounded, terminal-escaped text previews, redacted from Debug output.
 - Keep exact `VaultReference` and legacy-name identities separate from sanitized display text.
 - Protected inputs use `SecretInput`; they are neither cloned nor formatted as plaintext.
 - Initialization forms delegate to `jig_vault::validate_new_vault_passphrase_bytes` for early feedback. Passphrase-change forms check confirmation and defer policy to the backend so a retry can complete its matching recorded rekey despite a changed estimate. The core remains the enforcement boundary for new credentials; show only value-free policy errors.

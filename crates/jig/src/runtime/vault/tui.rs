@@ -160,7 +160,7 @@ impl VaultTuiBackend {
     }
 
     fn snapshot(&self) -> std::result::Result<VaultSnapshot, VaultUiError> {
-        self.with_vault(Vault::snapshot)
+        self.with_vault(Vault::display_snapshot)
     }
 
     fn finish_committed(&self, action: VaultCommittedAction) -> VaultActionResult {
@@ -410,7 +410,9 @@ impl VaultBackend for VaultTuiBackend {
     fn unlock(&self, passphrase: SecretBytes) -> std::result::Result<VaultSnapshot, VaultUiError> {
         let passphrase = Self::passphrase_from_bytes(passphrase)?;
         let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
-        let snapshot = selected.snapshot(&passphrase).map_err(map_vault_error)?;
+        let snapshot = selected
+            .display_snapshot(&passphrase)
+            .map_err(map_vault_error)?;
         self.session()?.credential = Some(passphrase);
         Ok(snapshot)
     }

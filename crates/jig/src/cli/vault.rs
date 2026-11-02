@@ -52,12 +52,12 @@ Examples:
   printf '%s' 'secret-value' | jig vault secret set api_token --value-stdin";
 
 const VAULT_FIELD_SET_AFTER_HELP: &str = "\
-Terminal use defaults to hidden input. Pass --value-prompt explicitly for the
+Terminal use hides concealed input and echoes --text input. Pass --value-prompt explicitly for the
 same behavior, or --value-stdin for automation. Stdin must be piped or
 redirected and is read byte-for-byte; use printf instead of echo when a
 trailing newline is not part of the field value. Fields are encrypted whether
-they are concealed or text; --text only prevents a contextual value from being
-used as an output-redaction needle by vault exec. The compatible vault run
+they are concealed or text; --text shows the value in TUI Details and excludes it from
+output-redaction needles used by vault exec. The compatible vault run
 broker still masks every injected value of at least 4 bytes.
 
 Examples:
@@ -571,7 +571,7 @@ pub(crate) struct VaultFieldSetOpts {
     #[arg(
         long = "value-prompt",
         action = ArgAction::SetTrue,
-        help = "Prompt for a UTF-8 field value with hidden terminal input; no trailing newline is stored"
+        help = "Prompt for a UTF-8 field value (visible with --text, otherwise hidden); no trailing newline is stored"
     )]
     pub(crate) value_prompt: bool,
     #[command(flatten)]
