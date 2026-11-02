@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::{collections::BTreeMap, fmt};
 
 use secrecy::SecretString;
@@ -73,20 +74,7 @@ impl VaultStore {
                         }
                         Err(error) => return Err(error),
                     };
-                    // Bound display allocation and escape arbitrary bytes before rendering.
-                    let mut text = String::new();
-                    for character in
-                        String::from_utf8_lossy(&bytes.as_slice()[..bytes.len().min(4096)]).chars()
-                    {
-                        if character.is_control() || character == '\\' {
-                            text.extend(character.escape_default());
-                        } else {
-                            text.push(character);
-                        }
-                    }
-                    if bytes.len() > 4096 {
-                        text.push_str("… [truncated]");
-                    }
+                    let text = text_preview(bytes.as_slice());
                     snapshot
                         .text_values
                         .0
@@ -105,10 +93,54 @@ impl VaultStore {
     }
 }
 
+fn text_preview(bytes: &[u8]) -> String {
+    let mut text = String::new();
+    // Preserve every byte in the bounded prefix, including invalid UTF-8 and
+    // a multibyte character cut by the limit. Never invent replacement text.
+    for chunk in bytes[..bytes.len().min(4096)].utf8_chunks() {
+        for character in chunk.valid().chars() {
+            if matches!(character, '\'' | '"') {
+                text.push(character);
+            } else {
+                // Debug escaping also makes invisible Unicode formatting
+                // characters visible before the terminal sanitizer sees them.
+                text.extend(character.escape_debug());
+            }
+        }
+        for byte in chunk.invalid() {
+            write!(text, "\\x{byte:02x}").expect("writing to String is infallible");
+        }
+    }
+    if bytes.len() > 4096 {
+        text.push_str("… [truncated]");
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::SecretBytes;
+
+    #[test]
+    fn previews_distinguish_invalid_bytes_format_characters_and_cutoff_prefixes() {
+        assert_eq!(text_preview(b"\xff\xfe\\xff"), "\\xff\\xfe\\\\xff");
+        assert_eq!(
+            text_preview("left\u{202d}\u{202e}right".as_bytes()),
+            "left\\u{202d}\\u{202e}right"
+        );
+        assert_eq!(
+            text_preview("café 'quoted' \"text\"".as_bytes()),
+            "café 'quoted' \"text\""
+        );
+        let crossing = format!("{}界", "a".repeat(4095));
+        assert_eq!(
+            text_preview(crossing.as_bytes()),
+            format!("{}\\xe7… [truncated]", "a".repeat(4095))
+        );
+        let exact = format!("{}界", "a".repeat(4093));
+        assert_eq!(text_preview(exact.as_bytes()), exact);
+    }
 
     #[test]
     fn malformed_text_preview_does_not_hide_valid_fields_or_weaken_verification() {

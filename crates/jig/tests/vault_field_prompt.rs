@@ -132,6 +132,12 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
         if input.starts_with(b"start") {
             master.write_all(b"start").unwrap();
             read_until(&mut master, &mut output, "Field value: start", TIMEOUT);
+            // These Alt keys share CSI/SS3 prefixes. Pause long enough for
+            // their ambiguity timeout, then continue editing and submit.
+            for prefix in [b"\x1b[", b"\x1bO"] {
+                master.write_all(prefix).unwrap();
+                std::thread::sleep(Duration::from_millis(150));
+            }
             // Exercise a key sequence split across separate terminal reads,
             // including the readiness wait after its Escape prefix.
             master.write_all(b"\x1b").unwrap();

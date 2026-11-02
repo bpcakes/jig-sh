@@ -57,25 +57,30 @@ pub(super) fn skip_escape(
     wait: &mut impl FnMut(Duration) -> std::io::Result<bool>,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_millis(100);
-    let mut next = || -> Result<u8> {
+    let mut next = || -> Result<Option<u8>> {
         if input.buffer().is_empty() && !wait(deadline.saturating_duration_since(Instant::now()))? {
-            bail!("text field input cancelled; value was not saved");
+            return Ok(None);
         }
         let mut byte = [0];
         input.read_exact(&mut byte)?;
         if matches!(byte[0], 3 | 4 | 27) {
             bail!("text field input cancelled; value was not saved");
         }
-        Ok(byte[0])
+        Ok(Some(byte[0]))
     };
-    let first = next()?;
+    let Some(first) = next()? else {
+        bail!("text field input cancelled; value was not saved");
+    };
     if matches!(first, b'[' | b'O') {
         // CSI and SS3 encode navigation/function keys. Ignore the whole
         // sequence, never its individual bytes as editable text.
         for _ in 0..64 {
             match next()? {
-                0x40..=0x7e => return Ok(()),
-                0x20..=0x3f => {}
+                // Alt+[ and Alt+O are indistinguishable from these prefixes
+                // until another byte arrives. A timeout after a prefix is
+                // an ignored Alt key, not the explicit bare-Escape cancel.
+                None | Some(0x40..=0x7e) => return Ok(()),
+                Some(0x20..=0x3f) => {}
                 _ => break,
             }
         }
@@ -85,7 +90,10 @@ pub(super) fn skip_escape(
     let width = super::utf8_width(first)?;
     let mut bytes = [first; 4];
     for byte in &mut bytes[1..width] {
-        *byte = next()?;
+        let Some(next) = next()? else {
+            bail!("incomplete terminal key sequence; value was not saved");
+        };
+        *byte = next;
     }
     std::str::from_utf8(&bytes[..width])?;
     Ok(())

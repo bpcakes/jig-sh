@@ -167,6 +167,20 @@ mod tests {
     }
 
     #[test]
+    fn alt_sequence_prefixes_timeout_without_cancelling() {
+        use std::io::BufRead;
+        for prefix in [b'[', b'O'] {
+            let bytes = [prefix];
+            let mut input = BufReader::new(bytes.as_slice());
+            // Feed the prefix through the same explicit buffer as production.
+            input.fill_buf().unwrap();
+            assert!(terminal_input::skip_escape(&mut input, &mut |_| Ok(false)).is_ok());
+        }
+        let mut bare_escape = BufReader::new(b"".as_slice());
+        assert!(terminal_input::skip_escape(&mut bare_escape, &mut |_| Ok(false)).is_err());
+    }
+
+    #[test]
     fn maximum_paste_preserves_utf8_with_bounded_redraws() {
         let value = "é".repeat(MAX_SECRET_VALUE_LEN / 2);
         let input = format!("{value}\n");
