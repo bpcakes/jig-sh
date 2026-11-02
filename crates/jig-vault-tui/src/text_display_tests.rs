@@ -137,6 +137,7 @@ fn text_without_a_preview_is_shown_as_unavailable_in_details() {
     app.selected_entry = Some(EntryIdentity::Field(
         "jig://ExampleProject/FIELD".parse().unwrap(),
     ));
+    app.focus = Focus::Details;
     let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
     let rendered = terminal.backend().to_string();
