@@ -127,33 +127,7 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
         set_nonblocking(&master);
         let mut output = Vec::new();
         read_until(&mut master, &mut output, "Field value: ", TIMEOUT);
-        let deadline = Instant::now() + TIMEOUT;
-        let mut remaining = input;
-        if input.starts_with(b"start") {
-            master.write_all(b"start").unwrap();
-            read_until(&mut master, &mut output, "Field value: start", TIMEOUT);
-            // These Alt keys share CSI/SS3 prefixes. Pause long enough for
-            // their ambiguity timeout, then continue editing and submit.
-            for prefix in [b"\x1b[", b"\x1bO"] {
-                master.write_all(prefix).unwrap();
-                std::thread::sleep(Duration::from_millis(150));
-            }
-            // Exercise a key sequence split across separate terminal reads,
-            // including the readiness wait after its Escape prefix.
-            master.write_all(b"\x1b").unwrap();
-            std::thread::sleep(Duration::from_millis(20));
-            remaining = &input[6..];
-        }
-        while !remaining.is_empty() {
-            read_available(&mut master, &mut output);
-            match master.write(&remaining[..remaining.len().min(4096)]) {
-                Ok(written) => remaining = &remaining[written..],
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => panic!("failed to send terminal input: {error}"),
-            }
-            assert!(Instant::now() < deadline, "sending input timed out");
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        send_input(&mut master, &mut output, input);
         let status = wait_for_child_while_draining(&mut child, &mut master, &mut output, TIMEOUT)
             .unwrap_or_else(|| {
                 panic!(
@@ -191,6 +165,36 @@ fn cli_field_prompts_echo_only_text_and_cancel_without_overwriting() {
             .read_field_to(&passphrase, reference.parse().unwrap(), &mut saved)
             .unwrap();
         assert_eq!(saved, expected);
+    }
+}
+
+fn send_input(master: &mut File, output: &mut Vec<u8>, input: &[u8]) {
+    let deadline = Instant::now() + TIMEOUT;
+    let mut remaining = input;
+    if input.starts_with(b"start") {
+        master.write_all(b"start").unwrap();
+        read_until(master, output, "Field value: start", TIMEOUT);
+        // These Alt keys share CSI/SS3 prefixes. Pause long enough for
+        // their ambiguity timeout, then continue editing and submit.
+        for prefix in [b"\x1b[", b"\x1bO"] {
+            master.write_all(prefix).unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        // Exercise a key sequence split across separate terminal reads,
+        // including the readiness wait after its Escape prefix.
+        master.write_all(b"\x1b").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        remaining = &input[6..];
+    }
+    while !remaining.is_empty() {
+        read_available(master, output);
+        match master.write(&remaining[..remaining.len().min(4096)]) {
+            Ok(written) => remaining = &remaining[written..],
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("failed to send terminal input: {error}"),
+        }
+        assert!(Instant::now() < deadline, "sending input timed out");
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 

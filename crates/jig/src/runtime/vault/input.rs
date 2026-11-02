@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn alt_sequence_prefixes_timeout_without_cancelling() {
         use std::io::BufRead;
-        for prefix in [b'[', b'O'] {
+        for prefix in *b"[O" {
             let bytes = [prefix];
             let mut input = BufReader::new(bytes.as_slice());
             // Feed the prefix through the same explicit buffer as production.
