@@ -21,28 +21,9 @@ on:
       - "tests/fixtures/**"
       - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
-  push:
-    branches:
-      - master
-    paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain"
-      - "rust-toolchain.toml"
-      - ".clippy.toml"
-      - "clippy.toml"
-      - ".config/nextest.toml"
-      - ".jig.toml"
-      - ".jig/source-runtime-version"
-      - ".agent/jig-contract.json"
-      - "scripts/**"
-      - "templates/project/**"
-      - "templates/scaffolds/**"
-      - "examples/**"
-      - "tests/fixtures/**"
-      - ".cargo/**"
-      - ".github/workflows/rust-tests.yml"
+  # Merges to master are tested together each night instead of one by one.
+  schedule:
+    - cron: "23 4 * * *"
   merge_group:
     types:
       - checks_requested
@@ -61,7 +42,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  nightly-gate:
+    # A nightly run skips every job when this workflow's last nightly run
+    # already tested the current master commit.
+    if: ${{ github.event_name == 'schedule' }}
+    name: Check for untested master commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          sparse-checkout: scripts/ci
+      - name: Compare with the last nightly run
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/nightly-scope.py
+
   launcher-contract:
+    needs: nightly-gate
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' }}
     name: Formatting and launcher checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -85,7 +91,8 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests -p 'test_jig_*.py'
 
   rendered-fixtures:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.benchmark_only }}
+    needs: nightly-gate
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
     name: Validate rendered fixtures and generated Rust
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -93,8 +100,10 @@ jobs:
       JIG_FIXTURE_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/fixture-builds
       JIG_GENERATED_RUST_TARGET_DIR: ${{ github.workspace }}/.agent/.cache/generated-rust-builds
       # Path/profile/compatibility fixtures need real installs, not optimized code.
-      # The isolated Git installation explicitly retains production optimization.
+      # The isolated Git installation retains production optimization except on
+      # pull requests, where building it from scratch optimized took ~4 minutes.
       CARGO_PROFILE_RELEASE_OPT_LEVEL: "0"
+      JIG_FIXTURE_GIT_INSTALL_INHERIT_OPT_LEVEL: ${{ github.event_name == 'pull_request' && '1' || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -134,7 +143,8 @@ jobs:
         run: bash scripts/validate-fixtures.sh
 
   test:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.benchmark_only }}
+    needs: nightly-gate
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
     name: scripts/jig check test-locked
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -188,7 +198,8 @@ jobs:
           retention-days: 7
 
   test-macos:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.benchmark_only }}
+    needs: nightly-gate
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
     name: scripts/jig check test-locked (macOS)
     runs-on: macos-latest
     timeout-minutes: 60
@@ -199,6 +210,11 @@ jobs:
           # Pull requests test only what their changes can affect, compared
           # with the merge commit's first parent, the base branch tip.
           fetch-depth: 2
+      - name: Check launcher parity with macOS Bash 3.2
+        # This job uniquely exercises the installer's empty-array handoff on Apple's stock Bash.
+        run: /bin/bash scripts/check-launcher-template.sh
+      - name: Test source runtime selection and development entrypoint
+        run: python3 -m unittest discover -s scripts/tests -p 'test_jig_*.py'
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -229,6 +245,9 @@ jobs:
           JIG_DEV_BIN: target/debug/jig
           JIG_REQUIRE_GO_TOOLCHAIN: "1"
           JIG_TEST_AFFECTED_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
+          # Pull requests leave the package-manager adoption scenarios, about
+          # 30% of macOS test time, to Linux; nightly runs keep them on macOS.
+          JIG_TEST_EXCLUDE: ${{ github.event_name == 'pull_request' && 'package(jig-bootstrap) & test(/^tests::frontend_adoption::/)' || '' }}
         run: scripts/jig check test-locked
       - name: Upload test timings
         if: ${{ !cancelled() }}
@@ -240,6 +259,8 @@ jobs:
           retention-days: 7
 
   msrv:
+    needs: nightly-gate
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' }}
     name: cargo check --workspace --all-targets --all-features (MSRV 1.88)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -260,7 +281,8 @@ jobs:
         run: cargo check --workspace --all-targets --all-features --locked
 
   no-default-features:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.benchmark_only }}
+    needs: nightly-gate
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
     name: cargo build and test -p jig-sh --no-default-features
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -302,18 +324,16 @@ jobs:
           retention-days: 7
 
   no-default-features-macos:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.benchmark_only }}
+    needs: nightly-gate
+    # Pull requests rely on the Linux no-default-features job; nightly, merge
+    # queue, and manual runs repeat the full minimal suite on macOS.
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
     name: cargo test -p jig-sh --no-default-features (macOS)
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Check launcher parity with macOS Bash 3.2
-        # This job uniquely exercises the installer's empty-array handoff on Apple's stock Bash.
-        run: /bin/bash scripts/check-launcher-template.sh
-      - name: Test source runtime selection and development entrypoint
-        run: python3 -m unittest discover -s scripts/tests -p 'test_jig_*.py'
       - name: Install Node.js for generated frontend tests
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -333,7 +353,7 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Run no-default-features tests
-        run: bash scripts/ci/test-rust.sh ${{ github.event_name == 'pull_request' && 'minimal-focused' || 'minimal' }}
+        run: bash scripts/ci/test-rust.sh minimal
       # Nextest does not run doctests. Preserve cargo test's documentation coverage.
       - name: Run no-default-features doctests
         run: cargo test -p jig-sh --no-default-features --doc --locked

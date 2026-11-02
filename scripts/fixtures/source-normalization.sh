@@ -477,8 +477,16 @@ validate_template_source_url_installs_from_recorded_commit() {
     # A fresh Cargo home changes registry source paths in Cargo fingerprints.
     # Keep its target separate so it cannot invalidate the reusable artifacts
     # from the other fixture installations. Keep this real Git installation on
-    # the production release profile even when other CI fixtures lower its opt-level.
-    env -u JIG_DEV_BIN -u CARGO_PROFILE_RELEASE_OPT_LEVEL CARGO_HOME="$TMP_DIR/cargo-home-git-install" \
+    # the production release profile even when other CI fixtures lower its
+    # opt-level, unless JIG_FIXTURE_GIT_INSTALL_INHERIT_OPT_LEVEL=1 asks it to
+    # share their lowered profile, as pull requests do to save time.
+    local -a profile_env=(-u CARGO_PROFILE_RELEASE_OPT_LEVEL)
+    if [[ "${JIG_FIXTURE_GIT_INSTALL_INHERIT_OPT_LEVEL:-}" == 1 ]]; then
+      profile_env=()
+    fi
+    # Expanding an empty array requires this form on macOS's Bash 3.2.
+    env -u JIG_DEV_BIN ${profile_env[@]+"${profile_env[@]}"} \
+      CARGO_HOME="$TMP_DIR/cargo-home-git-install" \
       CARGO_TARGET_DIR="$TMP_DIR/cargo-target-git-install" \
       scripts/install-jig.sh ".agent/.cache/jig/$contract_cache_key" >/dev/null
     [[ -x ".agent/.cache/jig/$contract_cache_key/bin/jig" ]]
