@@ -15,6 +15,7 @@ use ulid::Ulid;
 
 mod browse;
 mod commands;
+mod details_scroll;
 mod line_editor;
 mod model;
 mod peek;

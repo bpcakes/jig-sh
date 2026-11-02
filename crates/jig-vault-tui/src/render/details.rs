@@ -11,20 +11,12 @@ use crate::model::{App, Focus};
 
 pub(super) fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
     let title = if app.focus == Focus::Details {
-        "Details •"
+        "Details • ↑/↓ scroll · Home/End"
     } else {
         "Details"
     };
     let lines = if let Some(field) = app.selected_field() {
         vec![
-            key_value("Reference", &field.reference.to_string()),
-            key_value("Item", field.reference.item()),
-            key_value("Field", field.reference.field()),
-            key_value("Kind", field.kind.as_str()),
-            key_value("Length", &format!("{} bytes", field.value_len)),
-            key_value("Created", &format!("{} ms", field.created_at_ms)),
-            key_value("Updated", &format!("{} ms", field.updated_at_ms)),
-            Line::from(""),
             match app
                 .snapshot()
                 .and_then(|snapshot| snapshot.text_value(&field.reference))
@@ -35,6 +27,15 @@ pub(super) fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
                     Style::default().fg(MUTED),
                 )),
             },
+            Line::from(""),
+            key_value("Reference", &field.reference.to_string()),
+            key_value("Item", field.reference.item()),
+            key_value("Field", field.reference.field()),
+            key_value("Kind", field.kind.as_str()),
+            key_value("Length", &format!("{} bytes", field.value_len)),
+            key_value("Created", &format!("{} ms", field.created_at_ms)),
+            key_value("Updated", &format!("{} ms", field.updated_at_ms)),
+            Line::from(""),
         ]
     } else if let Some(secret) = app.selected_legacy() {
         vec![
@@ -51,10 +52,13 @@ pub(super) fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         vec![Line::from("No entry selected.")]
     };
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(panel(title))
-            .wrap(Wrap { trim: false }),
-        area,
+    let block = panel(title);
+    let inner = block.inner(area);
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let offset = app.details_scroll.position(
+        &app.selected_entry,
+        paragraph.line_count(inner.width),
+        inner.height,
     );
+    frame.render_widget(paragraph.block(block).scroll((offset, 0)), area);
 }

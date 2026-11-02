@@ -27,11 +27,12 @@ fn read_text_line(input: impl BufRead) -> Result<SecretBytes> {
         .take((MAX_SECRET_VALUE_LEN + 2) as u64)
         .read_line(&mut value)
         .context("failed to read text field value from terminal")?;
-    if value.ends_with('\n') {
+    if !value.ends_with('\n') {
+        bail!("text field input ended before submission; value was not saved");
+    }
+    value.pop();
+    if value.ends_with('\r') {
         value.pop();
-        if value.ends_with('\r') {
-            value.pop();
-        }
     }
     if value.len() > MAX_SECRET_VALUE_LEN {
         bail!("text field value exceeds the maximum length");
@@ -54,6 +55,9 @@ mod tests {
                 read_text_line(input.as_bytes()).unwrap().as_slice(),
                 expected.as_bytes()
             );
+        }
+        for input in ["", "partial", "partial\r"] {
+            assert!(read_text_line(input.as_bytes()).is_err());
         }
         assert!(read_text_line(vec![b'a'; MAX_SECRET_VALUE_LEN + 1].as_slice()).is_err());
     }

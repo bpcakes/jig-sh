@@ -1,3 +1,5 @@
+mod navigation;
+
 use std::path::Path;
 
 use jig_tui::sanitize_text;
@@ -23,6 +25,7 @@ pub(crate) struct App {
     pub(crate) screen: Screen,
     browser: Option<BrowseState>,
     pub(crate) focus: Focus,
+    pub(crate) details_scroll: crate::details_scroll::DetailsScroll,
     pub(crate) selected_item: Option<ItemIdentity>,
     pub(crate) selected_entry: Option<EntryIdentity>,
     filter: LineEditor,
@@ -44,6 +47,7 @@ impl App {
             screen,
             browser: None,
             focus: Focus::Items,
+            details_scroll: Default::default(),
             selected_item: None,
             selected_entry: None,
             filter: LineEditor::search(),
@@ -122,6 +126,7 @@ impl App {
     }
 
     fn install_snapshot(&mut self, snapshot: VaultSnapshot) {
+        self.details_scroll = Default::default();
         let previous_item = self.selected_item.clone();
         let previous_entry = self.selected_entry.clone();
         self.descriptor.home_state = VaultHomeState::Initialized;
@@ -163,6 +168,7 @@ impl App {
     }
 
     pub(crate) fn lock(&mut self) {
+        self.details_scroll = Default::default();
         self.browser = None;
         self.next_selection = None;
         self.selected_item = None;
@@ -1039,46 +1045,6 @@ impl App {
             .legacy_secrets
             .iter()
             .find(|record| &record.name == name)
-    }
-
-    pub(crate) fn move_selection(&mut self, delta: isize) {
-        match self.focus {
-            Focus::Items => {
-                let rows = self.visible_items();
-                self.selected_item = move_identity(&rows, self.selected_item.as_ref(), delta);
-                self.selected_entry = None;
-                self.reconcile_entry();
-            }
-            Focus::Fields => {
-                let rows = self.visible_entries();
-                self.selected_entry = move_identity(&rows, self.selected_entry.as_ref(), delta);
-            }
-            Focus::Details => {}
-        }
-    }
-
-    pub(crate) fn move_to_edge(&mut self, end: bool) {
-        match self.focus {
-            Focus::Items => {
-                let rows = self.visible_items();
-                self.selected_item = if end {
-                    rows.last().cloned()
-                } else {
-                    rows.first().cloned()
-                };
-                self.selected_entry = None;
-                self.reconcile_entry();
-            }
-            Focus::Fields => {
-                let rows = self.visible_entries();
-                self.selected_entry = if end {
-                    rows.last().cloned()
-                } else {
-                    rows.first().cloned()
-                };
-            }
-            Focus::Details => {}
-        }
     }
 
     pub(crate) fn append_filter(&mut self, value: &str) {

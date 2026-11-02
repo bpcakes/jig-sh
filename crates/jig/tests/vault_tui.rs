@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-// Load PTY helpers only in their two consumers; `tests/shared` holds helpers
+// Load PTY helpers only in their consumers; `tests/shared` holds helpers
 // that are intentionally separate from the general integration-test support module.
 #[path = "shared/pty.rs"]
 mod pty_support;

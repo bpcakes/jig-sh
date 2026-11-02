@@ -64,7 +64,7 @@ impl VaultStore {
                     for character in
                         String::from_utf8_lossy(&bytes.as_slice()[..bytes.len().min(4096)]).chars()
                     {
-                        if character.is_control() {
+                        if character.is_control() || character == '\\' {
                             text.extend(character.escape_default());
                         } else {
                             text.push(character);
@@ -110,7 +110,7 @@ mod tests {
                     &passphrase,
                     text.clone(),
                     FieldKind::Text,
-                    SecretBytes::new(b"visible\x1b[2J\ntext".to_vec()),
+                    SecretBytes::new(b"visible\x1b[2J\ntext\\n".to_vec()),
                 )
                 .unwrap();
             vault
@@ -123,7 +123,10 @@ mod tests {
                 .unwrap();
             assert_eq!(vault.snapshot(&passphrase).unwrap().text_value(&text), None);
             let snapshot = vault.display_snapshot(&passphrase).unwrap();
-            assert_eq!(snapshot.text_value(&text), Some("visible\\u{1b}[2J\\ntext"));
+            assert_eq!(
+                snapshot.text_value(&text),
+                Some("visible\\u{1b}[2J\\ntext\\\\n")
+            );
             assert_eq!(snapshot.text_value(&secret), None);
             assert!(!format!("{snapshot:?}").contains("visible"));
             assert!(!format!("{snapshot:?}").contains("concealed-sentinel"));
