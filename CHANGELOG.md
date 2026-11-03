@@ -15,8 +15,24 @@
   after `--` follow the session ID, and `--dry-run --json` reports
   `command: "claude resume"`.
 
+### Changed
+
+- Git calls behind source checks, such as those `jig file-budget` makes, and
+  `jig doctor` version probes no longer prove that every process they started
+  is gone. Jig still kills anything such a probe leaves in its process group,
+  but it skips the scan of the host's process list, so each call takes about
+  10 ms instead of about 60 ms on a host with 7,800 processes. Check targets,
+  resource probes, and workers keep the full proof, because a leftover process
+  there could change what a check reports or hold a Cargo build claim.
+
 ### Fixed
 
+- On Linux, a command that Jig runs is now killed when Jig itself is killed,
+  for example by a test timeout, instead of continuing in the background.
+  This covers the command Jig started directly, not processes it started in
+  turn. Linux clears this protection when the command executes a set-user-ID,
+  set-group-ID, or file-capability binary, or changes its effective or
+  filesystem user or group IDs.
 - Commands that run Git or other tools through Jig, such as
   `jig file-budget`, no longer fail intermittently on busy Linux hosts with
   "the process tree could not be cleaned up safely". After each command, Jig

@@ -6,7 +6,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use std::{env, fs};
 
-use jig_owned_process::{OwnedProcessTreeError, run_owned_process_tree_with_output};
+use jig_owned_process::{
+    OwnedProcessTreeError, ProcessTreeCleanup, run_owned_process_tree_with_output_and_cleanup,
+};
 
 use super::cargo_sqlx::path_has_symlink_or_reparse_component;
 use super::environment::DoctorEnvironment;
@@ -133,9 +135,12 @@ pub(super) fn probe_sqlx_driver_with_timeout_and_environment_and_cancellation(
         command.env(key, value);
     }
 
-    let output_result = run_owned_process_tree_with_output(&mut command, timeout, || {
-        cancellation.is_some_and(|cancelled| cancelled())
-    });
+    let output_result = run_owned_process_tree_with_output_and_cleanup(
+        &mut command,
+        timeout,
+        ProcessTreeCleanup::BestEffort,
+        || cancellation.is_some_and(|cancelled| cancelled()),
+    );
 
     let output = match output_result {
         Ok(output) => output,

@@ -6,7 +6,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use jig_context::RepoContext;
-use jig_owned_process::{OwnedProcessTreeError, run_owned_process_tree_with_output};
+use jig_owned_process::{
+    OwnedProcessTreeError, ProcessTreeCleanup, run_owned_process_tree_with_output_and_cleanup,
+};
 use serde_json::json;
 
 use super::check::{DoctorCheck, check};
@@ -512,9 +514,12 @@ pub(super) fn version_probe_stdout(
         command.env(key, value);
     }
 
-    let output = run_owned_process_tree_with_output(&mut command, VERSION_PROBE_TIMEOUT, || {
-        cancellation.is_some_and(|cancelled| cancelled())
-    })
+    let output = run_owned_process_tree_with_output_and_cleanup(
+        &mut command,
+        VERSION_PROBE_TIMEOUT,
+        ProcessTreeCleanup::BestEffort,
+        || cancellation.is_some_and(|cancelled| cancelled()),
+    )
     .map_err(|error| version_probe_reason(&error).to_string())?;
     let stdout = output
         .stdout
