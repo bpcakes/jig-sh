@@ -77,6 +77,9 @@ fn set_nonblocking_with(
 /// arrive, so the child refuses to exec. Linux ties the signal to the thread
 /// that spawned the child, so that thread must outlive the child; owned-process
 /// runners wait on the spawning thread. Only the direct child is covered.
+/// Linux clears this protection on exec of set-user-ID, set-group-ID, or
+/// file-capability binaries, and on changes to effective or filesystem user
+/// or group IDs.
 #[cfg(target_os = "linux")]
 pub fn set_parent_death_signal(parent: libc::pid_t) -> std::io::Result<()> {
     // SAFETY: PR_SET_PDEATHSIG only changes this process's own parent-death

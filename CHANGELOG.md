@@ -30,7 +30,9 @@
 - On Linux, a command that Jig runs is now killed when Jig itself is killed,
   for example by a test timeout, instead of continuing in the background.
   This covers the command Jig started directly, not processes it started in
-  turn.
+  turn. Linux clears this protection when the command executes a set-user-ID,
+  set-group-ID, or file-capability binary, or changes its effective or
+  filesystem user or group IDs.
 - Commands that run Git or other tools through Jig, such as
   `jig file-budget`, no longer fail intermittently on busy Linux hosts with
   "the process tree could not be cleaned up safely". After each command, Jig

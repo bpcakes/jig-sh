@@ -1,9 +1,86 @@
+use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
 
+use super::super::group_cleanup::{MEMBERSHIP_PROOFS, signal_owned_process_tree_once_with};
 use super::*;
+
+#[cfg(target_os = "linux")]
+mod parent_loss;
+
+#[test]
+fn cleanup_policy_controls_membership_proof_and_reaps_the_child() {
+    assert_eq!(ProcessTreeCleanup::default(), ProcessTreeCleanup::Confirmed);
+    for policy in [
+        ProcessTreeCleanup::BestEffort,
+        ProcessTreeCleanup::default(),
+    ] {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "while :; do :; done"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut process = spawn_owned_process(&mut command).unwrap();
+        process.cleanup = policy;
+        MEMBERSHIP_PROOFS.with(|count| count.set(0));
+
+        let status = process.terminate_and_reap().unwrap();
+
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        assert!(process.reaped_status.is_some());
+        assert!(process.process_group.is_none());
+        let proofs = MEMBERSHIP_PROOFS.with(std::cell::Cell::get);
+        match policy {
+            ProcessTreeCleanup::BestEffort => assert_eq!(proofs, 0),
+            ProcessTreeCleanup::Confirmed => assert!(proofs > 0),
+        }
+    }
+}
+
+#[test]
+fn best_effort_retains_post_signal_timeout_even_when_the_child_can_be_reaped() {
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "exit 0"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut process = spawn_owned_process(&mut command).unwrap();
+    let wait_deadline = Instant::now() + Duration::from_secs(10);
+    while observe_owned_process(&mut process).unwrap() != OwnedProcessObservation::Exited {
+        assert!(Instant::now() < wait_deadline, "child did not exit");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let mut signaled = false;
+    let error = process
+        .terminate_and_reap_with(|process, deadline| {
+            signal_owned_process_tree_once_with(
+                process,
+                deadline,
+                |process, _, _| {
+                    signal_owned_process_tree_once(process, deadline)?;
+                    signaled = true;
+                    Ok(ProcessGroupSignalResult::Delivered)
+                },
+                || deadline,
+            )
+        })
+        .unwrap_err();
+
+    assert!(signaled);
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(error.to_string().contains("after process-group SIGKILL"));
+    assert!(process.reaped_status.unwrap().success());
+    assert!(process.process_group.is_none());
+    assert!(!process.cleanup_complete);
+    assert_eq!(
+        process.terminate_and_reap().unwrap_err().kind(),
+        error.kind()
+    );
+}
 
 #[cfg(target_os = "linux")]
 const OWNED_PROCESS_PARENT_DEATH_MARKER_ENV: &str = "JIG_OWNED_PROCESS_PARENT_DEATH_MARKER";

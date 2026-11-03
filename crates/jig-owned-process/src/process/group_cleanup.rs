@@ -26,6 +26,11 @@ use super::{
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const OWNED_PROCESS_TREE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+thread_local! {
+    pub(super) static MEMBERSHIP_PROOFS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn observe_owned_process(
     process: &mut OwnedProcess,
@@ -86,6 +91,25 @@ pub(super) fn signal_owned_process_tree_once(
     process: &mut OwnedProcess,
     deadline: Instant,
 ) -> std::io::Result<()> {
+    signal_owned_process_tree_once_with(
+        process,
+        deadline,
+        signal_pinned_process_group,
+        Instant::now,
+    )
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn signal_owned_process_tree_once_with(
+    process: &mut OwnedProcess,
+    deadline: Instant,
+    signal: impl FnOnce(
+        &mut OwnedProcess,
+        libc::pid_t,
+        Instant,
+    ) -> std::io::Result<ProcessGroupSignalResult>,
+    now: impl FnOnce() -> Instant,
+) -> std::io::Result<()> {
     ensure_owned_process_cleanup_budget(deadline, "before process-group termination")?;
     let process_group = process.process_group.ok_or_else(|| {
         std::io::Error::other(
@@ -94,7 +118,9 @@ pub(super) fn signal_owned_process_tree_once(
     })?;
     // The unreaped direct child still pins the group, so this one signal
     // reaches every current member. Membership is not proven afterwards.
-    signal_pinned_process_group(process, process_group.id.as_raw(), deadline).map(|_| ())
+    signal(process, process_group.id.as_raw(), deadline)?;
+    owned_process_cleanup_remaining_at(deadline, now(), "after process-group SIGKILL")?;
+    Ok(())
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -221,6 +247,8 @@ pub(super) fn confirm_process_group_quiescent_with<T>(
         // make a prior SIGKILL authoritative for a later membership snapshot.
         let _signal_result = signal(state, process_group, deadline)?;
         owned_process_cleanup_remaining_at(deadline, now(), "after process-group SIGKILL")?;
+        #[cfg(test)]
+        MEMBERSHIP_PROOFS.with(|count| count.set(count.get() + 1));
         let quiescent = prove_quiescent(state, process_group, deadline)?;
         // Never accept a proof that completed outside the original absolute
         // cleanup budget.
