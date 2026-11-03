@@ -9,6 +9,11 @@ import tempfile
 import textwrap
 import unittest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    tomllib = None
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "ci" / "test-rust.sh"
 REPO = SCRIPT.parents[2]
@@ -217,6 +222,32 @@ class MacosPullRequestExclusionTests(unittest.TestCase):
         for pattern in patterns:
             with self.subTest(pattern=pattern):
                 self.assertTrue(any(re.search(pattern, name) for name in names), "no jig-bootstrap test matches")
+
+
+
+@unittest.skipIf(tomllib is None, "tomllib needs Python 3.11")
+class PullRequestDirectTestRunTests(unittest.TestCase):
+    """Pull requests run the test-locked command without the launcher, so a
+    change to it in .jig.toml would otherwise first run on master."""
+
+    def setUp(self):
+        self.config = tomllib.loads((REPO / ".jig.toml").read_text())
+        self.workflow = (REPO / ".github/workflows/rust-tests.yml").read_text()
+
+    def test_linux_and_macos_run_the_configured_command(self):
+        (runner,) = [
+            action["runner"] for action in self.config["repository"]["actions"]
+            if action.get("target") == {"component": "api", "action": "test-locked"}
+        ]
+        self.assertEqual(runner["kind"], "shell")
+        command = self.config["commands"][runner["command"]]
+        direct = re.findall(r'^ *JIG_REPO_ROOT="\$\(pwd -P\)" (.+) </dev/null$', self.workflow, re.M)
+        self.assertEqual(direct, [command, command])
+
+    def test_macos_keeps_the_launcher_time_limit(self):
+        limits = re.findall(r"command_timeout_seconds in \.jig\.toml\).*\n.*\n *timeout-minutes: (\d+)$",
+                            self.workflow, re.M)
+        self.assertEqual(limits, [str(self.config["execution"]["command_timeout_seconds"] // 60)])
 
 
 if __name__ == "__main__":

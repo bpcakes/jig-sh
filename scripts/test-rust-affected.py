@@ -11,12 +11,15 @@ any path the tables do not list, run the whole workspace suite. Every change
 to a tracked file also selects the supported-host policy tests, which scan
 every tracked file.
 
-Usage: scripts/test-rust-affected.py [--base REF] [--print | --filterset] [-- NEXTEST_ARGS...]
+Usage: scripts/test-rust-affected.py [--base REF] [--print | --filterset | --selects PACKAGE]
+       [-- NEXTEST_ARGS...]
 
 --filterset prints only the selection as a nextest filterset: `all()` when
 the whole suite must run, `none()` when nothing changed, and a union of
 `rdeps(...)` and narrower test filters otherwise. CI combines it with its
-phase filters.
+phase filters. --selects prints `true` when that filterset runs any of
+PACKAGE's tests and `false` otherwise, for CI steps that test one package
+outside Nextest.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -46,9 +50,10 @@ FULL_SUITE_PATHS = (
     # this checkout depend on.
     ".gitattributes",
     ".gitignore",
-    # CI runs the suite through the launcher as `scripts/jig check
+    # Local and nightly runs go through the launcher as `scripts/jig check
     # test-locked`, with a development binary from scripts/jig-dev. The
-    # launcher hands every test this checkout as JIG_REPO_ROOT.
+    # launcher hands every test this checkout as JIG_REPO_ROOT, which pull
+    # requests set themselves when they run the same command directly.
     ".jig.toml",
     ".agent/jig-contract.json",
     "scripts/jig",
@@ -255,6 +260,40 @@ def scope_filterset(selection: Selection | None) -> str:
     return " | ".join(terms) or "none()"
 
 
+def workspace_dependencies(metadata: dict, package: str) -> set[str]:
+    """PACKAGE and every workspace package it depends on, through any kind of dependency."""
+    members = set(metadata["workspace_members"])
+    packages = {entry["name"]: entry for entry in metadata["packages"] if entry["id"] in members}
+    if package not in packages:
+        raise SystemExit(f"{package} is not a workspace package.")
+    closure, pending = set(), [package]
+    while pending:
+        name = pending.pop()
+        if name not in closure:
+            closure.add(name)
+            pending += [dependency["name"] for dependency in packages[name]["dependencies"]
+                        if dependency["name"] in packages]
+    return closure
+
+
+def selects_package(selection: Selection | None, package: str, metadata: dict) -> bool:
+    """Whether scope_filterset(selection) runs any of PACKAGE's tests.
+
+    rdeps(=X) runs them when PACKAGE depends on X. A filter runs them unless
+    it is limited to another package.
+    """
+    dependencies = workspace_dependencies(metadata, package)
+    if selection is None:
+        return True
+    if with_extra_consumers(selection.packages) & dependencies:
+        return True
+    for test_filter in selection.filters:
+        scope = re.match(r"package\(=([^)]+)\) & ", test_filter)
+        if scope is None or scope.group(1) == package:
+            return True
+    return False
+
+
 def nextest_command(selection: Selection | None, extra_args: list[str]) -> list[str]:
     """The nextest invocation; None selects the whole workspace suite."""
     command = ["cargo", "nextest", "run", "--workspace", *NEXTEST_ARGS]
@@ -269,6 +308,9 @@ def main(argv: list[str], root: Path = ROOT) -> int:
     parser.add_argument("--print", action="store_true", help="Show the selection without running it.")
     parser.add_argument(
         "--filterset", action="store_true", help="Print only the selection as a nextest filterset."
+    )
+    parser.add_argument(
+        "--selects", metavar="PACKAGE", help="Print whether the selection runs any of PACKAGE's tests."
     )
     parser.add_argument("nextest_args", nargs="*", help="Extra arguments for cargo nextest run (after --).")
     options = parser.parse_args(argv)
@@ -285,12 +327,18 @@ def main(argv: list[str], root: Path = ROOT) -> int:
             changed_paths(root, base), package_roots(metadata), untracked_paths(root)
         )
     except FullSuite as reason:
+        if options.selects:
+            print(str(selects_package(None, options.selects, metadata)).lower())
+            return 0
         if options.filterset:
             print(scope_filterset(None))
             return 0
         print(f"Running the full suite: {reason.path} {reason.reason}.")
         command = nextest_command(None, options.nextest_args)
     else:
+        if options.selects:
+            print(str(selects_package(selection, options.selects, metadata)).lower())
+            return 0
         if options.filterset:
             print(scope_filterset(selection))
             return 0
