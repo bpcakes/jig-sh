@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import unittest
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "ci" / "test-rust.sh"
+REPO = SCRIPT.parents[2]
 
 
 class TestBuildReuseTests(unittest.TestCase):
@@ -183,6 +185,38 @@ class TestBuildReuseTests(unittest.TestCase):
         self.env["EXAMPLE_TEST_FAIL"] = "1"
         self.assertEqual(self.invoke().returncode, 42)
         self.assertEqual(sum(args[:2] == ["nextest", "run"] for args in self.calls()), 3)
+
+
+def jig_bootstrap_test_names():
+    """Approximate Nextest names of jig-bootstrap's unit tests, from its sources."""
+    source = REPO / "crates/jig-bootstrap/src"
+    names = set()
+    for path in source.rglob("*.rs"):
+        parts = list(path.relative_to(source).with_suffix("").parts)
+        if parts[-1] in ("lib", "mod"):
+            parts.pop()
+        text = path.read_text(errors="ignore")
+        functions = re.findall(r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*fn\s+(\w+)", text)
+        modules = ["::".join(parts)]
+        if re.search(r"^\s*mod tests \{", text, re.M):
+            modules.append("::".join(parts + ["tests"]))
+        names.update(f"{module}::{function}".lstrip(":") for module in modules for function in functions)
+    return names
+
+
+class MacosPullRequestExclusionTests(unittest.TestCase):
+    def test_every_kept_jig_bootstrap_pattern_matches_a_test(self):
+        """macOS pull requests exclude jig-bootstrap's tests except the ones named
+        here, so a pattern that stops matching would silently drop its tests."""
+        workflow = (REPO / ".github/workflows/rust-tests.yml").read_text()
+        kept = re.search(r"'package\(jig-bootstrap\) & not \((.*)\)'\s*\|\| ''", workflow, re.S)
+        self.assertIsNotNone(kept, "the macOS pull request exclusion changed shape")
+        patterns = re.findall(r"test\(/(.+?)/\)", kept.group(1))
+        names = jig_bootstrap_test_names()
+        self.assertGreater(len(patterns), 1)
+        for pattern in patterns:
+            with self.subTest(pattern=pattern):
+                self.assertTrue(any(re.search(pattern, name) for name in names), "no jig-bootstrap test matches")
 
 
 if __name__ == "__main__":

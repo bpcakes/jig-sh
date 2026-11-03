@@ -245,9 +245,32 @@ jobs:
           JIG_DEV_BIN: target/debug/jig
           JIG_REQUIRE_GO_TOOLCHAIN: "1"
           JIG_TEST_AFFECTED_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
-          # Pull requests leave the package-manager adoption scenarios, about
-          # 30% of macOS test time, to Linux; nightly runs keep them on macOS.
-          JIG_TEST_EXCLUDE: ${{ github.event_name == 'pull_request' && 'package(jig-bootstrap) & test(/^tests::frontend_adoption::/)' || '' }}
+          # Pull requests leave jig-bootstrap's platform-neutral rendering,
+          # adoption and generated-toolchain tests, about half of macOS test
+          # time, to Linux. They keep its tests of paths where macOS differs:
+          # git and /private/var path aliases, no-replace publication, flock
+          # guards, open-file accounting through /dev/fd, installer snippets
+          # and generated scripts under Bash 3.2, and ps-based install lock
+          # identity. Nightly runs keep every test.
+          JIG_TEST_EXCLUDE: >-
+            ${{ github.event_name == 'pull_request' && 'package(jig-bootstrap) & not (
+            test(/^git::tests::/) |
+            test(/^runtime_cache_lock::tests::/) |
+            test(/^update_transaction::tests::/) |
+            test(/^tests::launcher_repair_/) |
+            test(/^tests::repair_seed_/) |
+            test(/^tests::basic::path_and_git::/) |
+            test(/^tests::basic::init_safety::publication::/) |
+            test(/^tests::basic::init_safety::rollback::/) |
+            test(/^tests::basic::init_safety::preflight::/) |
+            test(/^tests::basic::init_safety::generation_budget::/) |
+            test(/^tests::template_source::(git_|non_git_)?local_source_stamp_/) |
+            test(/^tests::template_source::source_stamp::/) |
+            test(/^tests::frontend_adoption::configuration::package_managers::/) |
+            test(/^tests::frontend_adoption::install_locking::generated_web_checks_wait_/) |
+            test(/^tests::frontend_adoption::install_locking::generated_web_checks_recover_/) |
+            test(/^tests::frontend_adoption::install_locking::generated_web_install_worker_/))'
+            || '' }}
         run: scripts/jig check test-locked
       - name: Upload test timings
         if: ${{ !cancelled() }}

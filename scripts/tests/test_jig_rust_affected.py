@@ -25,49 +25,124 @@ METADATA = {
 }
 
 
-class AffectedPackagesTests(unittest.TestCase):
+HOST = f"({affected.HOST_SURFACE_TESTS})"
+GUIDES = f"({affected.GUIDE_TESTS})"
+
+
+class AffectedSelectionTests(unittest.TestCase):
     def setUp(self):
         self.roots = affected.package_roots(METADATA)
+
+    def select(self, *paths, untracked=frozenset()):
+        return affected.scope_filterset(affected.affected_selection(list(paths), self.roots, untracked))
 
     def test_package_roots_cover_only_workspace_members(self):
         self.assertEqual(self.roots, {"crates/cli": "example-cli", "crates/core": "example-core"})
 
     def test_files_select_their_owning_packages(self):
-        packages = affected.affected_packages(
+        selection = affected.affected_selection(
             ["crates/core/src/lib.rs", "crates/core/AGENTS.md", "crates/cli/tests/end_to_end.rs"],
             self.roots,
         )
-        self.assertEqual(packages, {"example-cli", "example-core"})
+        self.assertEqual(selection.packages, {"example-cli", "example-core"})
 
     def test_package_directory_prefixes_do_not_match_sibling_directories(self):
         with self.assertRaises(affected.FullSuite) as raised:
-            affected.affected_packages(["crates/core-extra/src/lib.rs"], self.roots)
+            affected.affected_selection(["crates/core-extra/src/lib.rs"], self.roots)
         self.assertEqual(raised.exception.path, "crates/core-extra/src/lib.rs")
 
-    def test_shared_inputs_outside_packages_require_the_full_suite(self):
-        for path in ["Cargo.lock", ".config/nextest.toml", "templates/project/.jig.toml.jinja", "docs/configuration.md"]:
-            with self.subTest(path=path), self.assertRaises(affected.FullSuite):
-                affected.affected_packages(["crates/core/src/lib.rs", path], self.roots)
+    def test_build_and_harness_inputs_require_the_full_suite(self):
+        for path in [
+            "Cargo.lock",
+            ".config/nextest.toml",
+            ".gitattributes",
+            ".jig.toml",
+            ".agent/jig-contract.json",
+            "scripts/jig",
+            "scripts/ci/test-rust.sh",
+            ".github/workflows/rust-tests.yml",
+        ]:
+            with self.subTest(path=path), self.assertRaises(affected.FullSuite) as raised:
+                affected.affected_selection(["crates/core/src/lib.rs", path], self.roots)
+            self.assertEqual(raised.exception.reason, "is a build or test-harness input")
 
-    def test_notes_that_no_test_reads_are_ignored(self):
-        packages = affected.affected_packages(
-            [
-                ".beadroll.json",
-                ".agent/plans/example.md",
-                "docs/plans/example.md",
-                "scripts/__pycache__/example.cpython-314.pyc",
-            ],
-            self.roots,
+    def test_unlisted_paths_outside_packages_require_the_full_suite(self):
+        for path in ["Makefile", "scripts/new-check.sh", "scripts/ci/new-step.sh", "tests/new.rs"]:
+            with self.subTest(path=path), self.assertRaises(affected.FullSuite) as raised:
+                affected.affected_selection([path], self.roots)
+            self.assertIn("not listed in OUTSIDE_PACKAGE_READERS", raised.exception.reason)
+
+    def test_directory_patterns_do_not_match_sibling_paths(self):
+        for path in ["docs", "templates-old/example.jinja", "scripts/jig-new"]:
+            with self.subTest(path=path), self.assertRaises(affected.FullSuite):
+                affected.affected_selection([path], self.roots)
+
+    def test_templates_select_the_packages_that_embed_or_include_them(self):
+        self.assertEqual(
+            self.select("templates/project/.jig.toml.jinja"),
+            f"rdeps(=jig-bootstrap) | rdeps(=jig-context) | rdeps(=jig-repository) | {HOST}",
         )
-        self.assertEqual(packages, set())
+
+    def test_known_runtime_readers_select_their_tests(self):
+        """Tests read these files at run time, which the include guard cannot see."""
+        for path in [
+            "README.md",
+            "CHANGELOG.md",
+            "agent-map.md",
+            "scripts/release.sh",
+            "docs/developer-ux.md",
+            "docs/repo-intent.md",
+            "docs/public-contract.md",
+            "docs/status-provider.md",
+        ]:
+            with self.subTest(path=path):
+                self.assertEqual(self.select(path), f"{HOST} | {GUIDES}")
+        self.assertEqual(self.select("scripts/install-jig.sh"), f"rdeps(=jig-sh) | rdeps(=jig-ui) | {HOST}")
+        for path in ["scripts/check-supported-host-surface.sh", "docs/plans/example.md"]:
+            with self.subTest(path=path):
+                self.assertIn(HOST, self.select(path))
+
+    def test_paths_no_test_reads_select_only_the_host_surface_scan(self):
+        for path in [
+            "AGENTS.md",
+            "CONTRIBUTING.md",
+            ".agent/state/receipts.jsonl",
+            ".agent/plans/example.md",
+            ".beadroll.json",
+            ".beads/issues.jsonl",
+            ".github/workflows/release.yml",
+            "scripts/tests/test_jig_example.py",
+            "scripts/ci/nightly-scope.py",
+            "examples/backend-only.toml",
+        ]:
+            with self.subTest(path=path):
+                self.assertEqual(self.select(path), HOST)
+
+    def test_package_changes_combine_with_outside_readers(self):
+        self.assertEqual(
+            self.select("crates/core/src/lib.rs", "README.md"),
+            f"rdeps(=example-core) | {HOST} | {GUIDES}",
+        )
+
+    def test_untracked_files_do_not_select_the_tracked_file_scan(self):
+        self.assertEqual(self.select(".agent/notes/example.md", untracked={".agent/notes/example.md"}), "none()")
+        self.assertEqual(self.select("docs/example.md", untracked={"docs/example.md"}), GUIDES)
+        self.assertEqual(
+            self.select("crates/core/src/new.rs", untracked={"crates/core/src/new.rs"}), "rdeps(=example-core)"
+        )
+
+    def test_bytecode_caches_are_ignored(self):
+        self.assertEqual(self.select("scripts/__pycache__/example.cpython-314.pyc"), "none()")
+        self.assertEqual(self.select(), "none()")
 
 
 class CommandTests(unittest.TestCase):
     def test_scope_filterset_covers_full_empty_and_scoped_selections(self):
         self.assertEqual(affected.scope_filterset(None), "all()")
-        self.assertEqual(affected.scope_filterset(set()), "none()")
+        self.assertEqual(affected.scope_filterset(affected.Selection()), "none()")
         self.assertEqual(
-            affected.scope_filterset({"jig-sh"}), "rdeps(=jig-sh) | rdeps(=jig-ui)"
+            affected.scope_filterset(affected.Selection({"jig-sh"}, {affected.HOST_SURFACE_TESTS})),
+            f"rdeps(=jig-sh) | rdeps(=jig-ui) | {HOST}",
         )
 
     def test_full_suite_command_has_no_filter(self):
@@ -77,11 +152,11 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(command[-1], "--no-fail-fast")
 
     def test_scoped_command_selects_reverse_dependencies_exactly(self):
-        command = affected.nextest_command({"example-core", "example-cli"}, [])
+        command = affected.nextest_command(affected.Selection({"example-core", "example-cli"}), [])
         self.assertEqual(command[-2:], ["-E", "rdeps(=example-cli) | rdeps(=example-core)"])
 
     def test_scoped_command_adds_packages_that_read_changed_files(self):
-        command = affected.nextest_command({"jig-sh"}, [])
+        command = affected.nextest_command(affected.Selection({"jig-sh"}), [])
         self.assertEqual(command[-1], "rdeps(=jig-sh) | rdeps(=jig-ui)")
 
 
@@ -132,7 +207,8 @@ class ChangedPathTests(unittest.TestCase):
         paths = self.changed()
         self.assertEqual(paths, [".agent/notes/café.md", "crates/core/src/naïve.rs"])
         self.assertEqual(
-            affected.affected_packages(paths, {"crates/core": "example-core"}), {"example-core"}
+            affected.affected_selection(paths, {"crates/core": "example-core"}).packages,
+            {"example-core"},
         )
 
 
@@ -148,47 +224,87 @@ NON_READING_REFERENCES = {
 
 
 class WorkspaceEdgeTests(unittest.TestCase):
-    def test_cross_package_file_reads_are_covered(self):
-        """A package whose sources name another package's directory must be one
-        of its reverse dependencies or be listed in EXTRA_CONSUMERS."""
+    @classmethod
+    def setUpClass(cls):
         metadata = json.loads(
             subprocess.run(
                 ["cargo", "metadata", "--format-version", "1", "--no-deps"],
                 cwd=REPO, check=True, capture_output=True, text=True,
             ).stdout
         )
-        roots = affected.package_roots(metadata)
-        names = set(roots.values())
-        dependents = {name: set() for name in names}
+        cls.roots = affected.package_roots(metadata)
+        names = set(cls.roots.values())
+        cls.dependents = {name: set() for name in names}
         for package in metadata["packages"]:
             for dependency in package["dependencies"]:
                 if dependency["name"] in names and package["name"] in names:
-                    dependents[dependency["name"]].add(package["name"])
+                    cls.dependents[dependency["name"]].add(package["name"])
 
-        def reverse_closure(name):
-            seen, pending = {name}, [name]
-            while pending:
-                for dependent in dependents[pending.pop()]:
-                    if dependent not in seen:
-                        seen.add(dependent)
-                        pending.append(dependent)
-            return seen
+    def reverse_closure(self, name):
+        seen, pending = {name}, [name]
+        while pending:
+            for dependent in self.dependents[pending.pop()]:
+                if dependent not in seen:
+                    seen.add(dependent)
+                    pending.append(dependent)
+        return seen
 
-        directories = {directory: name for directory, name in roots.items()}
+    def test_cross_package_file_reads_are_covered(self):
+        """A package whose sources name another package's directory must be one
+        of its reverse dependencies or be listed in EXTRA_CONSUMERS."""
+        directories = {directory: name for directory, name in self.roots.items()}
         uncovered = []
-        for directory, reader in roots.items():
+        for directory, reader in self.roots.items():
             for path in (REPO / directory).rglob("*.rs"):
                 text = path.read_text(errors="ignore")
                 for match in set(re.findall(r"crates/[a-z0-9-]+", text)):
                     owner = directories.get(match)
                     if owner is None or owner == reader:
                         continue
-                    if reader in reverse_closure(owner) or reader in affected.EXTRA_CONSUMERS.get(owner, ()):
+                    if reader in self.reverse_closure(owner) or reader in affected.EXTRA_CONSUMERS.get(owner, ()):
                         continue
                     if (path.relative_to(REPO).as_posix(), match) in NON_READING_REFERENCES:
                         continue
                     uncovered.append(f"{reader} reads {match} ({path.relative_to(REPO)})")
         self.assertEqual(uncovered, [], "add these readers to EXTRA_CONSUMERS")
+
+    def test_files_included_from_outside_packages_select_their_readers(self):
+        """A file that a package's sources include from outside every package
+        must select that package or a dependency of it, or run the whole suite."""
+        relative_include = re.compile(r'include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)')
+        manifest_include = re.compile(
+            r'include_(?:str|bytes)!\(\s*concat!\(\s*env!\("CARGO_MANIFEST_DIR"\),\s*"([^"]+)"\s*\)\s*\)'
+        )
+        uncovered = []
+        for directory, reader in self.roots.items():
+            for path in (REPO / directory).rglob("*.rs"):
+                text = path.read_text(errors="ignore")
+                targets = [path.parent / include for include in relative_include.findall(text)]
+                targets += [REPO / directory / include.lstrip("/") for include in manifest_include.findall(text)]
+                for target in targets:
+                    included = Path(os.path.normpath(target)).relative_to(REPO).as_posix()
+                    if any(included.startswith(root + "/") for root in self.roots):
+                        continue
+                    try:
+                        selection = affected.affected_selection([included], self.roots)
+                    except affected.FullSuite:
+                        continue
+                    if not any(reader in self.reverse_closure(package) for package in selection.packages):
+                        uncovered.append(f"{reader} includes {included} ({path.relative_to(REPO)})")
+        self.assertEqual(uncovered, [], "add these readers to OUTSIDE_PACKAGE_READERS")
+
+    def test_reader_tables_name_existing_packages_and_test_binaries(self):
+        directories = {name: directory for directory, name in self.roots.items()}
+        filters = {affected.HOST_SURFACE_TESTS}
+        for _, packages, entry_filters in affected.OUTSIDE_PACKAGE_READERS:
+            self.assertLessEqual(set(packages), set(directories), packages)
+            filters.update(entry_filters)
+        for test_filter in filters:
+            with self.subTest(test_filter=test_filter):
+                match = re.fullmatch(r"package\(=([a-z0-9-]+)\) & binary\(=([a-z0-9_]+)\)", test_filter)
+                self.assertIsNotNone(match, "extend this check for the new filter form")
+                package, binary = match.groups()
+                self.assertTrue((REPO / directories[package] / "tests" / f"{binary}.rs").is_file())
 
 
 if __name__ == "__main__":

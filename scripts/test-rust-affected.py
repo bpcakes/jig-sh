@@ -5,14 +5,18 @@ Changed files are those that differ between BASE (by default the merge base
 with origin/master) and HEAD, plus staged, unstaged, and untracked files. A
 file inside a workspace package selects that package, every package that
 depends on it through nextest's `rdeps()`, and any package listed as reading
-its files. Paths that no test reads are ignored; any other change outside a
-package runs the whole workspace suite.
+its files. A file outside every package selects the tests listed as reading
+it in OUTSIDE_PACKAGE_READERS. Inputs to how the suite builds and runs, and
+any path the tables do not list, run the whole workspace suite. Every change
+to a tracked file also selects the supported-host policy tests, which scan
+every tracked file.
 
 Usage: scripts/test-rust-affected.py [--base REF] [--print | --filterset] [-- NEXTEST_ARGS...]
 
 --filterset prints only the selection as a nextest filterset: `all()` when
-the whole suite must run, `none()` when no Rust package changed, and an
-`rdeps(...)` expression otherwise. CI combines it with its phase filters.
+the whole suite must run, `none()` when nothing changed, and a union of
+`rdeps(...)` and narrower test filters otherwise. CI combines it with its
+phase filters.
 """
 
 from __future__ import annotations
@@ -27,13 +31,100 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Tracker configuration, notes, and planning records that no test reads.
-# Python bytecode caches are skipped wherever they appear.
-IGNORED_PREFIXES = (
-    ".beadroll.json",
-    ".agent/notes/",
-    ".agent/plans/",
-    "docs/plans/",
+# A pattern ending in "/" matches every path below that directory; any other
+# pattern matches one path.
+
+# Paths outside every package that can change how any test builds or runs.
+FULL_SUITE_PATHS = (
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    ".cargo/",
+    ".config/",
+    # Checkout normalization and ignore rules, which the tests that clone
+    # this checkout depend on.
+    ".gitattributes",
+    ".gitignore",
+    # CI runs the suite through the launcher as `scripts/jig check
+    # test-locked`, with a development binary from scripts/jig-dev. The
+    # launcher hands every test this checkout as JIG_REPO_ROOT.
+    ".jig.toml",
+    ".agent/jig-contract.json",
+    "scripts/jig",
+    "scripts/jig-dev",
+    # The CI test step, its environment, and this selection.
+    ".github/workflows/rust-tests.yml",
+    "scripts/ci/setup-user-systemd.sh",
+    "scripts/ci/test-rust.sh",
+    "scripts/test-rust-affected.py",
+)
+
+# jig-sh's supported-host policy tests scan the name and contents of every
+# tracked file, so every change to a tracked file selects them.
+HOST_SURFACE_TESTS = "package(=jig-sh) & binary(=supported_host_surface)"
+# jig-sh's architecture tests read README.md, CHANGELOG.md, agent-map.md,
+# scripts/release.sh, and guides under docs/, and require docs/status-provider.md
+# to stay absent.
+GUIDE_TESTS = "package(=jig-sh) & binary(=ui_architecture)"
+
+# Other paths outside every package, matched in order: the packages whose
+# tests read them (selected with their dependents) and narrower Nextest
+# filtersets. Entries with neither are read by no test except the host-surface
+# scan. A path that no entry matches runs the whole suite.
+OUTSIDE_PACKAGE_READERS = (
+    # jig-bootstrap's build script embeds every template, and jig-sh links
+    # it; jig-context and jig-repository tests include single templates.
+    ("templates/", ("jig-bootstrap", "jig-context", "jig-repository"), ()),
+    ("docs/", (), (GUIDE_TESTS,)),
+    ("README.md", (), (GUIDE_TESTS,)),
+    ("CHANGELOG.md", (), (GUIDE_TESTS,)),
+    ("agent-map.md", (), (GUIDE_TESTS,)),
+    ("scripts/release.sh", (), (GUIDE_TESTS,)),
+    # jig-sh tests run the installer and check that it exists.
+    ("scripts/install-jig.sh", ("jig-sh",), ()),
+    # Other guides, harness state, tracker records, other workflows, and the
+    # policy and file-budget settings that other CI jobs check.
+    ("AGENTS.md", (), ()),
+    ("CONTRIBUTING.md", (), ()),
+    ("SECURITY.md", (), ()),
+    ("LICENSE", (), ()),
+    (".agent/", (), ()),
+    (".beadroll.json", (), ()),
+    (".beads/", (), ()),
+    (".github/", (), ()),
+    (".jig/", (), ()),
+    ("clippy.toml", (), ()),
+    ("landing/", (), ()),
+    # Inputs of the shell fixtures that the rendered-fixtures job runs.
+    ("examples/", (), ()),
+    ("tests/fixtures/", (), ()),
+    ("scripts/fixtures/", (), ()),
+    ("scripts/validate-fixtures.sh", (), ()),
+    ("scripts/check-generated-rust-clippy.sh", (), ()),
+    # Python tests, CI gates, repository checks, and release and maintenance
+    # tooling that no Rust test runs.
+    ("scripts/tests/", (), ()),
+    ("scripts/ci/nightly-scope.py", (), ()),
+    ("scripts/ci/policy-scope.py", (), ()),
+    ("scripts/check-launcher-template.sh", (), ()),
+    ("scripts/check-rust-format.sh", (), ()),
+    ("scripts/check-rust-module-splits.py", (), ()),
+    ("scripts/check-supported-host-surface.sh", (), ()),
+    ("scripts/check-vault-production-features.py", (), ()),
+    ("scripts/jig-source-runtime.py", (), ()),
+    ("scripts/install.sh", (), ()),
+    ("scripts/release-notes.sh", (), ()),
+    ("scripts/release-validation.sh", (), ()),
+    ("scripts/package-release-binary.py", (), ()),
+    ("scripts/publish-release-binaries.py", (), ()),
+    ("scripts/smoke-release-binary.py", (), ()),
+    ("scripts/deploy-landing.sh", (), ()),
+    ("scripts/bead-triage.py", (), ()),
+    ("scripts/benchmark-ready-dependents.py", (), ()),
+    ("scripts/enforce-coverage.js", (), ()),
+    ("scripts/new-checkout.sh", (), ()),
+    ("scripts/test-rust-partition.sh", (), ()),
 )
 
 # Packages whose tests read another package's files without depending on it,
@@ -49,9 +140,18 @@ NEXTEST_ARGS = ["-P", "local", "--status-level", "fail", "--final-status-level",
 class FullSuite(Exception):
     """A changed path can affect tests outside any single package."""
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, reason: str) -> None:
         super().__init__(path)
         self.path = path
+        self.reason = reason
+
+
+class Selection:
+    """Packages selected with their dependents, plus narrower Nextest filters."""
+
+    def __init__(self, packages: set[str] | None = None, filters: set[str] | None = None) -> None:
+        self.packages = set(packages or ())
+        self.filters = set(filters or ())
 
 
 def git(root: Path, *args: str) -> str:
@@ -73,6 +173,10 @@ def default_base(root: Path) -> str:
     raise SystemExit("Could not find a merge base with origin/master or master; pass --base.")
 
 
+def untracked_paths(root: Path) -> set[str]:
+    return set(nul_separated(git(root, "ls-files", "-z", "--others", "--exclude-standard")))
+
+
 def changed_paths(root: Path, base: str) -> list[str]:
     """Paths changed by commits since BASE, plus local and untracked changes.
 
@@ -82,8 +186,7 @@ def changed_paths(root: Path, base: str) -> list[str]:
     """
     committed = git(root, "diff", "-z", "--name-only", "--no-renames", base, "HEAD", "--")
     local = git(root, "diff", "-z", "--name-only", "--no-renames", "HEAD", "--")
-    untracked = git(root, "ls-files", "-z", "--others", "--exclude-standard")
-    return sorted(set(nul_separated(committed) + nul_separated(local) + nul_separated(untracked)))
+    return sorted(set(nul_separated(committed) + nul_separated(local)) | untracked_paths(root))
 
 
 def package_roots(metadata: dict) -> dict[str, str]:
@@ -98,21 +201,42 @@ def package_roots(metadata: dict) -> dict[str, str]:
     return roots
 
 
-def affected_packages(paths: list[str], roots: dict[str, str]) -> set[str]:
-    """Packages whose directories contain a changed path; raises FullSuite."""
-    packages = set()
+def matches(path: str, pattern: str) -> bool:
+    return path.startswith(pattern) if pattern.endswith("/") else path == pattern
+
+
+def affected_selection(
+    paths: list[str], roots: dict[str, str], untracked: set[str] | frozenset[str] = frozenset()
+) -> Selection:
+    """The tests that changed paths can affect; raises FullSuite.
+
+    Untracked paths do not select the host-surface tests, which scan only
+    tracked files.
+    """
+    selection = Selection()
     for path in paths:
-        if path.startswith(IGNORED_PREFIXES) or "__pycache__" in PurePosixPath(path).parts:
+        if "__pycache__" in PurePosixPath(path).parts:
             continue
+        if path not in untracked:
+            selection.filters.add(HOST_SURFACE_TESTS)
         owner = None
         for parent in PurePosixPath(path).parents:
             owner = roots.get(parent.as_posix())
             if owner is not None:
                 break
-        if owner is None:
-            raise FullSuite(path)
-        packages.add(owner)
-    return packages
+        if owner is not None:
+            selection.packages.add(owner)
+            continue
+        if any(matches(path, pattern) for pattern in FULL_SUITE_PATHS):
+            raise FullSuite(path, "is a build or test-harness input")
+        for pattern, packages, filters in OUTSIDE_PACKAGE_READERS:
+            if matches(path, pattern):
+                selection.packages.update(packages)
+                selection.filters.update(filters)
+                break
+        else:
+            raise FullSuite(path, "is outside every package and not listed in OUTSIDE_PACKAGE_READERS")
+    return selection
 
 
 def with_extra_consumers(packages: set[str]) -> set[str]:
@@ -122,24 +246,20 @@ def with_extra_consumers(packages: set[str]) -> set[str]:
     return selected
 
 
-def filterset(packages: set[str]) -> str:
-    return " | ".join(f"rdeps(={package})" for package in sorted(packages))
-
-
-def scope_filterset(packages: set[str] | None) -> str:
+def scope_filterset(selection: Selection | None) -> str:
     """The selection as a nextest filterset; None selects everything."""
-    if packages is None:
+    if selection is None:
         return "all()"
-    if not packages:
-        return "none()"
-    return filterset(with_extra_consumers(packages))
+    terms = [f"rdeps(={package})" for package in sorted(with_extra_consumers(selection.packages))]
+    terms += [f"({test_filter})" for test_filter in sorted(selection.filters)]
+    return " | ".join(terms) or "none()"
 
 
-def nextest_command(packages: set[str] | None, extra_args: list[str]) -> list[str]:
+def nextest_command(selection: Selection | None, extra_args: list[str]) -> list[str]:
     """The nextest invocation; None selects the whole workspace suite."""
     command = ["cargo", "nextest", "run", "--workspace", *NEXTEST_ARGS]
-    if packages is not None:
-        command += ["-E", filterset(with_extra_consumers(packages))]
+    if selection is not None:
+        command += ["-E", scope_filterset(selection)]
     return command + extra_args
 
 
@@ -161,22 +281,26 @@ def main(argv: list[str], root: Path = ROOT) -> int:
         ).stdout
     )
     try:
-        packages = affected_packages(changed_paths(root, base), package_roots(metadata))
+        selection = affected_selection(
+            changed_paths(root, base), package_roots(metadata), untracked_paths(root)
+        )
     except FullSuite as reason:
         if options.filterset:
             print(scope_filterset(None))
             return 0
-        print(f"Running the full suite: {reason.path} is outside any workspace package.")
+        print(f"Running the full suite: {reason.path} {reason.reason}.")
         command = nextest_command(None, options.nextest_args)
     else:
         if options.filterset:
-            print(scope_filterset(packages))
+            print(scope_filterset(selection))
             return 0
-        if not packages:
-            print(f"No Rust package changed since {base[:12]}; nothing to test.")
+        if not selection.packages and not selection.filters:
+            print(f"No test reads the files changed since {base[:12]}; nothing to test.")
             return 0
-        print(f"Changed packages since {base[:12]}: {', '.join(sorted(packages))}")
-        command = nextest_command(packages, options.nextest_args)
+        if selection.packages:
+            packages = ", ".join(sorted(selection.packages))
+            print(f"Packages selected by changes since {base[:12]}, with their dependents: {packages}")
+        command = nextest_command(selection, options.nextest_args)
     print("+ " + shlex.join(command))
     if options.print:
         return 0

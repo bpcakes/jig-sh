@@ -28,10 +28,24 @@ selects its own tests and those of every package that depends on it, through
 nextest's `rdeps()`. Packages whose tests read another package's files without
 depending on it are listed in the script's `EXTRA_CONSUMERS` table; a guard test
 in `scripts/tests/test_jig_rust_affected.py` fails when a crate names another
-crate's directory without such an edge. Tracker configuration and notes that
-no test reads (`.beadroll.json`, `.agent/plans/`, `.agent/notes/`, `docs/plans/`)
-and Python `__pycache__` directories are ignored. Any other change outside a crate, such as `Cargo.lock`,
-`templates/`, `scripts/`, or `.config/nextest.toml`, runs the whole suite.
+crate's directory without such an edge.
+
+Files outside every crate select the tests that read them, as listed in the
+script's `OUTSIDE_PACKAGE_READERS` table. For example, `templates/` selects
+jig-bootstrap, which embeds the templates, and its dependents, while `docs/`,
+`README.md`, `CHANGELOG.md`, and `agent-map.md` select jig-sh's
+`ui_architecture` tests. Every change to a tracked file also selects jig-sh's
+`supported_host_surface` tests, which scan every tracked file. Paths that no
+test reads, such as `.agent/state/`, `.beads/`, other workflows, and Python
+tests, select nothing else. Build and test-harness inputs run the whole suite:
+`Cargo.toml`, `Cargo.lock`, the toolchain, `.config/`, `.gitattributes`,
+`.gitignore`, `.jig.toml`, `.agent/jig-contract.json`, the `scripts/jig` and
+`scripts/jig-dev` launchers, the Rust Tests workflow, and its test scripts. So
+does any path the table does not list. When you add a test that reads a file
+outside its crate, make the file's entry select that test. A guard test fails
+when a crate `include_str!`s a file whose entry does not select the crate; files
+that tests read at run time are pinned by the table's unit tests instead. Python
+`__pycache__` directories are ignored.
 `jig-sh` depends on every crate, so its tests run for any Rust change.
 
 ## Before handing off a broad change
@@ -90,11 +104,18 @@ the job log.
 
 The macOS job on pull requests also sets `JIG_TEST_EXCLUDE` to a Nextest
 filterset that `scripts/ci/test-rust.sh` removes from every workspace phase:
-jig-bootstrap's `tests::frontend_adoption` package-manager scenarios, which take
-about 30% of macOS test time. The Linux job still runs them on pull requests,
-and the nightly macOS run keeps them, including their Node 24 coverage. The macOS job
-also runs the launcher parity check with Apple's stock Bash 3.2 and the
-source-runtime unit tests.
+jig-bootstrap's platform-neutral tests, which take about half of macOS test
+time. They render templates, adopt repositories, and run generated toolchain
+checks, including the package-manager adoption scenarios. Pull requests keep
+jig-bootstrap's tests of paths where macOS behaves differently: git and
+`/private/var` path aliases, no-replace publication, flock guards, open-file
+accounting through `/dev/fd`, installer snippets and generated scripts under
+Bash 3.2, and `ps`-based install lock identity. A guard test in
+`scripts/tests/test_jig_ci_tests.py` fails when a kept pattern stops matching a
+test. The Linux job still runs every affected jig-bootstrap test on pull
+requests, and the nightly macOS run keeps them all, including their Node 24
+coverage. The macOS job also runs the launcher parity check with Apple's stock
+Bash 3.2 and the source-runtime unit tests.
 
 Merges to `master` do not start CI. The Rust Tests and Repo Policy workflows run
 on `master` each night instead (04:23 UTC), covering every job, platform, and
