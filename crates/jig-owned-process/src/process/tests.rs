@@ -8,8 +8,16 @@ use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
 
+#[cfg(target_os = "macos")]
+use super::group_cleanup::resolve_macos_process_group_signal_eperm;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::group_cleanup::{
+    ProcessGroupSignalResult, confirm_process_group_quiescent_with, signal_owned_process_group_with,
+};
 use super::*;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod cleanup_policy;
 #[cfg(target_os = "macos")]
 mod macos_exit;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -199,7 +199,9 @@ fn git_bounded_proof_command_capture_with_timeout(
         .stderr(Stdio::piped());
     configure_read_only_git_environment(command);
     let mut observer = GitProcessObserver { collection };
-    let output = match run_owned_process_tree_with_output_policy_and_observer(
+    // Read-only Git probes cannot change what a check reports, so they skip
+    // the descendant-membership proof that check targets require.
+    let output = match run_owned_process_tree_with_output_policy_cleanup_and_observer(
         command,
         timeout,
         ProcessOutputLimits {
@@ -207,6 +209,7 @@ fn git_bounded_proof_command_capture_with_timeout(
             stderr: MAX_GIT_ERROR_PREVIEW_BYTES as usize,
         },
         ProcessOutputOverflowPolicy::Error,
+        ProcessTreeCleanup::BestEffort,
         &mut observer,
     ) {
         Ok(output) => output,
@@ -350,14 +353,19 @@ pub(super) fn run_git_command_with_cancellation(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Output> {
     configure_read_only_git_environment(command);
-    let output = match run_owned_process_tree_with_output_limits(
+    let mut observer = GitProcessObserver {
+        collection: GitCollection::Cancellable(cancelled),
+    };
+    let output = match run_owned_process_tree_with_output_policy_cleanup_and_observer(
         command,
         Duration::MAX,
         ProcessOutputLimits {
             stdout: usize::MAX,
             stderr: usize::MAX,
         },
-        cancelled,
+        ProcessOutputOverflowPolicy::Truncate,
+        ProcessTreeCleanup::BestEffort,
+        &mut observer,
     ) {
         Ok(output) => output,
         Err(error) if error.is_cancellation() => {

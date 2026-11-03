@@ -25,9 +25,9 @@ use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
 
 use jig_owned_process::{
     OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError, ProcessOutputLimits,
-    ProcessOutputOverflowPolicy, format_exit_status, require_success,
-    run_checked_output_with_context, run_owned_process_tree_with_output_limits,
-    run_owned_process_tree_with_output_policy_and_observer,
+    ProcessOutputOverflowPolicy, ProcessTreeCleanup, format_exit_status, require_success,
+    run_checked_output_with_context,
+    run_owned_process_tree_with_output_policy_cleanup_and_observer,
 };
 
 mod change_scope;

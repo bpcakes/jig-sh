@@ -70,6 +70,27 @@ fn set_nonblocking_with(
     set_flags(flags | libc::O_NONBLOCK)
 }
 
+/// Arranges for the calling child to receive `SIGKILL` when `parent` exits.
+///
+/// Call it from `pre_exec`, passing the parent's PID captured before spawn.
+/// If the parent already exited between fork and this call, no signal would
+/// arrive, so the child refuses to exec. Linux ties the signal to the thread
+/// that spawned the child, so that thread must outlive the child; owned-process
+/// runners wait on the spawning thread. Only the direct child is covered.
+#[cfg(target_os = "linux")]
+pub fn set_parent_death_signal(parent: libc::pid_t) -> std::io::Result<()> {
+    // SAFETY: PR_SET_PDEATHSIG only changes this process's own parent-death
+    // signal; prctl reads the signal number as an unsigned long.
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: getppid only reads this process's parent identity.
+    if unsafe { libc::getppid() } != parent {
+        return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 #[derive(Debug)]
 pub struct WaitidStatus {

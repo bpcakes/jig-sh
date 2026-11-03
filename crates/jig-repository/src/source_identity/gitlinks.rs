@@ -189,7 +189,7 @@ pub(super) fn git_status_is_dirty(
         .stderr(Stdio::piped());
     configure_read_only_git_environment(&mut command);
     let mut observer = GitProcessObserver { collection };
-    let output = match run_owned_process_tree_with_output_policy_and_observer(
+    let output = match run_owned_process_tree_with_output_policy_cleanup_and_observer(
         &mut command,
         Duration::MAX,
         ProcessOutputLimits {
@@ -197,6 +197,7 @@ pub(super) fn git_status_is_dirty(
             stderr: MAX_GIT_ERROR_PREVIEW_BYTES as usize,
         },
         ProcessOutputOverflowPolicy::Error,
+        ProcessTreeCleanup::BestEffort,
         &mut observer,
     ) {
         Ok(output) => output,
