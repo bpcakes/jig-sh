@@ -30,6 +30,15 @@ members = [
 ]
 resolver = "2"
 
+# Keep file/line backtraces while reducing local build artifacts. The test
+# profile inherits these settings; debug assertions remain enabled.
+[profile.dev]
+debug = "line-tables-only"
+
+# Non-workspace dependencies do not need debug information for routine builds.
+[profile.dev.package."*"]
+debug = false
+
 [profile.test.package.argon2]
 opt-level = 3
 
