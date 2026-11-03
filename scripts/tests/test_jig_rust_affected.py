@@ -1,4 +1,6 @@
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -158,6 +160,120 @@ class CommandTests(unittest.TestCase):
     def test_scoped_command_adds_packages_that_read_changed_files(self):
         command = affected.nextest_command(affected.Selection({"jig-sh"}), [])
         self.assertEqual(command[-1], "rdeps(=jig-sh) | rdeps(=jig-ui)")
+
+
+def package(name, *dependencies, kind=None):
+    return {
+        "id": f"{name} 0.1.0",
+        "name": name,
+        "dependencies": [{"name": dependency, "kind": kind} for dependency in dependencies],
+    }
+
+
+DEPENDENCY_METADATA = {
+    "workspace_members": [
+        f"{name} 0.1.0"
+        for name in ("example-contract", "example-core", "example-proxy", "example-cli", "jig-ui", "example-board")
+    ],
+    "packages": [
+        package("example-contract"),
+        package("example-core", "example-contract", kind="dev"),
+        package("example-proxy", "example-core", "outside"),
+        package("example-cli", "example-proxy"),
+        package("jig-ui"),
+        package("example-board", "jig-ui"),
+        {"id": "outside 1.0.0", "name": "outside", "dependencies": []},
+    ],
+}
+
+
+class PackageSelectionTests(unittest.TestCase):
+    def selects(self, selection, name="example-proxy"):
+        return affected.selects_package(selection, name, DEPENDENCY_METADATA)
+
+    def test_the_full_suite_selects_every_package(self):
+        self.assertTrue(self.selects(None))
+
+    def test_changes_to_the_package_or_any_workspace_dependency_select_it(self):
+        self.assertEqual(
+            affected.workspace_dependencies(DEPENDENCY_METADATA, "example-proxy"),
+            {"example-proxy", "example-core", "example-contract"},
+        )
+        self.assertTrue(self.selects(affected.Selection({"example-proxy"})))
+        self.assertTrue(self.selects(affected.Selection({"example-contract"})))
+
+    def test_changes_to_dependents_alone_do_not_select_it(self):
+        self.assertFalse(self.selects(affected.Selection({"example-cli"})))
+        self.assertFalse(self.selects(affected.Selection()))
+
+    def test_extra_consumers_extend_the_changed_packages(self):
+        self.assertTrue(self.selects(affected.Selection({"jig-sh"}), "example-board"))
+        self.assertFalse(self.selects(affected.Selection({"jig-sh"})))
+
+    def test_filters_select_it_unless_limited_to_another_package(self):
+        self.assertFalse(self.selects(affected.Selection(filters={affected.HOST_SURFACE_TESTS})))
+        self.assertTrue(self.selects(affected.Selection(filters={"package(=example-proxy) & binary(=signals)"})))
+        self.assertTrue(self.selects(affected.Selection(filters={"test(/signals/)"})))
+
+    def test_unknown_packages_are_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.selects(None, "outside")
+
+
+class SelectsCommandTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="example-affected-")
+        self.addCleanup(temporary.cleanup)
+        self.repo = Path(temporary.name)
+        self.write("Cargo.toml", '[workspace]\nmembers = ["crates/core", "crates/proxy", "crates/cli"]\nresolver = "2"\n')
+        # Cargo may write a lockfile, which would otherwise count as a change.
+        self.write(".gitignore", "Cargo.lock\ntarget/\n")
+        self.crate("core")
+        self.crate("proxy", "core")
+        self.crate("cli", "proxy")
+        self.git("init", "-q")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "base")
+
+    def git(self, *args):
+        subprocess.run(
+            ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", *args],
+            cwd=self.repo, check=True, capture_output=True,
+        )
+
+    def write(self, relative, contents):
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents)
+
+    def crate(self, name, *dependencies):
+        lines = [f'[package]\nname = "example-{name}"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]']
+        lines += [f'example-{dependency} = {{ path = "../{dependency}" }}' for dependency in dependencies]
+        self.write(f"crates/{name}/Cargo.toml", "\n".join(lines) + "\n")
+        self.write(f"crates/{name}/src/lib.rs", "")
+
+    def selects(self, name="example-proxy"):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = affected.main(["--base", "HEAD", "--selects", name], root=self.repo)
+        self.assertEqual(status, 0)
+        return output.getvalue()
+
+    def test_reports_whether_the_changes_reach_the_package(self):
+        self.write("crates/cli/src/lib.rs", "// changed\n")
+        self.assertEqual(self.selects(), "false\n")
+        self.write("crates/core/src/lib.rs", "// changed\n")
+        self.assertEqual(self.selects(), "true\n")
+
+    def test_full_suite_inputs_select_the_package(self):
+        self.write(".config/nextest.toml", "# changed\n")
+        self.assertEqual(self.selects(), "true\n")
+
+    def test_unknown_packages_fail_even_for_the_full_suite(self):
+        self.write(".config/nextest.toml", "# changed\n")
+        with self.assertRaises(SystemExit) as raised:
+            self.selects("example-missing")
+        self.assertNotEqual(raised.exception.code, 0)
 
 
 class ChangedPathTests(unittest.TestCase):

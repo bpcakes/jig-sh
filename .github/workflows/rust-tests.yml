@@ -28,11 +28,6 @@ on:
     types:
       - checks_requested
   workflow_dispatch:
-    inputs:
-      benchmark_only:
-        description: Run only the formatting and MSRV jobs for runner comparison
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -65,34 +60,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci/nightly-scope.py
 
-  launcher-contract:
-    needs: nightly-gate
-    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' }}
-    name: Formatting and launcher checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          cache: false
-          rustflags: ""
-          components: rustfmt
-      # This is the exact script behind api:fmt; formatting needs no Jig binary.
-      - name: Run rustfmt check
-        run: bash scripts/check-rust-format.sh
-      - name: Check launcher, installer, and contract parity
-        if: ${{ !cancelled() }}
-        run: bash scripts/check-launcher-template.sh
-      - name: Test source runtime selection and development entrypoint
-        if: ${{ !cancelled() }}
-        run: python3 -m unittest discover -s scripts/tests -p 'test_jig_*.py'
-
   rendered-fixtures:
     needs: nightly-gate
-    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' }}
     name: Validate rendered fixtures and generated Rust
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -144,8 +114,8 @@ jobs:
 
   test:
     needs: nightly-gate
-    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
-    name: scripts/jig check test-locked
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' }}
+    name: Locked Rust tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -179,6 +149,9 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Build and validate the current source runtime through the launcher
+        # Pull requests skip this build, which the tests cannot reuse. Repo
+        # Policy runs the same check with the binary it already builds.
+        if: ${{ github.event_name != 'pull_request' }}
         run: scripts/jig-dev check contract
       - name: Start the systemd user manager
         run: bash scripts/ci/setup-user-systemd.sh
@@ -187,7 +160,21 @@ jobs:
           JIG_DEV_BIN: target/debug/jig
           JIG_REQUIRE_GO_TOOLCHAIN: "1"
           JIG_TEST_AFFECTED_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
-        run: scripts/jig check test-locked
+        # Pull requests run a copy of .jig.toml's test-locked command, kept in
+        # sync by scripts/tests/test_jig_ci_tests.py, the way the launcher
+        # does: from the checkout root, with JIG_REPO_ROOT set to it and no
+        # stdin, failing if the tests change the checkout.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            exec scripts/jig check test-locked
+          fi
+          before="$(git status --porcelain)"
+          JIG_REPO_ROOT="$(pwd -P)" bash scripts/ci/test-rust.sh workspace </dev/null
+          if [ "$(git status --porcelain)" != "$before" ]; then
+            echo "::error::The tests changed files in the checkout."
+            git status --short
+            exit 1
+          fi
       - name: Upload test timings
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -199,8 +186,8 @@ jobs:
 
   test-macos:
     needs: nightly-gate
-    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
-    name: scripts/jig check test-locked (macOS)
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' }}
+    name: Locked Rust tests (macOS)
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -239,6 +226,10 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Build and validate the current source runtime through the launcher
+        # Pull requests skip this build, which the tests cannot reuse. Repo
+        # Policy checks only Linux on pull requests, so the step after the
+        # tests runs the test build's binary through the launcher instead.
+        if: ${{ github.event_name != 'pull_request' }}
         run: scripts/jig-dev check contract
       - name: Run locked Rust tests
         env:
@@ -271,72 +262,31 @@ jobs:
             test(/^tests::frontend_adoption::install_locking::generated_web_checks_recover_/) |
             test(/^tests::frontend_adoption::install_locking::generated_web_install_worker_/))'
             || '' }}
-        run: scripts/jig check test-locked
-      - name: Upload test timings
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: test-timings-${{ github.job }}
-          path: .agent/.cache/test-reports/**/*.xml
-          include-hidden-files: true
-          retention-days: 7
-
-  msrv:
-    needs: nightly-gate
-    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' }}
-    name: cargo check --workspace --all-targets --all-features (MSRV 1.88)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          toolchain: "1.88"
-          cache: false
-          rustflags: ""
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}
-      - name: Run MSRV check
-        run: cargo check --workspace --all-targets --all-features --locked
-
-  no-default-features:
-    needs: nightly-gate
-    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
-    name: cargo build and test -p jig-sh --no-default-features
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Node.js for generated frontend tests
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          # Pin Node for predictable frontend fixture performance on each platform.
-          node-version: ${{ runner.os == 'macOS' && '24' || '22' }}
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          cache: false
-          rustflags: ""
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
-        with:
-          tool: cargo-nextest@0.9.130
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          shared-key: rust-${{ runner.os }}-${{ github.job }}
-      - name: Run no-default-features build
-        run: cargo build -p jig-sh --no-default-features --locked
-      - name: Run no-default-features tests
-        run: bash scripts/ci/test-rust.sh ${{ github.event_name == 'pull_request' && 'minimal-focused' || 'minimal' }}
-      # Nextest does not run doctests. Preserve cargo test's documentation coverage.
-      - name: Run no-default-features doctests
-        run: cargo test -p jig-sh --no-default-features --doc --locked
+        # The launcher's limit (command_timeout_seconds in .jig.toml), which
+        # the direct run lacks.
+        timeout-minutes: 30
+        # Pull requests run a copy of .jig.toml's test-locked command, kept in
+        # sync by scripts/tests/test_jig_ci_tests.py, the way the launcher
+        # does: from the checkout root, with JIG_REPO_ROOT set to it and no
+        # stdin, failing if the tests change the checkout.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            exec scripts/jig check test-locked
+          fi
+          before="$(git status --porcelain)"
+          JIG_REPO_ROOT="$(pwd -P)" bash scripts/ci/test-rust.sh workspace </dev/null
+          if [ "$(git status --porcelain)" != "$before" ]; then
+            echo "::error::The tests changed files in the checkout."
+            git status --short
+            exit 1
+          fi
+      - name: Check the launcher hands off to the test build
+        # Pull requests otherwise run no macOS binary through the launcher and
+        # installer. The test build's binary needs no further compile.
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          JIG_DEV_BIN: target/debug/jig
+        run: scripts/jig check contract
       - name: Upload test timings
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -348,9 +298,10 @@ jobs:
 
   no-default-features-macos:
     needs: nightly-gate
-    # Pull requests rely on the Linux no-default-features job; nightly, merge
-    # queue, and manual runs repeat the full minimal suite on macOS.
-    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.benchmark_only) }}
+    # Pull requests rely on the Linux no-default-features tests in Repo Policy;
+    # nightly, merge queue, and manual runs repeat the full minimal suite on
+    # macOS.
+    if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' && github.event_name != 'pull_request' }}
     name: cargo test -p jig-sh --no-default-features (macOS)
     runs-on: macos-latest
     timeout-minutes: 45

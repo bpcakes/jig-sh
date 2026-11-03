@@ -69,15 +69,18 @@ jobs:
   clippy:
     needs: nightly-gate
     if: ${{ !cancelled() && needs.nightly-gate.outputs.run != 'false' }}
-    name: Rust lint and repository policy (${{ matrix.os }})
+    name: Rust lint, compatibility, and repository policy (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'macos-latest' && 45 || 30 }}
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 45 || 40 }}
     strategy:
       fail-fast: false
       matrix:
         # Pull requests check Linux only; nightly, merge queue, and manual
         # runs add macOS. A matrix include entry would add macOS back, so
-        # per-platform settings are derived from matrix.os below.
+        # per-platform settings are derived from matrix.os below. Linux also
+        # runs the formatting, launcher, MSRV, and no-default-features checks:
+        # every pull request that starts Rust Tests also starts this workflow,
+        # and this job finishes well before the slowest Rust Tests job.
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     env:
       JIG_DEV_BIN: target/debug/jig
@@ -90,25 +93,62 @@ jobs:
       - name: Select policy checks
         id: scope
         run: python3 scripts/ci/policy-scope.py
+      - name: Install Node.js for generated frontend tests
+        if: ${{ runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # Pin Node for predictable frontend fixture performance.
+          node-version: "22"
       - name: Install Rust toolchain
         if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
           cache: false
           rustflags: ""
-          components: clippy
+          components: clippy, rustfmt
+      # Install every compiler before rust-cache calculates its toolchain key,
+      # on every Linux run, so that every run has the same key.
+      - name: Install the MSRV toolchain
+        if: ${{ runner.os == 'Linux' }}
+        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Install cargo-nextest
+        if: ${{ runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: cargo-nextest@0.9.130
       - name: Cache Rust artifacts
-        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
+        if: ${{ !cancelled() && (runner.os == 'Linux' || steps.scope.outputs.rust != 'false') }}
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          # Cache all three command configurations from this job together.
-          shared-key: rust-${{ runner.os }}-${{ matrix.os == 'macos-latest' && 'clippy-macos' || 'clippy' }}-combined-v1
+          # Cache every command configuration from this job together. A cache
+          # that matches its key exactly is never saved again, so change the
+          # key when the job adds a configuration.
+          shared-key: rust-${{ runner.os }}-${{ matrix.os == 'macos-latest' && 'clippy-macos-combined-v1' || 'clippy-combined-v2' }}
+          # Only nightly and manual runs save the cache pull requests restore.
+          # Later checks still run after a failure, so a run with one failing
+          # check still compiles, and can save, the others' configurations.
+          cache-on-failure: ${{ github.event_name != 'pull_request' }}
+      # This is the exact script behind api:fmt; formatting needs no Jig binary.
+      - name: Run rustfmt check
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        run: bash scripts/check-rust-format.sh
+      - name: Check launcher, installer, and contract parity
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        run: bash scripts/check-launcher-template.sh
+      - name: Test source runtime selection and development entrypoint
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        run: python3 -m unittest discover -s scripts/tests -p 'test_jig_*.py'
       - name: Build current Jig binary
-        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
+        if: ${{ !cancelled() && (runner.os == 'Linux' || steps.scope.outputs.rust != 'false') }}
         id: build
         run: cargo build -p jig-sh --bin jig --locked
+      # Rust Tests' test jobs skip this on pull requests. scripts/jig-dev's
+      # build matches the one above, so it compiles nothing here.
+      - name: Validate the current source runtime through the launcher
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.build.outcome == 'success' }}
+        run: scripts/jig-dev check contract
       - name: Check production vault features
-        if: ${{ runner.os == 'Linux' || steps.scope.outputs.rust != 'false' }}
+        if: ${{ !cancelled() && (runner.os == 'Linux' || steps.scope.outputs.rust != 'false') }}
         run: |
           python3 scripts/check-vault-production-features.py
           python3 -m unittest discover -s scripts/tests -p 'test_vault_production_features.py'
@@ -159,13 +199,48 @@ jobs:
       - name: Run no-default-features clippy
         if: ${{ !cancelled() && steps.scope.outputs.rust != 'false' }}
         run: cargo clippy -p jig-sh -p jig-bootstrap --no-default-features --all-targets --locked -- -D warnings
+      # Pull requests skip the serial run when no change reaches jig-dev-proxy
+      # or a workspace package it depends on, the same selection Rust Tests
+      # applies to its Nextest run. A change to this workflow, or any failure
+      # to decide, runs it.
+      - name: Select serial dev proxy tests
+        id: proxy-scope
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.scope.outputs.rust != 'false' }}
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- .github/workflows/repo-policy.yml &&
+            selected="$(python3 scripts/test-rust-affected.py --base HEAD^1 --selects jig-dev-proxy)"; then
+            echo "run=$selected" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Run serial dev proxy tests
-        if: ${{ !cancelled() && steps.scope.outputs.rust != 'false' }}
+        if: ${{ !cancelled() && steps.scope.outputs.rust != 'false' && steps.proxy-scope.outputs.run != 'false' }}
         # Preserve the standard harness's process-global signal/trust coverage
         # alongside the full workspace's process-per-test Nextest coverage.
         env:
           RUST_TEST_THREADS: "1"
         run: cargo test -p jig-dev-proxy --locked
-      - name: Run dev proxy clippy
+      # rust-toolchain.toml pins the current toolchain, so name the MSRV one.
+      - name: Run MSRV check
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
-        run: cargo clippy -p jig-dev-proxy --all-targets --locked -- -D warnings
+        run: cargo +1.88.0 check --workspace --all-targets --all-features --locked
+      # The no-default-features build replaces target/debug/jig, so it follows
+      # every step that runs that binary.
+      - name: Run no-default-features build
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        run: cargo build -p jig-sh --no-default-features --locked
+      - name: Run no-default-features tests
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        run: bash scripts/ci/test-rust.sh ${{ github.event_name == 'pull_request' && 'minimal-focused' || 'minimal' }}
+      # Nextest does not run doctests. Preserve cargo test's documentation coverage.
+      - name: Run no-default-features doctests
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        run: cargo test -p jig-sh --no-default-features --doc --locked
+      - name: Upload test timings
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-timings-no-default-features
+          path: .agent/.cache/test-reports/**/*.xml
+          include-hidden-files: true
+          retention-days: 7

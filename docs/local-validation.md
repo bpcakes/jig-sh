@@ -65,7 +65,7 @@ preflight profile is an execution convenience, not a dependency of tests or an
 additional delivery requirement; direct `scripts/jig check test` remains
 available. Each run executes its targets; Jig does not reuse earlier results.
 
-Preflight runs the same checks as CI's formatting and repository-policy jobs,
+Preflight runs the same formatting and policy checks as CI's Repo Policy job,
 including two that plain Cargo commands miss: `scripts/check-rust-format.sh`
 also rejects Rust sources spliced in with `include!` or named by position
 (`part_NN.rs`, `tail.rs`, `*_parts/`), which `cargo fmt` would not reach, and
@@ -79,20 +79,28 @@ runtime selected by `.jig/source-runtime-version`.
 
 ## Source repository CI
 
-Linux jobs use GitHub-hosted `ubuntu-latest` runners, including formatting,
-MSRV, policy, and release jobs. macOS jobs use GitHub-hosted `macos-latest`
-runners. The repository's `ci_github_runner` setting in `.jig.toml` records the
-Linux runner selection.
+Linux jobs, including the policy and release jobs, use GitHub-hosted
+`ubuntu-latest` runners. macOS jobs use GitHub-hosted `macos-latest` runners.
+The repository's `ci_github_runner` setting in `.jig.toml` records the Linux
+runner selection.
 
-The Rust Tests workflow runs formatting and launcher checks together without
-building Jig. Generated-Rust Clippy validation and rendered fixtures share a job
-and development binary, with both generated-project toolchains installed before
-cache restoration. `validate-fixtures.sh` accepts an already-built `JIG_DEV_BIN`;
-as with the launcher, the caller is responsible for its freshness. Full tests build and validate the source runtime through
-`scripts/jig-dev check contract` before testing, avoiding a final development
-rebuild after test-only dependency features have been enabled. The Linux
-no-default-features test job first runs the explicit no-default-features build
-check, sharing checkout, toolchain setup, and cache restoration.
+On pull requests the Rust Tests workflow runs three jobs: Linux tests, macOS
+tests, and rendered fixtures. Generated-Rust Clippy validation and rendered
+fixtures share a job and development binary, with both generated-project
+toolchains installed before cache restoration. `validate-fixtures.sh` accepts an
+already-built `JIG_DEV_BIN`; as with the launcher, the caller is responsible for
+its freshness. Nightly, merge queue, and manual test runs build and validate the
+source runtime through `scripts/jig-dev check contract`, then run `scripts/jig
+check test-locked`, which avoids a final development rebuild after test-only
+dependency features have been enabled. Pull requests skip that build, which the
+tests cannot reuse, and run the same `bash scripts/ci/test-rust.sh workspace`
+command directly, the way the launcher does: from the checkout root, with
+`JIG_REPO_ROOT` set to it and no stdin, failing if the tests change the
+checkout. `scripts/tests/test_jig_ci_tests.py` fails when that copy, or the
+macOS step's time limit, no longer matches `.jig.toml`. Repo Policy runs
+`scripts/jig-dev check contract` on Linux after an identical build, so it
+compiles nothing more, and the macOS job runs `scripts/jig check contract` with
+the test build's binary, so the launcher and installer still run on macOS.
 
 On pull requests, the Linux and macOS `test-locked` jobs still compile every
 target but run only the tests the pull request can affect: they set
@@ -130,34 +138,47 @@ morning after the merge that broke it rather than right away.
 
 The Repo Policy workflow builds Jig once on each of Linux and macOS, then reuses
 that binary for Clippy and file-budget checks. Pull requests run only the Linux
-job; nightly, merge queue, and manual runs add macOS. Each platform job also runs
-no-default-features Clippy and the serial dev-proxy test harness; Linux retains
-the standalone dev-proxy Clippy command. These checks share one cache containing
-their distinct Cargo configurations. Both the serial proxy harness and the full
-workspace Nextest coverage are retained. The Linux job also validates the
-agent map and tracker triage adapter. Its path filters include Rust, policy, and agent-guide
-inputs. When every changed path is `.beadroll.json`, an `AGENTS.md`, or
-`agent-map.md`, only Linux repository policy checks run, without Clippy or proxy
-tests. Unknown paths, unavailable comparison trees, manual runs, and merge
-queues retain full policy coverage. The generated project workflows retain
-their own layout in
-`templates/project/.github/workflows/`.
+job; nightly, merge queue, and manual runs add macOS. Each platform job also
+runs no-default-features Clippy and the serial dev-proxy test harness, which
+keeps process-global signal coverage alongside the workspace's process-per-test
+Nextest coverage; workspace Clippy covers jig-dev-proxy itself. On pull requests
+the serial harness runs only when `scripts/test-rust-affected.py --selects
+jig-dev-proxy` reports that a change reaches jig-dev-proxy or a workspace
+package it depends on, or when the workflow itself changes. The Linux job also
+validates the contract through `scripts/jig-dev` and the launcher, the agent
+map, and the tracker triage adapter. It runs the checks that need no job of
+their own, too: rustfmt with the module-split check, launcher and installer
+parity, the source-runtime unit tests, the MSRV 1.88 `cargo check`, and the
+no-default-features build, tests, and doctests. Its path filters include every
+Rust Tests input plus policy and agent-guide inputs, so each pull request that
+starts Rust Tests starts this job too, and it finishes well before the slowest
+Rust Tests job. Each platform's checks share one cache containing their distinct
+Cargo configurations. rust-cache never saves again over a cache that matched its
+key exactly, so the key changes whenever the job adds a configuration, and every
+Linux run installs the MSRV toolchain so that all of them share a key. Nightly
+and manual runs save the cache even when a check fails, because only they save
+the cache that pull requests restore. When every changed path is
+`.beadroll.json`, an `AGENTS.md`, or `agent-map.md`, only Linux repository
+policy checks run, without formatting, Clippy, compatibility, or proxy tests.
+Unknown paths, unavailable comparison trees, manual runs, and merge queues
+retain full policy coverage. The generated project workflows retain their own
+layout in `templates/project/.github/workflows/`.
 
 Manual and nightly policy runs compare the selected ref with its merge base
 against the remote default branch, so they also work without a local `master`
 branch. On `master` itself, the comparison base is the same commit.
 
 The locked test suite uses `scripts/ci/test-rust.sh workspace`. The Linux
-minimal-feature job uses `minimal-focused` on pull requests and `minimal` on
-nightly, merge queue, and full manual runs; the macOS minimal-feature job runs
-only `minimal`, and not on pull requests. Both modes compile every
-minimal-feature test target; focused mode executes CLI/JSON and launcher-repair
-integration tests, proxy-disabled dispatch and discovery, runtime compatibility,
-configuration and TLD validation, and template/runtime repair tests. Full
-default-feature tests still run on both platforms for every PR, and all-target
-minimal Clippy on Linux. This intentionally reduces repeated minimal-feature
-and macOS coverage on PRs; nightly runs and merge queues retain the exhaustive
-matrix.
+minimal-feature tests in Repo Policy use `minimal-focused` on pull requests and
+`minimal` on nightly, merge queue, and full manual runs; the macOS
+minimal-feature job in Rust Tests runs only `minimal`, and not on pull requests.
+Both modes compile every minimal-feature test target; focused mode executes
+CLI/JSON and launcher-repair integration tests, proxy-disabled dispatch and
+discovery, runtime compatibility, configuration and TLD validation, and
+template/runtime repair tests. Full default-feature tests still run on both
+platforms for every PR, and all-target minimal Clippy on Linux. This
+intentionally reduces repeated minimal-feature and macOS coverage on PRs;
+nightly runs and merge queues retain the exhaustive matrix.
 
 For exhaustive execution, each invocation builds the complete selected set
 of test binaries once, then passes Cargo and binary metadata to Nextest for
@@ -174,12 +195,9 @@ independently, while retaining every scenario and the two-test frontend limit.
 The local vault partition continues to use identical workspace features for
 both of its phases.
 
-The Rust Tests workflow accepts `benchmark_only=true` on manual runs. This
-runs just formatting/launcher and MSRV checks with the same commands, runner,
-and cache keys as ordinary CI, for measuring complete job time.
-
 The separate [Ubicloud trial](https://github.com/bpcakes/jig-sh/pull/73) compared
-runner sizes on 2026-10-03 at `b8d34b0c`, using two successful runs per size.
+runner sizes on 2026-10-03 at `b8d34b0c`, using two successful runs per size of
+the formatting and MSRV jobs, which Repo Policy has since absorbed.
 The following results describe that provider trial; they do not describe the
 GitHub-hosted runners used by this configuration:
 
