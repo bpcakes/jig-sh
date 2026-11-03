@@ -150,8 +150,8 @@ fn finish_interaction<T>(
     match (outcome, cleanup) {
         (Ok(value), Ok(())) => Ok(value),
         (Err(error), Ok(())) => Err(OwnedProcessTreeInteractionError::Interaction(error)),
-        (Ok(_), Err(_)) => Err(OwnedProcessTreeInteractionError::Process(
-            OwnedProcessTreeError::Cleanup,
+        (Ok(_), Err(error)) => Err(OwnedProcessTreeInteractionError::Process(
+            OwnedProcessTreeError::Cleanup(error),
         )),
         (Err(error), Err(_)) => Err(OwnedProcessTreeInteractionError::InteractionAndCleanup(
             error,

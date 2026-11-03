@@ -540,9 +540,9 @@ fn worker_process_error(
         OwnedProcessTreeError::Await => {
             ExecutionCommandError::failed_after_start(anyhow!("Failed to wait for worker process"))
         }
-        OwnedProcessTreeError::Cleanup => ExecutionCommandError::failed_after_start(anyhow!(
-            "Worker process tree could not be cleaned up safely"
-        )),
+        OwnedProcessTreeError::Cleanup(error) => ExecutionCommandError::failed_after_start(
+            anyhow!("Worker process tree could not be cleaned up safely: {error}"),
+        ),
     }
 }
 

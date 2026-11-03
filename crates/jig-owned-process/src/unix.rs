@@ -231,14 +231,14 @@ fn collect_linux_process_ids_with<T>(
     process_group: ProcessGroupId,
     mut entries: impl Iterator<Item = std::io::Result<T>>,
     mut process_id: impl FnMut(T) -> Option<i32>,
-    mut within_budget: impl FnMut() -> bool,
+    within_budget: impl FnMut() -> bool,
 ) -> std::io::Result<Vec<i32>> {
+    let mut budget = LinuxScanBudget::new(process_group, within_budget);
     let mut pids = Vec::new();
     loop {
-        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-        let entry = entries.next();
-        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-        let Some(entry) = entry else {
+        budget.cheap_step()?;
+        let Some(entry) = entries.next() else {
+            budget.check()?;
             return Ok(pids);
         };
         let entry = match entry {
@@ -256,6 +256,47 @@ fn collect_linux_process_ids_with<T>(
         };
         if let Some(pid) = process_id(entry) {
             pids.push(pid);
+        }
+    }
+}
+
+/// Most cheap per-PID steps a scan takes between deadline checks.
+///
+/// Each check reads the monotonic clock. Where the clock source is HPET, a
+/// clock read costs more than a membership probe, so checking around every
+/// one of thousands of PIDs used most of the cleanup budget. Stat reads,
+/// fallback probes, and accepted results still check every time.
+#[cfg(any(target_os = "linux", test))]
+const LINUX_SCAN_CHEAP_STEPS_PER_BUDGET_CHECK: usize = 64;
+
+#[cfg(any(target_os = "linux", test))]
+struct LinuxScanBudget<F> {
+    process_group: ProcessGroupId,
+    within_budget: F,
+    unchecked_steps: usize,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl<F: FnMut() -> bool> LinuxScanBudget<F> {
+    fn new(process_group: ProcessGroupId, within_budget: F) -> Self {
+        Self {
+            process_group,
+            within_budget,
+            unchecked_steps: 0,
+        }
+    }
+
+    fn check(&mut self) -> std::io::Result<()> {
+        self.unchecked_steps = 0;
+        ensure_linux_process_scan_budget(self.process_group, &mut self.within_budget)
+    }
+
+    fn cheap_step(&mut self) -> std::io::Result<()> {
+        if self.unchecked_steps >= LINUX_SCAN_CHEAP_STEPS_PER_BUDGET_CHECK {
+            self.check()
+        } else {
+            self.unchecked_steps += 1;
+            Ok(())
         }
     }
 }
@@ -284,19 +325,29 @@ fn linux_process_group_has_live_members_with(
     pids: impl IntoIterator<Item = i32>,
     mut read_stat: impl FnMut(i32) -> std::io::Result<Vec<u8>>,
     mut process_group_for_pid: impl FnMut(i32) -> std::io::Result<Option<i32>>,
-    mut within_budget: impl FnMut() -> bool,
+    within_budget: impl FnMut() -> bool,
 ) -> std::io::Result<bool> {
-    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+    let mut budget = LinuxScanBudget::new(process_group, within_budget);
+    budget.check()?;
     for pid in pids {
-        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+        budget.cheap_step()?;
+        // A membership probe is one cheap syscall, while a stat read costs an
+        // open, reads, and a close. Only a PID that may belong to the group
+        // needs its stat read for liveness. Skipping a PID never accepts a
+        // result, so the final checks still bound every accepted answer.
+        match process_group_for_pid(pid) {
+            Ok(None) => continue,
+            Ok(Some(other_group)) if other_group != process_group.as_raw() => continue,
+            Ok(Some(_)) | Err(_) => {}
+        }
+        budget.check()?;
         let observation = read_stat(pid).and_then(|stat| parse_linux_process_stat(pid, &stat));
-        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+        budget.check()?;
         let observation = match observation {
             Ok(observation) => observation,
             Err(stat_error) => {
-                ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
                 let observed_group = process_group_for_pid(pid);
-                ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+                budget.check()?;
                 match observed_group {
                     Ok(None) => continue,
                     Ok(Some(other_group)) if other_group != process_group.as_raw() => continue,
@@ -322,11 +373,11 @@ fn linux_process_group_has_live_members_with(
             }
         };
         if observation.process_group == process_group.as_raw() && observation.live {
-            ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+            budget.check()?;
             return Ok(true);
         }
     }
-    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+    budget.check()?;
     Ok(false)
 }
 

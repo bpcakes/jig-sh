@@ -544,7 +544,7 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
         Err(jig_owned_process::OwnedProcessTreeError::Await) => {
             bail!("Frontend dependency readiness check could not be awaited for {app_dir}")
         }
-        Err(jig_owned_process::OwnedProcessTreeError::Cleanup) => {
+        Err(jig_owned_process::OwnedProcessTreeError::Cleanup(_)) => {
             return Err(FrontendDependencyPreflightCleanupUnconfirmed {
                 app_dir: app_dir.to_string(),
             }
