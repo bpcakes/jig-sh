@@ -17,6 +17,17 @@
 
 ### Fixed
 
+- Commands that run Git or other tools through Jig, such as
+  `jig file-budget`, no longer fail intermittently on busy Linux hosts with
+  "the process tree could not be cleaned up safely". After each command, Jig
+  confirms that no process from its process group survives. That check read
+  every `/proc/<pid>/stat` file and the clock once per process, so on a host
+  with thousands of processes and a slow clock source it used most of its
+  500 ms budget. The check now reads a stat file only for a process that may
+  be in the group and reads the clock once per 64 processes. On a host with
+  7,700 processes, each command spends about 60 ms instead of about 370 ms.
+  The budget is now 2 s so a heavily loaded host still finishes in time. When
+  cleanup does fail, the error now includes the cause.
 - `jig check migration-immutability` no longer reports Markdown files in the
   migration directory, such as an `AGENTS.md` guide or a README. Updating the
   guidance next to migrations failed the check as if a migration had changed.

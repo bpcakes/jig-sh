@@ -22,7 +22,7 @@ mod output;
 
 use output::{OutputDrain, OwnedProcessOutputDrains};
 
-const OWNED_PROCESS_TREE_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
+const OWNED_PROCESS_TREE_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const OWNED_PROCESS_TREE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
@@ -180,7 +180,8 @@ pub enum OwnedProcessTreeError {
     Cancelled,
     OutputLimitExceeded(OwnedProcessOutputStream),
     Await,
-    Cleanup,
+    /// Carries the reason cleanup could not confirm the tree was gone.
+    Cleanup(std::io::Error),
 }
 
 impl OwnedProcessTreeError {
@@ -191,7 +192,7 @@ impl OwnedProcessTreeError {
             | Self::TimedOut
             | Self::OutputLimitExceeded(_)
             | Self::Await
-            | Self::Cleanup => false,
+            | Self::Cleanup(_) => false,
         }
     }
 }
@@ -212,7 +213,9 @@ impl std::fmt::Display for OwnedProcessTreeError {
                 )
             }
             Self::Await => formatter.write_str("the process tree could not be awaited"),
-            Self::Cleanup => formatter.write_str("the process tree could not be cleaned up safely"),
+            Self::Cleanup(_) => {
+                formatter.write_str("the process tree could not be cleaned up safely")
+            }
         }
     }
 }
@@ -220,7 +223,7 @@ impl std::fmt::Display for OwnedProcessTreeError {
 impl std::error::Error for OwnedProcessTreeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Start(error) => Some(error),
+            Self::Start(error) | Self::Cleanup(error) => Some(error),
             _ => None,
         }
     }
@@ -304,7 +307,7 @@ pub fn run_owned_process_tree_with_output_policy_and_observer(
     let Ok(mut drains) = OwnedProcessOutputDrains::start(&mut process.child, limits) else {
         return match process.terminate_and_reap() {
             Ok(_) => Err(OwnedProcessTreeError::Await),
-            Err(_) => Err(OwnedProcessTreeError::Cleanup),
+            Err(error) => Err(OwnedProcessTreeError::Cleanup(error)),
         };
     };
     let wait_result = wait_for_owned_process(
@@ -646,14 +649,10 @@ fn finish_owned_process_wait(
     };
     // A owned process leader can exit while a background descendant keeps running.
     // End the owned tree on every outcome before reading captured output.
-    let cleanup = process.terminate_and_reap();
-    if cleanup.is_err() {
-        return Err(OwnedProcessTreeError::Cleanup);
-    }
-    match outcome {
-        Some(outcome) => outcome,
-        None => cleanup.map_err(|_| OwnedProcessTreeError::Await),
-    }
+    let status = process
+        .terminate_and_reap()
+        .map_err(OwnedProcessTreeError::Cleanup)?;
+    outcome.unwrap_or(Ok(status))
 }
 
 fn terminate_spawn_failure_child(child: &mut Child, deadline: Instant) {

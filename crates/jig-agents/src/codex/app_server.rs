@@ -494,8 +494,8 @@ fn app_server_error(error: &OwnedProcessTreeInteractionError, timeout: Duration)
         OwnedProcessTreeInteractionError::Process(OwnedProcessTreeError::Await) => {
             "Codex app-server could not be awaited".into()
         }
-        OwnedProcessTreeInteractionError::Process(OwnedProcessTreeError::Cleanup) => {
-            "Codex app-server process tree could not be cleaned up safely".into()
+        OwnedProcessTreeInteractionError::Process(OwnedProcessTreeError::Cleanup(error)) => {
+            format!("Codex app-server process tree could not be cleaned up safely: {error}")
         }
     }
 }

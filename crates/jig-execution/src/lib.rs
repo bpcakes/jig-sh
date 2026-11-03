@@ -251,8 +251,8 @@ fn supervised_execution_error(
             error: anyhow!("{label} could not be awaited"),
             process_started: true,
         },
-        OwnedProcessTreeError::Cleanup => SupervisedExecutionError::Failed {
-            error: anyhow!("{label} process tree could not be cleaned up safely"),
+        OwnedProcessTreeError::Cleanup(error) => SupervisedExecutionError::Failed {
+            error: anyhow!("{label} process tree could not be cleaned up safely: {error}"),
             process_started: true,
         },
     }

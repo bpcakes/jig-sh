@@ -662,9 +662,9 @@ fn owned_process_cleanup_is_bounded_and_requires_pinned_identity() {
             &mut process,
             Err(std::io::Error::other("injected observation failure")),
         ),
-        Err(OwnedProcessTreeError::Cleanup)
+        Err(OwnedProcessTreeError::Cleanup(_))
     ));
-    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(started.elapsed() < OWNED_PROCESS_TREE_CLEANUP_TIMEOUT + Duration::from_secs(2));
     assert!(process.reaped_status.is_none());
     assert!(!process.cleanup_complete);
     assert!(process.cleanup_finalized);
@@ -759,7 +759,7 @@ fn owned_process_wait_errors_only_release_identity_after_echild() {
     assert!(process.process_group.is_none());
     assert!(matches!(
         finish_owned_process_wait(&mut process, Err(error)),
-        Err(OwnedProcessTreeError::Cleanup)
+        Err(OwnedProcessTreeError::Cleanup(_))
     ));
     assert!(!process.cleanup_complete);
     assert!(process.cleanup_finalized);
