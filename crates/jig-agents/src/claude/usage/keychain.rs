@@ -18,6 +18,11 @@ const PICKER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// A tool read with permission already granted returns at once. Headless
 /// inspection stops waiting on one that needs the user to answer a dialog.
 const HEADLESS_READ_TIMEOUT: Duration = Duration::from_secs(2);
+const PICKER_READ_FAILED: &str = "Claude Keychain access was denied, timed out, or is locked";
+const HEADLESS_READ_FAILED: &str = "Claude Keychain login is locked or needs permission";
+/// Unlocking and item permission are separate: a session without desktop
+/// access, such as SSH, can do neither through a dialog, so name both remedies.
+const READ_FAILED_REMEDY: &str = "unlock a locked Keychain with security unlock-keychain, as needed over SSH, and grant access by choosing Always Allow in the jig claude launch picker from a desktop session";
 
 pub(super) fn service(home: &Home) -> Result<String, String> {
     if home.default_config {
@@ -97,10 +102,11 @@ fn read_with(
     }
     // Jig's own read never asks for trust, so a protected item is read through
     // Apple's security tool, whose permission survives Jig rebuilds and upgrades.
-    match mode {
-        InspectionMode::Interactive => tool_read(PICKER_READ_TIMEOUT).map(Some),
-        InspectionMode::Headless => tool_read(HEADLESS_READ_TIMEOUT).map(Some).map_err(|_| {
-            "Claude Keychain credentials require permission; open the jig claude launch picker and choose Always Allow".into()
-        }),
-    }
+    let (timeout, failure) = match mode {
+        InspectionMode::Interactive => (PICKER_READ_TIMEOUT, PICKER_READ_FAILED),
+        InspectionMode::Headless => (HEADLESS_READ_TIMEOUT, HEADLESS_READ_FAILED),
+    };
+    tool_read(timeout)
+        .map(Some)
+        .map_err(|_| format!("{failure}; {READ_FAILED_REMEDY}"))
 }
