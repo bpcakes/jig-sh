@@ -92,12 +92,44 @@ pub(super) fn load(
         default_config: home.default_config,
     };
     #[cfg(target_os = "macos")]
-    if let Some(bytes) = super::keychain::read(&home, mode, cancelled)? {
-        return parse(&bytes);
-    }
+    return prefer_keychain(
+        super::keychain::read(&home, mode, cancelled),
+        cancelled,
+        chrono::Utc::now().timestamp_millis(),
+        || read_file(&home),
+    );
     #[cfg(not(target_os = "macos"))]
-    let _ = (mode, cancelled);
-    read_file(&home)
+    {
+        let _ = (mode, cancelled);
+        read_file(&home)
+    }
+}
+
+/// Claude Code reads the Keychain through the same `security` command and uses
+/// `.credentials.json` whenever that read returns nothing, as in an SSH session
+/// that cannot unlock the login Keychain. Follow that order so a home reports
+/// the login a launch from this session would use. The Keychain error, which
+/// names its remedy, stands when the file holds no login usable for inspection:
+/// an expired or unscoped file login would only replace that remedy with advice
+/// to sign in again, although the Keychain may hold a working login.
+#[cfg(target_os = "macos")]
+pub(super) fn prefer_keychain(
+    keychain: Result<Option<Zeroizing<Vec<u8>>>, String>,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    now_millis: i64,
+    file: impl FnOnce() -> Result<Credential, String>,
+) -> Result<Credential, String> {
+    if cancelled() {
+        return Err("Claude usage inspection was cancelled".into());
+    }
+    match keychain {
+        Ok(Some(bytes)) => parse(&bytes),
+        Ok(None) => file(),
+        Err(error) => file()
+            .ok()
+            .filter(|credential| credential.usage_error(now_millis).is_none())
+            .ok_or(error),
+    }
 }
 
 pub(super) fn read_file(home: &Home) -> Result<Credential, String> {

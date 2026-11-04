@@ -72,11 +72,25 @@ fn check(
         Expected::ToolRead => assert_eq!(&**result.unwrap().unwrap(), b"example-tool-token"),
         Expected::PermissionRequired => {
             let error = result.unwrap_err();
-            assert!(error.contains("require permission") && error.contains("jig claude launch"));
+            assert!(error.contains("needs permission"), "{error}");
+            assert_names_both_remedies(&error);
         }
-        Expected::ToolDenied => assert!(result.unwrap_err().contains("denied")),
+        Expected::ToolDenied => {
+            let error = result.unwrap_err();
+            assert!(error.contains("denied"), "{error}");
+            assert_names_both_remedies(&error);
+        }
         Expected::Cancelled => assert!(result.unwrap_err().contains("cancelled")),
     }
+}
+
+/// Unlocking does not grant item permission, so both modes name each remedy.
+fn assert_names_both_remedies(error: &str) {
+    assert!(error.contains("security unlock-keychain"), "{error}");
+    assert!(
+        error.contains("Always Allow") && error.contains("jig claude launch"),
+        "{error}"
+    );
 }
 
 fn failure(code: i32) -> SearchOutcome<Vec<SearchResult>> {

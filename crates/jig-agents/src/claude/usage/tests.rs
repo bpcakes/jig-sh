@@ -213,6 +213,76 @@ fn credential_file_is_bounded_and_non_regular_files_are_rejected() {
     assert!(credentials::read_file(&home).is_err());
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn unreadable_keychain_logins_fall_back_to_the_file_claude_code_would_use() {
+    use zeroize::Zeroizing;
+
+    const NOW: i64 = 2000;
+    let stored = |token: &str, extra: &str| {
+        format!(r#"{{"claudeAiOauth":{{"accessToken":"{token}"{extra}}}}}"#).into_bytes()
+    };
+    let file_login = || credentials::parse(&stored("example-file-token", ""));
+    let expired_file = || credentials::parse(&stored("example-file-token", r#","expiresAt":2000"#));
+    let unscoped_file = || {
+        credentials::parse(&stored(
+            "example-file-token",
+            r#","scopes":["user:inference"]"#,
+        ))
+    };
+    let no_file = || Err::<credentials::Credential, _>("No readable Claude login".to_string());
+    let unused = || -> Result<credentials::Credential, String> { panic!("file read unexpectedly") };
+    type Login = Result<credentials::Credential, String>;
+    type KeychainRead = Result<Option<Zeroizing<Vec<u8>>>, String>;
+    let keychain_error = || -> KeychainRead { Err("Claude Keychain login is locked".into()) };
+    let choose = |keychain: KeychainRead, cancelled: bool, file: &dyn Fn() -> Login| {
+        credentials::prefer_keychain(keychain, &move || cancelled, NOW, file)
+    };
+    let token =
+        |result: Result<credentials::Credential, String>| result.unwrap().access_token.to_string();
+    let error = |result: Result<credentials::Credential, String>| result.err().unwrap();
+
+    // A readable Keychain login wins over the file, as in Claude Code.
+    let keychain = Ok(Some(Zeroizing::new(stored("example-keychain-token", ""))));
+    assert_eq!(
+        token(choose(keychain, false, &unused)),
+        "example-keychain-token"
+    );
+    // No Keychain item: the file decides, including its own error or expiry.
+    assert_eq!(
+        token(choose(Ok(None), false, &file_login)),
+        "example-file-token"
+    );
+    assert_eq!(
+        error(choose(Ok(None), false, &no_file)),
+        "No readable Claude login"
+    );
+    let expired = choose(Ok(None), false, &expired_file).unwrap();
+    assert!(expired.usage_error(NOW).unwrap().contains("expired"));
+    // An item this session cannot read, such as a locked Keychain over SSH,
+    // falls back to the file login, which a launch from here would use.
+    assert_eq!(
+        token(choose(keychain_error(), false, &file_login)),
+        "example-file-token"
+    );
+    // Without a file login usable for inspection, the Keychain error keeps its
+    // remedy instead of advice to sign in again.
+    for file in [
+        &no_file as &dyn Fn() -> Login,
+        &expired_file,
+        &unscoped_file,
+    ] {
+        assert_eq!(
+            error(choose(keychain_error(), false, file)),
+            "Claude Keychain login is locked"
+        );
+    }
+    // Cancellation stops before any file read, whatever the Keychain reported.
+    for keychain in [Ok(None), keychain_error()] {
+        assert!(error(choose(keychain, true, &unused)).contains("cancelled"));
+    }
+}
+
 fn http_response(
     status: &str,
     body: &str,
