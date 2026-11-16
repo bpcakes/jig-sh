@@ -31,6 +31,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Generated repositories live outside the checkout's rustup directory override.
+# Keep its active toolchain unless a fixture explicitly selects another one.
+if command -v rustup >/dev/null 2>&1; then
+  fixture_toolchain="$(cd "$root_dir" && rustup show active-toolchain)"
+  export RUSTUP_TOOLCHAIN="${fixture_toolchain%% *}"
+fi
+
 # Rust/React init validates that its default package manager is available, but
 # this check never executes JavaScript tooling. Keep the generated Bun default
 # under test without coupling the Rust-only gate to a runner image's tool list.
