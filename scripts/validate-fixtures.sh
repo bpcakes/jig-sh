@@ -15,6 +15,7 @@ trap report_fixture_failure ERR
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
+TMP_DIR="$(cd "$TMP_DIR" && pwd -P)"
 
 # Generated repositories live outside this checkout, where rustup would otherwise
 # select the host default. Keep the source checkout's active toolchain throughout.

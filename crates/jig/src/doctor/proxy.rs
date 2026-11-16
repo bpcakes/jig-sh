@@ -141,7 +141,9 @@ pub(super) fn proxy_list_output_with_timeout_and_limits_and_cancellation(
             "`scripts/jig proxy list --json` output capture did not complete"
         ));
     }
-    if stdout.truncated || stderr.truncated {
+    // Launcher installs can produce more Cargo diagnostics than the stderr cap.
+    // Only stdout carries the result; require complete pipes and a successful exit.
+    if stdout.truncated {
         return Err(anyhow!(
             "`scripts/jig proxy list --json` output exceeded the diagnostic capture limit"
         ));
