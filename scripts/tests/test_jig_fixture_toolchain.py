@@ -15,6 +15,9 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 class FixtureToolchainTests(unittest.TestCase):
+    script = "validate-fixtures.sh"
+    expected_status = 0
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="ExampleFixtureToolchain-")
         self.addCleanup(temporary.cleanup)
@@ -24,7 +27,7 @@ class FixtureToolchainTests(unittest.TestCase):
         fixtures = self.source / "scripts/fixtures"
         fixtures.mkdir(parents=True)
         self.outside.mkdir()
-        shutil.copy2(REPO / "scripts/validate-fixtures.sh", self.source / "scripts")
+        shutil.copy2(REPO / "scripts" / self.script, self.source / "scripts")
         (self.source / "rust-toolchain").write_text("1.100.0-example-host")
         tools = self.root / "tools"
         tools.mkdir()
@@ -37,11 +40,12 @@ class FixtureToolchainTests(unittest.TestCase):
             print(selected + " (directory override)")
         ''')
         self.write_tool(tools / "cargo", '''
-            import json, os, pathlib
+            import json, os, pathlib, sys
             pathlib.Path(os.environ["EXAMPLE_RESULT"]).write_text(json.dumps({
                 "cwd": str(pathlib.Path.cwd()),
                 "toolchain": os.environ.get("RUSTUP_TOOLCHAIN"),
             }))
+            sys.exit(int(os.environ.get("EXAMPLE_CARGO_EXIT", "0")))
         ''')
         self.write_tool(tools / "jig", "pass")
         # Stop after observing a child Cargo invocation from outside the source
@@ -58,21 +62,21 @@ class FixtureToolchainTests(unittest.TestCase):
         path.chmod(0o755)
 
     def invoke(self):
-        return subprocess.run(["/bin/bash", str(self.source / "scripts/validate-fixtures.sh")],
+        return subprocess.run(["/bin/bash", str(self.source / "scripts" / self.script)],
                               cwd=self.outside, env=self.env, capture_output=True,
                               text=True, timeout=10)
 
     def test_source_toolchain_reaches_cargo_outside_checkout(self):
         result = self.invoke()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(self.result.read_text()), {
-            "cwd": str(self.outside.resolve()), "toolchain": "1.100.0-example-host",
-        })
+        self.assertEqual(result.returncode, self.expected_status, result.stderr)
+        observed = json.loads(self.result.read_text())
+        self.assertTrue(Path(observed["cwd"]).is_relative_to(self.outside.resolve()))
+        self.assertEqual(observed["toolchain"], "1.100.0-example-host")
 
     def test_explicit_toolchain_override_is_preserved(self):
         self.env["RUSTUP_TOOLCHAIN"] = "example-custom-toolchain"
         result = self.invoke()
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, self.expected_status, result.stderr)
         self.assertEqual(json.loads(self.result.read_text())["toolchain"],
                          "example-custom-toolchain")
 
@@ -80,6 +84,34 @@ class FixtureToolchainTests(unittest.TestCase):
         self.env["EXAMPLE_RUSTUP_FAIL"] = "1"
         self.assertEqual(self.invoke().returncode, 23)
         self.assertFalse(self.result.exists())
+
+
+class GeneratedRustToolchainTests(FixtureToolchainTests):
+    script = "check-generated-rust-clippy.sh"
+    expected_status = 77
+
+    def setUp(self):
+        super().setUp()
+        tools = self.root / "tools"
+        self.write_tool(tools / "jig", '''
+            import pathlib, sys
+            assert sys.argv[1] == "init"
+            pathlib.Path(sys.argv[2]).mkdir()
+        ''')
+        self.write_tool(tools / "git", "pass")
+        # Observe the real runner's first Cargo call in its generated project,
+        # then stop before the unrelated Clippy policy checks need Rust sources.
+        self.env.update(TMPDIR=str(self.outside), EXAMPLE_CARGO_EXIT="77")
+        self.env.pop("JIG_GENERATED_RUST_ONLY_TOOLCHAIN", None)
+        self.env.pop("JIG_GENERATED_RUST_REACT_TOOLCHAIN", None)
+
+    def test_fixture_toolchain_overrides_source_selection(self):
+        self.env["RUSTUP_TOOLCHAIN"] = "example-source-toolchain"
+        self.env["JIG_GENERATED_RUST_ONLY_TOOLCHAIN"] = "example-fixture-toolchain"
+        result = self.invoke()
+        self.assertEqual(result.returncode, self.expected_status, result.stderr)
+        self.assertEqual(json.loads(self.result.read_text())["toolchain"],
+                         "example-fixture-toolchain")
 
 
 if __name__ == "__main__":
