@@ -16,6 +16,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Generated repositories live outside this checkout, where rustup would otherwise
+# select the host default. Keep the source checkout's active toolchain throughout.
+if command -v rustup >/dev/null 2>&1; then
+  fixture_toolchain="$(cd "$ROOT_DIR" && rustup show active-toolchain)"
+  export RUSTUP_TOOLCHAIN="${fixture_toolchain%% *}"
+fi
+
 # As with the launcher, an explicit development binary is authoritative; its
 # caller is responsible for building it from the current source first.
 if [[ -n "${JIG_DEV_BIN:-}" ]]; then
