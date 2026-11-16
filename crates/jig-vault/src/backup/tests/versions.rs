@@ -144,7 +144,7 @@ fn backups_record_and_restore_the_actual_source_format() {
         );
 
         let target = temp.path().join("restored");
-        let request = Vault::preflight_backup_restore(&output, target.clone()).unwrap();
+        let request = Vault::preflight_backup_restore(&output, target).unwrap();
         let restored = Vault::restore_backup(&passphrase, request).unwrap();
         assert_eq!(restored.format_version, version, "v{version}");
         assert_eq!(restored.source_format_version, version);
@@ -166,7 +166,7 @@ fn backups_record_and_restore_the_actual_source_format() {
         assert_eq!(restore_event.action, "backup_restore");
         assert_eq!(restore_event.details["source_generation"], 1);
         assert_eq!(restore_event.details["generation"], 2);
-        let stale = Vault::resolve_for_test(Some(source_home.clone()))
+        let stale = Vault::resolve_for_test(Some(source_home))
             .unwrap()
             .list_fields(&passphrase)
             .unwrap_err();

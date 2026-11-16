@@ -264,7 +264,7 @@ fn guarded_publication_rejects_root_and_nested_parent_swaps_without_touching_for
         let foreign_root = if swap_nested_parent {
             root.join("scripts")
         } else {
-            root.clone()
+            root
         };
         assert_eq!(
             fs::read_to_string(foreign_root.join("foreign")).unwrap(),

@@ -395,7 +395,7 @@ fn inspected_home_errors(homes: &[JsonValue]) -> Vec<JsonValue> {
             .and_then(JsonValue::as_str)
         {
             errors.push(json!({
-                "home": home.clone(),
+                "home": home,
                 "kind": "inspection",
                 "message": message
             }));

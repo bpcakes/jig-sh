@@ -572,7 +572,7 @@ impl<'a> ModelBuilder<'a> {
                 ),
             };
             let target = target_id(component, descriptor.id)?;
-            let mut action = ActionSpec::new(target.clone(), descriptor.intent, runner);
+            let mut action = ActionSpec::new(target, descriptor.intent, runner);
             action.description = Some(descriptor.description.into());
             action.effects = descriptor.effects.to_vec();
             action.inputs = self.adapter_inputs(descriptor);

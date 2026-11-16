@@ -242,7 +242,7 @@ fn managed_update_keeps_a_custom_model_eligible_for_the_document_check() {
             "{backend}: {notes:?}"
         );
 
-        let mut reverted = upgraded.clone();
+        let mut reverted = upgraded;
         let web = reverted
             .components
             .iter_mut()

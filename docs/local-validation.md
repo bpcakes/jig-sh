@@ -148,7 +148,7 @@ package it depends on, or when the workflow itself changes. The Linux job also
 validates the contract through `scripts/jig-dev` and the launcher, the agent
 map, and the tracker triage adapter. It runs the checks that need no job of
 their own, too: rustfmt with the module-split check, launcher and installer
-parity, the source-runtime unit tests, the MSRV 1.88 `cargo check`, and the
+parity, the source-runtime unit tests, the MSRV 1.100 `cargo check`, and the
 no-default-features build, tests, and doctests. Its path filters include every
 Rust Tests input plus policy and agent-guide inputs, so each pull request that
 starts Rust Tests starts this job too, and it finishes well before the slowest

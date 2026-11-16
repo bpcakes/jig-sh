@@ -299,7 +299,7 @@ fn update_from_contract_eight_moves_tracker_ownership_and_drops_work() {
             &output["warnings"],
             &["Retired [work] settings are dropped from .jig.toml: `checks`; `tracker`."],
         );
-        let ctx = jig_context::RepoContext::load_from_root(repo.clone()).unwrap();
+        let ctx = jig_context::RepoContext::load_from_root(repo).unwrap();
         assert_eq!(
             ctx.contract_version(),
             jig_context::CURRENT_CONTRACT_VERSION

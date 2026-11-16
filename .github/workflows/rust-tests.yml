@@ -86,7 +86,7 @@ jobs:
       # Install every compiler before rust-cache calculates its toolchain key.
       - name: Install generated-project Rust toolchains
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component clippy
+          rustup toolchain install 1.100.0 --profile minimal --component clippy
           rustup toolchain install 1.94.0 --profile minimal --component clippy
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
@@ -101,7 +101,7 @@ jobs:
       - name: Validate generated Rust Clippy policy
         env:
           JIG_DEV_BIN: target/debug/jig
-          JIG_GENERATED_RUST_ONLY_TOOLCHAIN: 1.88.0
+          JIG_GENERATED_RUST_ONLY_TOOLCHAIN: 1.100.0
           JIG_GENERATED_RUST_REACT_TOOLCHAIN: 1.94.0
         run: bash scripts/check-generated-rust-clippy.sh
       - name: Validate behavioral fixtures

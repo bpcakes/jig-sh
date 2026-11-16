@@ -183,7 +183,7 @@ impl SignalSession {
             ));
         }
         let previous_generation = NEXT_SIGNAL_GENERATION
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
                 generation.checked_add(1)
             })
             .map_err(|_| std::io::Error::other("signal-session generations are exhausted"))?;

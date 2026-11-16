@@ -98,7 +98,7 @@ impl ExecutionSlots {
 
     fn acquire_with_minimum(&self, minimum: usize) -> Option<ExecutionSlot> {
         self.available
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |available| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |available| {
                 (available > minimum).then(|| available - 1)
             })
             .ok()

@@ -271,7 +271,7 @@ impl Drop for TerminationSession {
 
 fn claim_next_session_generation() -> Result<usize> {
     NEXT_SESSION_GENERATION
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
             generation.checked_add(1)
         })
         .map_err(|_| anyhow::anyhow!("foreground termination session generation space exhausted"))
@@ -305,7 +305,7 @@ fn retire_session_generation_with(
     // before publishing generation zero: a handler entering in the interval
     // before reset must take the existing conventional-exit claim, not set a
     // force flag that reset would erase. Preserve an exit already in progress.
-    let _ = OWNED_RESOURCE_STATE.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |state| {
+    let _ = OWNED_RESOURCE_STATE.try_update(Ordering::SeqCst, Ordering::SeqCst, |state| {
         (state != EXIT_WITHOUT_RESOURCES_CLAIMED).then_some(RESOURCES_UNARMED)
     });
     after_resources_unarmed();
