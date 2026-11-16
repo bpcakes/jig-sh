@@ -129,3 +129,5 @@ mod pnpm;
 mod workflows;
 #[cfg(unix)]
 mod yarn;
+
+mod coverage;

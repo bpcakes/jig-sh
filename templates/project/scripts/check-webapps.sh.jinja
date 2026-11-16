@@ -2026,7 +2026,7 @@ run_check() {
 
   if [ "$script_name" = "test:coverage" ]; then
     COVERAGE_DIR="$app_dir/coverage" COVERAGE_THRESHOLD="$coverage_threshold" \
-      "$node_bin" scripts/enforce-coverage.cjs
+      "$node_bin" scripts/enforce-coverage.cjs "$app_role"
   fi
 [% if frontend_contracts_enabled %]
   if [ "$script_name" = "build:bundle" ] && [ "$app_role" = "spa" ]; then

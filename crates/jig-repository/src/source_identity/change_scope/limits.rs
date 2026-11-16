@@ -1,4 +1,9 @@
-use super::*;
+#[cfg(test)]
+use super::SCOPE_RENAME_LIMIT_OVERRIDE;
+use super::{
+    GitCollection, MAX_SCOPE_RENAME_CANDIDATES_V1, Output, Path, Result,
+    gate_scope_diff_output_limit,
+};
 
 pub(super) fn scope_git_output(
     root: &Path,

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Generated coverage checks reject missing, incomplete, and invalid reports
+  instead of manufacturing empty results or accepting nonnumeric percentages.
+  Astro apps configured with a zero threshold explicitly skip coverage and
+  report that exemption; other apps require a report even at zero.
+- State diagnostics honor the selected Git executable, ignore ambient Git
+  repository/index redirection, and bound child-process time and output.
+- File-budget failure codes use typed causes rather than error-message text.
+
+### Changed
+
+- Adoption writes only `.agent/.cache/adopt/adopt-last.json`. The deprecated
+  `.agent/state/adopt-last.json` compatibility copy and legacy receipt fields
+  are retired after their migration window. Existing legacy files are left
+  untouched; automation must use the canonical cache path.
+- Source-repository budgets now cover shell, Python, JavaScript, and script
+  templates. Existing debt may stay flat or shrink; new oversized files and
+  growth fail the check. Audited source-identity and file-budget modules use
+  explicit imports, and obsolete staging suppressions and the retired source
+  coverage helper are removed.
+
 ## v0.9.3 - 2026-11-16
 
 ### Added

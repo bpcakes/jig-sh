@@ -1,4 +1,4 @@
-use super::*;
+use super::{Context, GitCollection, Path, Result, bail, git_bounded_proof_stdout};
 
 /// Reads one optional index blob through the same bounded, scrubbed Git process
 /// used by repository evidence. The caller supplies a validated

@@ -2,38 +2,45 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const coverageDir = process.env.COVERAGE_DIR ?? "coverage";
-const threshold = Number(process.env.COVERAGE_THRESHOLD ?? "0");
-const summaryPath = path.join(coverageDir, "coverage-summary.json");
+function enforceCoverage() {
+  const coverageDir = process.env.COVERAGE_DIR ?? "coverage";
+  const configuredThreshold = process.env.COVERAGE_THRESHOLD ?? "0";
+  const threshold = Number(configuredThreshold);
+  if (configuredThreshold.trim() === "" || !Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
+    throw new Error("COVERAGE_THRESHOLD must be a finite percentage between 0 and 100.");
+  }
 
-if (!fs.existsSync(summaryPath)) {
-  console.log("No coverage summary generated; creating an empty summary.");
-  fs.mkdirSync(coverageDir, { recursive: true });
-  const empty = {
-    total: {
-      lines: { pct: 0 },
-      functions: { pct: 0 },
-      statements: { pct: 0 },
-      branches: { pct: 0 },
-    },
-  };
-  fs.writeFileSync(summaryPath, JSON.stringify(empty, null, 2));
-}
+  // Astro scaffolds have no instrumented test suite. Their configured zero
+  // threshold explicitly disables coverage; every other app requires a report.
+  if (process.argv[2] === "astro" && threshold === 0) {
+    console.log("Coverage is disabled for this Astro app (coverage_threshold=0).");
+    return;
+  }
 
-const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
-const total = summary.total ?? {};
-const metrics = ["lines", "functions", "statements", "branches"];
-const below = [];
+  const summaryPath = path.join(coverageDir, "coverage-summary.json");
+  const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+  const metrics = ["lines", "functions", "statements", "branches"];
+  const below = [];
 
-for (const metric of metrics) {
-  const pct = Number(total[metric]?.pct ?? 0);
-  console.log(`${metric}: ${pct}%`);
-  if (pct < threshold) {
-    below.push(`${metric} (${pct}%)`);
+  for (const metric of metrics) {
+    const pct = summary?.total?.[metric]?.pct;
+    if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 100) {
+      throw new Error(`${summaryPath}: ${metric}.pct must be a number between 0 and 100.`);
+    }
+    console.log(`${metric}: ${pct}%`);
+    if (pct < threshold) {
+      below.push(`${metric} (${pct}%)`);
+    }
+  }
+
+  if (below.length > 0) {
+    throw new Error(`Coverage below threshold ${threshold}%: ${below.join(", ")}`);
   }
 }
 
-if (below.length > 0) {
-  console.error(`Coverage below threshold ${threshold}%: ${below.join(", ")}`);
-  process.exit(1);
+try {
+  enforceCoverage();
+} catch (error) {
+  console.error(`Coverage check failed: ${error.message}`);
+  process.exitCode = 1;
 }

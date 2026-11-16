@@ -1,4 +1,4 @@
-use super::*;
+use super::{Context, Result, bail, require_nul_terminated};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(in crate::source_identity) struct RawDiffEntry {

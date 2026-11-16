@@ -1,4 +1,7 @@
 use super::*;
+use crate::source_identity::scope::{
+    extend_discovered_paths_with_limit, parse_name_status_z, parse_nul_utf8_paths_with_limit,
+};
 
 #[test]
 fn whole_worktree_fingerprint_fails_closed_on_large_binary_diff_output() {

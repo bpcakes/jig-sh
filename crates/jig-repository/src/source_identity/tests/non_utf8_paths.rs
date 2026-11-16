@@ -1,4 +1,5 @@
 use super::*;
+use crate::source_identity::gitlinks::literal_os_path_chunks;
 
 // Apple rejects invalid-byte path components with EILSEQ before these
 // filesystem-backed fixtures can exercise Jig's path handling.

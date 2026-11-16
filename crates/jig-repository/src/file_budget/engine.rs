@@ -1,7 +1,28 @@
-use super::report::*;
-use super::*;
+use super::report::{
+    change_kind, combined_cancelled, digest_bytes, digest_json, earliest_valid_until_ms,
+    ensure_active, file_budget_finding, finding_severity_counts, human_report,
+    measurement_error_result, normalize_diagnostic, policy_date_at_ms, resource_limit_result,
+    result_with_findings, scope_incomplete_result, scope_issue_json, sort_findings,
+    unsupported_file_kind,
+};
+use super::{
+    BaselineFileV1, BudgetDiagnosticCodeV1, CandidateDigestFactV1, ComparisonPolicyV1,
+    ComparisonPreparationV1, Context, CurrentFileStateV1, CurrentSourceV1, Cursor, Digest,
+    EvaluateFileV1, EvaluationInputV1, ExactCurrentPathFactV1, ExactCurrentPathStateV1,
+    FINDING_PREVIEW_LIMIT_V1, File, FileBudgetEngineContext, FileBudgetEvaluationMode,
+    FileChangeKindV1, FindingSeverity, GitExactCurrentPathStateV1, MAX_POLICY_BYTES_V1,
+    MeasuredContentV1, MeasurementBudgetV1, MeasurementProgressV1, MeasurementV1,
+    NativeActionResult, OpenOptions, POLICY_PATH_V1, Path, PathBuf, PathDispositionV1,
+    PolicyPreparationV1, PolicyV1, PreparedNativeInputV1, Read, ResolvedComparisonV1, Result,
+    RunConclusion, ScopeEntryV1, ScopeSnapshotV1, Sha256, bail,
+    capture_all_current_scope_v1_with_cancellation, capture_scope_v1_with_cancellation,
+    evaluate_v1, json, measure_stream_v1, observe_exact_paths_v1_with_cancellation,
+    parse_comparison_policy_v1, parse_policy_v1, read_git_blob_v1_with_cancellation,
+    read_tree_path_blob_v1_with_cancellation, resolve_index_blob_oid_v1_with_cancellation,
+    resolve_tree_path_blob_oid_v1_with_cancellation,
+};
 
-pub fn execute_ready_file_budget(
+pub(super) fn execute_ready_file_budget(
     context: &FileBudgetEngineContext<'_>,
 ) -> Result<NativeActionResult> {
     ensure_active(context)?;
@@ -24,11 +45,11 @@ pub fn execute_ready_file_budget(
 
     let evaluated_at_ms = jig_state::now_ms();
     let current_date = policy_date_at_ms(evaluated_at_ms)?;
-    let policy_bytes = crate::read_policy_bytes(context.repository, prepared.view)
-        .map_err(anyhow::Error::msg)?
-        .ok_or_else(|| {
-            anyhow::anyhow!("authenticated file-budget policy is missing at execution")
-        })?;
+    let policy_bytes =
+        crate::native_input::read_policy_bytes_typed(context.repository, prepared.view)?
+            .ok_or_else(|| {
+                anyhow::anyhow!("authenticated file-budget policy is missing at execution")
+            })?;
     ensure_active(context)?;
     let policy = parse_policy_v1(&policy_bytes, current_date).map_err(|error| {
         anyhow::anyhow!("authenticated file-budget policy became invalid: {error}")
@@ -706,7 +727,7 @@ fn measure_worktree_path(
         .metadata()
         .with_context(|| format!("file-budget path `{path}` identity could not be rechecked"))?;
     if !same_file_identity(&before, &after) || after.len() != measurement.bytes {
-        bail!("file-budget path `{path}` changed while it was being measured");
+        return Err(super::error::ChangedDuringRead(path.to_owned()).into());
     }
     ensure_active(context)?;
     Ok(MeasuredContentV1 {

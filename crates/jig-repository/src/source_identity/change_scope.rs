@@ -1,4 +1,12 @@
-use super::*;
+use super::{
+    BTreeSet, Context, CurrentViewV1, GitCollection, InspectedWorktreePath,
+    MAX_CHANGED_PATH_DISCOVERY_ENTRIES, Output, Path, ResolvedComparisonV1, Result, bail,
+    ensure_staged_deletion_has_no_worktree_replacement, gate_scope_diff_output_limit,
+    inspect_worktree_path, parse_nul_utf8_paths, parse_porcelain_status_z, require_nul_terminated,
+    strict_git_path,
+};
+#[cfg(test)]
+use std::cell::Cell;
 
 mod limits;
 pub(super) mod parse;
@@ -16,7 +24,6 @@ thread_local! {
     static SCOPE_RENAME_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
-#[allow(dead_code, reason = "staged native file-budget change kinds")]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum FileChangeKindV1 {
     Added,
@@ -27,21 +34,18 @@ pub enum FileChangeKindV1 {
     Unchanged,
 }
 
-#[allow(dead_code, reason = "staged native file-budget content sources")]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CurrentSourceV1 {
     WorktreePath,
     IndexBlob { oid: String },
 }
 
-#[allow(dead_code, reason = "staged native file-budget baseline authority")]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct BaselineFileV1 {
     pub path: String,
     pub blob_oid: String,
 }
 
-#[allow(dead_code, reason = "staged native file-budget scope entry")]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ScopeEntryV1 {
     pub kind: FileChangeKindV1,
@@ -50,7 +54,6 @@ pub struct ScopeEntryV1 {
     pub baseline: Option<BaselineFileV1>,
 }
 
-#[allow(dead_code, reason = "staged native file-budget scope issue kinds")]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ScopeIssueKindV1 {
     EmbeddedRepository,
@@ -67,7 +70,6 @@ pub enum ScopeIssueKindV1 {
     UnsupportedMode,
 }
 
-#[allow(dead_code, reason = "staged native file-budget scope issue")]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ScopeIssueV1 {
     pub kind: ScopeIssueKindV1,
@@ -75,7 +77,6 @@ pub struct ScopeIssueV1 {
     pub message: String,
 }
 
-#[allow(dead_code, reason = "staged native file-budget measurable scope")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScopeSnapshotV1 {
     pub view: CurrentViewV1,
@@ -84,7 +85,6 @@ pub struct ScopeSnapshotV1 {
     pub issues: Vec<ScopeIssueV1>,
 }
 
-#[allow(dead_code, reason = "staged native file-budget measurable scope API")]
 pub fn capture_scope_v1(
     root: &Path,
     comparison: &ResolvedComparisonV1,
@@ -93,7 +93,6 @@ pub fn capture_scope_v1(
     capture_scope_inner(root, comparison, view, GitCollection::Blocking)
 }
 
-#[allow(dead_code, reason = "staged cancellable native file-budget scope API")]
 pub fn capture_scope_v1_with_cancellation(
     root: &Path,
     comparison: &ResolvedComparisonV1,

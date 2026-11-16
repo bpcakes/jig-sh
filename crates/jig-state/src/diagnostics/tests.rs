@@ -240,3 +240,6 @@ fn git(root: &Path, args: &[&str]) {
         .unwrap();
     assert!(status.success(), "git {args:?} failed");
 }
+
+#[cfg(unix)]
+mod git_environment;

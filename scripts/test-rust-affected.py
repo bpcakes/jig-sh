@@ -127,7 +127,6 @@ OUTSIDE_PACKAGE_READERS = (
     ("scripts/deploy-landing.sh", (), ()),
     ("scripts/bead-triage.py", (), ()),
     ("scripts/benchmark-ready-dependents.py", (), ()),
-    ("scripts/enforce-coverage.js", (), ()),
     ("scripts/new-checkout.sh", (), ()),
     ("scripts/test-rust-partition.sh", (), ()),
 )
