@@ -576,7 +576,7 @@ fn affected_reason_batches(
             }
         }))?;
         let mut seen = BTreeSet::from([origin.clone()]);
-        let mut pending = vec![origin.clone()];
+        let mut pending = vec![origin];
         while let Some(component_id) = pending.pop() {
             let component = catalog
                 .component(&component_id)

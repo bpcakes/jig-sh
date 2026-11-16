@@ -178,6 +178,36 @@ fn proxy_list_output_accepts_valid_json_larger_than_the_diagnostic_default() {
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn proxy_list_output_checks_json_and_exit_status_with_truncated_diagnostics() {
+    for (stdout, status, expected_error) in [
+        (r#"{"ok":true,"running":false,"routes":[]}"#, "0", None),
+        ("invalid JSON", "0", Some("Failed to parse")),
+        (r#"{"ok":true}"#, "1", Some("exited with status")),
+    ] {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "i=0; while [ \"$i\" -lt 1100 ]; do printf 0123456789abcdef >&2; i=$((i + 1)); done; printf '%s\\n' \"$1\"; exit \"$2\"",
+            "proxy-list-fixture",
+            stdout,
+            status,
+        ]);
+
+        let result = proxy_list_output_with_timeout(&mut command, Duration::from_secs(2));
+
+        if let Some(expected) = expected_error {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains(expected), "{error}");
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                json!({"ok": true, "running": false, "routes": []})
+            );
+        }
+    }
+}
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn proxy_list_output_reports_injected_stdout_truncation() {
     let temp = tempdir().unwrap();
     let launcher = temp.path().join("proxy-list-truncated");

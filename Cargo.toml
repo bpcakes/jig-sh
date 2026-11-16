@@ -48,7 +48,7 @@ license = "MIT"
 repository = "https://github.com/bpcakes/jig-sh"
 homepage = "https://github.com/bpcakes/jig-sh"
 documentation = "https://github.com/bpcakes/jig-sh/tree/master/docs"
-rust-version = "1.88"
+rust-version = "1.100"
 version = "0.9.2-dev"
 
 [workspace.lints.clippy]

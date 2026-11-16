@@ -320,7 +320,7 @@ fn feature_policy_rejects_conflicts_and_preserves_independent_locked_offline_fla
         let mut focus = explicit(&["example@1.0.0"], vec![]);
         if let RustFocusV1::Explicit { features, .. } = &mut focus {
             *features = Some(RustFeaturesV1 {
-                features: context.features.clone(),
+                features: context.features,
                 all_features: true,
                 no_default_features,
             });

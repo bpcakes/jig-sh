@@ -110,7 +110,7 @@ jobs:
       # on every Linux run, so that every run has the same key.
       - name: Install the MSRV toolchain
         if: ${{ runner.os == 'Linux' }}
-        run: rustup toolchain install 1.88.0 --profile minimal
+        run: rustup toolchain install 1.100.0 --profile minimal
       - name: Install cargo-nextest
         if: ${{ runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
@@ -223,7 +223,7 @@ jobs:
       # rust-toolchain.toml pins the current toolchain, so name the MSRV one.
       - name: Run MSRV check
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.scope.outputs.rust != 'false' }}
-        run: cargo +1.88.0 check --workspace --all-targets --all-features --locked
+        run: cargo +1.100.0 check --workspace --all-targets --all-features --locked
       # The no-default-features build replaces target/debug/jig, so it follows
       # every step that runs that binary.
       - name: Run no-default-features build

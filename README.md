@@ -128,7 +128,7 @@ Linux binaries need glibc 2.35 or newer; macOS binaries need macOS 13 or newer.
 Both x86-64 and ARM64 are available. You can also download and inspect the script
 first, or unpack a verified archive from
 [GitHub Releases](https://github.com/bpcakes/jig-sh/releases) yourself. Source
-installation remains available for other hosts and needs Rust 1.88 or newer:
+installation remains available for other hosts and needs Rust 1.100 or newer:
 
 ```sh
 cargo install jig-sh --locked
@@ -158,9 +158,9 @@ cd ./ExampleProject && scripts/jig setup
 
 | Preset | Generated project shape | Toolchain requirements |
 | --- | --- | --- |
-| `harness-only` | Jig harness files without application code | Rust 1.88+, Bash, Python 3.8+ |
-| `rust-library` | Rust 2024 workspace with one library crate | Rust 1.88+, Bash, Python 3.8+ |
-| `rust-cli` | Rust 2024 workspace with one binary crate | Rust 1.88+, Bash, Python 3.8+ |
+| `harness-only` | Jig harness files without application code | Rust 1.100+, Bash, Python 3.8+ |
+| `rust-library` | Rust 2024 workspace with one library crate | Rust 1.100+, Bash, Python 3.8+ |
+| `rust-cli` | Rust 2024 workspace with one binary crate | Rust 1.100+, Bash, Python 3.8+ |
 | `rust-react` | Batter-based Rust API plus optional Vite React, Astro, and admin frontends | Unix, Rust 1.94+; Node.js 24.19.0+ and a supported package manager for frontends; database tools when enabled |
 | `go-react` | Go API plus Vite React or Astro frontends | Go 1.26; Node.js 24.19.0+ and a supported package manager; PostgreSQL tools when enabled |
 

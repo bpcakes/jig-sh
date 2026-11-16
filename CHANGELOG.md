@@ -15,6 +15,11 @@
   after `--` follow the session ID, and `--dry-run --json` reports
   `command: "claude resume"`.
 
+### Changed
+
+- Upgrade the development toolchain to Rust 1.100.0 and raise the minimum Rust
+  version for Jig and generated Rust library and CLI projects to 1.100.
+
 ### Fixed
 
 - Commands that run Git or other tools through Jig, such as
