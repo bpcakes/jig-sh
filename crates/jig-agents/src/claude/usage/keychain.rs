@@ -25,9 +25,11 @@ const HEADLESS_READ_WAITING: &str = "Claude Keychain login needs permission";
 /// Unlocking and item permission are separate: a session without desktop
 /// access, such as SSH, can do neither through a dialog, so name both remedies.
 const READ_FAILED_REMEDY: &str = "unlock a locked Keychain with security unlock-keychain, as needed over SSH; an item that does not yet allow /usr/bin/security also needs Always Allow from the jig claude launch picker in a desktop session";
+const TOOL_UNREADABLE: &str =
+    "Claude Keychain credentials could not be read through /usr/bin/security";
 
 /// How the `security` tool failed to return the item.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(super) enum ToolFailure {
     /// The tool ended without the item, as when the Keychain is locked in a
     /// session that cannot unlock it or the user denied access.
@@ -35,6 +37,9 @@ pub(super) enum ToolFailure {
     /// The tool was still running at the deadline, typically waiting on a
     /// dialog.
     Waiting,
+    /// The tool's output could not be taken, being oversized or unreadable, or
+    /// the tool could not be stopped. A launch would still read the item.
+    Unreadable,
 }
 
 /// A Keychain item that exists but could not be read.
@@ -48,10 +53,12 @@ pub(super) struct ReadError {
 }
 
 impl ReadError {
-    fn failed(message: impl Into<String>) -> Self {
+    /// A read that did not show the tool ending without the item, so the file
+    /// login cannot stand in for the one a launch would read.
+    fn without_fallback(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            file_fallback: true,
+            file_fallback: false,
         }
     }
 }
@@ -77,7 +84,9 @@ pub(super) fn read(
     mode: InspectionMode,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<Zeroizing<Vec<u8>>>, ReadError> {
-    let service = service(home).map_err(ReadError::failed)?;
+    // A launch still derives a service name and reads that item, so a path Jig
+    // cannot name keeps its error instead of reporting the file login.
+    let service = service(home).map_err(ReadError::without_fallback)?;
     let account = std::env::var("USER")
         .ok()
         .filter(|name| {
@@ -131,7 +140,7 @@ fn read_with(
         Err(_) => {}
     }
     if cancelled() {
-        return Err(ReadError::failed(super::CANCELLED));
+        return Err(ReadError::without_fallback(super::CANCELLED));
     }
     // Jig's own read never asks for trust, so a protected item is read through
     // Apple's security tool, whose permission survives Jig rebuilds and upgrades.
@@ -149,6 +158,7 @@ fn read_with(
         let (summary, file_fallback) = match failure {
             ToolFailure::Failed => (failed, true),
             ToolFailure::Waiting => (waiting, false),
+            ToolFailure::Unreadable => return ReadError::without_fallback(TOOL_UNREADABLE),
         };
         ReadError {
             message: format!("{summary}; {READ_FAILED_REMEDY}"),

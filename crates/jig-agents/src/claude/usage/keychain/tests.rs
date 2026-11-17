@@ -10,6 +10,7 @@ enum Expected {
     PermissionRequired,
     ToolDenied,
     StillWaiting,
+    ToolUnreadable,
     Cancelled,
 }
 
@@ -67,6 +68,7 @@ fn check(
                 | Expected::PermissionRequired
                 | Expected::ToolDenied
                 | Expected::StillWaiting
+                | Expected::ToolUnreadable
         )
     );
     match expected {
@@ -101,7 +103,22 @@ fn check(
             assert!(error.message.contains(expected), "{}", error.message);
             assert_names_both_remedies(&error.message);
         }
-        Expected::Cancelled => assert!(result.unwrap_err().message.contains("cancelled")),
+        // Oversized or unreadable output, or a tool left running, is an item a
+        // launch would still read.
+        Expected::ToolUnreadable => {
+            let error = result.unwrap_err();
+            assert!(!error.file_fallback);
+            assert!(
+                error.message.contains("could not be read"),
+                "{}",
+                error.message
+            );
+        }
+        Expected::Cancelled => {
+            let error = result.unwrap_err();
+            assert!(!error.file_fallback);
+            assert!(error.message.contains("cancelled"), "{}", error.message);
+        }
     }
 }
 
@@ -171,6 +188,15 @@ fn scenarios() {
                 false,
                 Some(ToolFailure::Waiting),
                 Expected::StillWaiting,
+            );
+        }
+        for outcomes in protected() {
+            check(
+                outcomes,
+                mode,
+                false,
+                Some(ToolFailure::Unreadable),
+                Expected::ToolUnreadable,
             );
         }
         check(vec![failure(-25308)], mode, true, None, Expected::Cancelled);
