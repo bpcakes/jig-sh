@@ -1,4 +1,4 @@
-use super::*;
+use super::{Context, GitCollection, Path, Result, fs};
 
 /// Keep this separate from affected-selection ignores: documentation and other
 /// non-code inputs remain source authority even when they do not select a

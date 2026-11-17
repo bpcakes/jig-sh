@@ -1,3 +1,7 @@
+#![warn(clippy::wildcard_imports)]
+
+use comparison::has_unborn_symbolic_head;
+use exact_path::{InspectedWorktreePath, inspect_worktree_path};
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,9 +24,6 @@ use tempfile::NamedTempFile;
 
 use jig_git::scrub_known_repository_git_environment;
 
-#[cfg(unix)]
-use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
-
 use jig_owned_process::{
     OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError, ProcessOutputLimits,
     ProcessOutputOverflowPolicy, format_exit_status, require_success,
@@ -40,14 +41,38 @@ mod process;
 mod scope;
 mod worktree;
 
-pub use change_scope::*;
-pub use comparison::*;
-pub use content::*;
-pub use exact_path::*;
-use gitlinks::*;
-use process::*;
-use scope::*;
-use worktree::*;
+pub use change_scope::{
+    BaselineFileV1, CurrentSourceV1, FileChangeKindV1, ScopeEntryV1, ScopeIssueKindV1,
+    ScopeIssueV1, ScopeSnapshotV1, capture_affected_paths_v1,
+    capture_all_current_scope_v1_with_cancellation, capture_scope_v1,
+    capture_scope_v1_with_cancellation,
+};
+pub use comparison::{resolve_comparison_v1, resolve_comparison_v1_with_cancellation};
+pub use content::{
+    read_git_blob_v1_with_cancellation, read_index_blob_v1,
+    read_tree_path_blob_v1_with_cancellation, resolve_index_blob_oid_v1_with_cancellation,
+    resolve_tree_path_blob_oid_v1_with_cancellation,
+};
+pub use exact_path::{
+    ExactCurrentPathFactV1, ExactCurrentPathStateV1, MAX_EXACT_CURRENT_PATH_BYTES_V1,
+    MAX_EXACT_CURRENT_PATH_FACTS_V1, observe_exact_paths_v1,
+    observe_exact_paths_v1_with_cancellation,
+};
+use gitlinks::ensure_worktree_gitlinks_are_stable;
+use process::{
+    GitProcessObserver, configure_read_only_git_environment, gate_scope_diff_output_limit,
+    git_bounded_proof_output, git_bounded_proof_output_with_timeout, git_bounded_proof_stdout,
+    git_changed_path_stdout, git_hash_file, git_hash_file_with_cancellation, git_output,
+    git_output_with_cancellation, git_worktree_proof_stdout, git_worktree_proof_stdout_os,
+    worktree_diff_output_limit, worktree_status_entry_limit, worktree_status_output_limit,
+};
+use scope::{
+    ensure_staged_deletion_has_no_worktree_replacement, parse_nul_utf8_paths,
+    plan_change_snapshot_from_empty_tree_inner, plan_change_snapshot_inner, require_nul_terminated,
+};
+use worktree::{
+    hash_field, parse_porcelain_status_z, path_buf_from_git_bytes, repo_worktree_fingerprint_inner,
+};
 
 const MAX_INLINE_UNTRACKED_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_INLINE_UNTRACKED_BYTES: u64 = 32 * 1024 * 1024;
@@ -444,4 +469,5 @@ impl std::fmt::Display for GitCollectionCancelled {
 impl std::error::Error for GitCollectionCancelled {}
 
 #[cfg(test)]
+#[allow(clippy::wildcard_imports)] // Tests intentionally share their parent fixture helpers.
 mod tests;

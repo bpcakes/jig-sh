@@ -1,3 +1,5 @@
+#![warn(clippy::wildcard_imports)]
+
 use std::fs::{File, OpenOptions};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -173,11 +175,13 @@ pub fn execute_prepared_file_budget(
 }
 
 mod engine;
+mod error;
 mod report;
 
 use engine::execute_ready_file_budget;
 use report::{engine_error_result, file_budget_finding, result_with_findings, terminal_result};
 #[cfg(test)]
+#[allow(clippy::wildcard_imports)] // Tests intentionally share their parent fixture helpers.
 mod tests {
     use std::process::Command;
     use std::time::Duration;

@@ -28,10 +28,6 @@ use super::opts::AdoptOpts;
 
 pub(super) const ADOPT_RECEIPT_PATH: &str = ".agent/.cache/adopt/adopt-last.json";
 
-pub(super) const LEGACY_ADOPT_RECEIPT_PATH: &str = ".agent/state/adopt-last.json";
-
-pub(super) const ADOPT_RECEIPT_PATHS: [&str; 2] = [ADOPT_RECEIPT_PATH, LEGACY_ADOPT_RECEIPT_PATH];
-
 pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
     let invocation_cwd = bootstrap_invocation_cwd()?;
     let destination = absolute_path_from(&opts.path, &invocation_cwd)?;
@@ -225,7 +221,7 @@ fn adopt_backup_root(destination: &Path) -> PathBuf {
 }
 
 fn validate_adopt_output_ancestors(destination: &Path, backup_root: Option<&Path>) -> Result<()> {
-    validate_adopt_receipt_paths(destination)?;
+    validate_adopt_receipt_path(destination)?;
     if let Some(backup_root) = backup_root {
         let backup_relative = backup_root.strip_prefix(destination).with_context(|| {
             format!(
@@ -239,23 +235,22 @@ fn validate_adopt_output_ancestors(destination: &Path, backup_root: Option<&Path
     Ok(())
 }
 
-fn validate_adopt_receipt_paths(destination: &Path) -> Result<()> {
-    for relative in ADOPT_RECEIPT_PATHS.map(Path::new) {
-        validate_repository_relative_ancestors(destination, relative)?;
-        let receipt_path = destination.join(relative);
-        match fs::symlink_metadata(&receipt_path) {
-            Ok(metadata) if metadata.file_type().is_file() => {}
-            Ok(_) => {
-                bail!(
-                    "Adopt receipt path must be missing or a regular file, not a symlink, directory, or other file type: {}",
-                    receipt_path.display()
-                );
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to stat {}", receipt_path.display()));
-            }
+fn validate_adopt_receipt_path(destination: &Path) -> Result<()> {
+    let relative = Path::new(ADOPT_RECEIPT_PATH);
+    validate_repository_relative_ancestors(destination, relative)?;
+    let receipt_path = destination.join(relative);
+    match fs::symlink_metadata(&receipt_path) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => {
+            bail!(
+                "Adopt receipt path must be missing or a regular file, not a symlink, directory, or other file type: {}",
+                receipt_path.display()
+            );
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to stat {}", receipt_path.display()));
         }
     }
     Ok(())
@@ -300,8 +295,6 @@ fn write_adopt_last_receipt(
         "destination": destination.display().to_string(),
         "backup_root": backup_root.map(|path| path.display().to_string()),
         "canonical_receipt_path": ADOPT_RECEIPT_PATH,
-        "legacy_receipt_path": LEGACY_ADOPT_RECEIPT_PATH,
-        "legacy_receipt_deprecated": true,
         "apply_report": &result.apply_report,
         "undo_hint": "Use apply_report.backups to restore modified or removed files, then delete paths listed in apply_report.files_created if you want to undo this adopt write. Delete backup_root when those backups are no longer needed.",
     });
@@ -309,18 +302,11 @@ fn write_adopt_last_receipt(
         serde_json::to_string_pretty(&receipt).context("Failed to serialize adopt receipt")?;
     let bytes = format!("{text}\n");
     write_adopt_receipt_atomic(destination, Path::new(ADOPT_RECEIPT_PATH), bytes.as_bytes())?;
-    // TODO(jig-0.4): remove the legacy receipt copy after adopted repos have
-    // had a release window to migrate readers to the canonical cache path.
-    write_adopt_receipt_atomic(
-        destination,
-        Path::new(LEGACY_ADOPT_RECEIPT_PATH),
-        bytes.as_bytes(),
-    )?;
     Ok(())
 }
 
 fn write_adopt_receipt_atomic(destination: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
-    validate_adopt_receipt_paths(destination)?;
+    validate_adopt_receipt_path(destination)?;
     let receipt_path = destination.join(relative);
     let parent = receipt_path.parent().with_context(|| {
         format!(
@@ -329,7 +315,7 @@ fn write_adopt_receipt_atomic(destination: &Path, relative: &Path, bytes: &[u8])
         )
     })?;
     fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
-    validate_adopt_receipt_paths(destination)?;
+    validate_adopt_receipt_path(destination)?;
 
     let existing_permissions = match fs::symlink_metadata(&receipt_path) {
         Ok(metadata) => Some(metadata.permissions()),
@@ -380,7 +366,7 @@ fn write_adopt_receipt_atomic(destination: &Path, relative: &Path, bytes: &[u8])
         )
     })?;
 
-    validate_adopt_receipt_paths(destination)?;
+    validate_adopt_receipt_path(destination)?;
     temp.persist(&receipt_path)
         .map(|_| ())
         .map_err(|error| error.error)

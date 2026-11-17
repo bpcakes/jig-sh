@@ -62,7 +62,7 @@ use template_source::{
 };
 
 #[cfg(test)]
-use adopt::{ADOPT_RECEIPT_PATH, ADOPT_RECEIPT_PATHS, LEGACY_ADOPT_RECEIPT_PATH};
+use adopt::ADOPT_RECEIPT_PATH;
 #[cfg(test)]
 use apps::parse_frontend_app;
 #[cfg(test)]

@@ -919,7 +919,7 @@ Each configured app directory is expected to support:
 - build: `bun run build:bundle`
 - test coverage: `bun run test:coverage`
 
-The coverage command must write `coverage/coverage-summary.json` in the app directory; generated local checks and web CI enforce each app's `coverage_threshold` from that summary. The generated SPA Vitest configuration includes production `src/**/*.{ts,tsx}` by default and excludes only tests, test setup, the render-only entrypoint, and generated UI primitives, so adding an untested feature or API module affects the advertised threshold instead of silently falling outside coverage.
+Astro apps configured with `coverage_threshold = 0` explicitly disable coverage, and the checker prints that exemption. All other apps require a complete report, even at threshold zero; malformed percentages or thresholds fail the check. The coverage command must write `coverage/coverage-summary.json` in the app directory; generated local checks and web CI enforce each app's `coverage_threshold` from that summary. The generated SPA Vitest configuration includes production `src/**/*.{ts,tsx}` by default and excludes only tests, test setup, the render-only entrypoint, and generated UI primitives, so adding an untested feature or API module affects the advertised threshold instead of silently falling outside coverage.
 
 ## `dev` Shape
 

@@ -1,14 +1,15 @@
-use super::*;
+use super::{
+    BTreeMap, BTreeSet, Context, CurrentViewV1, GitCollection, MAX_GIT_LITERAL_PATHS_PER_DIFF,
+    MAX_GIT_LITERAL_PATHSPEC_BYTES_PER_DIFF, Path, Result, ScopeIssueKindV1, ScopeIssueV1, bail,
+    fs, gate_scope_diff_output_limit,
+};
 
 use super::change_scope::parse::{IndexStageEntry, parse_index_stage_z};
 use super::change_scope::{intent_to_add_paths, sparse_index_paths, unsupported_mode};
 
-#[allow(dead_code, reason = "staged native file-budget exact-path bound")]
 pub const MAX_EXACT_CURRENT_PATH_FACTS_V1: usize = 8_192;
-#[allow(dead_code, reason = "staged native file-budget exact-path bound")]
 pub const MAX_EXACT_CURRENT_PATH_BYTES_V1: usize = 4_096;
 
-#[allow(dead_code, reason = "staged native file-budget exact-path states")]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ExactCurrentPathStateV1 {
     Regular,
@@ -16,14 +17,12 @@ pub enum ExactCurrentPathStateV1 {
     Unsupported { reason: ScopeIssueKindV1 },
 }
 
-#[allow(dead_code, reason = "staged native file-budget exact-path fact")]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ExactCurrentPathFactV1 {
     pub path: String,
     pub state: ExactCurrentPathStateV1,
 }
 
-#[allow(dead_code, reason = "staged native file-budget worktree inspection")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum InspectedWorktreePath {
     Regular,
@@ -31,7 +30,6 @@ pub(super) enum InspectedWorktreePath {
     Unsupported(ScopeIssueKindV1),
 }
 
-#[allow(dead_code, reason = "staged native file-budget exact-path API")]
 pub fn observe_exact_paths_v1(
     root: &Path,
     view: CurrentViewV1,
@@ -40,7 +38,6 @@ pub fn observe_exact_paths_v1(
     observe_exact_paths_inner(root, view, paths, GitCollection::Blocking)
 }
 
-#[allow(dead_code, reason = "staged cancellable native exact-path API")]
 pub fn observe_exact_paths_v1_with_cancellation(
     root: &Path,
     view: CurrentViewV1,

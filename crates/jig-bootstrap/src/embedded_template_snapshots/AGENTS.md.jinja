@@ -92,7 +92,7 @@ Each configured app is expected to support `lint`, `typecheck`, `build:bundle`, 
 [% if application_contracts_enabled -%]
 Application contract freshness and public deployment boundaries have separate `scripts/check-webapps.sh application-contracts` and `scripts/check-webapps.sh public-artifacts` checks; `jig-contract` remains limited to Jig harness wiring.
 [% endif -%]
-`test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
+`test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement. Only Astro apps explicitly configured with `coverage_threshold = 0` skip coverage; the checker reports that exemption.
 Run package scripts through `scripts/check-webapps.sh run-script <app-dir> <script>`.
 Keep registry, authentication, and install-script policy project-owned.
 For dependency installation details, see the [Jig frontend installation reference](https://github.com/bpcakes/jig-sh/blob/master/docs/adoption.md#frontend-dependency-installation).

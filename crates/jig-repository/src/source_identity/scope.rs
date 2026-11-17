@@ -1,4 +1,9 @@
-use super::*;
+#[cfg(test)]
+use super::PLAN_CHANGE_COLLECTION_COUNT;
+use super::{
+    Context, GitCollection, MAX_CHANGED_PATH_DISCOVERY_ENTRIES, Path, PlanChangeSnapshot, Result,
+    bail, fs, resolve_empty_tree_oid_inner, resolve_git_commit_inner,
+};
 
 impl PlanChangeSnapshot {
     pub fn all_changed_paths(&self) -> Vec<String> {

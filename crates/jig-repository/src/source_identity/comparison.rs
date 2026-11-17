@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    ComparisonRequestV1, Context, ExactTreeProvenanceV1, GitCollection, Output, Path,
+    ResolvedComparisonV1, Result, bail, is_git_collection_cancellation, parse_git_object_oid,
+    resolve_empty_tree_oid_inner,
+};
+#[cfg(test)]
+use std::cell::Cell;
 
 const MAX_COMPARISON_GIT_OUTPUT_BYTES: usize = 64 * 1024;
 

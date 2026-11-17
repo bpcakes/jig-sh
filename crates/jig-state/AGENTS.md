@@ -25,6 +25,7 @@
 
 - Treat `.agent/state/*.jsonl` as append-only unless a migration path is explicit, and preserve generated-repo compatibility for existing records.
 - Keep this crate independent from CLI, runtime execution, bootstrap, and vault secret handling.
+- Diagnostic Git commands use `jig-git` program selection and environment scrubbing, with bounded process supervision from `jig-owned-process`.
 - The test clock (`set_test_now_ms`), dashboard scan counters, and blocking lease helpers exist only under `cfg(test)` or the `test-support` feature, which dependents enable from `[dev-dependencies]` only. Production `now_ms` always reads the system clock.
 - Resource-lease tests re-run their own test binary by exact test path; keep those paths in `src/resource_leases/tests.rs` in step with module moves.
 

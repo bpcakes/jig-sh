@@ -212,15 +212,13 @@ fn adopt_write_records_backup_receipt_for_overwritten_managed_files() {
             .unwrap()
             .contains(".agent/.cache/adopt/backups")
     );
-    let legacy_receipt_path = repo.join(".agent/state/adopt-last.json");
-    let legacy_receipt: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&legacy_receipt_path).unwrap()).unwrap();
-    assert_eq!(legacy_receipt, receipt);
+    assert!(!repo.join(".agent/state/adopt-last.json").exists());
     assert_eq!(
         receipt["canonical_receipt_path"],
         ".agent/.cache/adopt/adopt-last.json"
     );
-    assert_eq!(receipt["legacy_receipt_deprecated"], true);
+    assert!(receipt.get("legacy_receipt_deprecated").is_none());
+    assert!(receipt.get("legacy_receipt_path").is_none());
     assert!(!repo.join(".agent/state/adopt-backups").exists());
     let backup = receipt["apply_report"]["backups"]
         .as_array()
@@ -253,53 +251,52 @@ fn adopt_rejects_receipt_leaf_symlinks_before_managed_mutation_even_with_force()
     let _guard = lock_env();
     let template = materialize_template_worktree();
 
-    for relative in ADOPT_RECEIPT_PATHS {
-        for force in [false, true] {
-            let temp = tempdir().unwrap();
-            let repo = temp.path().join("repo");
-            fs::create_dir_all(&repo).unwrap();
-            run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-            fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
+    let relative = ADOPT_RECEIPT_PATH;
+    for force in [false, true] {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+        fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
 
-            let receipt_path = repo.join(relative);
-            fs::remove_file(&receipt_path).unwrap();
-            let outside = temp.path().join("outside");
-            fs::create_dir(&outside).unwrap();
-            let outside_target = outside.join("receipt.json");
-            fs::write(&outside_target, "outside receipt\n").unwrap();
-            create_symlink(&outside_target, &receipt_path).unwrap();
-            let repo_before = regular_file_tree_snapshot(&repo);
-            let outside_before = regular_file_tree_snapshot(&outside);
+        let receipt_path = repo.join(relative);
+        fs::remove_file(&receipt_path).unwrap();
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let outside_target = outside.join("receipt.json");
+        fs::write(&outside_target, "outside receipt\n").unwrap();
+        create_symlink(&outside_target, &receipt_path).unwrap();
+        let repo_before = regular_file_tree_snapshot(&repo);
+        let outside_before = regular_file_tree_snapshot(&outside);
 
-            let error = run_adopt(footprint_adopt_opts(&repo, template.path(), false, force))
-                .unwrap_err()
-                .to_string();
+        let error = run_adopt(footprint_adopt_opts(&repo, template.path(), false, force))
+            .unwrap_err()
+            .to_string();
 
-            assert!(
-                error.contains("receipt path"),
-                "{relative}/{force}: {error}"
-            );
-            assert!(
-                error.contains("regular file"),
-                "{relative}/{force}: {error}"
-            );
-            assert_eq!(regular_file_tree_snapshot(&repo), repo_before);
-            assert_eq!(regular_file_tree_snapshot(&outside), outside_before);
-            assert_eq!(
-                fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
-                "project notes\n"
-            );
-            assert_eq!(
-                fs::read_to_string(&outside_target).unwrap(),
-                "outside receipt\n"
-            );
-            assert!(
-                fs::symlink_metadata(&receipt_path)
-                    .unwrap()
-                    .file_type()
-                    .is_symlink()
-            );
-        }
+        assert!(
+            error.contains("receipt path"),
+            "{relative}/{force}: {error}"
+        );
+        assert!(
+            error.contains("regular file"),
+            "{relative}/{force}: {error}"
+        );
+        assert_eq!(regular_file_tree_snapshot(&repo), repo_before);
+        assert_eq!(regular_file_tree_snapshot(&outside), outside_before);
+        assert_eq!(
+            fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+            "project notes\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&outside_target).unwrap(),
+            "outside receipt\n"
+        );
+        assert!(
+            fs::symlink_metadata(&receipt_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 }
 
@@ -308,38 +305,37 @@ fn adopt_rejects_receipt_leaf_directories_before_managed_mutation() {
     let _guard = lock_env();
     let template = materialize_template_worktree();
 
-    for relative in ADOPT_RECEIPT_PATHS {
-        for force in [false, true] {
-            let temp = tempdir().unwrap();
-            let repo = temp.path().join("repo");
-            fs::create_dir_all(&repo).unwrap();
-            run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-            fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
+    let relative = ADOPT_RECEIPT_PATH;
+    for force in [false, true] {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+        fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
 
-            let receipt_path = repo.join(relative);
-            fs::remove_file(&receipt_path).unwrap();
-            fs::create_dir(&receipt_path).unwrap();
-            let repo_before = regular_file_tree_snapshot(&repo);
+        let receipt_path = repo.join(relative);
+        fs::remove_file(&receipt_path).unwrap();
+        fs::create_dir(&receipt_path).unwrap();
+        let repo_before = regular_file_tree_snapshot(&repo);
 
-            let error = run_adopt(footprint_adopt_opts(&repo, template.path(), false, force))
-                .unwrap_err()
-                .to_string();
+        let error = run_adopt(footprint_adopt_opts(&repo, template.path(), false, force))
+            .unwrap_err()
+            .to_string();
 
-            assert!(
-                error.contains("receipt path"),
-                "{relative}/{force}: {error}"
-            );
-            assert!(
-                error.contains("regular file"),
-                "{relative}/{force}: {error}"
-            );
-            assert_eq!(regular_file_tree_snapshot(&repo), repo_before);
-            assert_eq!(
-                fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
-                "project notes\n"
-            );
-            assert!(receipt_path.is_dir());
-        }
+        assert!(
+            error.contains("receipt path"),
+            "{relative}/{force}: {error}"
+        );
+        assert!(
+            error.contains("regular file"),
+            "{relative}/{force}: {error}"
+        );
+        assert_eq!(regular_file_tree_snapshot(&repo), repo_before);
+        assert_eq!(
+            fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+            "project notes\n"
+        );
+        assert!(receipt_path.is_dir());
     }
 }
 
@@ -356,13 +352,11 @@ fn adopt_preview_ignores_unsafe_receipt_leaves_and_remains_read_only() {
 
     let outside = temp.path().join("outside");
     fs::create_dir(&outside).unwrap();
-    for (index, relative) in ADOPT_RECEIPT_PATHS.into_iter().enumerate() {
-        let receipt_path = repo.join(relative);
-        fs::remove_file(&receipt_path).unwrap();
-        let outside_target = outside.join(format!("receipt-{index}.json"));
-        fs::write(&outside_target, format!("outside receipt {index}\n")).unwrap();
-        create_symlink(&outside_target, &receipt_path).unwrap();
-    }
+    let receipt_path = repo.join(ADOPT_RECEIPT_PATH);
+    fs::remove_file(&receipt_path).unwrap();
+    let outside_target = outside.join("receipt.json");
+    fs::write(&outside_target, "outside receipt\n").unwrap();
+    create_symlink(&outside_target, &receipt_path).unwrap();
     let repo_before = regular_file_tree_snapshot(&repo);
     let outside_before = regular_file_tree_snapshot(&outside);
     let mut opts = footprint_adopt_opts(&repo, template.path(), false, false);
@@ -380,7 +374,7 @@ fn adopt_preview_ignores_unsafe_receipt_leaves_and_remains_read_only() {
 }
 
 #[test]
-fn adopt_atomically_replaces_regular_receipts_with_equal_contents_and_preserves_permissions() {
+fn adopt_replaces_canonical_receipt_and_preserves_retired_receipt() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
@@ -389,7 +383,7 @@ fn adopt_atomically_replaces_regular_receipts_with_equal_contents_and_preserves_
     run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
 
     let canonical = repo.join(ADOPT_RECEIPT_PATH);
-    let legacy = repo.join(LEGACY_ADOPT_RECEIPT_PATH);
+    let legacy = repo.join(".agent/state/adopt-last.json");
     fs::write(&canonical, "stale canonical receipt\n").unwrap();
     fs::write(&legacy, "stale legacy receipt\n").unwrap();
     #[cfg(unix)]
@@ -404,7 +398,7 @@ fn adopt_atomically_replaces_regular_receipts_with_equal_contents_and_preserves_
 
     let canonical_bytes = fs::read(&canonical).unwrap();
     let legacy_bytes = fs::read(&legacy).unwrap();
-    assert_eq!(legacy_bytes, canonical_bytes);
+    assert_eq!(legacy_bytes, b"stale legacy receipt\n");
     assert_ne!(canonical_bytes, b"stale canonical receipt\n");
     serde_json::from_slice::<serde_json::Value>(&canonical_bytes).unwrap();
     #[cfg(unix)]
@@ -424,7 +418,7 @@ fn adopt_atomically_replaces_regular_receipts_with_equal_contents_and_preserves_
 
 #[cfg(unix)]
 #[test]
-fn adopt_first_receipt_modes_match_same_parent_fs_write() {
+fn adopt_first_receipt_mode_matches_same_parent_fs_write() {
     use std::os::unix::fs::PermissionsExt;
 
     let _guard = lock_env();
@@ -433,28 +427,20 @@ fn adopt_first_receipt_modes_match_same_parent_fs_write() {
     let repo = temp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
 
-    let mut expected_modes = Vec::new();
-    for (index, relative) in ADOPT_RECEIPT_PATHS.into_iter().enumerate() {
-        let parent = repo.join(relative).parent().unwrap().to_path_buf();
-        fs::create_dir_all(&parent).unwrap();
-        let probe = parent.join(format!("fs-write-mode-probe-{index}"));
-        fs::write(&probe, "probe\n").unwrap();
-        expected_modes.push(fs::metadata(&probe).unwrap().permissions().mode() & 0o777);
-    }
+    let receipt = repo.join(ADOPT_RECEIPT_PATH);
+    let parent = receipt.parent().unwrap();
+    fs::create_dir_all(parent).unwrap();
+    let probe = parent.join("fs-write-mode-probe");
+    fs::write(&probe, "probe\n").unwrap();
+    let expected_mode = fs::metadata(&probe).unwrap().permissions().mode() & 0o777;
 
     run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
 
-    for (relative, expected_mode) in ADOPT_RECEIPT_PATHS.into_iter().zip(expected_modes) {
-        assert_eq!(
-            fs::metadata(repo.join(relative))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            expected_mode,
-            "{relative} should use the same create mode and ambient umask as fs::write"
-        );
-    }
+    assert_eq!(
+        fs::metadata(receipt).unwrap().permissions().mode() & 0o777,
+        expected_mode,
+        "the receipt should use the same create mode and ambient umask as fs::write"
+    );
 }
 
 #[cfg(unix)]

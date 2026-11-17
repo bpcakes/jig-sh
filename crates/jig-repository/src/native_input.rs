@@ -125,6 +125,7 @@ const fn current_view(request: &ComparisonRequestV1) -> CurrentViewV1 {
 mod policy;
 use policy::prepare_policy;
 pub use policy::read_policy_bytes;
+pub(crate) use policy::{PolicyChangedDuringRead, read_policy_bytes_typed};
 
 fn prepare_comparison(
     ctx: &RepoContext,

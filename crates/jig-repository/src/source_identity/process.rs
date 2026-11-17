@@ -1,4 +1,18 @@
-use super::*;
+#[cfg(test)]
+use super::{
+    CHANGED_PATH_GIT_OUTPUT_LIMIT_OVERRIDE, GATE_SCOPE_DIFF_OUTPUT_LIMIT_OVERRIDE,
+    WORKTREE_PROOF_GIT_OUTPUT_LIMIT_OVERRIDE, WORKTREE_STATUS_ENTRY_LIMIT_OVERRIDE,
+};
+use super::{
+    Command, Context, Duration, GitCollection, GitCollectionCancelled,
+    MAX_CHANGED_PATH_GIT_OUTPUT_BYTES, MAX_GATE_SCOPE_DIFF_OUTPUT_BYTES,
+    MAX_GIT_ERROR_PREVIEW_BYTES, MAX_WORKTREE_DIFF_OUTPUT_BYTES, MAX_WORKTREE_STATUS_ENTRIES,
+    MAX_WORKTREE_STATUS_OUTPUT_BYTES, OsString, Output, OwnedProcessObserver,
+    OwnedProcessOutputStream, OwnedProcessTreeError, Path, ProcessOutputLimits,
+    ProcessOutputOverflowPolicy, Result, Stdio, bail, copy, format_exit_status, fs,
+    require_success, run_checked_output_with_context, run_owned_process_tree_with_output_limits,
+    run_owned_process_tree_with_output_policy_and_observer, scrub_known_repository_git_environment,
+};
 
 pub(super) fn changed_path_git_output_limit() -> usize {
     #[cfg(test)]

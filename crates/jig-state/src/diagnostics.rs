@@ -8,10 +8,12 @@
 //! are still sized and checked because adopted repositories keep them.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde::de::IgnoredAny;
 use serde_json::{Value, json};
@@ -385,36 +387,56 @@ fn inspect_git_path(root: &Path, relative: &Path, report: &mut GitPathDiagnostic
     }
 }
 
-fn run_git<'a>(
+fn run_git(
     root: &Path,
-    args: impl IntoIterator<Item = &'a str>,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
 ) -> io::Result<std::process::Output> {
-    let mut command = Command::new("git");
+    let mut command = Command::new(jig_git::git_program());
+    jig_git::scrub_known_repository_git_environment(&mut command);
     command
         .current_dir(root)
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+        .stderr(Stdio::piped());
+    jig_owned_process::run_owned_process_tree_with_output_limits(
+        &mut command,
+        Duration::from_secs(5),
+        jig_owned_process::ProcessOutputLimits {
+            stdout: 64 * 1024,
+            stderr: 64 * 1024,
+        },
+        || false,
+    )
+    .map_err(io::Error::other)
+    .and_then(|output| {
+        let stdout = output
+            .stdout
+            .ok_or_else(|| io::Error::other("missing Git stdout"))?;
+        let stderr = output
+            .stderr
+            .ok_or_else(|| io::Error::other("missing Git stderr"))?;
+        if !stdout.complete || !stderr.complete {
+            return Err(io::Error::other("Git diagnostic output exceeded its limit"));
+        }
+        Ok(std::process::Output {
+            status: output.status,
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+        })
+    })
 }
 
 fn run_git_path<'a>(
     root: &Path,
     args: impl IntoIterator<Item = &'a str>,
-    path: &Path,
+    path: &'a Path,
 ) -> io::Result<std::process::Output> {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(args)
-        .arg(path)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+    run_git(
+        root,
+        args.into_iter().map(OsStr::new).chain([path.as_os_str()]),
+    )
 }
 
 fn git_failure(label: &str, output: &std::process::Output) -> String {

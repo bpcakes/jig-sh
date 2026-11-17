@@ -50,7 +50,7 @@ Crate-level `AGENTS.md` files are project-owned. Contracts v2–v8 validate requ
 
 The harness template does not generate application code unless a scaffold preset is selected. Crate-level `AGENTS.md` files and schema dump implementations remain project-owned.
 
-The repo dogfoods itself. This checkout is both the `jig` source tree and an adopted `jig` harness repo, and the root `AGENTS.md` instructs agents to validate runtime changes by building a dev binary and running through `scripts/jig` with `JIG_DEV_BIN`.
+The repo dogfoods itself. This checkout is both the `jig` source tree and an adopted `jig` harness repo, and the root `AGENTS.md` instructs agents to validate runtime changes through `scripts/jig-dev`, which builds the current source before invoking the launcher.
 
 ## The Product Idea
 
@@ -184,9 +184,8 @@ When changing generated repo behavior, validate with fixture rendering. The broa
 ./scripts/validate-fixtures.sh
 ```
 
-When changing runtime behavior, build a dev binary and dogfood through the launcher:
+When changing runtime behavior, build and dogfood through the development launcher:
 
 ```sh
-cargo build -p jig-sh --bin jig
-JIG_DEV_BIN=target/debug/jig scripts/jig state summary
+scripts/jig-dev state summary
 ```

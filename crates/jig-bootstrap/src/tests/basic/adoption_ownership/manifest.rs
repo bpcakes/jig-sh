@@ -147,7 +147,7 @@ fn tampered_manifest_cannot_make_update_or_adopt_remove_project_directory() {
 
         let manifest_before = fs::read(repo.join(managed_paths::MANIFEST_PATH)).unwrap();
         let canonical_receipt_before = fs::read(repo.join(ADOPT_RECEIPT_PATH)).unwrap();
-        let legacy_receipt_before = fs::read(repo.join(LEGACY_ADOPT_RECEIPT_PATH)).unwrap();
+
         let repo_before = regular_file_tree_snapshot(&repo);
 
         let error = match mode {
@@ -190,11 +190,6 @@ fn tampered_manifest_cannot_make_update_or_adopt_remove_project_directory() {
             fs::read(repo.join(ADOPT_RECEIPT_PATH)).unwrap(),
             canonical_receipt_before,
             "{mode}: canonical receipt changed"
-        );
-        assert_eq!(
-            fs::read(repo.join(LEGACY_ADOPT_RECEIPT_PATH)).unwrap(),
-            legacy_receipt_before,
-            "{mode}: legacy receipt changed"
         );
         assert_eq!(
             fs::read_to_string(existing_backup.join("project-sentinel")).unwrap(),

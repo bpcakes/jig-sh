@@ -1,4 +1,14 @@
-use super::*;
+#[cfg(test)]
+use super::WORKTREE_FINGERPRINT_COLLECTION_COUNT;
+use super::{
+    Context, Digest, GitCollection, GitCollectionCancelled, MAX_INLINE_UNTRACKED_BYTES,
+    MAX_TOTAL_INLINE_UNTRACKED_BYTES, NamedTempFile, OsString, Path, PathBuf, Read, Result, Sha256,
+    SystemTime, UNIX_EPOCH, WORKTREE_FINGERPRINT_DOMAIN, bail, ensure_worktree_gitlinks_are_stable,
+    fs, git_worktree_proof_stdout, git_worktree_proof_stdout_os, metadata, require_nul_terminated,
+    worktree_diff_output_limit, worktree_status_entry_limit, worktree_status_output_limit,
+};
+#[cfg(unix)]
+use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
 
 pub(super) fn repo_worktree_fingerprint_inner(
     root: &Path,

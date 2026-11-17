@@ -60,41 +60,69 @@ pub fn read_policy_bytes(
     ctx: &RepoContext,
     view: CurrentViewV1,
 ) -> std::result::Result<Option<Vec<u8>>, String> {
+    read_policy_bytes_typed(ctx, view).map_err(|error| error.to_string())
+}
+
+#[derive(Debug)]
+pub(crate) struct PolicyChangedDuringRead;
+
+impl std::fmt::Display for PolicyChangedDuringRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("file-budget policy changed while it was being prepared")
+    }
+}
+
+impl std::error::Error for PolicyChangedDuringRead {}
+
+pub(crate) fn read_policy_bytes_typed(
+    ctx: &RepoContext,
+    view: CurrentViewV1,
+) -> anyhow::Result<Option<Vec<u8>>> {
     if view == CurrentViewV1::Index {
         return match read_index_blob_v1(ctx.root(), POLICY_PATH_V1, MAX_POLICY_BYTES_V1 + 1) {
-            Ok(bytes) => validate_index_policy_bytes(bytes),
-            Err(error) => Err(bounded_message(&format!(
-                "file-budget policy could not be read from the index: {}",
-                redact_root(ctx, &format!("{error:#}"))
-            ))),
+            Ok(bytes) => validate_index_policy_bytes(bytes).map_err(anyhow::Error::msg),
+            Err(error) => {
+                let message = bounded_message(&format!(
+                    "file-budget policy could not be read from the index: {}",
+                    redact_root(ctx, &format!("{error:#}"))
+                ));
+                Err(error.context(message))
+            }
         };
     }
     let path = ctx.root().join(POLICY_PATH_V1);
     let before = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("file-budget policy metadata could not be read".into()),
+        Err(_) => {
+            return Err(anyhow::anyhow!(
+                "file-budget policy metadata could not be read"
+            ));
+        }
     };
     if !before.file_type().is_file() || before.file_type().is_symlink() {
-        return Err("file-budget policy must be a regular file and may not be a symlink".into());
+        return Err(anyhow::anyhow!(
+            "file-budget policy must be a regular file and may not be a symlink"
+        ));
     }
     if before.len() > MAX_POLICY_BYTES_V1 as u64 {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "file-budget policy is {} bytes; preparation permits at most {MAX_POLICY_BYTES_V1}",
             before.len()
         ));
     }
-    let mut file = File::open(&path).map_err(|_| "file-budget policy could not be opened")?;
+    let mut file =
+        File::open(&path).map_err(|_| anyhow::anyhow!("file-budget policy could not be opened"))?;
     let mut bytes = Vec::with_capacity(before.len() as usize);
     file.by_ref()
         .take((MAX_POLICY_BYTES_V1 + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|_| "file-budget policy could not be read completely")?;
+        .map_err(|_| anyhow::anyhow!("file-budget policy could not be read completely"))?;
     let after = file
         .metadata()
-        .map_err(|_| "file-budget policy identity could not be rechecked")?;
+        .map_err(|_| anyhow::anyhow!("file-budget policy identity could not be rechecked"))?;
     if bytes.len() > MAX_POLICY_BYTES_V1 {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "file-budget policy exceeds the {MAX_POLICY_BYTES_V1}-byte preparation limit"
         ));
     }
@@ -102,7 +130,7 @@ pub fn read_policy_bytes(
         || before.modified().ok() != after.modified().ok()
         || !after.file_type().is_file()
     {
-        return Err("file-budget policy changed while it was being prepared".into());
+        return Err(PolicyChangedDuringRead.into());
     }
     Ok(Some(bytes))
 }

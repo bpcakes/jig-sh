@@ -8,6 +8,16 @@ notice_lines = 400
 warn_lines = 500
 max_lines = 800
 
+# Current thresholds also apply to existing files: the normal comparison
+# ratchets their debt, while new files must fit the limit.
+[[rules]]
+id = "scripts-and-templates"
+category = "source"
+include = ["scripts/**/*.py", "scripts/**/*.sh", "scripts/**/*.js", "scripts/**/*.cjs", "scripts/**/*.mjs", "scripts/jig", "scripts/jig-dev", "templates/project/scripts/**", "templates/scaffolds/**/*.sh.jinja", "templates/scaffolds/**/*.js.jinja", "templates/scaffolds/**/*.cjs.jinja", "templates/scaffolds/**/*.mjs.jinja"]
+notice_lines = 400
+warn_lines = 500
+max_lines = 800
+
 [[exclusions]]
 pattern = "crates/jig-bootstrap/src/**/embedded_templates_snapshot.rs"
 kind = "generated"
