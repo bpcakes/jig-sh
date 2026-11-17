@@ -233,8 +233,14 @@ fn unreadable_keychain_logins_fall_back_to_the_file_claude_code_would_use() {
     let no_file = || Err::<credentials::Credential, _>("No readable Claude login".to_string());
     let unused = || -> Result<credentials::Credential, String> { panic!("file read unexpectedly") };
     type Login = Result<credentials::Credential, String>;
-    type KeychainRead = Result<Option<Zeroizing<Vec<u8>>>, String>;
-    let keychain_error = || -> KeychainRead { Err("Claude Keychain login is locked".into()) };
+    type KeychainRead = Result<Option<Zeroizing<Vec<u8>>>, super::keychain::ReadError>;
+    let unreadable = |file_fallback| -> KeychainRead {
+        Err(super::keychain::ReadError {
+            message: "Claude Keychain login is locked".into(),
+            file_fallback,
+        })
+    };
+    let keychain_error = || unreadable(true);
     let choose = |keychain: KeychainRead, cancelled: bool, file: &dyn Fn() -> Login| {
         credentials::prefer_keychain(keychain, &move || cancelled, NOW, file)
     };
@@ -277,6 +283,12 @@ fn unreadable_keychain_logins_fall_back_to_the_file_claude_code_would_use() {
             "Claude Keychain login is locked"
         );
     }
+    // A read abandoned while a dialog may be open keeps the Keychain error: a
+    // launch would wait on that dialog and use the Keychain login instead.
+    assert_eq!(
+        error(choose(unreadable(false), false, &unused)),
+        "Claude Keychain login is locked"
+    );
     // Cancellation stops before any file read, whatever the Keychain reported.
     for keychain in [Ok(None), keychain_error()] {
         assert!(error(choose(keychain, true, &unused)).contains("cancelled"));

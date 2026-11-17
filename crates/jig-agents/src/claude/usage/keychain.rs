@@ -18,11 +18,43 @@ const PICKER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// A tool read with permission already granted returns at once. Headless
 /// inspection stops waiting on one that needs the user to answer a dialog.
 const HEADLESS_READ_TIMEOUT: Duration = Duration::from_secs(2);
-const PICKER_READ_FAILED: &str = "Claude Keychain access was denied, timed out, or is locked";
+const PICKER_READ_FAILED: &str = "Claude Keychain access was denied or is locked";
+const PICKER_READ_WAITING: &str = "Claude Keychain permission request timed out";
 const HEADLESS_READ_FAILED: &str = "Claude Keychain login is locked or needs permission";
+const HEADLESS_READ_WAITING: &str = "Claude Keychain login needs permission";
 /// Unlocking and item permission are separate: a session without desktop
 /// access, such as SSH, can do neither through a dialog, so name both remedies.
-const READ_FAILED_REMEDY: &str = "unlock a locked Keychain with security unlock-keychain, as needed over SSH, and grant access by choosing Always Allow in the jig claude launch picker from a desktop session";
+const READ_FAILED_REMEDY: &str = "unlock a locked Keychain with security unlock-keychain, as needed over SSH; an item that does not yet allow /usr/bin/security also needs Always Allow from the jig claude launch picker in a desktop session";
+
+/// How the `security` tool failed to return the item.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ToolFailure {
+    /// The tool ended without the item, as when the Keychain is locked in a
+    /// session that cannot unlock it or the user denied access.
+    Failed,
+    /// The tool was still running at the deadline, typically waiting on a
+    /// dialog.
+    Waiting,
+}
+
+/// A Keychain item that exists but could not be read.
+#[derive(Debug)]
+pub(super) struct ReadError {
+    pub(super) message: String,
+    /// Whether a Claude launch from this session would also go without the
+    /// item and use `.credentials.json`. False while a dialog may still be
+    /// open: a launch waits on it and then uses the Keychain login.
+    pub(super) file_fallback: bool,
+}
+
+impl ReadError {
+    fn failed(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            file_fallback: true,
+        }
+    }
+}
 
 pub(super) fn service(home: &Home) -> Result<String, String> {
     if home.default_config {
@@ -44,8 +76,8 @@ pub(super) fn read(
     home: &Home,
     mode: InspectionMode,
     cancelled: &(dyn Fn() -> bool + Sync),
-) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-    let service = service(home)?;
+) -> Result<Option<Zeroizing<Vec<u8>>>, ReadError> {
+    let service = service(home).map_err(ReadError::failed)?;
     let account = std::env::var("USER")
         .ok()
         .filter(|name| {
@@ -76,8 +108,8 @@ fn read_with(
     mode: InspectionMode,
     cancelled: &(dyn Fn() -> bool + Sync),
     mut search: impl FnMut(&ItemSearchOptions) -> security_framework::base::Result<Vec<SearchResult>>,
-    tool_read: impl FnOnce(Duration) -> Result<Zeroizing<Vec<u8>>, String>,
-) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
+    tool_read: impl FnOnce(Duration) -> Result<Zeroizing<Vec<u8>>, ToolFailure>,
+) -> Result<Option<Zeroizing<Vec<u8>>>, ReadError> {
     match silent::search(&query, &mut search) {
         Ok(items) => {
             return Ok(items.into_iter().find_map(|item| match item {
@@ -87,7 +119,8 @@ fn read_with(
         }
         Err(error) if error.code() == -25300 => {
             // A skipped protected item is also reported as not found. Inspect
-            // attributes before falling back to a potentially stale file token.
+            // attributes so an existing item is read through the security tool
+            // instead of being treated as missing.
             query.load_data(false).load_attributes(true);
             match silent::search(&query, &mut search) {
                 Err(error) if error.code() == -25300 => return Ok(None),
@@ -98,15 +131,28 @@ fn read_with(
         Err(_) => {}
     }
     if cancelled() {
-        return Err("Claude usage inspection was cancelled".into());
+        return Err(ReadError::failed(super::CANCELLED));
     }
     // Jig's own read never asks for trust, so a protected item is read through
     // Apple's security tool, whose permission survives Jig rebuilds and upgrades.
-    let (timeout, failure) = match mode {
-        InspectionMode::Interactive => (PICKER_READ_TIMEOUT, PICKER_READ_FAILED),
-        InspectionMode::Headless => (HEADLESS_READ_TIMEOUT, HEADLESS_READ_FAILED),
+    let (timeout, failed, waiting) = match mode {
+        InspectionMode::Interactive => {
+            (PICKER_READ_TIMEOUT, PICKER_READ_FAILED, PICKER_READ_WAITING)
+        }
+        InspectionMode::Headless => (
+            HEADLESS_READ_TIMEOUT,
+            HEADLESS_READ_FAILED,
+            HEADLESS_READ_WAITING,
+        ),
     };
-    tool_read(timeout)
-        .map(Some)
-        .map_err(|_| format!("{failure}; {READ_FAILED_REMEDY}"))
+    tool_read(timeout).map(Some).map_err(|failure| {
+        let (summary, file_fallback) = match failure {
+            ToolFailure::Failed => (failed, true),
+            ToolFailure::Waiting => (waiting, false),
+        };
+        ReadError {
+            message: format!("{summary}; {READ_FAILED_REMEDY}"),
+            file_fallback,
+        }
+    })
 }

@@ -5,12 +5,17 @@ use std::time::{Duration, Instant};
 use jig_owned_process::interaction::run_owned_process_tree_with_cooperative_interaction;
 use zeroize::Zeroizing;
 
+use super::ToolFailure;
+
+/// Reads the item through Apple's `security` tool. A tool still running at the
+/// deadline is reported as [`ToolFailure::Waiting`]: it may be showing a
+/// permission or unlock dialog that a Claude launch would wait on.
 pub(super) fn read(
     service: &str,
     account: &str,
     timeout: Duration,
     cancelled: &(dyn Fn() -> bool + Sync),
-) -> Result<Zeroizing<Vec<u8>>, String> {
+) -> Result<Zeroizing<Vec<u8>>, ToolFailure> {
     let mut command = Command::new("/usr/bin/security");
     command
         .args(["find-generic-password", "-s", service, "-a", account, "-w"])
@@ -25,15 +30,18 @@ pub(super) fn read(
             let mut bytes = Zeroizing::new(Vec::new());
             let mut buffer = Zeroizing::new([0u8; 4096]);
             loop {
-                if cancelled() || deadline.is_none_or(|deadline| Instant::now() >= deadline) {
-                    return Err("Claude Keychain access cancelled or timed out".into());
+                if cancelled() {
+                    return Err("Claude Keychain access cancelled".into());
+                }
+                if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
+                    return Ok(Err(ToolFailure::Waiting));
                 }
                 match stdout.read(&mut *buffer) {
                     Ok(0) => {
                         return if bytes.is_empty() {
-                            Err("Claude Keychain access was denied or unavailable".into())
+                            Ok(Err(ToolFailure::Failed))
                         } else {
-                            Ok(bytes)
+                            Ok(Ok(bytes))
                         };
                     }
                     Ok(count) => {
@@ -53,5 +61,5 @@ pub(super) fn read(
             }
         },
     )
-    .map_err(|_| "Claude Keychain access was denied, cancelled, or timed out".into())
+    .unwrap_or(Err(ToolFailure::Failed))
 }

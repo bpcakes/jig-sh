@@ -108,27 +108,31 @@ pub(super) fn load(
 /// Claude Code reads the Keychain through the same `security` command and uses
 /// `.credentials.json` whenever that read returns nothing, as in an SSH session
 /// that cannot unlock the login Keychain. Follow that order so a home reports
-/// the login a launch from this session would use. The Keychain error, which
-/// names its remedy, stands when the file holds no login usable for inspection:
-/// an expired or unscoped file login would only replace that remedy with advice
-/// to sign in again, although the Keychain may hold a working login.
+/// the login a launch from this session would use. A read abandoned while the
+/// tool may still be showing a dialog does not fall back: a launch would wait on
+/// that dialog and then use the Keychain login, which can differ from the file's.
+/// The Keychain error, which names its remedy, also stands when the file holds
+/// no login usable for inspection: an expired or unscoped file login would only
+/// replace that remedy with advice to sign in again, although the Keychain may
+/// hold a working login.
 #[cfg(target_os = "macos")]
 pub(super) fn prefer_keychain(
-    keychain: Result<Option<Zeroizing<Vec<u8>>>, String>,
+    keychain: Result<Option<Zeroizing<Vec<u8>>>, super::keychain::ReadError>,
     cancelled: &(dyn Fn() -> bool + Sync),
     now_millis: i64,
     file: impl FnOnce() -> Result<Credential, String>,
 ) -> Result<Credential, String> {
     if cancelled() {
-        return Err("Claude usage inspection was cancelled".into());
+        return Err(super::CANCELLED.into());
     }
     match keychain {
         Ok(Some(bytes)) => parse(&bytes),
         Ok(None) => file(),
+        Err(error) if !error.file_fallback => Err(error.message),
         Err(error) => file()
             .ok()
             .filter(|credential| credential.usage_error(now_millis).is_none())
-            .ok_or(error),
+            .ok_or(error.message),
     }
 }
 

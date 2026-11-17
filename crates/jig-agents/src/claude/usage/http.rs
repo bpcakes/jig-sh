@@ -68,7 +68,7 @@ pub(super) async fn fetch(
     tokio::pin!(request);
     loop {
         if cancelled() {
-            return Err("Claude usage inspection was cancelled".into());
+            return Err(super::CANCELLED.into());
         }
         tokio::select! {
             result = &mut request => return result,

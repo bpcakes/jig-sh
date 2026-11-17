@@ -9,6 +9,7 @@ enum Expected {
     ToolRead,
     PermissionRequired,
     ToolDenied,
+    StillWaiting,
     Cancelled,
 }
 
@@ -16,7 +17,7 @@ fn check(
     outcomes: Vec<SearchOutcome<Vec<SearchResult>>>,
     mode: InspectionMode,
     cancelled: bool,
-    tool_reads: bool,
+    tool_failure: Option<ToolFailure>,
     expected: Expected,
 ) {
     let original = SecKeychain::user_interaction_allowed().unwrap();
@@ -50,10 +51,9 @@ fn check(
                 }
             );
             tool_used = true;
-            if tool_reads {
-                Ok(Zeroizing::new(b"example-tool-token".to_vec()))
-            } else {
-                Err("Claude Keychain access was denied or unavailable".into())
+            match tool_failure {
+                None => Ok(Zeroizing::new(b"example-tool-token".to_vec())),
+                Some(failure) => Err(failure),
             }
         },
     );
@@ -63,7 +63,10 @@ fn check(
         tool_used,
         matches!(
             expected,
-            Expected::ToolRead | Expected::PermissionRequired | Expected::ToolDenied
+            Expected::ToolRead
+                | Expected::PermissionRequired
+                | Expected::ToolDenied
+                | Expected::StillWaiting
         )
     );
     match expected {
@@ -72,15 +75,33 @@ fn check(
         Expected::ToolRead => assert_eq!(&**result.unwrap().unwrap(), b"example-tool-token"),
         Expected::PermissionRequired => {
             let error = result.unwrap_err();
-            assert!(error.contains("needs permission"), "{error}");
-            assert_names_both_remedies(&error);
+            assert!(error.file_fallback);
+            assert!(
+                error.message.contains("needs permission"),
+                "{}",
+                error.message
+            );
+            assert_names_both_remedies(&error.message);
         }
         Expected::ToolDenied => {
             let error = result.unwrap_err();
-            assert!(error.contains("denied"), "{error}");
-            assert_names_both_remedies(&error);
+            assert!(error.file_fallback);
+            assert!(error.message.contains("denied"), "{}", error.message);
+            assert_names_both_remedies(&error.message);
         }
-        Expected::Cancelled => assert!(result.unwrap_err().contains("cancelled")),
+        // A launch would wait on the dialog and use the Keychain login, so
+        // the file login must not stand in for it.
+        Expected::StillWaiting => {
+            let error = result.unwrap_err();
+            assert!(!error.file_fallback);
+            let expected = match mode {
+                InspectionMode::Headless => "needs permission",
+                InspectionMode::Interactive => "timed out",
+            };
+            assert!(error.message.contains(expected), "{}", error.message);
+            assert_names_both_remedies(&error.message);
+        }
+        Expected::Cancelled => assert!(result.unwrap_err().message.contains("cancelled")),
     }
 }
 
@@ -116,7 +137,7 @@ fn scenarios() {
             )])],
             mode,
             false,
-            true,
+            None,
             Expected::Stored,
         );
         for outcomes in [
@@ -124,26 +145,35 @@ fn scenarios() {
             vec![failure(-25300), failure(-25300)],
             vec![failure(-25300), Ok(vec![])],
         ] {
-            check(outcomes, mode, false, true, Expected::Missing);
+            check(outcomes, mode, false, None, Expected::Missing);
         }
         // Headless inspection reads through the security tool too, which
         // returns at once once the user has allowed it.
         for outcomes in protected() {
-            check(outcomes, mode, false, true, Expected::ToolRead);
+            check(outcomes, mode, false, None, Expected::ToolRead);
         }
         for outcomes in protected() {
             check(
                 outcomes,
                 mode,
                 false,
-                false,
+                Some(ToolFailure::Failed),
                 match mode {
                     InspectionMode::Headless => Expected::PermissionRequired,
                     InspectionMode::Interactive => Expected::ToolDenied,
                 },
             );
         }
-        check(vec![failure(-25308)], mode, true, true, Expected::Cancelled);
+        for outcomes in protected() {
+            check(
+                outcomes,
+                mode,
+                false,
+                Some(ToolFailure::Waiting),
+                Expected::StillWaiting,
+            );
+        }
+        check(vec![failure(-25308)], mode, true, None, Expected::Cancelled);
     }
 }
 
