@@ -105,6 +105,13 @@ pub(super) struct OwnedProcessOutputDrains {
 }
 
 impl OwnedProcessOutputDrains {
+    pub(super) fn remaining_stderr(stderr: Option<OutputDrain>) -> Self {
+        Self {
+            stdout: None,
+            stderr,
+        }
+    }
+
     pub(super) fn start(child: &mut Child, limits: ProcessOutputLimits) -> std::io::Result<Self> {
         let stdout = child
             .stdout

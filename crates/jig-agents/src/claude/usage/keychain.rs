@@ -18,54 +18,33 @@ const PICKER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// A tool read with permission already granted returns at once. Headless
 /// inspection stops waiting on one that needs the user to answer a dialog.
 const HEADLESS_READ_TIMEOUT: Duration = Duration::from_secs(2);
-const PICKER_READ_UNAVAILABLE: &str =
-    "Claude Keychain is locked or cannot ask for permission in this session";
-const PICKER_READ_WAITING: &str = "Claude Keychain permission request timed out";
-const HEADLESS_READ_UNAVAILABLE: &str = "Claude Keychain login is locked or needs permission";
-const HEADLESS_READ_WAITING: &str = "Claude Keychain login needs permission";
-const READ_REFUSED: &str = "Claude Keychain access was denied or cancelled";
-/// Unlocking and item permission are separate: a session without desktop
-/// access, such as SSH, can do neither through a dialog, so name both remedies.
 const READ_FAILED_REMEDY: &str = "unlock a locked Keychain with security unlock-keychain, as needed over SSH; an item that does not yet allow /usr/bin/security also needs Always Allow from the jig claude launch picker in a desktop session";
-const TOOL_UNREADABLE: &str =
-    "Claude Keychain credentials could not be read through /usr/bin/security";
 
-/// How the `security` tool failed to return the item.
+pub(super) type ReadResult = Result<Option<Zeroizing<Vec<u8>>>, ReadError>;
+
+/// Evidence from the read. Confirmed absence is `Ok(None)` regardless of
+/// whether the native query or the security command observed it.
 #[derive(Debug)]
-pub(super) enum ToolFailure {
-    /// The tool could not run, or reported that this session cannot show a
-    /// dialog, as over SSH, or that the item is gone. A Claude launch from
-    /// this session would go without the item too.
-    Unavailable,
-    /// The tool ended without the item for another reason, such as a Deny or
-    /// a cancelled unlock dialog. That answers only one request: a launch
-    /// asks again and may then use the Keychain login.
+pub(super) enum ReadError {
+    ToolMissing,
+    InteractionNotAllowed,
     Refused,
-    /// The tool was still running at the deadline, typically waiting on a
-    /// dialog.
-    Waiting,
-    /// The tool's output could not be taken, being oversized or unreadable, or
-    /// the tool could not be stopped. A launch would still read the item.
+    TimedOut,
     Unreadable,
-}
-
-/// A Keychain item that exists but could not be read.
-#[derive(Debug)]
-pub(super) struct ReadError {
-    pub(super) message: String,
-    /// Whether a Claude launch from this session would also go without the
-    /// item and use `.credentials.json`. False when a launch could still show
-    /// a dialog, wait on it, and then use the Keychain login.
-    pub(super) file_fallback: bool,
+    Cancelled,
+    Service(String),
 }
 
 impl ReadError {
-    /// A read that does not show a launch would go without the item, so the
-    /// file login cannot stand in for the one a launch would read.
-    fn without_fallback(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            file_fallback: false,
+    pub(super) fn message(&self) -> String {
+        match self {
+            Self::ToolMissing => "Claude Keychain credentials require the missing /usr/bin/security tool".into(),
+            Self::InteractionNotAllowed => format!("Claude Keychain is locked or cannot ask for permission in this session; {READ_FAILED_REMEDY}"),
+            Self::Refused => format!("Claude Keychain access was denied or cancelled; {READ_FAILED_REMEDY}"),
+            Self::TimedOut => "Claude Keychain read timed out; if a permission dialog is waiting, answer it from the jig claude launch picker in a desktop session".into(),
+            Self::Unreadable => "Claude Keychain credentials could not be read through /usr/bin/security".into(),
+            Self::Cancelled => super::CANCELLED.into(),
+            Self::Service(message) => message.clone(),
         }
     }
 }
@@ -90,10 +69,10 @@ pub(super) fn read(
     home: &Home,
     mode: InspectionMode,
     cancelled: &(dyn Fn() -> bool + Sync),
-) -> Result<Option<Zeroizing<Vec<u8>>>, ReadError> {
+) -> ReadResult {
     // A launch still derives a service name and reads that item, so a path Jig
     // cannot name keeps its error instead of reporting the file login.
-    let service = service(home).map_err(ReadError::without_fallback)?;
+    let service = service(home).map_err(ReadError::Service)?;
     let account = std::env::var("USER")
         .ok()
         .filter(|name| {
@@ -124,14 +103,19 @@ fn read_with(
     mode: InspectionMode,
     cancelled: &(dyn Fn() -> bool + Sync),
     mut search: impl FnMut(&ItemSearchOptions) -> security_framework::base::Result<Vec<SearchResult>>,
-    tool_read: impl FnOnce(Duration) -> Result<Zeroizing<Vec<u8>>, ToolFailure>,
-) -> Result<Option<Zeroizing<Vec<u8>>>, ReadError> {
+    tool_read: impl FnOnce(Duration) -> ReadResult,
+) -> ReadResult {
     match silent::search(&query, &mut search) {
+        Ok(items) if items.is_empty() => return Ok(None),
         Ok(items) => {
-            return Ok(items.into_iter().find_map(|item| match item {
+            if let Some(bytes) = items.into_iter().find_map(|item| match item {
                 SearchResult::Data(bytes) => Some(Zeroizing::new(bytes)),
                 _ => None,
-            }));
+            }) {
+                return Ok(Some(bytes));
+            }
+            // A successful query without credential data also needs an
+            // authoritative tool read.
         }
         Err(error) if error.code() == -25300 => {
             // A skipped protected item is also reported as not found. Inspect
@@ -147,32 +131,12 @@ fn read_with(
         Err(_) => {}
     }
     if cancelled() {
-        return Err(ReadError::without_fallback(super::CANCELLED));
+        return Err(ReadError::Cancelled);
     }
     // Jig's own read never asks for trust, so a protected item is read through
     // Apple's security tool, whose permission survives Jig rebuilds and upgrades.
-    let (timeout, unavailable, waiting) = match mode {
-        InspectionMode::Interactive => (
-            PICKER_READ_TIMEOUT,
-            PICKER_READ_UNAVAILABLE,
-            PICKER_READ_WAITING,
-        ),
-        InspectionMode::Headless => (
-            HEADLESS_READ_TIMEOUT,
-            HEADLESS_READ_UNAVAILABLE,
-            HEADLESS_READ_WAITING,
-        ),
-    };
-    tool_read(timeout).map(Some).map_err(|failure| {
-        let (summary, file_fallback) = match failure {
-            ToolFailure::Unavailable => (unavailable, true),
-            ToolFailure::Refused => (READ_REFUSED, false),
-            ToolFailure::Waiting => (waiting, false),
-            ToolFailure::Unreadable => return ReadError::without_fallback(TOOL_UNREADABLE),
-        };
-        ReadError {
-            message: format!("{summary}; {READ_FAILED_REMEDY}"),
-            file_fallback,
-        }
+    tool_read(match mode {
+        InspectionMode::Interactive => PICKER_READ_TIMEOUT,
+        InspectionMode::Headless => HEADLESS_READ_TIMEOUT,
     })
 }

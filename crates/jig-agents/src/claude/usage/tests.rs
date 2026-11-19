@@ -233,15 +233,9 @@ fn unreadable_keychain_logins_fall_back_to_the_file_claude_code_would_use() {
     let no_file = || Err::<credentials::Credential, _>("No readable Claude login".to_string());
     let unused = || -> Result<credentials::Credential, String> { panic!("file read unexpectedly") };
     type Login = Result<credentials::Credential, String>;
-    type KeychainRead = Result<Option<Zeroizing<Vec<u8>>>, super::keychain::ReadError>;
-    let unreadable = |file_fallback| -> KeychainRead {
-        Err(super::keychain::ReadError {
-            message: "Claude Keychain login is locked".into(),
-            file_fallback,
-        })
-    };
-    let keychain_error = || unreadable(true);
-    let choose = |keychain: KeychainRead, cancelled: bool, file: &dyn Fn() -> Login| {
+    use super::keychain::{ReadError, ReadResult};
+    let keychain_error = || Err(ReadError::InteractionNotAllowed);
+    let choose = |keychain: ReadResult, cancelled: bool, file: &dyn Fn() -> Login| {
         credentials::prefer_keychain(keychain, &move || cancelled, NOW, file)
     };
     let token =
@@ -280,14 +274,14 @@ fn unreadable_keychain_logins_fall_back_to_the_file_claude_code_would_use() {
     ] {
         assert_eq!(
             error(choose(keychain_error(), false, file)),
-            "Claude Keychain login is locked"
+            ReadError::InteractionNotAllowed.message()
         );
     }
     // A read abandoned while a dialog may be open keeps the Keychain error: a
     // launch would wait on that dialog and use the Keychain login instead.
     assert_eq!(
-        error(choose(unreadable(false), false, &unused)),
-        "Claude Keychain login is locked"
+        error(choose(Err(ReadError::TimedOut), false, &unused)),
+        ReadError::TimedOut.message()
     );
     // Cancellation stops before any file read, whatever the Keychain reported.
     for keychain in [Ok(None), keychain_error()] {

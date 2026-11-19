@@ -7,10 +7,7 @@ enum Expected {
     Stored,
     Missing,
     ToolRead,
-    Unavailable,
-    Refused,
-    StillWaiting,
-    ToolUnreadable,
+    MissingAfterProbe,
     Cancelled,
 }
 
@@ -18,7 +15,6 @@ fn check(
     outcomes: Vec<SearchOutcome<Vec<SearchResult>>>,
     mode: InspectionMode,
     cancelled: bool,
-    tool_failure: Option<ToolFailure>,
     expected: Expected,
 ) {
     let original = SecKeychain::user_interaction_allowed().unwrap();
@@ -52,9 +48,9 @@ fn check(
                 }
             );
             tool_used = true;
-            match tool_failure {
-                None => Ok(Zeroizing::new(b"example-tool-token".to_vec())),
-                Some(failure) => Err(failure),
+            match expected {
+                Expected::MissingAfterProbe => Ok(None),
+                _ => Ok(Some(Zeroizing::new(b"example-tool-token".to_vec()))),
             }
         },
     );
@@ -62,60 +58,14 @@ fn check(
     assert_eq!(SecKeychain::user_interaction_allowed().unwrap(), original);
     assert_eq!(
         tool_used,
-        matches!(
-            expected,
-            Expected::ToolRead
-                | Expected::Unavailable
-                | Expected::Refused
-                | Expected::StillWaiting
-                | Expected::ToolUnreadable
-        )
+        matches!(expected, Expected::ToolRead | Expected::MissingAfterProbe)
     );
     match expected {
         Expected::Stored => assert_eq!(&**result.unwrap().unwrap(), b"example-stored-token"),
-        Expected::Missing => assert!(result.unwrap().is_none()),
+        Expected::Missing | Expected::MissingAfterProbe => assert!(result.unwrap().is_none()),
         Expected::ToolRead => assert_eq!(&**result.unwrap().unwrap(), b"example-tool-token"),
-        expected => assert_read_error(result.unwrap_err(), mode, expected),
+        Expected::Cancelled => assert!(matches!(result, Err(ReadError::Cancelled))),
     }
-}
-
-/// Checks whether an unread item lets the file login stand in, and its message.
-fn assert_read_error(error: ReadError, mode: InspectionMode, expected: Expected) {
-    let interactive = matches!(mode, InspectionMode::Interactive);
-    let (file_fallback, summary, remedies) = match expected {
-        // A session that cannot show a dialog, as over SSH, would leave a
-        // launch without the item too, so the file login may stand in.
-        Expected::Unavailable if interactive => (true, "cannot ask for permission", true),
-        Expected::Unavailable => (true, "needs permission", true),
-        // A Deny or cancelled dialog answers one request: a launch asks again
-        // and may then use the Keychain login.
-        Expected::Refused => (false, "denied", true),
-        // A launch would wait on the dialog and use the Keychain login, so
-        // the file login must not stand in for it.
-        Expected::StillWaiting if interactive => (false, "timed out", true),
-        Expected::StillWaiting => (false, "needs permission", true),
-        // Oversized or unreadable output, or a tool left running, is an item a
-        // launch would still read.
-        Expected::ToolUnreadable => (false, "could not be read", false),
-        Expected::Cancelled => (false, "cancelled", false),
-        Expected::Stored | Expected::Missing | Expected::ToolRead => {
-            unreachable!("a read expected to succeed failed: {}", error.message)
-        }
-    };
-    assert_eq!(error.file_fallback, file_fallback, "{}", error.message);
-    assert!(error.message.contains(summary), "{}", error.message);
-    if remedies {
-        assert_names_both_remedies(&error.message);
-    }
-}
-
-/// Unlocking does not grant item permission, so both modes name each remedy.
-fn assert_names_both_remedies(error: &str) {
-    assert!(error.contains("security unlock-keychain"), "{error}");
-    assert!(
-        error.contains("Always Allow") && error.contains("jig claude launch"),
-        "{error}"
-    );
 }
 
 fn failure(code: i32) -> SearchOutcome<Vec<SearchResult>> {
@@ -141,7 +91,6 @@ fn scenarios() {
             )])],
             mode,
             false,
-            None,
             Expected::Stored,
         );
         for outcomes in [
@@ -149,63 +98,20 @@ fn scenarios() {
             vec![failure(-25300), failure(-25300)],
             vec![failure(-25300), Ok(vec![])],
         ] {
-            check(outcomes, mode, false, None, Expected::Missing);
+            check(outcomes, mode, false, Expected::Missing);
         }
         // Headless inspection reads through the security tool too, which
         // returns at once once the user has allowed it.
         for outcomes in protected() {
-            check(outcomes, mode, false, None, Expected::ToolRead);
+            check(outcomes, mode, false, Expected::ToolRead);
         }
-        for outcomes in protected() {
-            check(
-                outcomes,
-                mode,
-                false,
-                Some(ToolFailure::Unavailable),
-                Expected::Unavailable,
-            );
-        }
-        for outcomes in protected() {
-            check(
-                outcomes,
-                mode,
-                false,
-                Some(ToolFailure::Refused),
-                Expected::Refused,
-            );
-        }
-        for outcomes in protected() {
-            check(
-                outcomes,
-                mode,
-                false,
-                Some(ToolFailure::Waiting),
-                Expected::StillWaiting,
-            );
-        }
-        for outcomes in protected() {
-            check(
-                outcomes,
-                mode,
-                false,
-                Some(ToolFailure::Unreadable),
-                Expected::ToolUnreadable,
-            );
-        }
-        check(vec![failure(-25308)], mode, true, None, Expected::Cancelled);
-    }
-}
-
-#[test]
-fn security_tool_exits_fall_back_only_when_a_launch_would_lack_the_item() {
-    let unavailable = |code| matches!(prompt::ended_without_item(code), ToolFailure::Unavailable);
-    // errSecInteractionNotAllowed, as over SSH, and errSecItemNotFound.
-    assert!(unavailable(Some(36)));
-    assert!(unavailable(Some(44)));
-    // errSecAuthFailed after a Deny, errSecUserCanceled, other failures, and a
-    // tool stopped by a signal.
-    for code in [Some(51), Some(128), Some(1), None] {
-        assert!(!unavailable(code), "{code:?}");
+        check(
+            vec![failure(-25300), Ok(vec![SearchResult::Other])],
+            mode,
+            false,
+            Expected::MissingAfterProbe,
+        );
+        check(vec![failure(-25308)], mode, true, Expected::Cancelled);
     }
 }
 

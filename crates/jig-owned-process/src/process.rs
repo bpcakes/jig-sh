@@ -257,19 +257,19 @@ impl Default for ProcessOutputLimits {
     }
 }
 
+struct CancellationObserver<'a, F>(&'a mut F);
+impl<F: FnMut() -> bool> OwnedProcessObserver for CancellationObserver<'_, F> {
+    fn cancelled(&mut self) -> bool {
+        (self.0)()
+    }
+}
+
 pub fn run_owned_process_tree_with_output_limits(
     command: &mut Command,
     timeout: Duration,
     limits: ProcessOutputLimits,
     mut cancelled: impl FnMut() -> bool,
 ) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
-    struct CancellationObserver<'a, F>(&'a mut F);
-    impl<F: FnMut() -> bool> OwnedProcessObserver for CancellationObserver<'_, F> {
-        fn cancelled(&mut self) -> bool {
-            (self.0)()
-        }
-    }
-
     run_owned_process_tree_with_output_limits_and_observer(
         command,
         timeout,
@@ -312,7 +312,7 @@ pub fn run_owned_process_tree_with_output_policy_and_observer(
     };
     let wait_result = wait_for_owned_process(
         &mut process,
-        timeout,
+        ProcessDeadline::after(timeout),
         overflow_policy,
         observer,
         &mut drains,
@@ -535,13 +535,12 @@ enum OwnedProcessObservation {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_for_owned_process(
     process: &mut OwnedProcess,
-    timeout: Duration,
+    deadline: ProcessDeadline,
     overflow_policy: ProcessOutputOverflowPolicy,
     observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
 ) -> std::io::Result<OwnedProcessWait> {
     let started = Instant::now();
-    let deadline = ProcessDeadline::after(timeout);
     loop {
         let output_poll = drains.poll(observer);
         if overflow_policy == ProcessOutputOverflowPolicy::Error
@@ -621,7 +620,7 @@ fn terminate_owned_process_fallback(_process: &mut OwnedProcess) -> std::io::Res
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn wait_for_owned_process(
     _process: &mut OwnedProcess,
-    _timeout: Duration,
+    _deadline: ProcessDeadline,
     _overflow_policy: ProcessOutputOverflowPolicy,
     observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
