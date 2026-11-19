@@ -2,56 +2,215 @@ use std::io::{ErrorKind, Read};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use jig_owned_process::interaction::run_owned_process_tree_with_cooperative_interaction;
+use jig_owned_process::OwnedProcessTreeError;
+use jig_owned_process::interaction::{
+    OwnedProcessTreeInteractionError,
+    run_owned_process_tree_with_cooperative_interaction_and_status,
+};
 use zeroize::Zeroizing;
+
+use super::ReadError;
+use crate::claude::usage::credentials::CREDENTIAL_LIMIT;
+
+// The security CLI returns the low byte of the OSStatus.
+const EXIT_ITEM_NOT_FOUND: i32 = 44; // errSecItemNotFound (-25300)
+const EXIT_INTERACTION_NOT_ALLOWED: i32 = 36; // errSecInteractionNotAllowed (-25308)
+const EXIT_AUTH_FAILED: i32 = 51; // errSecAuthFailed (-25293)
+const EXIT_USER_CANCELED: i32 = 128; // errSecUserCanceled (-128)
 
 pub(super) fn read(
     service: &str,
     account: &str,
     timeout: Duration,
     cancelled: &(dyn Fn() -> bool + Sync),
-) -> Result<Zeroizing<Vec<u8>>, String> {
+) -> Result<Zeroizing<Vec<u8>>, ReadError> {
     let mut command = Command::new("/usr/bin/security");
+    command.args(["find-generic-password", "-s", service, "-a", account, "-w"]);
+    run(&mut command, timeout, cancelled)
+}
+
+pub(super) fn run(
+    command: &mut Command,
+    timeout: Duration,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<Zeroizing<Vec<u8>>, ReadError> {
     command
-        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    run_owned_process_tree_with_cooperative_interaction(
-        &mut command,
+    let (bytes, status) = run_owned_process_tree_with_cooperative_interaction_and_status(
+        command,
         timeout,
-        |stdin, mut stdout, deadline| {
+        cancelled,
+        |stdin, stdout, deadline| {
             drop(stdin);
             let mut bytes = Zeroizing::new(Vec::new());
             let mut buffer = Zeroizing::new([0u8; 4096]);
             loop {
-                if cancelled() || deadline.is_none_or(|deadline| Instant::now() >= deadline) {
-                    return Err("Claude Keychain access cancelled or timed out".into());
+                if cancelled() {
+                    return Err(OwnedProcessTreeError::Cancelled);
                 }
                 match stdout.read(&mut *buffer) {
-                    Ok(0) => {
-                        return if bytes.is_empty() {
-                            Err("Claude Keychain access was denied or unavailable".into())
-                        } else {
-                            Ok(bytes)
-                        };
-                    }
+                    Ok(0) => return Ok(bytes),
                     Ok(count) => {
-                        if bytes.len() + count > 64 * 1024 {
-                            return Err(
-                                "Claude Keychain credentials exceeded the size limit".into()
-                            );
+                        if (bytes.len() + count) as u64 > CREDENTIAL_LIMIT {
+                            return Err(OwnedProcessTreeError::OutputLimitExceeded(
+                                jig_owned_process::OwnedProcessOutputStream::Stdout,
+                            ));
                         }
                         bytes.extend_from_slice(&buffer[..count]);
                     }
                     Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                            return Err(OwnedProcessTreeError::TimedOut);
+                        }
                         std::thread::sleep(Duration::from_millis(25))
                     }
-                    Err(error) if error.kind() == ErrorKind::Interrupted => {}
-                    Err(_) => return Err("Could not read Claude Keychain credentials".into()),
+                    Err(error) if error.kind() == ErrorKind::Interrupted => {
+                        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                            return Err(OwnedProcessTreeError::TimedOut);
+                        }
+                    }
+                    Err(_) => return Err(OwnedProcessTreeError::Await),
                 }
             }
         },
     )
-    .map_err(|_| "Claude Keychain access was denied, cancelled, or timed out".into())
+    .map_err(process_error)?;
+    match status.code() {
+        Some(0) if bytes.iter().all(u8::is_ascii_whitespace) => Err(ReadError::EmptyOutput),
+        Some(0) => Ok(bytes),
+        Some(EXIT_ITEM_NOT_FOUND) => Err(ReadError::SearchMiss),
+        Some(EXIT_INTERACTION_NOT_ALLOWED) => Err(ReadError::InteractionNotAllowed),
+        Some(EXIT_AUTH_FAILED | EXIT_USER_CANCELED) => Err(ReadError::Refused),
+        _ => Err(ReadError::FailedExit(status)),
+    }
+}
+
+fn process_error(error: OwnedProcessTreeInteractionError) -> ReadError {
+    use OwnedProcessTreeInteractionError::Process;
+    match error {
+        Process(OwnedProcessTreeError::Start(error)) if error.kind() == ErrorKind::NotFound => {
+            ReadError::ToolMissing
+        }
+        Process(OwnedProcessTreeError::OutputLimitExceeded(_)) => ReadError::OutputTooLarge,
+        Process(OwnedProcessTreeError::TimedOut) => ReadError::TimedOut,
+        Process(OwnedProcessTreeError::Cancelled | OwnedProcessTreeError::CancelledBeforeStart) => {
+            ReadError::Cancelled
+        }
+        _ => ReadError::Unreadable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::claude::usage::credentials::{parse, prefer_keychain};
+
+    fn command(script: &str) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    const TIMEOUT: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn command_status_determines_the_credential_source_and_diagnostic() {
+        let file = || parse(br#"{"claudeAiOauth":{"accessToken":"example-file"}}"#);
+        let choose = |read, file: &dyn Fn() -> _| prefer_keychain(read, &|| false, 0, file);
+        let unused = || panic!("unexpected credential file read");
+        let read = |script: &str| run(&mut command(script), TIMEOUT, &|| false).map(Some);
+
+        assert_eq!(
+            choose(read("exit 36"), &file)
+                .unwrap()
+                .access_token
+                .as_str(),
+            "example-file"
+        );
+        let locked = choose(read("exit 36"), &|| parse(b"?")).err().unwrap();
+        assert!(locked.contains("security unlock-keychain") && locked.contains("Always Allow"));
+
+        let data = r#"printf '%s' '{"claudeAiOauth":{"accessToken":"example-keychain"}}'"#;
+        assert_eq!(
+            choose(read(data), &unused).unwrap().access_token.as_str(),
+            "example-keychain"
+        );
+        for script in ["exit 0", "echo"] {
+            assert!(
+                choose(read(script), &unused)
+                    .err()
+                    .unwrap()
+                    .contains("empty")
+            );
+        }
+        let oversized = format!("head -c {} /dev/zero", CREDENTIAL_LIMIT + 1);
+        assert!(
+            choose(read(&oversized), &unused)
+                .err()
+                .unwrap()
+                .contains("size limit")
+        );
+        for script in [
+            "exit 1",
+            "exit 93",
+            "kill -TERM $$",
+            &format!("{data}; exit 1"),
+        ] {
+            let result = read(script);
+            assert!(matches!(result, Err(ReadError::FailedExit(_))));
+            let error = choose(result, &unused).err().unwrap();
+            assert!(error.contains("could not be read") && !error.contains("example-keychain"));
+        }
+        for script in ["exit 51", "exit 128"] {
+            let message = choose(read(script), &unused).err().unwrap();
+            assert!(message.contains("denied or cancelled"), "{message}");
+        }
+    }
+
+    #[test]
+    fn only_a_missing_executable_permits_file_fallback_after_start_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing-security");
+        let result = run(&mut Command::new(missing), TIMEOUT, &|| false);
+        assert!(matches!(result, Err(ReadError::ToolMissing)));
+        let file = || parse(br#"{"claudeAiOauth":{"accessToken":"example-file"}}"#);
+        assert_eq!(
+            prefer_keychain(Err(ReadError::ToolMissing), &|| false, 0, file)
+                .unwrap()
+                .access_token
+                .as_str(),
+            "example-file"
+        );
+        let error = prefer_keychain(result.map(Some), &|| false, 0, || parse(b"?"))
+            .err()
+            .unwrap();
+        assert!(error.contains("missing /usr/bin/security") && !error.contains("unlock"));
+        for errno in [libc::EMFILE, libc::EAGAIN, libc::EINTR, libc::EPERM] {
+            let error = process_error(OwnedProcessTreeInteractionError::Process(
+                OwnedProcessTreeError::Start(std::io::Error::from_raw_os_error(errno)),
+            ));
+            assert!(matches!(error, ReadError::Unreadable));
+            assert!(
+                prefer_keychain(Err(error), &|| false, 0, || panic!(
+                    "transient failure read the file"
+                ))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn closed_stdout_does_not_end_the_deadline_or_cancellation_checks() {
+        let stalled = || command("exec 1>&-; exec sleep 10");
+        let timeout = run(&mut stalled(), Duration::from_millis(100), &|| false);
+        assert!(matches!(timeout, Err(ReadError::TimedOut)));
+        let start = Instant::now();
+        let cancelled = run(&mut stalled(), TIMEOUT, &|| {
+            start.elapsed() >= Duration::from_millis(100)
+        });
+        assert!(matches!(cancelled, Err(ReadError::Cancelled)));
+        assert!(start.elapsed() < TIMEOUT);
+    }
 }

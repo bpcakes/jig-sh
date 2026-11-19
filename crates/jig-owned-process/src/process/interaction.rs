@@ -1,5 +1,5 @@
 use std::io::Read;
-use std::process::{ChildStderr, ChildStdin, Command};
+use std::process::{ChildStderr, ChildStdin, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use crate::{ChildPipe, NonblockingPipe};
@@ -100,47 +100,93 @@ where
         Option<Instant>,
     ) -> std::result::Result<T, String>,
 {
-    let mut process = spawn_owned_process(command)
-        .map_err(OwnedProcessTreeError::Start)
-        .map_err(OwnedProcessTreeInteractionError::Process)?;
-    let Some(stdin) = process.child.stdin.take() else {
-        return cleanup_failed_interaction(
-            &mut process,
-            "the child stdin was not configured as a pipe",
-        );
-    };
-    let Some(stdout) = process.child.stdout.take() else {
-        drop(stdin);
-        return cleanup_failed_interaction(
-            &mut process,
-            "the child stdout was not configured as a pipe",
-        );
-    };
-    let stderr = process.child.stderr.take();
-    let stdout = match ProcessInteractionStdout::new(stdout, stderr) {
-        Ok(stdout) => stdout,
-        Err(error) => {
-            drop(stdin);
-            return cleanup_failed_interaction(
-                &mut process,
-                &format!("the child stdout could not be prepared for bounded reads: {error}"),
-            );
-        }
-    };
-
+    let (mut process, stdin, stdout) = start(command)?;
     let deadline = ProcessDeadline::after(timeout);
     let outcome = interaction(stdin, stdout, deadline.as_optional_instant());
     finish_interaction(outcome, process.terminate_and_reap().map(|_| ()))
 }
 
-fn cleanup_failed_interaction<T>(
+/// Runs a finite command whose stdout the caller must read with its own buffering.
+/// After the exchange succeeds, waits for the direct child's natural exit before
+/// tree cleanup. Cancellation and the original deadline apply even after stdout
+/// closes. As with cooperative interaction, the callback must poll them while reading.
+pub fn run_owned_process_tree_with_cooperative_interaction_and_status<T>(
+    command: &mut Command,
+    timeout: Duration,
+    mut cancelled: impl FnMut() -> bool,
+    interaction: impl FnOnce(
+        ChildStdin,
+        &mut ProcessInteractionStdout,
+        Option<Instant>,
+    ) -> Result<T, OwnedProcessTreeError>,
+) -> Result<(T, ExitStatus), OwnedProcessTreeInteractionError> {
+    use super::{
+        CancellationObserver, OwnedProcessOutputDrains, ProcessOutputOverflowPolicy,
+        finish_owned_process_wait, wait_for_owned_process,
+    };
+
+    if cancelled() {
+        return Err(OwnedProcessTreeInteractionError::Process(
+            OwnedProcessTreeError::CancelledBeforeStart,
+        ));
+    }
+    let (mut process, stdin, mut stdout) = start(command)?;
+    let deadline = ProcessDeadline::after(timeout);
+    let value = match interaction(stdin, &mut stdout, deadline.as_optional_instant()) {
+        Ok(value) => value,
+        Err(error) => {
+            process
+                .terminate_and_reap()
+                .map_err(OwnedProcessTreeError::Cleanup)
+                .map_err(OwnedProcessTreeInteractionError::Process)?;
+            return Err(OwnedProcessTreeInteractionError::Process(error));
+        }
+    };
+    // EOF on stdout can precede the final diagnostic and exit. Keep draining
+    // piped stderr and observing the pinned child through the original deadline.
+    let wait = wait_for_owned_process(
+        &mut process,
+        deadline,
+        ProcessOutputOverflowPolicy::Truncate,
+        &mut CancellationObserver(&mut cancelled),
+        &mut OwnedProcessOutputDrains::remaining_stderr(stdout.stderr.take()),
+    );
+    finish_owned_process_wait(&mut process, wait)
+        .map(|status| (value, status))
+        .map_err(OwnedProcessTreeInteractionError::Process)
+}
+
+fn start(
+    command: &mut Command,
+) -> Result<(OwnedProcess, ChildStdin, ProcessInteractionStdout), OwnedProcessTreeInteractionError>
+{
+    let mut process = spawn_owned_process(command)
+        .map_err(OwnedProcessTreeError::Start)
+        .map_err(OwnedProcessTreeInteractionError::Process)?;
+    match prepare_pipes(&mut process) {
+        Ok((stdin, stdout)) => Ok((process, stdin, stdout)),
+        Err(error) => finish_interaction(Err(error), process.terminate_and_reap().map(|_| ())),
+    }
+}
+
+fn prepare_pipes(
     process: &mut OwnedProcess,
-    message: &str,
-) -> std::result::Result<T, OwnedProcessTreeInteractionError> {
-    finish_interaction(
-        Err(message.into()),
-        process.terminate_and_reap().map(|_| ()),
-    )
+) -> Result<(ChildStdin, ProcessInteractionStdout), String> {
+    let stdin = process
+        .child
+        .stdin
+        .take()
+        .ok_or("the child stdin was not configured as a pipe")?;
+    let stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or("the child stdout was not configured as a pipe")?;
+    let stdout =
+        ProcessInteractionStdout::new(stdout, process.child.stderr.take()).map_err(|error| {
+            format!("the child stdout could not be prepared for bounded reads: {error}")
+        })?;
+    Ok((stdin, stdout))
 }
 
 fn finish_interaction<T>(
@@ -149,7 +195,7 @@ fn finish_interaction<T>(
 ) -> std::result::Result<T, OwnedProcessTreeInteractionError> {
     match (outcome, cleanup) {
         (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) => Err(OwnedProcessTreeInteractionError::Interaction(error)),
+        (Err(error), Ok(_)) => Err(OwnedProcessTreeInteractionError::Interaction(error)),
         (Ok(_), Err(error)) => Err(OwnedProcessTreeInteractionError::Process(
             OwnedProcessTreeError::Cleanup(error),
         )),
@@ -170,6 +216,7 @@ mod tests {
     use super::{
         OwnedProcessTreeInteractionError, finish_interaction,
         run_owned_process_tree_with_cooperative_interaction,
+        run_owned_process_tree_with_cooperative_interaction_and_status,
     };
     use crate::test_process::{read_test_process_identity, terminate_and_confirm_test_process};
 
@@ -239,5 +286,47 @@ mod tests {
         let rendered = error.to_string();
         assert!(rendered.contains("could not be cleaned up safely"));
         assert!(rendered.contains("specific protocol failure"));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn interaction_status_reports_the_child_exit_after_end_of_output() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                "printf done; exec 1>&-; sleep 0.1; echo finished >&2; exit 7",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let (output, status) = run_owned_process_tree_with_cooperative_interaction_and_status(
+            &mut command,
+            Duration::from_secs(10),
+            || false,
+            |stdin, stdout, deadline| {
+                drop(stdin);
+                let mut output = Vec::new();
+                let mut buffer = [0_u8; 64];
+                loop {
+                    match stdout.read(&mut buffer) {
+                        Ok(0) => return Ok(output),
+                        Ok(count) => output.extend_from_slice(&buffer[..count]),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                                return Err(crate::OwnedProcessTreeError::TimedOut);
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => return Err(crate::OwnedProcessTreeError::Await),
+                    }
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output, b"done");
+        assert_eq!(status.code(), Some(7));
     }
 }

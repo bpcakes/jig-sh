@@ -7,7 +7,7 @@ use zeroize::Zeroizing;
 use crate::agent_provider::InspectionMode;
 use crate::claude::Home;
 
-const CREDENTIAL_LIMIT: u64 = 64 * 1024;
+pub(super) const CREDENTIAL_LIMIT: u64 = 64 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,12 +92,42 @@ pub(super) fn load(
         default_config: home.default_config,
     };
     #[cfg(target_os = "macos")]
-    if let Some(bytes) = super::keychain::read(&home, mode, cancelled)? {
-        return parse(&bytes);
-    }
+    return prefer_keychain(
+        super::keychain::read(&home, mode, cancelled),
+        cancelled,
+        chrono::Utc::now().timestamp_millis(),
+        || read_file(&home),
+    );
     #[cfg(not(target_os = "macos"))]
-    let _ = (mode, cancelled);
-    read_file(&home)
+    {
+        let _ = (mode, cancelled);
+        read_file(&home)
+    }
+}
+
+/// Confirmed absence delegates completely to the file. If the session cannot
+/// use the Keychain, a usable file login may stand in. For an inconclusive
+/// read, a subsequent launch could still use a different Keychain account.
+#[cfg(target_os = "macos")]
+pub(super) fn prefer_keychain(
+    keychain: super::keychain::ReadResult,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    now_millis: i64,
+    file: impl FnOnce() -> Result<Credential, String>,
+) -> Result<Credential, String> {
+    if cancelled() {
+        return Err(super::CANCELLED.into());
+    }
+    use super::keychain::ReadError;
+    match keychain {
+        Ok(Some(bytes)) => parse(&bytes),
+        Ok(None) => file(),
+        Err(error @ (ReadError::ToolMissing | ReadError::InteractionNotAllowed)) => file()
+            .ok()
+            .filter(|credential| credential.usage_error(now_millis).is_none())
+            .ok_or_else(|| error.message()),
+        Err(error) => Err(error.message()),
+    }
 }
 
 pub(super) fn read_file(home: &Home) -> Result<Credential, String> {

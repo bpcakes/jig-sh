@@ -17,6 +17,7 @@ mod tests;
 
 /// The normalized bucket for the subscription's own five-hour and weekly windows.
 pub(super) const SUBSCRIPTION_BUCKET: &str = "claude";
+const CANCELLED: &str = "Claude usage inspection was cancelled";
 
 pub struct Inspection {
     homes: Vec<Home>,
@@ -122,7 +123,7 @@ pub fn report(homes: Homes, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Val
         )
         .map_err(anyhow::Error::msg)?;
     if cancelled() {
-        anyhow::bail!("Claude usage inspection was cancelled");
+        anyhow::bail!(CANCELLED);
     }
     Ok(report)
 }

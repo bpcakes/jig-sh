@@ -7,8 +7,8 @@ enum Expected {
     Stored,
     Missing,
     ToolRead,
-    PermissionRequired,
-    ToolDenied,
+    MissingAfterProbe,
+    InconclusiveAfterProbe,
     Cancelled,
 }
 
@@ -16,7 +16,6 @@ fn check(
     outcomes: Vec<SearchOutcome<Vec<SearchResult>>>,
     mode: InspectionMode,
     cancelled: bool,
-    tool_reads: bool,
     expected: Expected,
 ) {
     let original = SecKeychain::user_interaction_allowed().unwrap();
@@ -50,10 +49,13 @@ fn check(
                 }
             );
             tool_used = true;
-            if tool_reads {
-                Ok(Zeroizing::new(b"example-tool-token".to_vec()))
-            } else {
-                Err("Claude Keychain access was denied or unavailable".into())
+            match expected {
+                Expected::MissingAfterProbe | Expected::InconclusiveAfterProbe => {
+                    let mut command = std::process::Command::new("/bin/sh");
+                    command.args(["-c", "exec 1>&-; sleep 0.05; exit 44"]);
+                    prompt::run(&mut command, timeout, &|| false)
+                }
+                _ => Ok(Zeroizing::new(b"example-tool-token".to_vec())),
             }
         },
     );
@@ -63,19 +65,34 @@ fn check(
         tool_used,
         matches!(
             expected,
-            Expected::ToolRead | Expected::PermissionRequired | Expected::ToolDenied
+            Expected::ToolRead | Expected::MissingAfterProbe | Expected::InconclusiveAfterProbe
         )
     );
     match expected {
         Expected::Stored => assert_eq!(&**result.unwrap().unwrap(), b"example-stored-token"),
         Expected::Missing => assert!(result.unwrap().is_none()),
-        Expected::ToolRead => assert_eq!(&**result.unwrap().unwrap(), b"example-tool-token"),
-        Expected::PermissionRequired => {
-            let error = result.unwrap_err();
-            assert!(error.contains("require permission") && error.contains("jig claude launch"));
+        Expected::MissingAfterProbe => {
+            assert!(matches!(result, Ok(None)));
+            let file_error =
+                crate::claude::usage::credentials::prefer_keychain(result, &|| false, 0, || {
+                    Err("fixture file error".into())
+                })
+                .err()
+                .unwrap();
+            assert_eq!(file_error, "fixture file error");
         }
-        Expected::ToolDenied => assert!(result.unwrap_err().contains("denied")),
-        Expected::Cancelled => assert!(result.unwrap_err().contains("cancelled")),
+        Expected::InconclusiveAfterProbe => {
+            assert!(matches!(result, Err(ReadError::SearchMiss)));
+            let error =
+                crate::claude::usage::credentials::prefer_keychain(result, &|| false, 0, || {
+                    panic!("ambiguous search selected the file")
+                })
+                .err()
+                .unwrap();
+            assert!(error.contains("could not be confirmed absent"));
+        }
+        Expected::ToolRead => assert_eq!(&**result.unwrap().unwrap(), b"example-tool-token"),
+        Expected::Cancelled => assert!(matches!(result, Err(ReadError::Cancelled))),
     }
 }
 
@@ -102,34 +119,38 @@ fn scenarios() {
             )])],
             mode,
             false,
-            true,
             Expected::Stored,
         );
         for outcomes in [
-            vec![Ok(vec![])],
+            vec![Ok(vec![]), failure(-25300)],
             vec![failure(-25300), failure(-25300)],
             vec![failure(-25300), Ok(vec![])],
         ] {
-            check(outcomes, mode, false, true, Expected::Missing);
+            check(outcomes, mode, false, Expected::Missing);
         }
         // Headless inspection reads through the security tool too, which
         // returns at once once the user has allowed it.
         for outcomes in protected() {
-            check(outcomes, mode, false, true, Expected::ToolRead);
+            check(outcomes, mode, false, Expected::ToolRead);
         }
-        for outcomes in protected() {
+        // The same tool status can mean deletion or failure to search. The
+        // second attribute probe determines whether the file is authoritative.
+        for (confirmation, expected) in [
+            (failure(-25300), Expected::MissingAfterProbe),
+            (
+                Ok(vec![SearchResult::Other]),
+                Expected::InconclusiveAfterProbe,
+            ),
+            (failure(-25308), Expected::InconclusiveAfterProbe),
+        ] {
             check(
-                outcomes,
+                vec![failure(-25300), Ok(vec![SearchResult::Other]), confirmation],
                 mode,
                 false,
-                false,
-                match mode {
-                    InspectionMode::Headless => Expected::PermissionRequired,
-                    InspectionMode::Interactive => Expected::ToolDenied,
-                },
+                expected,
             );
         }
-        check(vec![failure(-25308)], mode, true, true, Expected::Cancelled);
+        check(vec![failure(-25308)], mode, true, Expected::Cancelled);
     }
 }
 
