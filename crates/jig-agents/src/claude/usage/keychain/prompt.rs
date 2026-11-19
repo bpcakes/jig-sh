@@ -10,6 +10,7 @@ use jig_owned_process::interaction::{
 use zeroize::Zeroizing;
 
 use super::{ReadError, ReadResult};
+use crate::claude::usage::credentials::CREDENTIAL_LIMIT;
 
 // The security CLI returns the low byte of the OSStatus.
 const EXIT_ITEM_NOT_FOUND: i32 = 44; // errSecItemNotFound (-25300)
@@ -52,7 +53,7 @@ fn run(
                 match stdout.read(&mut *buffer) {
                     Ok(0) => return Ok(bytes),
                     Ok(count) => {
-                        if bytes.len() + count > 64 * 1024 {
+                        if (bytes.len() + count) as u64 > CREDENTIAL_LIMIT {
                             return Err(OwnedProcessTreeError::OutputLimitExceeded(
                                 jig_owned_process::OwnedProcessOutputStream::Stdout,
                             ));
@@ -77,11 +78,12 @@ fn run(
     )
     .map_err(process_error)?;
     match status.code() {
-        Some(0) if !bytes.is_empty() => Ok(Some(bytes)),
+        Some(0) if bytes.iter().all(u8::is_ascii_whitespace) => Err(ReadError::EmptyOutput),
+        Some(0) => Ok(Some(bytes)),
         Some(EXIT_ITEM_NOT_FOUND) => Ok(None),
         Some(EXIT_INTERACTION_NOT_ALLOWED) => Err(ReadError::InteractionNotAllowed),
         Some(EXIT_AUTH_FAILED | EXIT_USER_CANCELED) => Err(ReadError::Refused),
-        _ => Err(ReadError::Unreadable),
+        _ => Err(ReadError::FailedExit(status)),
     }
 }
 
@@ -91,6 +93,7 @@ fn process_error(error: OwnedProcessTreeInteractionError) -> ReadError {
         Process(OwnedProcessTreeError::Start(error)) if error.kind() == ErrorKind::NotFound => {
             ReadError::ToolMissing
         }
+        Process(OwnedProcessTreeError::OutputLimitExceeded(_)) => ReadError::OutputTooLarge,
         Process(OwnedProcessTreeError::TimedOut) => ReadError::TimedOut,
         Process(OwnedProcessTreeError::Cancelled | OwnedProcessTreeError::CancelledBeforeStart) => {
             ReadError::Cancelled
@@ -152,18 +155,31 @@ mod tests {
             choose(read(data), &unused).unwrap().access_token.as_str(),
             "example-keychain"
         );
+        for script in ["exit 0", "echo"] {
+            assert!(
+                choose(read(script), &unused)
+                    .err()
+                    .unwrap()
+                    .contains("empty")
+            );
+        }
+        let oversized = format!("head -c {} /dev/zero", CREDENTIAL_LIMIT + 1);
+        assert!(
+            choose(read(&oversized), &unused)
+                .err()
+                .unwrap()
+                .contains("size limit")
+        );
         for script in [
-            "exit 0",
             "exit 1",
             "exit 93",
-            "head -c 65537 /dev/zero",
             "kill -TERM $$",
             &format!("{data}; exit 1"),
         ] {
-            assert_eq!(
-                choose(read(script), &unused).err().unwrap(),
-                ReadError::Unreadable.message()
-            );
+            let result = read(script);
+            assert!(matches!(result, Err(ReadError::FailedExit(_))));
+            let error = choose(result, &unused).err().unwrap();
+            assert!(error.contains("could not be read") && !error.contains("example-keychain"));
         }
         for script in ["exit 51", "exit 128"] {
             let message = choose(read(script), &unused).err().unwrap();

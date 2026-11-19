@@ -7,7 +7,7 @@ use zeroize::Zeroizing;
 use crate::agent_provider::InspectionMode;
 use crate::claude::Home;
 
-const CREDENTIAL_LIMIT: u64 = 64 * 1024;
+pub(super) const CREDENTIAL_LIMIT: u64 = 64 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
