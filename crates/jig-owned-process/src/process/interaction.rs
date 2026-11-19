@@ -1,5 +1,5 @@
 use std::io::Read;
-use std::process::{ChildStderr, ChildStdin, Command};
+use std::process::{ChildStderr, ChildStdin, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use crate::{ChildPipe, NonblockingPipe};
@@ -100,6 +100,28 @@ where
         Option<Instant>,
     ) -> std::result::Result<T, String>,
 {
+    run_owned_process_tree_with_cooperative_interaction_and_status(command, timeout, interaction)
+        .map(|(value, _)| value)
+}
+
+/// Like [`run_owned_process_tree_with_cooperative_interaction`], and also
+/// returns the direct child's reaped exit status.
+///
+/// The status is the child's own exit only when it had exited before the
+/// interaction returned, as after reading its stdout to end of file; a child
+/// still running is terminated, and its status then reports that signal.
+pub fn run_owned_process_tree_with_cooperative_interaction_and_status<T, F>(
+    command: &mut Command,
+    timeout: Duration,
+    interaction: F,
+) -> std::result::Result<(T, ExitStatus), OwnedProcessTreeInteractionError>
+where
+    F: FnOnce(
+        ChildStdin,
+        ProcessInteractionStdout,
+        Option<Instant>,
+    ) -> std::result::Result<T, String>,
+{
     let mut process = spawn_owned_process(command)
         .map_err(OwnedProcessTreeError::Start)
         .map_err(OwnedProcessTreeInteractionError::Process)?;
@@ -130,26 +152,23 @@ where
 
     let deadline = ProcessDeadline::after(timeout);
     let outcome = interaction(stdin, stdout, deadline.as_optional_instant());
-    finish_interaction(outcome, process.terminate_and_reap().map(|_| ()))
+    finish_interaction(outcome, process.terminate_and_reap())
 }
 
 fn cleanup_failed_interaction<T>(
     process: &mut OwnedProcess,
     message: &str,
 ) -> std::result::Result<T, OwnedProcessTreeInteractionError> {
-    finish_interaction(
-        Err(message.into()),
-        process.terminate_and_reap().map(|_| ()),
-    )
+    finish_interaction(Err(message.into()), process.terminate_and_reap()).map(|(value, _)| value)
 }
 
 fn finish_interaction<T>(
     outcome: std::result::Result<T, String>,
-    cleanup: std::io::Result<()>,
-) -> std::result::Result<T, OwnedProcessTreeInteractionError> {
+    cleanup: std::io::Result<ExitStatus>,
+) -> std::result::Result<(T, ExitStatus), OwnedProcessTreeInteractionError> {
     match (outcome, cleanup) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) => Err(OwnedProcessTreeInteractionError::Interaction(error)),
+        (Ok(value), Ok(status)) => Ok((value, status)),
+        (Err(error), Ok(_)) => Err(OwnedProcessTreeInteractionError::Interaction(error)),
         (Ok(_), Err(error)) => Err(OwnedProcessTreeInteractionError::Process(
             OwnedProcessTreeError::Cleanup(error),
         )),
@@ -170,6 +189,7 @@ mod tests {
     use super::{
         OwnedProcessTreeInteractionError, finish_interaction,
         run_owned_process_tree_with_cooperative_interaction,
+        run_owned_process_tree_with_cooperative_interaction_and_status,
     };
     use crate::test_process::{read_test_process_identity, terminate_and_confirm_test_process};
 
@@ -239,5 +259,43 @@ mod tests {
         let rendered = error.to_string();
         assert!(rendered.contains("could not be cleaned up safely"));
         assert!(rendered.contains("specific protocol failure"));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn interaction_status_reports_the_child_exit_after_end_of_output() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "printf done; exit 7"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+
+        let (output, status) = run_owned_process_tree_with_cooperative_interaction_and_status(
+            &mut command,
+            Duration::from_secs(10),
+            |stdin, mut stdout, deadline| {
+                drop(stdin);
+                let mut output = Vec::new();
+                let mut buffer = [0_u8; 64];
+                loop {
+                    match stdout.read(&mut buffer) {
+                        Ok(0) => return Ok(output),
+                        Ok(count) => output.extend_from_slice(&buffer[..count]),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                                return Err("timed out".into());
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    }
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output, b"done");
+        assert_eq!(status.code(), Some(7));
     }
 }

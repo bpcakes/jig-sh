@@ -18,10 +18,12 @@ const PICKER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// A tool read with permission already granted returns at once. Headless
 /// inspection stops waiting on one that needs the user to answer a dialog.
 const HEADLESS_READ_TIMEOUT: Duration = Duration::from_secs(2);
-const PICKER_READ_FAILED: &str = "Claude Keychain access was denied or is locked";
+const PICKER_READ_UNAVAILABLE: &str =
+    "Claude Keychain is locked or cannot ask for permission in this session";
 const PICKER_READ_WAITING: &str = "Claude Keychain permission request timed out";
-const HEADLESS_READ_FAILED: &str = "Claude Keychain login is locked or needs permission";
+const HEADLESS_READ_UNAVAILABLE: &str = "Claude Keychain login is locked or needs permission";
 const HEADLESS_READ_WAITING: &str = "Claude Keychain login needs permission";
+const READ_REFUSED: &str = "Claude Keychain access was denied or cancelled";
 /// Unlocking and item permission are separate: a session without desktop
 /// access, such as SSH, can do neither through a dialog, so name both remedies.
 const READ_FAILED_REMEDY: &str = "unlock a locked Keychain with security unlock-keychain, as needed over SSH; an item that does not yet allow /usr/bin/security also needs Always Allow from the jig claude launch picker in a desktop session";
@@ -31,9 +33,14 @@ const TOOL_UNREADABLE: &str =
 /// How the `security` tool failed to return the item.
 #[derive(Debug)]
 pub(super) enum ToolFailure {
-    /// The tool ended without the item, as when the Keychain is locked in a
-    /// session that cannot unlock it or the user denied access.
-    Failed,
+    /// The tool could not run, or reported that this session cannot show a
+    /// dialog, as over SSH, or that the item is gone. A Claude launch from
+    /// this session would go without the item too.
+    Unavailable,
+    /// The tool ended without the item for another reason, such as a Deny or
+    /// a cancelled unlock dialog. That answers only one request: a launch
+    /// asks again and may then use the Keychain login.
+    Refused,
     /// The tool was still running at the deadline, typically waiting on a
     /// dialog.
     Waiting,
@@ -47,14 +54,14 @@ pub(super) enum ToolFailure {
 pub(super) struct ReadError {
     pub(super) message: String,
     /// Whether a Claude launch from this session would also go without the
-    /// item and use `.credentials.json`. False while a dialog may still be
-    /// open: a launch waits on it and then uses the Keychain login.
+    /// item and use `.credentials.json`. False when a launch could still show
+    /// a dialog, wait on it, and then use the Keychain login.
     pub(super) file_fallback: bool,
 }
 
 impl ReadError {
-    /// A read that did not show the tool ending without the item, so the file
-    /// login cannot stand in for the one a launch would read.
+    /// A read that does not show a launch would go without the item, so the
+    /// file login cannot stand in for the one a launch would read.
     fn without_fallback(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -144,19 +151,22 @@ fn read_with(
     }
     // Jig's own read never asks for trust, so a protected item is read through
     // Apple's security tool, whose permission survives Jig rebuilds and upgrades.
-    let (timeout, failed, waiting) = match mode {
-        InspectionMode::Interactive => {
-            (PICKER_READ_TIMEOUT, PICKER_READ_FAILED, PICKER_READ_WAITING)
-        }
+    let (timeout, unavailable, waiting) = match mode {
+        InspectionMode::Interactive => (
+            PICKER_READ_TIMEOUT,
+            PICKER_READ_UNAVAILABLE,
+            PICKER_READ_WAITING,
+        ),
         InspectionMode::Headless => (
             HEADLESS_READ_TIMEOUT,
-            HEADLESS_READ_FAILED,
+            HEADLESS_READ_UNAVAILABLE,
             HEADLESS_READ_WAITING,
         ),
     };
     tool_read(timeout).map(Some).map_err(|failure| {
         let (summary, file_fallback) = match failure {
-            ToolFailure::Failed => (failed, true),
+            ToolFailure::Unavailable => (unavailable, true),
+            ToolFailure::Refused => (READ_REFUSED, false),
             ToolFailure::Waiting => (waiting, false),
             ToolFailure::Unreadable => return ReadError::without_fallback(TOOL_UNREADABLE),
         };

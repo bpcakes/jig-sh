@@ -7,8 +7,8 @@ enum Expected {
     Stored,
     Missing,
     ToolRead,
-    PermissionRequired,
-    ToolDenied,
+    Unavailable,
+    Refused,
     StillWaiting,
     ToolUnreadable,
     Cancelled,
@@ -65,8 +65,8 @@ fn check(
         matches!(
             expected,
             Expected::ToolRead
-                | Expected::PermissionRequired
-                | Expected::ToolDenied
+                | Expected::Unavailable
+                | Expected::Refused
                 | Expected::StillWaiting
                 | Expected::ToolUnreadable
         )
@@ -75,50 +75,37 @@ fn check(
         Expected::Stored => assert_eq!(&**result.unwrap().unwrap(), b"example-stored-token"),
         Expected::Missing => assert!(result.unwrap().is_none()),
         Expected::ToolRead => assert_eq!(&**result.unwrap().unwrap(), b"example-tool-token"),
-        Expected::PermissionRequired => {
-            let error = result.unwrap_err();
-            assert!(error.file_fallback);
-            assert!(
-                error.message.contains("needs permission"),
-                "{}",
-                error.message
-            );
-            assert_names_both_remedies(&error.message);
-        }
-        Expected::ToolDenied => {
-            let error = result.unwrap_err();
-            assert!(error.file_fallback);
-            assert!(error.message.contains("denied"), "{}", error.message);
-            assert_names_both_remedies(&error.message);
-        }
+        expected => assert_read_error(result.unwrap_err(), mode, expected),
+    }
+}
+
+/// Checks whether an unread item lets the file login stand in, and its message.
+fn assert_read_error(error: ReadError, mode: InspectionMode, expected: Expected) {
+    let interactive = matches!(mode, InspectionMode::Interactive);
+    let (file_fallback, summary, remedies) = match expected {
+        // A session that cannot show a dialog, as over SSH, would leave a
+        // launch without the item too, so the file login may stand in.
+        Expected::Unavailable if interactive => (true, "cannot ask for permission", true),
+        Expected::Unavailable => (true, "needs permission", true),
+        // A Deny or cancelled dialog answers one request: a launch asks again
+        // and may then use the Keychain login.
+        Expected::Refused => (false, "denied", true),
         // A launch would wait on the dialog and use the Keychain login, so
         // the file login must not stand in for it.
-        Expected::StillWaiting => {
-            let error = result.unwrap_err();
-            assert!(!error.file_fallback);
-            let expected = match mode {
-                InspectionMode::Headless => "needs permission",
-                InspectionMode::Interactive => "timed out",
-            };
-            assert!(error.message.contains(expected), "{}", error.message);
-            assert_names_both_remedies(&error.message);
-        }
+        Expected::StillWaiting if interactive => (false, "timed out", true),
+        Expected::StillWaiting => (false, "needs permission", true),
         // Oversized or unreadable output, or a tool left running, is an item a
         // launch would still read.
-        Expected::ToolUnreadable => {
-            let error = result.unwrap_err();
-            assert!(!error.file_fallback);
-            assert!(
-                error.message.contains("could not be read"),
-                "{}",
-                error.message
-            );
+        Expected::ToolUnreadable => (false, "could not be read", false),
+        Expected::Cancelled => (false, "cancelled", false),
+        Expected::Stored | Expected::Missing | Expected::ToolRead => {
+            unreachable!("a read expected to succeed failed: {}", error.message)
         }
-        Expected::Cancelled => {
-            let error = result.unwrap_err();
-            assert!(!error.file_fallback);
-            assert!(error.message.contains("cancelled"), "{}", error.message);
-        }
+    };
+    assert_eq!(error.file_fallback, file_fallback, "{}", error.message);
+    assert!(error.message.contains(summary), "{}", error.message);
+    if remedies {
+        assert_names_both_remedies(&error.message);
     }
 }
 
@@ -174,11 +161,17 @@ fn scenarios() {
                 outcomes,
                 mode,
                 false,
-                Some(ToolFailure::Failed),
-                match mode {
-                    InspectionMode::Headless => Expected::PermissionRequired,
-                    InspectionMode::Interactive => Expected::ToolDenied,
-                },
+                Some(ToolFailure::Unavailable),
+                Expected::Unavailable,
+            );
+        }
+        for outcomes in protected() {
+            check(
+                outcomes,
+                mode,
+                false,
+                Some(ToolFailure::Refused),
+                Expected::Refused,
             );
         }
         for outcomes in protected() {
@@ -200,6 +193,19 @@ fn scenarios() {
             );
         }
         check(vec![failure(-25308)], mode, true, None, Expected::Cancelled);
+    }
+}
+
+#[test]
+fn security_tool_exits_fall_back_only_when_a_launch_would_lack_the_item() {
+    let unavailable = |code| matches!(prompt::ended_without_item(code), ToolFailure::Unavailable);
+    // errSecInteractionNotAllowed, as over SSH, and errSecItemNotFound.
+    assert!(unavailable(Some(36)));
+    assert!(unavailable(Some(44)));
+    // errSecAuthFailed after a Deny, errSecUserCanceled, other failures, and a
+    // tool stopped by a signal.
+    for code in [Some(51), Some(128), Some(1), None] {
+        assert!(!unavailable(code), "{code:?}");
     }
 }
 
