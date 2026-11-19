@@ -89,7 +89,9 @@ mod tests {
                 pipe.read_available(&mut buffer).unwrap_err().kind(),
                 io::ErrorKind::WouldBlock
             );
-            drop(writer);
+            // A concurrent spawn can briefly hold another writer descriptor.
+            // Shut down the socket to establish EOF for all copies.
+            writer.shutdown(std::net::Shutdown::Write).unwrap();
             assert_eq!(pipe.read_available(&mut buffer).unwrap(), 0);
         }
     }
