@@ -8,6 +8,7 @@ enum Expected {
     Missing,
     ToolRead,
     MissingAfterProbe,
+    InconclusiveAfterProbe,
     Cancelled,
 }
 
@@ -49,8 +50,12 @@ fn check(
             );
             tool_used = true;
             match expected {
-                Expected::MissingAfterProbe => Ok(None),
-                _ => Ok(Some(Zeroizing::new(b"example-tool-token".to_vec()))),
+                Expected::MissingAfterProbe | Expected::InconclusiveAfterProbe => {
+                    let mut command = std::process::Command::new("/bin/sh");
+                    command.args(["-c", "exec 1>&-; sleep 0.05; exit 44"]);
+                    prompt::run(&mut command, timeout, &|| false)
+                }
+                _ => Ok(Zeroizing::new(b"example-tool-token".to_vec())),
             }
         },
     );
@@ -58,11 +63,34 @@ fn check(
     assert_eq!(SecKeychain::user_interaction_allowed().unwrap(), original);
     assert_eq!(
         tool_used,
-        matches!(expected, Expected::ToolRead | Expected::MissingAfterProbe)
+        matches!(
+            expected,
+            Expected::ToolRead | Expected::MissingAfterProbe | Expected::InconclusiveAfterProbe
+        )
     );
     match expected {
         Expected::Stored => assert_eq!(&**result.unwrap().unwrap(), b"example-stored-token"),
-        Expected::Missing | Expected::MissingAfterProbe => assert!(result.unwrap().is_none()),
+        Expected::Missing => assert!(result.unwrap().is_none()),
+        Expected::MissingAfterProbe => {
+            assert!(matches!(result, Ok(None)));
+            let file_error =
+                crate::claude::usage::credentials::prefer_keychain(result, &|| false, 0, || {
+                    Err("fixture file error".into())
+                })
+                .err()
+                .unwrap();
+            assert_eq!(file_error, "fixture file error");
+        }
+        Expected::InconclusiveAfterProbe => {
+            assert!(matches!(result, Err(ReadError::SearchMiss)));
+            let error =
+                crate::claude::usage::credentials::prefer_keychain(result, &|| false, 0, || {
+                    panic!("ambiguous search selected the file")
+                })
+                .err()
+                .unwrap();
+            assert!(error.contains("could not be confirmed absent"));
+        }
         Expected::ToolRead => assert_eq!(&**result.unwrap().unwrap(), b"example-tool-token"),
         Expected::Cancelled => assert!(matches!(result, Err(ReadError::Cancelled))),
     }
@@ -94,7 +122,7 @@ fn scenarios() {
             Expected::Stored,
         );
         for outcomes in [
-            vec![Ok(vec![])],
+            vec![Ok(vec![]), failure(-25300)],
             vec![failure(-25300), failure(-25300)],
             vec![failure(-25300), Ok(vec![])],
         ] {
@@ -105,12 +133,23 @@ fn scenarios() {
         for outcomes in protected() {
             check(outcomes, mode, false, Expected::ToolRead);
         }
-        check(
-            vec![failure(-25300), Ok(vec![SearchResult::Other])],
-            mode,
-            false,
-            Expected::MissingAfterProbe,
-        );
+        // The same tool status can mean deletion or failure to search. The
+        // second attribute probe determines whether the file is authoritative.
+        for (confirmation, expected) in [
+            (failure(-25300), Expected::MissingAfterProbe),
+            (
+                Ok(vec![SearchResult::Other]),
+                Expected::InconclusiveAfterProbe,
+            ),
+            (failure(-25308), Expected::InconclusiveAfterProbe),
+        ] {
+            check(
+                vec![failure(-25300), Ok(vec![SearchResult::Other]), confirmation],
+                mode,
+                false,
+                expected,
+            );
+        }
         check(vec![failure(-25308)], mode, true, Expected::Cancelled);
     }
 }

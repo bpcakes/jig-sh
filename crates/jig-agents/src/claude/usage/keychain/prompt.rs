@@ -9,7 +9,7 @@ use jig_owned_process::interaction::{
 };
 use zeroize::Zeroizing;
 
-use super::{ReadError, ReadResult};
+use super::ReadError;
 use crate::claude::usage::credentials::CREDENTIAL_LIMIT;
 
 // The security CLI returns the low byte of the OSStatus.
@@ -23,17 +23,17 @@ pub(super) fn read(
     account: &str,
     timeout: Duration,
     cancelled: &(dyn Fn() -> bool + Sync),
-) -> ReadResult {
+) -> Result<Zeroizing<Vec<u8>>, ReadError> {
     let mut command = Command::new("/usr/bin/security");
     command.args(["find-generic-password", "-s", service, "-a", account, "-w"]);
     run(&mut command, timeout, cancelled)
 }
 
-fn run(
+pub(super) fn run(
     command: &mut Command,
     timeout: Duration,
     cancelled: &(dyn Fn() -> bool + Sync),
-) -> ReadResult {
+) -> Result<Zeroizing<Vec<u8>>, ReadError> {
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -79,8 +79,8 @@ fn run(
     .map_err(process_error)?;
     match status.code() {
         Some(0) if bytes.iter().all(u8::is_ascii_whitespace) => Err(ReadError::EmptyOutput),
-        Some(0) => Ok(Some(bytes)),
-        Some(EXIT_ITEM_NOT_FOUND) => Ok(None),
+        Some(0) => Ok(bytes),
+        Some(EXIT_ITEM_NOT_FOUND) => Err(ReadError::SearchMiss),
         Some(EXIT_INTERACTION_NOT_ALLOWED) => Err(ReadError::InteractionNotAllowed),
         Some(EXIT_AUTH_FAILED | EXIT_USER_CANCELED) => Err(ReadError::Refused),
         _ => Err(ReadError::FailedExit(status)),
@@ -120,26 +120,8 @@ mod tests {
         let file = || parse(br#"{"claudeAiOauth":{"accessToken":"example-file"}}"#);
         let choose = |read, file: &dyn Fn() -> _| prefer_keychain(read, &|| false, 0, file);
         let unused = || panic!("unexpected credential file read");
-        let read = |script: &str| run(&mut command(script), TIMEOUT, &|| false);
+        let read = |script: &str| run(&mut command(script), TIMEOUT, &|| false).map(Some);
 
-        let missing = || read("exec 1>&-; sleep 0.05; exit 44");
-        assert_eq!(
-            choose(missing(), &file).unwrap().access_token.as_str(),
-            "example-file"
-        );
-        assert_eq!(
-            choose(missing(), &|| parse(b"?")).err().unwrap(),
-            "Claude credentials could not be decoded"
-        );
-        let expired =
-            || parse(br#"{"claudeAiOauth":{"accessToken":"example-expired","expiresAt":0}}"#);
-        assert!(
-            choose(missing(), &expired)
-                .unwrap()
-                .usage_error(0)
-                .unwrap()
-                .contains("expired")
-        );
         assert_eq!(
             choose(read("exit 36"), &file)
                 .unwrap()
@@ -201,7 +183,7 @@ mod tests {
                 .as_str(),
             "example-file"
         );
-        let error = prefer_keychain(result, &|| false, 0, || parse(b"?"))
+        let error = prefer_keychain(result.map(Some), &|| false, 0, || parse(b"?"))
             .err()
             .unwrap();
         assert!(error.contains("missing /usr/bin/security") && !error.contains("unlock"));
